@@ -1,4 +1,4 @@
-"""Tests for AGENTS.md and MCP settings injection in commis workspaces."""
+"""Tests for AGENTS.md, MCP settings, and hooks injection in commis workspaces."""
 
 import json
 from pathlib import Path
@@ -8,6 +8,7 @@ import tomllib
 
 from zerg.services.workspace_manager import inject_agents_md
 from zerg.services.workspace_manager import inject_codex_mcp_settings
+from zerg.services.workspace_manager import inject_commis_hooks
 from zerg.services.workspace_manager import inject_mcp_settings
 
 
@@ -358,3 +359,146 @@ class TestInjectCodexMcpSettings:
 
         config = tomllib.loads(result.read_text(encoding="utf-8"))
         assert "longhouse" in config["mcp_servers"]
+
+
+# --- inject_commis_hooks tests ---
+
+
+class TestInjectCommisHooks:
+    """Tests for quality-gate hook injection into .claude/settings.json."""
+
+    def test_creates_hooks_with_makefile(self, workspace: Path) -> None:
+        """When Makefile exists, Stop hook runs 'make test'."""
+        (workspace / "Makefile").write_text("test:\n\tpytest\n", encoding="utf-8")
+
+        result = inject_commis_hooks(workspace)
+        assert result is not None
+        assert result.exists()
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        assert "hooks" in settings
+        assert "Stop" in settings["hooks"]
+
+        stop_hooks = settings["hooks"]["Stop"]
+        # Should have verify hook + notification hook
+        assert len(stop_hooks) == 2
+
+        # First hook: verify command
+        verify_entry = stop_hooks[0]
+        assert verify_entry["matcher"] == ""
+        assert len(verify_entry["hooks"]) == 1
+        assert verify_entry["hooks"][0]["type"] == "command"
+        assert "make test" in verify_entry["hooks"][0]["command"]
+        assert verify_entry["hooks"][0]["timeout"] == 300
+
+    def test_skips_verify_without_makefile(self, workspace: Path) -> None:
+        """When no Makefile exists, only the notification hook is injected."""
+        result = inject_commis_hooks(workspace)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        stop_hooks = settings["hooks"]["Stop"]
+        # Only notification hook, no verify
+        assert len(stop_hooks) == 1
+        assert "notify" in stop_hooks[0]["hooks"][0]["command"].lower() or "Oikos" in stop_hooks[0]["hooks"][0]["command"]
+
+    def test_custom_verify_command(self, workspace: Path) -> None:
+        """Custom verify_command overrides Makefile heuristic."""
+        result = inject_commis_hooks(workspace, verify_command="npm test")
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        stop_hooks = settings["hooks"]["Stop"]
+        assert len(stop_hooks) == 2
+        assert stop_hooks[0]["hooks"][0]["command"] == "npm test"
+
+    def test_preserves_existing_mcp_settings(self, workspace: Path) -> None:
+        """Existing MCP config in settings.json is preserved when adding hooks."""
+        # First inject MCP settings
+        inject_mcp_settings(workspace, api_url="http://localhost:8080")
+
+        # Then inject hooks
+        (workspace / "Makefile").write_text("test:\n\tpytest\n", encoding="utf-8")
+        result = inject_commis_hooks(workspace)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        # MCP config still present
+        assert "mcpServers" in settings
+        assert "longhouse" in settings["mcpServers"]
+        # Hooks also present
+        assert "hooks" in settings
+        assert "Stop" in settings["hooks"]
+
+    def test_preserves_other_hook_events(self, workspace: Path) -> None:
+        """Existing hooks for other events (PreToolUse, etc.) are preserved."""
+        claude_dir = workspace / ".claude"
+        claude_dir.mkdir(parents=True)
+        existing = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{"type": "command", "command": "echo pre-check"}],
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+
+        result = inject_commis_hooks(workspace)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        # PreToolUse preserved
+        assert "PreToolUse" in settings["hooks"]
+        assert settings["hooks"]["PreToolUse"][0]["matcher"] == "Bash"
+        # Stop hooks added
+        assert "Stop" in settings["hooks"]
+
+    def test_notification_hook_is_async(self, workspace: Path) -> None:
+        """The notification hook runs async (non-blocking)."""
+        result = inject_commis_hooks(workspace)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        # Last Stop hook is the notification hook
+        notify_entry = settings["hooks"]["Stop"][-1]
+        assert notify_entry["hooks"][0].get("async") is True
+
+    def test_handles_corrupt_json(self, workspace: Path) -> None:
+        """Corrupt settings.json is overwritten cleanly with hooks."""
+        claude_dir = workspace / ".claude"
+        claude_dir.mkdir(parents=True)
+        (claude_dir / "settings.json").write_text("not valid json {{{", encoding="utf-8")
+
+        result = inject_commis_hooks(workspace, verify_command="pytest")
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        assert "hooks" in settings
+        assert len(settings["hooks"]["Stop"]) == 2
+
+    def test_overwrites_existing_stop_hooks(self, workspace: Path) -> None:
+        """Existing Stop hooks are replaced with fresh config."""
+        claude_dir = workspace / ".claude"
+        claude_dir.mkdir(parents=True)
+        stale = {
+            "hooks": {
+                "Stop": [
+                    {
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "old-verify"}],
+                    }
+                ]
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(stale, indent=2) + "\n", encoding="utf-8")
+
+        result = inject_commis_hooks(workspace, verify_command="new-verify")
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        stop_hooks = settings["hooks"]["Stop"]
+        assert stop_hooks[0]["hooks"][0]["command"] == "new-verify"
+        assert "old-verify" not in json.dumps(settings)
