@@ -103,6 +103,11 @@ test.describe('Chat Send - Core', () => {
     const ficheId = await createFicheViaUI(page);
     await navigateToChat(page, ficheId);
 
+    // Wait for WebSocket to be connected before sending — streaming requires an active WS.
+    // The backend /config.js can inject a stale WS_BASE_URL from APP_PUBLIC_URL; the E2E
+    // spawn-test-backend clears that so the frontend falls through to VITE_WS_BASE_URL.
+    await expect(page.locator('[data-ws-status="connected"]').first()).toBeVisible({ timeout: 10000 });
+
     const testMessage = 'Say hello in exactly 10 words';
     await sendMessage(page, testMessage);
 
