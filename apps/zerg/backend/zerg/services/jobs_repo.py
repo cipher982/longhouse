@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -200,7 +201,7 @@ def install_jobs_deps(data_dir: str | Path) -> dict[str, Any]:
 
     try:
         result = subprocess.run(
-            ["pip", "install", "--quiet", "--disable-pip-version-check", "-r", str(requirements_path)],
+            [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "-r", str(requirements_path)],
             capture_output=True,
             text=True,
             timeout=120,
