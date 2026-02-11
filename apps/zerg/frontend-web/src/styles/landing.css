@@ -2032,14 +2032,29 @@
     background: rgba(99, 102, 241, 0.10);
   }
 
-  /* Cell icons */
+  /* Cell icons + labels */
   .comparison-cell {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: var(--space-1-5);
+  }
+
+  .comparison-cell-label {
+    font-size: var(--font-size-sm);
+    white-space: nowrap;
+  }
+
+  .comparison-cell-label--muted {
+    color: var(--color-text-muted);
+    opacity: 0.5;
   }
 
   .comparison-cell--yes {
+    color: var(--color-intent-success);
+  }
+
+  .comparison-cell--yes .comparison-cell-label {
     color: var(--color-intent-success);
   }
 
@@ -2050,6 +2065,14 @@
 
   .comparison-cell--partial {
     color: var(--color-intent-warning, #f59e0b);
+  }
+
+  .comparison-cell--partial .comparison-cell-label {
+    color: var(--color-text-secondary);
+  }
+
+  .comparison-cell--na {
+    opacity: 0.5;
   }
 
   /* --------------------------------------------------------
