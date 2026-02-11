@@ -405,7 +405,7 @@ test_config() {
     config=$(curl -s "$FRONTEND_URL/config.js" 2>/dev/null)
 
     local api_url
-    api_url=$(echo "$config" | grep -o 'API_BASE_URL = "[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/')
+    api_url=$(echo "$config" | grep -o 'API_BASE_URL *= *"[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/')
 
     local api_expected
     local api_expected_with_suffix
