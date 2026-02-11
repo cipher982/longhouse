@@ -1,10 +1,12 @@
-"""Tests for AGENTS.md instruction chain injection in commis workspaces."""
+"""Tests for AGENTS.md and MCP settings injection in commis workspaces."""
 
+import json
 from pathlib import Path
 
 import pytest
 
 from zerg.services.workspace_manager import inject_agents_md
+from zerg.services.workspace_manager import inject_mcp_settings
 
 
 @pytest.fixture
@@ -148,10 +150,110 @@ def test_inject_section_ordering(workspace: Path, tmp_path: Path, monkeypatch: p
     assert global_pos < repo_pos < longhouse_pos
 
 
-def test_inject_mcp_placeholder(workspace: Path) -> None:
-    """Longhouse context includes MCP server placeholder note."""
+def test_inject_mentions_mcp_auto_configured(workspace: Path) -> None:
+    """Longhouse context mentions MCP tools are auto-configured."""
     result = inject_agents_md(workspace)
     assert result is not None
 
     content = result.read_text(encoding="utf-8")
-    assert "MCP server integration coming in 3f" in content
+    assert "MCP tools" in content
+    assert ".claude/settings.json" in content
+
+
+# --- inject_mcp_settings tests ---
+
+
+class TestInjectMcpSettings:
+    """Tests for MCP server config injection into .claude/settings.json."""
+
+    def test_creates_file(self, workspace: Path) -> None:
+        """Creates .claude/settings.json with MCP config from scratch."""
+        result = inject_mcp_settings(workspace)
+        assert result is not None
+        assert result.exists()
+        assert result.name == "settings.json"
+        assert result.parent.name == ".claude"
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        assert "mcpServers" in settings
+        assert "longhouse" in settings["mcpServers"]
+
+        lh = settings["mcpServers"]["longhouse"]
+        assert lh["type"] == "stdio"
+        assert lh["command"] == "longhouse"
+        assert lh["args"] == ["mcp-server"]
+
+    def test_preserves_existing_settings(self, workspace: Path) -> None:
+        """Existing settings.json content is preserved when injecting MCP config."""
+        claude_dir = workspace / ".claude"
+        claude_dir.mkdir(parents=True)
+        existing = {
+            "permissions": {"allow": ["Read", "Write"]},
+            "mcpServers": {
+                "other-server": {"type": "stdio", "command": "other"},
+            },
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+
+        result = inject_mcp_settings(workspace)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        # Existing keys preserved
+        assert settings["permissions"] == {"allow": ["Read", "Write"]}
+        assert "other-server" in settings["mcpServers"]
+        # Longhouse added
+        assert "longhouse" in settings["mcpServers"]
+
+    def test_with_api_url(self, workspace: Path) -> None:
+        """--url arg is included when api_url is provided."""
+        result = inject_mcp_settings(workspace, api_url="https://david.longhouse.ai")
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        lh = settings["mcpServers"]["longhouse"]
+        assert lh["args"] == ["mcp-server", "--url", "https://david.longhouse.ai"]
+
+    def test_overwrites_stale_longhouse_entry(self, workspace: Path) -> None:
+        """Existing longhouse MCP entry is replaced with fresh config."""
+        claude_dir = workspace / ".claude"
+        claude_dir.mkdir(parents=True)
+        stale = {
+            "mcpServers": {
+                "longhouse": {
+                    "type": "stdio",
+                    "command": "longhouse",
+                    "args": ["mcp-server", "--url", "http://old-url:9999"],
+                },
+            },
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(stale, indent=2) + "\n", encoding="utf-8")
+
+        result = inject_mcp_settings(workspace, api_url="http://new-url:8080")
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        lh = settings["mcpServers"]["longhouse"]
+        assert lh["args"] == ["mcp-server", "--url", "http://new-url:8080"]
+        assert "old-url" not in json.dumps(settings)
+
+    def test_without_api_url(self, workspace: Path) -> None:
+        """No --url arg when api_url is None."""
+        result = inject_mcp_settings(workspace, api_url=None)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        lh = settings["mcpServers"]["longhouse"]
+        assert lh["args"] == ["mcp-server"]
+
+    def test_handles_corrupt_json(self, workspace: Path) -> None:
+        """Corrupt settings.json is overwritten cleanly."""
+        claude_dir = workspace / ".claude"
+        claude_dir.mkdir(parents=True)
+        (claude_dir / "settings.json").write_text("not valid json {{{", encoding="utf-8")
+
+        result = inject_mcp_settings(workspace)
+        assert result is not None
+
+        settings = json.loads(result.read_text(encoding="utf-8"))
+        assert "longhouse" in settings["mcpServers"]
