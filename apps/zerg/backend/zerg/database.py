@@ -18,6 +18,7 @@ from sqlalchemy import Engine
 from sqlalchemy import MetaData
 from sqlalchemy import create_engine
 from sqlalchemy import event
+from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import declarative_base
@@ -411,6 +412,9 @@ def initialize_database(engine: Engine = None) -> None:
     # Create agents tables
     AgentsBase.metadata.create_all(bind=target_engine)
 
+    # Migrate existing tables: add columns that create_all() won't ALTER into place
+    _migrate_agents_columns(target_engine)
+
     # SQLite-only: ensure FTS5 index for agent events
     if target_engine.dialect.name == "sqlite":
         _ensure_agents_fts(target_engine)
@@ -422,6 +426,27 @@ def initialize_database(engine: Engine = None) -> None:
         inspector = inspect(target_engine)
         tables = inspector.get_table_names()
         logger.debug("Tables created in database: %s", sorted(tables))
+
+
+def _migrate_agents_columns(engine: Engine) -> None:
+    """Add columns to existing tables that create_all() won't ALTER in.
+
+    SQLite's CREATE TABLE IF NOT EXISTS is a no-op on existing tables, so new
+    columns must be added explicitly via ALTER TABLE.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+            if "summary" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN summary TEXT"))
+            if "summary_title" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN summary_title VARCHAR(200)"))
+            conn.commit()
+    except Exception:
+        logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
 
 def _ensure_agents_fts(engine: Engine) -> None:
