@@ -2,12 +2,23 @@ import logging
 
 import pytest
 
+from zerg.generated.ws_messages import Envelope
 from zerg.main import app
 from zerg.models.models import Thread
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _envelope(msg_type: str, data: dict, req_id: str = "") -> dict:
+    """Build an envelope dict ready for send_json."""
+    return Envelope.create(
+        message_type=msg_type,
+        topic="system",
+        data=data,
+        req_id=req_id,
+    ).model_dump()
 
 
 @pytest.mark.skip(reason="Temporarily disabled due to hangs and logging issues")
@@ -51,21 +62,18 @@ class TestWebSocketIntegration:
     def test_connect_disconnect(self, ws_client):
         """Test basic connection and disconnection"""
         # Send a ping to check connectivity
-        ws_client.send_json({"type": "ping", "timestamp": 123456789})
+        ws_client.send_json(_envelope("ping", {"timestamp": 123456789}, "test-ping-1"))
         response = ws_client.receive_json()
         assert response["type"] == "pong"
-        assert "timestamp" in response
+        assert "data" in response
+        assert response["data"].get("timestamp") == 123456789
 
     def test_subscribe_thread(self, ws_client, test_thread):
         """Test subscribing to a thread"""
         # Subscribe to thread topic with explicit thread ID
         logger.info(f"Subscribing to thread: {test_thread.id}")
         ws_client.send_json(
-            {
-                "type": "subscribe",
-                "topics": [f"thread:{test_thread.id}"],
-                "message_id": "test-sub-1",
-            }
+            _envelope("subscribe", {"topics": [f"thread:{test_thread.id}"], "message_id": "test-sub-1"}, "test-sub-1")
         )
 
         # Should receive thread history
@@ -87,11 +95,11 @@ class TestWebSocketIntegration:
         invalid_thread_id = 999999
         logger.info(f"Attempting to subscribe to invalid thread: {invalid_thread_id}")
         ws_client.send_json(
-            {
-                "type": "subscribe",
-                "topics": [f"thread:{invalid_thread_id}"],
-                "message_id": "test-sub-2",
-            }
+            _envelope(
+                "subscribe",
+                {"topics": [f"thread:{invalid_thread_id}"], "message_id": "test-sub-2"},
+                "test-sub-2",
+            )
         )
 
         response = ws_client.receive_json()
@@ -104,11 +112,7 @@ class TestWebSocketIntegration:
         # First subscribe to thread
         logger.info(f"Subscribing to thread: {test_thread.id}")
         ws_client.send_json(
-            {
-                "type": "subscribe_thread",
-                "thread_id": test_thread.id,
-                "message_id": "test-sub-3",
-            }
+            _envelope("subscribe_thread", {"thread_id": test_thread.id}, "test-sub-3")
         )
         history = ws_client.receive_json()  # Consume history
         logger.info(f"Received history: {history}")
@@ -122,12 +126,11 @@ class TestWebSocketIntegration:
         test_content = "Hello, WebSocket world!"
         logger.info(f"Sending message to thread {test_thread.id}: {test_content}")
         ws_client.send_json(
-            {
-                "type": "send_message",
-                "thread_id": test_thread.id,
-                "content": test_content,
-                "message_id": "test-msg-1",
-            }
+            _envelope(
+                "send_message",
+                {"thread_id": test_thread.id, "content": test_content, "message_id": "test-msg-1"},
+                "test-msg-1",
+            )
         )
 
         # Should receive a broadcast message
@@ -153,11 +156,7 @@ class TestWebSocketIntegration:
             # Subscribe both clients to the same thread
             for i, ws in enumerate(clients):
                 ws.send_json(
-                    {
-                        "type": "subscribe_thread",
-                        "thread_id": test_thread.id,
-                        "message_id": f"test-sub-{i}",
-                    }
+                    _envelope("subscribe_thread", {"thread_id": test_thread.id}, f"test-sub-{i}")
                 )
                 history = ws.receive_json()  # Consume history
                 logger.info(f"Client {i} received history: {history}")
@@ -171,12 +170,11 @@ class TestWebSocketIntegration:
             test_content = "Broadcast test"
             logger.info(f"Client 0 sending message to thread {test_thread.id}: {test_content}")
             clients[0].send_json(
-                {
-                    "type": "send_message",
-                    "thread_id": test_thread.id,
-                    "content": test_content,
-                    "message_id": "test-msg-2",
-                }
+                _envelope(
+                    "send_message",
+                    {"thread_id": test_thread.id, "content": test_content, "message_id": "test-msg-2"},
+                    "test-msg-2",
+                )
             )
 
             # Get responses from both clients

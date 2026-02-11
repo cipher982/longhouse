@@ -12,7 +12,7 @@ import {
   type ModelConfig,
 } from "../services/api";
 import { buildUrl } from "../services/api";
-import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
+import { ConnectionStatus, createEnvelope, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { PlusIcon } from "../components/icons";
 import FicheSettingsDrawer from "../components/fiche-settings/FicheSettingsDrawer";
@@ -330,19 +330,16 @@ export default function DashboardPage() {
         ficheIds: ficheIdsToSubscribe
       });
 
-      sendMessageRef.current?.({
-        type: "subscribe",
-        topics: topicsToSubscribe,
-        message_id: messageId,
-      });
+      sendMessageRef.current?.(
+        createEnvelope("subscribe", "system", { topics: topicsToSubscribe, message_id: messageId }, messageId),
+      );
     }
 
     if (topicsToUnsubscribe.length > 0) {
-      sendMessageRef.current?.({
-        type: "unsubscribe",
-        topics: topicsToUnsubscribe,
-        message_id: generateMessageId(),
-      });
+      const unsubMsgId = generateMessageId();
+      sendMessageRef.current?.(
+        createEnvelope("unsubscribe", "system", { topics: topicsToUnsubscribe, message_id: unsubMsgId }, unsubMsgId),
+      );
     }
   }, [fiches, connectionStatus, isAuthenticated, wsReconnectToken, generateMessageId]);
 
@@ -356,11 +353,10 @@ export default function DashboardPage() {
     }
 
     const topics = Array.from(subscribedFicheIdsRef.current).map((id) => `fiche:${id}`);
-    sendMessageRef.current?.({
-      type: "unsubscribe",
-      topics,
-      message_id: generateMessageId(),
-    });
+    const unsubId = generateMessageId();
+    sendMessageRef.current?.(
+      createEnvelope("unsubscribe", "system", { topics, message_id: unsubId }, unsubId),
+    );
     subscribedFicheIdsRef.current.clear();
   }, [isAuthenticated, generateMessageId]);
 
@@ -384,11 +380,10 @@ export default function DashboardPage() {
         return;
       }
       const topics = Array.from(subscribedFicheIds).map((id) => `fiche:${id}`);
-      sendMessage?.({
-        type: "unsubscribe",
-        topics,
-        message_id: msgId(),
-      });
+      const cleanupMsgId = msgId();
+      sendMessage?.(
+        createEnvelope("unsubscribe", "system", { topics, message_id: cleanupMsgId }, cleanupMsgId),
+      );
       subscribedFicheIds.clear();
     };
   }, []);

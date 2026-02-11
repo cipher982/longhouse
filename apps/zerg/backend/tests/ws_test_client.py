@@ -8,6 +8,8 @@ from typing import Optional
 from websockets.client import WebSocketClientProtocol
 from websockets.client import connect
 
+from zerg.generated.ws_messages import Envelope
+
 
 class WebSocketTestClient:
     """
@@ -62,13 +64,25 @@ class WebSocketTestClient:
 
     async def subscribe(self, topics: List[str], message_id: str = "test-sub") -> Dict:
         """Subscribe to topics and return the response"""
-        await self.send_json({"type": "subscribe", "topics": topics, "message_id": message_id})
+        env = Envelope.create(
+            message_type="subscribe",
+            topic="system",
+            data={"topics": topics, "message_id": message_id},
+            req_id=message_id,
+        )
+        await self.send_json(env.model_dump())
         self.subscribed_topics.extend(topics)
         return await self.receive_json()
 
     async def unsubscribe(self, topics: List[str], message_id: str = "test-unsub") -> Dict:
         """Unsubscribe from topics and return the response"""
-        await self.send_json({"type": "unsubscribe", "topics": topics, "message_id": message_id})
+        env = Envelope.create(
+            message_type="unsubscribe",
+            topic="system",
+            data={"topics": topics, "message_id": message_id},
+            req_id=message_id,
+        )
+        await self.send_json(env.model_dump())
         for topic in topics:
             if topic in self.subscribed_topics:
                 self.subscribed_topics.remove(topic)

@@ -2,6 +2,7 @@ import logging
 
 import pytest
 
+from zerg.generated.ws_messages import Envelope
 from zerg.generated.ws_messages import MessageType
 
 # Set up logging
@@ -42,7 +43,13 @@ class TestChatMessageFlow:
     def test_basic_connection(self, ws_client):
         """Verify basic websocket connection works"""
         # Send a ping to check connectivity using envelope format
-        ws_client.send_json({"type": "ping", "timestamp": 123456789, "message_id": "test-ping-1"})
+        ping_env = Envelope.create(
+            message_type="ping",
+            topic="system",
+            data={"timestamp": 123456789},
+            req_id="test-ping-1",
+        )
+        ws_client.send_json(ping_env.model_dump())
         response = ws_client.receive_json()
         # Check envelope format
         assert response["v"] == 1
@@ -56,15 +63,15 @@ class TestChatMessageFlow:
         logger.info("Starting chat message flow test")
 
         # Note: subscribe_thread is deprecated - streaming is automatic to user:{user_id}
-        # Just send message directly
-        message = {
-            "type": MessageType.SEND_MESSAGE,
-            "thread_id": test_thread.id,
-            "content": "Test message",
-            "message_id": "test-msg-1",
-        }
-        logger.info(f"Sending message: {message}")
-        ws_client.send_json(message)
+        # Just send message directly using envelope format
+        send_env = Envelope.create(
+            message_type=MessageType.SEND_MESSAGE,
+            topic="system",
+            data={"thread_id": test_thread.id, "content": "Test message", "message_id": "test-msg-1"},
+            req_id="test-msg-1",
+        )
+        logger.info(f"Sending message: {send_env.model_dump()}")
+        ws_client.send_json(send_env.model_dump())
 
         # Wait for response
         raw_response = ws_client.receive_json()
@@ -91,14 +98,15 @@ class TestChatMessageFlow:
         messages = ["First test message", "Second test message", "Third test message"]
 
         for idx, content in enumerate(messages):
-            message = {
-                "type": MessageType.SEND_MESSAGE,
-                "thread_id": test_thread.id,
-                "content": content,
-                "message_id": f"test-msg-{idx + 1}",
-            }
-            logger.info(f"Sending message {idx + 1}: {message}")
-            ws_client.send_json(message)
+            msg_id = f"test-msg-{idx + 1}"
+            send_env = Envelope.create(
+                message_type=MessageType.SEND_MESSAGE,
+                topic="system",
+                data={"thread_id": test_thread.id, "content": content, "message_id": msg_id},
+                req_id=msg_id,
+            )
+            logger.info(f"Sending message {idx + 1}: {send_env.model_dump()}")
+            ws_client.send_json(send_env.model_dump())
 
             # Verify response for each message
             raw = ws_client.receive_json()

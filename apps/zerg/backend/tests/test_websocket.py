@@ -9,12 +9,43 @@ from starlette.testclient import WebSocketTestSession
 
 from zerg.events import EventType
 from zerg.events import event_bus
+from zerg.generated.ws_messages import Envelope
 from zerg.models.models import Fiche
 from zerg.models.models import Thread
 from zerg.websocket.manager import TopicConnectionManager
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+def _subscribe_envelope(topics: list[str], message_id: str) -> dict:
+    """Build a subscribe envelope dict ready for send_json."""
+    return Envelope.create(
+        message_type="subscribe",
+        topic="system",
+        data={"topics": topics, "message_id": message_id},
+        req_id=message_id,
+    ).model_dump()
+
+
+def _unsubscribe_envelope(topics: list[str], message_id: str) -> dict:
+    """Build an unsubscribe envelope dict ready for send_json."""
+    return Envelope.create(
+        message_type="unsubscribe",
+        topic="system",
+        data={"topics": topics, "message_id": message_id},
+        req_id=message_id,
+    ).model_dump()
+
+
+def _ping_envelope(timestamp: int, message_id: str) -> dict:
+    """Build a ping envelope dict ready for send_json."""
+    return Envelope.create(
+        message_type="ping",
+        topic="system",
+        data={"timestamp": timestamp},
+        req_id=message_id,
+    ).model_dump()
 
 
 @pytest.fixture
@@ -38,23 +69,18 @@ class TestTopicBasedWebSocket:
     def test_basic_connection(self, ws_client: WebSocketTestSession):
         """Test basic WebSocket connection and ping/pong."""
         # Send a ping
-        ws_client.send_json({"type": "ping", "timestamp": 123456789, "message_id": "test-ping-1"})
+        ws_client.send_json(_ping_envelope(123456789, "test-ping-1"))
 
         # Expect pong response
         response = ws_client.receive_json()
         assert response["type"] == "pong"
-        assert "timestamp" in response
+        assert "data" in response
+        assert response["data"].get("timestamp") == 123456789
 
     async def test_subscribe_to_thread(self, ws_client, sample_thread: Thread):
         """Test subscribing to a thread topic."""
         # Subscribe to thread
-        ws_client.send_json(
-            {
-                "type": "subscribe",
-                "topics": [f"thread:{sample_thread.id}"],
-                "message_id": "test-sub-1",
-            }
-        )
+        ws_client.send_json(_subscribe_envelope([f"thread:{sample_thread.id}"], "test-sub-1"))
 
         # Should receive thread history
         response = ws_client.receive_json()
@@ -81,13 +107,7 @@ class TestTopicBasedWebSocket:
         logger.info("START: test_subscribe_to_fiche")
         # Subscribe to fiche
         logger.info(f"Subscribing to fiche: {sample_fiche.id}")
-        ws_client.send_json(
-            {
-                "type": "subscribe",
-                "topics": [f"fiche:{sample_fiche.id}"],
-                "message_id": "test-sub-2",
-            }
-        )
+        ws_client.send_json(_subscribe_envelope([f"fiche:{sample_fiche.id}"], "test-sub-2"))
         logger.info("Subscription message sent")
 
         # Should receive current fiche state
@@ -123,11 +143,7 @@ class TestTopicBasedWebSocket:
         """Test subscribing to multiple topics in one request."""
         # Subscribe to both thread and fiche
         ws_client.send_json(
-            {
-                "type": "subscribe",
-                "topics": [f"thread:{sample_thread.id}", f"fiche:{sample_fiche.id}"],
-                "message_id": "test-sub-3",
-            }
+            _subscribe_envelope([f"thread:{sample_thread.id}", f"fiche:{sample_fiche.id}"], "test-sub-3")
         )
 
         # Should receive thread history and fiche state
@@ -146,23 +162,11 @@ class TestTopicBasedWebSocket:
     ):
         """Test unsubscribing from a topic."""
         # First subscribe
-        ws_client.send_json(
-            {
-                "type": "subscribe",
-                "topics": [f"thread:{sample_thread.id}"],
-                "message_id": "test-sub-4",
-            }
-        )
+        ws_client.send_json(_subscribe_envelope([f"thread:{sample_thread.id}"], "test-sub-4"))
         ws_client.receive_json()  # Consume history response
 
         # Then unsubscribe
-        ws_client.send_json(
-            {
-                "type": "unsubscribe",
-                "topics": [f"thread:{sample_thread.id}"],
-                "message_id": "test-unsub-1",
-            }
-        )
+        ws_client.send_json(_unsubscribe_envelope([f"thread:{sample_thread.id}"], "test-unsub-1"))
 
         # Wait for unsubscribe confirmation
         response = ws_client.receive_json()
@@ -177,13 +181,7 @@ class TestTopicBasedWebSocket:
     async def test_invalid_topic_format(self, ws_client):
         """Test handling of invalid topic formats."""
         # Try to subscribe to invalid topic
-        ws_client.send_json(
-            {
-                "type": "subscribe",
-                "topics": ["invalid:123", "also:invalid"],
-                "message_id": "test-invalid-1",
-            }
-        )
+        ws_client.send_json(_subscribe_envelope(["invalid:123", "also:invalid"], "test-invalid-1"))
 
         # Should receive error for each invalid topic
         response = ws_client.receive_json()
@@ -193,13 +191,7 @@ class TestTopicBasedWebSocket:
     async def test_nonexistent_resources(self, ws_client):
         """Test subscribing to non-existent thread/fiche."""
         # Try to subscribe to non-existent resources
-        ws_client.send_json(
-            {
-                "type": "subscribe",
-                "topics": ["thread:99999", "fiche:99999"],
-                "message_id": "test-invalid-2",
-            }
-        )
+        ws_client.send_json(_subscribe_envelope(["thread:99999", "fiche:99999"], "test-invalid-2"))
 
         # Should receive error messages
         response1 = ws_client.receive_json()
