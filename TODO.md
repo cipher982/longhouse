@@ -13,7 +13,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
-## Validation Summary (2026-02-10, rev 4)
+## Validation Summary (2026-02-10, rev 5)
 
 ### Done / Verified
 | Section | Status | Notes |
@@ -33,15 +33,16 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Timeline Resume UI | DONE | Resume button on session detail + card hints (commit `2c59a77f`) |
 | AGENTS.md Chain | DONE | Global->repo->subdir chain in commis workspaces (commit `81ce535d`) |
 | Skill Format Docs | DONE | Migration scripts for Claude Code + Cursor (commit `5cae78af`) |
+| Harness Phase 3f-3h | 100% | 3f (MCP server + commis injection + Codex config.toml); 3g (quality gates + hooks + review fixes); 3h (research doc) |
+| Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
 
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Harness Phase 3f-3h | 100% | 3f (MCP server + commis injection + Codex config.toml); 3g (quality gates + hooks); 3h (research: Codex App Server + Claude Agent SDK evaluation) |
 | Landing Page Redesign | ~98% | Phase 2+5 complete (comparison, enterprise link, scroll padding, copy); Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
-| Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
-| Install/Onboarding | ~70% | install.sh + doctor + connect + hooks + MCP server done; fresh-shell verify remaining |
+| Install/Onboarding | ~90% | install.sh + doctor + connect + hooks + MCP server + fresh-shell PATH verify done; canonical install path docs + onboard wizard docs remaining |
+| OSS First-Run UX | ~90% | Auto-seed on first run + guided empty state done; "No Claude Code" guidance remaining |
 
 ### Not Started
 | Section | Status | Notes |
@@ -49,7 +50,6 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Semantic Search (Phase 4) | 0% | No embeddings, no sqlite-vec |
 | Forum Discovery UX | 0% | No presence events, no bucket UI |
 | Stripe Integration | 0% | Control plane Phase 2 |
-| OSS First-Run UX | ~90% | Auto-seed on first run + guided empty state done; "No Claude Code" guidance remaining |
 
 > Changelogs archived. See git log for session details.
 
@@ -59,10 +59,10 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 1. **Landing Page Visual Assets (Phase 6)** — Capture timeline screenshots for landing page and README. [Details](#product-landing-page-redesign--full-6)
 2. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
-3. **Install/Onboarding Polish** — Verify Claude shim + PATH in fresh shell; `longhouse connect --install` already injects hooks. [Details](#launch-install--onboarding-alignment-4)
-4. **OSS First-Run UX** — Auto-seed demo data on first `longhouse onboard`; add guided empty state with "Load demo" CTA. [Details](#product-oss-first-run-ux-polish-5)
-5. **HN Launch Prep** — Video walkthrough, social proof (comparison table done). [Details](#launch-hn-launch-readiness--remaining-4)
-6. **Public Launch Checklist** — CTA from Chat to session trace, UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
+3. **HN Launch Prep** — Video walkthrough, social proof (comparison table done). [Details](#launch-hn-launch-readiness--remaining-4)
+4. **Public Launch Checklist** — UI smoke snapshots, shipper smoke test. [Details](#launch-public-launch-checklist-6)
+5. **Install/Onboarding Polish** — Remaining: canonical install path docs, onboard wizard docs. Fresh-shell verify + hooks done. [Details](#launch-install--onboarding-alignment-4)
+6. **OSS First-Run UX** — Remaining: "No Claude Code" guidance. Auto-seed + guided empty state done. [Details](#product-oss-first-run-ux-polish-5)
 
 ---
 
@@ -456,7 +456,7 @@ Close the gap between VISION, README, docs, and the live installer.
 - [ ] **Document onboarding wizard** (steps, troubleshooting, service install) and link it from README + landing page
 - [x] **Add `longhouse doctor`** (self-diagnosis for server health, shipper status, config validity); run after install/upgrade and recommend in docs
 - [x] **Fix `longhouse connect` default URL** — `connect` + `ship` fallback changed from 47300 to 8080 (commit `426f8c9b`)
-- [ ] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (VISION requirement)
+- [x] **Installer polish:** verify Claude shim + PATH in a *fresh* shell and print an exact fix line when it fails (commit `1600b094`)
 - [x] **Hook-based shipping:** `longhouse ship --file` flag + Stop hook implemented (commit `17a978df`). Hook reads `transcript_path` from stdin JSON, ships single file incrementally. SessionStart hook shows recent sessions on new session start. Remaining: `longhouse connect --install` should auto-inject hooks into `.claude/settings.json`.
 - [x] **AGENTS.md chain support:** Support Codex-style AGENTS.md chain (global → repo → subdir) in commis workspaces. Auto-inject Longhouse context (MCP server config, memory pointers) into workspace AGENTS.md when spawning commis.
 
@@ -533,7 +533,7 @@ Close the remaining open questions from VISION.md.
 - [Infra/docs] DB size claim stale; prod DB reset 2026-02-05 (no users). Update docs/launch notes once data exists.
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
 - [Docs vs UI] Timeline resume only in Forum Drop-In (Claude-only), not on `/timeline`. **Tracked** in "Public Launch Checklist."
-- [Docs vs code] Installer lacks PATH-based Claude shim + fresh-shell verification. **Tracked** in "Install + Onboarding Alignment."
+- ~~[Docs vs code] Installer lacks PATH-based Claude shim + fresh-shell verification.~~ **FIXED** — fresh-shell PATH verification added (commit `1600b094`).
 - ~~[Docs vs UI] Timeline empty state has no "Load demo" CTA.~~ **FIXED** — guided empty state with "Load demo sessions" button + connect steps.
 
 ---

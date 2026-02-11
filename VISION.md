@@ -182,7 +182,7 @@ CLI agents (Claude Code, Codex, Gemini) can call back into Longhouse's toolbox v
 - Commis spawned via `hatch` automatically get the Longhouse MCP server configured
 - A hatch-spawned agent can search "how did we implement retry logic?" against the Longhouse archive mid-task
 
-**Current State (as of 2026-02-10):** MCP server implemented with stdio and HTTP transport. 5 tools exposed: `search_sessions`, `get_session_detail`, `memory_read`, `memory_write`, `notify_oikos`. Auto-registered via `longhouse connect --install`. Remaining: auto-configure for commis workspaces, Codex config.toml registration.
+**Current State (as of 2026-02-10):** MCP server implemented with stdio and HTTP transport. 5 tools exposed: `search_sessions`, `get_session_detail`, `memory_read`, `memory_write`, `notify_oikos`. Auto-registered via `longhouse connect --install`. Auto-configured for commis workspaces (injected into `.claude/settings.json` at spawn time). Codex `config.toml` MCP registration supported. Quality gates (verify hooks) injected into commis workspaces.
 
 ### Multi-Provider Backend Integration
 
@@ -329,7 +329,7 @@ The first 2 minutes determine adoption. Onboarding must be zero-friction and dem
 - New users land on Timeline immediately, not a dashboard or settings page
 
 **Zero-key demo:**
-- "Load demo" button seeds example sessions with no API key required
+- Demo sessions auto-seed on first run (when sessions table is empty); `SKIP_DEMO_SEED=1` to disable
 - Users see the product working before any configuration
 - Chat/LLM features prompt for keys only when actually needed
 
@@ -340,6 +340,8 @@ When Timeline is empty, show a 3-step path:
 3. Explore timeline - filters, search, detail views
 
 This is not a modal or tour - it's inline content that disappears once sessions exist.
+
+**Current State (as of 2026-02-10):** Auto-seed on first run and guided empty state with "Load demo sessions" CTA are implemented. `longhouse serve --demo` / `--demo-fresh` also supported.
 
 **Docs-as-source validation:**
 README contains an `onboarding-contract` JSON block that CI executes:
@@ -355,7 +357,7 @@ If the README drifts from reality, CI fails. No hidden env flags - everything de
 - The installer must:
   - Install the `longhouse` CLI
   - Install a Claude shim (PATH-based) so sessions show up without user retraining
-  - Verify the shim in a fresh shell and **report if it failed** with an exact fix line
+  - Verify the shim in a fresh shell and **report if it failed** with an exact fix line (implemented)
 - **Interactive wizard:** `longhouse onboard`
   - QuickStart by default; Manual for power users
   - No 200-line `.env` edits
