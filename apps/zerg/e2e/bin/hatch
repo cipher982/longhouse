@@ -64,6 +64,15 @@ EOF
     >&2 echo "[mock-hatch] Created session file: $SESSION_FILE"
 fi
 
-# Output success message to stdout
-echo "Task completed successfully."
+# Output scenario-appropriate message to stdout.
+# The commis_job_processor extracts a summary from this output,
+# and E2E tests assert on evidence keywords (e.g., "45%").
+PROMPT_LOWER=$(echo "$PROMPT" | tr '[:upper:]' '[:lower:]')
+if echo "$PROMPT_LOWER" | grep -q "disk"; then
+    echo "Disk usage: /dev/sda1 is at 45% capacity. Largest consumers: Docker images/volumes."
+elif echo "$PROMPT_LOWER" | grep -q "repository\|repo\|analyze"; then
+    echo "Repository analyzed. Main files: README.md, src/, package.json."
+else
+    echo "Task completed successfully."
+fi
 exit 0

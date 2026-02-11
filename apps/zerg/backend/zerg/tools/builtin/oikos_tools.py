@@ -79,12 +79,8 @@ async def spawn_commis_async(
             f"execution_mode must be 'standard' or 'workspace', got '{execution_mode}'",
         )
 
-    # Workspace mode (cloud is alias) requires git_repo
-    if execution_mode in ("cloud", "workspace") and not git_repo:
-        return tool_error(
-            ErrorType.VALIDATION_ERROR,
-            "git_repo is required when execution_mode='workspace'",
-        )
+    # Workspace mode (cloud is alias) uses git_repo if provided.
+    # Without git_repo, a scratch workspace (temp dir) is created instead.
 
     # Get database session from credential resolver context
     resolver = get_credential_resolver()
@@ -112,8 +108,9 @@ async def spawn_commis_async(
     if execution_mode in ("cloud", "workspace"):
         job_config = {
             "execution_mode": "workspace",  # Normalize to new name
-            "git_repo": git_repo,
         }
+        if git_repo:
+            job_config["git_repo"] = git_repo
         if resume_session_id:
             job_config["resume_session_id"] = resume_session_id
         if _skills:
