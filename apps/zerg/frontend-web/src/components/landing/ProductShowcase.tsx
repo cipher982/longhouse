@@ -8,7 +8,7 @@
 import { useState } from "react";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
-type Tab = "timeline" | "session";
+type Tab = "timeline" | "search" | "session";
 
 interface TabConfig {
   id: Tab;
@@ -25,6 +25,13 @@ const tabs: TabConfig[] = [
     description: "All your AI coding sessions in one place. See when, what, and how long.",
     image: "/images/landing/timeline-preview.png",
     alt: "Session timeline showing Claude Code sessions with timestamps and summaries",
+  },
+  {
+    id: "search",
+    label: "Search",
+    description: "Full-text search across every tool call, file edit, and conversation. Find anything instantly.",
+    image: "/images/landing/search-preview.png",
+    alt: "Search results filtering sessions by keyword with highlighted matches",
   },
   {
     id: "session",
