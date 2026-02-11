@@ -97,9 +97,13 @@ Import from `../components/ui`. **Check here before building custom UI.**
 
 ## Pushing Changes
 
-**Prod instance**: https://david.longhouse.ai (frontend + API at `/api`)
+**Two things get deployed — both live on the `zerg` server:**
 
-**Deployment architecture**: Control plane + marketing site run on Coolify (clifford). User instances (like `david.longhouse.ai`) are Docker containers on the `zerg` server, managed manually for now (control plane provisioning is WIP). Coolify does NOT auto-deploy user instances.
+| What | URL | How | Container |
+|------|-----|-----|-----------|
+| Marketing site | https://longhouse.ai | Coolify app `longhouse-demo` (UUID: `t0kggkcs044sws0o8wwg8kkk`) | Coolify-managed |
+| User instance | https://david.longhouse.ai | Manual Docker container from GHCR image | `longhouse-david` |
+| Control plane | https://control.longhouse.ai | Coolify app `longhouse-control-plane` (UUID: `jkkcgcoo8wws0csocs40sokc`) | Coolify-managed |
 
 ### Before Push
 ```bash
@@ -108,29 +112,40 @@ make test-e2e          # Core E2E + a11y - must pass 100%
 ```
 
 ### After Push
-Push to main triggers `runtime-image.yml` which builds and publishes `ghcr.io/cipher982/longhouse-runtime:latest` to GHCR. **This does NOT auto-deploy.** You must manually update the instance:
+Push to main triggers `runtime-image.yml` which builds `ghcr.io/cipher982/longhouse-runtime:latest`. **This does NOT auto-deploy.** You must update both:
+
+**1. Marketing site (Coolify):**
+```bash
+~/git/me/mytech/scripts/coolify-deploy.sh t0kggkcs044sws0o8wwg8kkk
+```
+
+**2. User instance (manual Docker):**
 ```bash
 ssh zerg 'docker pull ghcr.io/cipher982/longhouse-runtime:latest'
 ssh zerg 'docker stop longhouse-david && docker rm longhouse-david'
-# Recreate with same env vars, volume, network (see scripts or control-plane)
+# Recreate: inspect old container for env vars, then docker run with same config
+# Key flags: --network coolify, -v /var/lib/docker/data/longhouse/david:/data
+# Caddy labels: caddy=david.longhouse.ai, caddy.reverse_proxy={{upstreams 8000}}
 ```
 
 ### Verify Deploy
 ```bash
-make verify-prod       # Full validation: API + browser (~80s)
+make verify-prod       # Full validation: API + browser
+curl -s https://longhouse.ai | grep '<title>'  # Verify marketing site
 ```
 
 ### If Something Breaks
 ```bash
-ssh zerg 'docker logs longhouse-david --tail 50'
+ssh zerg 'docker logs longhouse-david --tail 50'      # User instance
+coolify app logs t0kggkcs044sws0o8wwg8kkk              # Marketing site
 ```
 
 ### Checklist for Agents
 1. ✅ `make test` passes locally
-2. ✅ `make test-e2e` passes locally
-3. ✅ Push to main (triggers GHCR image build)
-4. ✅ Pull + recreate container on zerg server
-5. ✅ Run `make verify-prod` (~80s)
+2. ✅ Push to main (triggers GHCR image build)
+3. ✅ Deploy marketing site: `coolify-deploy.sh t0kggkcs044sws0o8wwg8kkk`
+4. ✅ Pull + recreate `longhouse-david` container on zerg
+5. ✅ Verify both: `make verify-prod` + check `longhouse.ai` title
 6. ✅ Report result to user
 
 ## apps/sauron - Scheduler (Folded In)
