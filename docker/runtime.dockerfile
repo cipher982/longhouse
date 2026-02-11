@@ -14,12 +14,13 @@ FROM oven/bun:alpine AS frontend-builder
 
 WORKDIR /app
 
-# Copy package files for dependency caching
+# Copy root lockfile + workspace package.json for dependency caching
+# bun.lock lives at monorepo root; no per-workspace lockfile exists
+COPY bun.lock ./
 COPY apps/zerg/frontend-web/package.json ./
-COPY apps/zerg/frontend-web/bun.lock* ./
 
-# Install dependencies
-RUN bun install --frozen-lockfile || bun install
+# Install dependencies (frozen-lockfile works now that we have the real lockfile)
+RUN bun install --frozen-lockfile
 
 # Copy frontend source
 COPY apps/zerg/frontend-web/ ./
