@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../ui";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 import { InstallSection } from "./InstallSection";
+import { WaitlistModal } from "./WaitlistModal";
 import config from "../../lib/config";
 
 interface HeroSectionProps {
@@ -11,16 +13,14 @@ interface HeroSectionProps {
 
 export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _heroAnimationsEnabled }: HeroSectionProps) {
   const navigate = useNavigate();
+  const [showWaitlist, setShowWaitlist] = useState(false);
 
   const handleSelfHost = () => {
     document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleHostedBeta = () => {
-    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
-    setTimeout(() => {
-      document.querySelector<HTMLButtonElement>(".landing-pricing-card.coming-soon .landing-pricing-cta")?.click();
-    }, 400);
+    setShowWaitlist(true);
   };
 
   return (
@@ -90,6 +90,8 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           />
         </div>
       </div>
+
+      {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} source="hero_hosted" />}
     </section>
   );
 }

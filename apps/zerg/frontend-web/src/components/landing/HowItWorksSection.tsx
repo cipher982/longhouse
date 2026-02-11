@@ -5,7 +5,6 @@
  * Dual-path: Hosted or Self-hosted → Search → Resume.
  */
 
-import config from "../../lib/config";
 import { DownloadIcon, SearchIcon, SmartphoneIcon } from "../icons";
 import { Button } from "../ui";
 
@@ -39,7 +38,7 @@ const steps: Step[] = [
 
 export function HowItWorksSection() {
   const handleGetStarted = () => {
-    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("deployment-options")?.scrollIntoView({ behavior: "smooth" });
   };
 
   return (
