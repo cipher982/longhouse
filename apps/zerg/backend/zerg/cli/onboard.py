@@ -379,13 +379,29 @@ def onboard(
     typer.secho("Step 1: Checking dependencies", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
-    # Check Claude Code
+    # Check supported AI CLIs
     has_claude = _has_command("claude")
+    has_codex = _has_command("codex")
+    has_gemini = _has_command("gemini")
+    has_any_cli = has_claude or has_codex or has_gemini
+
     if has_claude:
         typer.secho("  [OK] Claude Code found", fg=typer.colors.GREEN)
-    else:
-        typer.secho("  [--] Claude Code not found (optional)", fg=typer.colors.YELLOW)
-        typer.echo("       Install from: https://docs.anthropic.com/claude-code")
+    if has_codex:
+        typer.secho("  [OK] Codex CLI found", fg=typer.colors.GREEN)
+    if has_gemini:
+        typer.secho("  [OK] Gemini CLI found", fg=typer.colors.GREEN)
+
+    if not has_any_cli:
+        typer.secho("  [--] No supported AI CLI found", fg=typer.colors.YELLOW)
+        typer.echo("")
+        typer.echo("  Longhouse works with any of these CLI tools:")
+        typer.echo("    - Claude Code  https://docs.anthropic.com/en/docs/claude-code/overview")
+        typer.echo("    - Codex CLI    https://github.com/openai/codex")
+        typer.echo("    - Gemini CLI   https://github.com/google-gemini/gemini-cli")
+        typer.echo("")
+        typer.echo("  You can still set up the server now and connect a CLI later.")
+        typer.echo("  You can also import sessions manually via JSONL upload.")
 
     # Check for existing config
     config_path = get_config_path()
@@ -447,9 +463,9 @@ def onboard(
 
     if no_shipper:
         typer.echo("  Skipping shipper setup (--no-shipper)")
-    elif not has_claude:
-        typer.echo("  Skipping shipper (Claude Code not installed)")
-        typer.echo("  Install Claude Code first, then run: longhouse connect --install")
+    elif not has_any_cli:
+        typer.echo("  Skipping shipper (no supported CLI installed)")
+        typer.echo("  Install a CLI first, then run: longhouse connect --install")
     else:
         # Check for service manager
         has_service_manager = _has_launchd() or _has_systemd()

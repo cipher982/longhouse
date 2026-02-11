@@ -42,7 +42,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Landing Page Redesign | ~99% | Phase 2+5 complete, CTA checklist done (commit 62108045); Phase 6 visual assets remaining |
 | Control Plane | ~45% | Scaffold + provisioner + CI gate done; OAuth/billing/runtime image pending |
 | Install/Onboarding | ~90% | install.sh + doctor + connect + hooks + MCP server + fresh-shell PATH verify done; canonical install path docs + onboard wizard docs remaining |
-| OSS First-Run UX | ~90% | Auto-seed on first run + guided empty state done; "No Claude Code" guidance remaining |
+| OSS First-Run UX | DONE | Auto-seed on first run + guided empty state + "No Claude Code" guidance all complete |
 
 ### Not Started
 | Section | Status | Notes |
@@ -62,7 +62,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 3. **HN Launch Prep** — Video walkthrough, social proof (comparison table done). [Details](#launch-hn-launch-readiness--remaining-4)
 4. **Public Launch Checklist** — UI smoke snapshots, shipper smoke test. [Details](#launch-public-launch-checklist-6)
 5. **Install/Onboarding Polish** — Remaining: canonical install path docs, onboard wizard docs. Fresh-shell verify + hooks done. [Details](#launch-install--onboarding-alignment-4)
-6. **OSS First-Run UX** — Remaining: "No Claude Code" guidance. Auto-seed + guided empty state done. [Details](#product-oss-first-run-ux-polish-5)
+6. **OSS First-Run UX** — DONE. Auto-seed + guided empty state + "No Claude Code" guidance all complete. [Details](#product-oss-first-run-ux-polish-5)
 
 ---
 
