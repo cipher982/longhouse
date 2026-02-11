@@ -3,10 +3,6 @@ name: github
 description: "Interact with GitHub repositories, issues, and pull requests using the GitHub API."
 emoji: "🐙"
 homepage: "https://docs.github.com/en/rest"
-primary_env: "GITHUB_TOKEN"
-requires:
-  env:
-    - GITHUB_TOKEN
 ---
 
 # GitHub Skill
@@ -47,5 +43,4 @@ github_create_issue(
 
 ## Authentication
 
-Configure GitHub token in Fiche Settings > Connectors, or ensure
-`GITHUB_TOKEN` is set in the environment.
+Configure a GitHub Personal Access Token in Settings > Connectors > GitHub.
