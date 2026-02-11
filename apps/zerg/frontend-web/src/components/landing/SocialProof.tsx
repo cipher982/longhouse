@@ -1,31 +1,19 @@
 /**
  * SocialProof
  *
- * Credibility section: "Built by" info, open-source badge, video walkthrough placeholder.
+ * Credibility section: "Built by" info and open-source badge.
  * Sits near the bottom of the landing page, before the footer CTA.
- *
- * To add a video later, set the `videoUrl` prop (YouTube/Loom embed URL)
- * or configure VITE_WALKTHROUGH_VIDEO_URL in the environment.
  */
-
-interface SocialProofProps {
-  /** YouTube or Loom embed URL. When set, renders an iframe instead of placeholder. */
-  videoUrl?: string;
-}
 
 const GITHUB_PROFILE = "https://github.com/cipher982";
 const GITHUB_REPO = "https://github.com/cipher982/longhouse";
 const TWITTER_PROFILE = "https://x.com/drose_999";
 const LICENSE = "Apache-2.0";
 
-export function SocialProof({ videoUrl }: SocialProofProps) {
-  const resolvedVideoUrl =
-    videoUrl || import.meta.env?.VITE_WALKTHROUGH_VIDEO_URL || undefined;
-
+export function SocialProof() {
   return (
     <section className="landing-social-proof" id="about">
       <div className="landing-section-inner">
-        {/* Builder credibility */}
         <div className="social-proof-builder">
           <p className="social-proof-built-by">
             Built by{" "}
@@ -79,31 +67,6 @@ export function SocialProof({ videoUrl }: SocialProofProps) {
               <span>{LICENSE}</span>
             </a>
           </div>
-        </div>
-
-        {/* Video walkthrough */}
-        <div className="social-proof-video">
-          {resolvedVideoUrl ? (
-            <div className="social-proof-video-frame">
-              <iframe
-                src={resolvedVideoUrl}
-                title="Longhouse walkthrough"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                className="social-proof-video-iframe"
-              />
-            </div>
-          ) : (
-            <div className="social-proof-video-frame social-proof-video-placeholder">
-              <div className="social-proof-video-play">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </div>
-              <p className="social-proof-video-label">Video walkthrough coming soon</p>
-              <p className="social-proof-video-sub">Install, timeline, search -- in 60 seconds</p>
-            </div>
-          )}
         </div>
       </div>
     </section>
