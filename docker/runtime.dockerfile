@@ -108,6 +108,9 @@ COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/frontend
 # Copy config
 COPY --from=backend-builder --chown=longhouse:longhouse /config /config
 
+# Bootstrap pip in the venv so job packs can pip-install their own deps at startup
+RUN /app/.venv/bin/python -m ensurepip --default-pip 2>/dev/null || true
+
 # Create required directories
 RUN mkdir -p /app/static/avatars /data \
     && chown -R longhouse:longhouse /app/static /data \
