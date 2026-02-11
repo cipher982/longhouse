@@ -177,6 +177,9 @@ def build_transcript(
     Returns:
         A :class:`SessionTranscript` with messages, turns, and metadata.
     """
+    # Sort events by timestamp to guarantee chronological order
+    events = sorted(events, key=lambda e: e.get("timestamp") or datetime.min)
+
     # Derive session_id from the first event (all events should share it)
     session_id = ""
     if events:
@@ -211,14 +214,7 @@ def build_transcript(
             )
         )
 
-    # Apply token budget via truncation of the full concatenated text
-    if token_budget is not None and messages:
-        messages = _apply_token_budget(messages, token_budget, token_encoding)
-
-    # Build turns from the final message list
-    turns = detect_turns(messages)
-
-    # Extract goal/outcome signals
+    # Extract goal/outcome signals from full session BEFORE budget truncation
     first_user = None
     last_assistant = None
     for msg in messages:
@@ -226,6 +222,13 @@ def build_transcript(
             first_user = msg.content
         if msg.role == "assistant":
             last_assistant = msg.content
+
+    # Apply token budget via truncation of the full concatenated text
+    if token_budget is not None and messages:
+        messages = _apply_token_budget(messages, token_budget, token_encoding)
+
+    # Build turns from the final message list
+    turns = detect_turns(messages)
 
     total_tokens = sum(count_tokens(m.content, token_encoding) for m in messages)
 

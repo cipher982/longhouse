@@ -5,11 +5,14 @@ Tests cover:
     - tokens: count_tokens, truncate (head, tail, sandwich)
     - transcript: build_transcript, detect_turns, token_budget
     - golden: full pipeline from sample events to verified SessionTranscript
+    - review-fix: modern token redaction, tool filtering, event sorting,
+      budget signal preservation, noise stripping accuracy
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 
 import pytest
@@ -221,8 +224,9 @@ class TestIsToolResult:
     def test_tool_role(self):
         assert is_tool_result({"role": "tool"}) is True
 
-    def test_with_tool_output(self):
-        assert is_tool_result({"role": "assistant", "tool_output_text": "some output"}) is True
+    def test_assistant_with_tool_output_is_not_tool_result(self):
+        """Assistant events with tool_output_text are NOT tool results — only role='tool' qualifies."""
+        assert is_tool_result({"role": "assistant", "tool_output_text": "some output"}) is False
 
     def test_user_message(self):
         assert is_tool_result({"role": "user"}) is False
@@ -615,3 +619,175 @@ class TestGoldenTranscript:
         # Secrets redacted
         assert "sk-abc123" not in transcript.messages[0].content
         assert "[OPENAI_KEY]" in transcript.messages[0].content
+
+
+# =====================================================================
+# Review Fix 1: Modern token format redaction
+# =====================================================================
+
+class TestRedactSecretsModernTokens:
+    """Verify redaction catches modern API key / token formats."""
+
+    def test_sk_proj_key_redacted(self):
+        """sk-proj-... keys (OpenAI project-scoped) must be redacted."""
+        text = "my key is sk-proj-abc123def456ghi789jkl012mno"
+        result = redact_secrets(text)
+        assert "sk-proj-" not in result
+        assert "[OPENAI_KEY]" in result
+
+    def test_github_pat_redacted(self):
+        """github_pat_... fine-grained PATs must be redacted."""
+        text = "token: github_pat_11AABBBCC_xxyyzzaabbccddee1234567890abcdef"
+        result = redact_secrets(text)
+        assert "github_pat_" not in result
+        assert "[GITHUB_PAT]" in result
+
+    def test_aws_temporary_credentials_redacted(self):
+        """ASIA... AWS temporary credentials must be redacted."""
+        text = "AWS_ACCESS_KEY_ID=ASIAIOSFODNN7EXAMPLE"
+        result = redact_secrets(text)
+        assert "ASIAIOSFODNN7EXAMPLE" not in result
+        assert "[AWS_TEMP_KEY]" in result
+
+    def test_json_api_key_redacted(self):
+        """JSON-style 'apiKey': '...' patterns must be redacted."""
+        text = '{"apiKey": "abcdef1234567890abcdef1234567890"}'
+        result = redact_secrets(text)
+        assert "abcdef1234567890" not in result
+        assert "[REDACTED]" in result
+
+    def test_sk_ant_still_specific_label(self):
+        """sk-ant-... keys get [ANTHROPIC_KEY], not [OPENAI_KEY]."""
+        text = "key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
+        result = redact_secrets(text)
+        assert "[ANTHROPIC_KEY]" in result
+
+
+# =====================================================================
+# Review Fix 2: Tool-result detection — assistant narration preserved
+# =====================================================================
+
+class TestToolResultFiltering:
+    """Verify assistant events with tool_output_text are not dropped."""
+
+    def test_assistant_with_tool_output_included_when_tools_excluded(self):
+        """When include_tool_calls=False, assistant narration must still appear."""
+        now = _ts(11, 0)
+        events = [
+            {"role": "user", "content_text": "Run ls", "timestamp": now, "session_id": "fix2"},
+            {
+                "role": "assistant",
+                "content_text": "I ran ls and found 3 files.",
+                "tool_output_text": "file1.txt\nfile2.txt\nfile3.txt",
+                "timestamp": _ts(11, 1),
+                "session_id": "fix2",
+            },
+        ]
+        transcript = build_transcript(
+            events, include_tool_calls=False, strip_noise=False, redact_secrets=False,
+        )
+        assistant_msgs = [m for m in transcript.messages if m.role == "assistant"]
+        assert len(assistant_msgs) == 1
+        assert "I ran ls" in assistant_msgs[0].content
+        # Tool output must NOT appear (include_tool_calls=False)
+        assert "file1.txt" not in assistant_msgs[0].content
+
+    def test_tool_role_skipped_when_tools_excluded(self):
+        """Events with role='tool' must be skipped when include_tool_calls=False."""
+        events = [
+            {"role": "user", "content_text": "Run ls", "timestamp": _ts(11, 0), "session_id": "fix2b"},
+            {"role": "tool", "tool_output_text": "file1.txt", "timestamp": _ts(11, 1), "session_id": "fix2b"},
+            {"role": "assistant", "content_text": "Done.", "timestamp": _ts(11, 2), "session_id": "fix2b"},
+        ]
+        transcript = build_transcript(
+            events, include_tool_calls=False, strip_noise=False, redact_secrets=False,
+        )
+        roles = [m.role for m in transcript.messages]
+        assert "tool" not in roles
+
+
+# =====================================================================
+# Review Fix 3: Unsorted events sorted by build_transcript
+# =====================================================================
+
+class TestEventSorting:
+    """Verify build_transcript sorts events by timestamp."""
+
+    def test_unsorted_events_produce_correct_order(self):
+        base = _ts(12, 0)
+        events = [
+            {"role": "assistant", "content_text": "second", "timestamp": base + timedelta(seconds=120), "session_id": "fix3"},
+            {"role": "user", "content_text": "first", "timestamp": base + timedelta(seconds=60), "session_id": "fix3"},
+            {"role": "assistant", "content_text": "third", "timestamp": base + timedelta(seconds=180), "session_id": "fix3"},
+        ]
+        transcript = build_transcript(events, strip_noise=False, redact_secrets=False)
+        contents = [m.content for m in transcript.messages]
+        assert contents == ["first", "second", "third"]
+
+
+# =====================================================================
+# Review Fix 4: Token budget preserves goal signals
+# =====================================================================
+
+class TestTokenBudgetSignals:
+    """Verify first_user_message and last_assistant_message survive budget truncation."""
+
+    def test_first_user_message_survives_truncation(self):
+        now = _ts(13, 0)
+        events = [
+            {"role": "user", "content_text": "Please build the auth system", "timestamp": now, "session_id": "fix4"},
+        ]
+        for i in range(20):
+            events.append({
+                "role": "assistant",
+                "content_text": f"Working on step {i}. " * 50,
+                "timestamp": now + timedelta(seconds=i + 1),
+                "session_id": "fix4",
+            })
+        events.append({
+            "role": "assistant",
+            "content_text": "All done! The auth system is complete.",
+            "timestamp": now + timedelta(seconds=100),
+            "session_id": "fix4",
+        })
+
+        transcript = build_transcript(
+            events, token_budget=50, strip_noise=False, redact_secrets=False,
+        )
+        # Goal signals come from FULL session, not truncated view
+        assert transcript.first_user_message == "Please build the auth system"
+        assert "All done" in transcript.last_assistant_message
+
+
+# =====================================================================
+# Review Fix 5: strip_noise preserves HTML/JSX
+# =====================================================================
+
+class TestStripNoiseAccuracy:
+    """Verify strip_noise only removes known noise tags, not legitimate HTML/JSX."""
+
+    def test_html_div_preserved(self):
+        text = "Use a <div className='container'>content</div> wrapper."
+        result = strip_noise(text)
+        assert "<div" in result
+        assert "content</div>" in result
+
+    def test_jsx_component_preserved(self):
+        text = "Render <Button variant='primary'>Click me</Button> for the CTA."
+        result = strip_noise(text)
+        assert "<Button" in result
+        assert "</Button>" in result
+
+    def test_system_reminder_still_stripped(self):
+        text = "Before <system-reminder>secret stuff</system-reminder> After"
+        result = strip_noise(text)
+        assert "secret stuff" not in result
+        assert "Before" in result
+        assert "After" in result
+
+    def test_custom_xml_tag_preserved(self):
+        """Arbitrary XML tags must NOT be stripped."""
+        text = "Configure <my_config>value=42</my_config> in settings."
+        result = strip_noise(text)
+        assert "<my_config>" in result
+        assert "value=42" in result

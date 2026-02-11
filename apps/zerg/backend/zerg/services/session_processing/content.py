@@ -17,7 +17,6 @@ _NOISE_PATTERNS = [
     re.compile(r"<env>[\s\S]*?</env>", re.IGNORECASE),
     re.compile(r"<claude_background_info>[\s\S]*?</claude_background_info>", re.IGNORECASE),
     re.compile(r"<fast_mode_info>[\s\S]*?</fast_mode_info>", re.IGNORECASE),
-    re.compile(r"<[\w_]+[^>]*>[\s\S]*?</[\w_]+>", re.IGNORECASE),
 ]
 
 
@@ -42,21 +41,27 @@ def strip_noise(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 _REDACTION_PATTERNS = [
-    # OpenAI API keys (sk-...)
-    (re.compile(r"\bsk-[a-zA-Z0-9]{20,}\b"), "[OPENAI_KEY]"),
-    # Anthropic API keys (sk-ant-...)
-    (re.compile(r"\bsk-ant-[a-zA-Z0-9-]{20,}\b"), "[ANTHROPIC_KEY]"),
+    # Anthropic API keys (sk-ant-...) — must come before generic sk- pattern
+    (re.compile(r"\bsk-ant-[\w-]{20,}\b"), "[ANTHROPIC_KEY]"),
+    # OpenAI API keys (sk-..., sk-proj-..., etc.)
+    (re.compile(r"\bsk-[\w-]{20,}\b"), "[OPENAI_KEY]"),
+    # Generic API keys in JSON-style ("apiKey": "..." or "api_key": "...")
+    (re.compile(r"""(?i)["']api[_-]?key["']\s*:\s*["'][a-zA-Z0-9_-]{20,}["']"""), '"apiKey": "[REDACTED]"'),
     # Generic API keys (api_key=... or apikey=...)
     (re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)['\"]?[a-zA-Z0-9_-]{20,}['\"]?"), r"\1[REDACTED]"),
     # Bearer tokens
     (re.compile(r"(?i)(bearer\s+)[a-zA-Z0-9_.-]{20,}"), r"\1[BEARER_TOKEN]"),
     # AWS access keys (AKIA...)
     (re.compile(r"\bAKIA[A-Z0-9]{16}\b"), "[AWS_ACCESS_KEY]"),
+    # AWS temporary credentials (ASIA...)
+    (re.compile(r"\bASIA[A-Z0-9]{16}\b"), "[AWS_TEMP_KEY]"),
     # AWS secret keys (40 char base64-ish)
     (
         re.compile(r"(?i)(aws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*)['\"]?[a-zA-Z0-9/+=]{40}['\"]?"),
         r"\1[AWS_SECRET]",
     ),
+    # GitHub fine-grained PATs (github_pat_...)
+    (re.compile(r"\bgithub_pat_[a-zA-Z0-9_]{20,}\b"), "[GITHUB_PAT]"),
     # GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_)
     (re.compile(r"\bgh[pousr]_[a-zA-Z0-9]{36,}\b"), "[GITHUB_TOKEN]"),
     # Slack tokens (xoxb-, xoxp-, xoxa-, xoxr-)
@@ -72,8 +77,9 @@ _REDACTION_PATTERNS = [
         "[JWT_TOKEN]",
     ),
     # Generic secrets in env vars (SECRET=..., PASSWORD=..., TOKEN=...)
+    # Negative lookahead (?!\[) prevents clobbering earlier redaction placeholders.
     (
-        re.compile(r"(?i)(secret|password|token|credential)[_-]?\s*[=:]\s*['\"]?[^\s'\"]{8,}['\"]?"),
+        re.compile(r"(?i)(secret|password|token|credential)[_-]?\s*[=:]\s*['\"]?(?!\[)[^\s'\"]{8,}['\"]?"),
         r"\1=[REDACTED]",
     ),
 ]
@@ -101,11 +107,9 @@ def redact_secrets(text: str) -> str:
 def is_tool_result(event: dict) -> bool:
     """Check if an event dict represents a tool result.
 
-    An event is a tool result if its role is "tool" or it has a non-empty
-    tool_output_text field.
+    An event is a tool result only if its role is "tool". Assistant events
+    that happen to carry ``tool_output_text`` (e.g. narration alongside a
+    tool call) are NOT tool results — their ``content_text`` must still be
+    included in transcripts.
     """
-    if event.get("role") == "tool":
-        return True
-    if event.get("tool_output_text"):
-        return True
-    return False
+    return event.get("role") == "tool"
