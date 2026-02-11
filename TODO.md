@@ -786,7 +786,7 @@ Evidence: `ideas/evidence/40_evidence_lazy_binder_compat.sh`
 22. ~~[ID 22] Remove deprecated publish_event_safe wrapper.~~ ✅ Already gone (2026-02-10)
 Evidence: `ideas/evidence/41_evidence_events_publisher_deprecated.sh`
 
-23. [ID 23] Require envelope-only WS messages, remove legacy wrapping.
+23. ~~[ID 23] Require envelope-only WS messages, remove legacy wrapping.~~ ✅ Done (2026-02-10)
 Evidence: `ideas/evidence/42_evidence_websocket_legacy_wrap.sh`
 
 24. ~~[ID 24] Remove legacy admin routes without api prefix.~~ ✅ Done (2026-02-10)

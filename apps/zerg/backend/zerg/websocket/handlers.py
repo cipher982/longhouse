@@ -1,7 +1,7 @@
 """WebSocket message handlers for topic-based subscriptions.
 
-This module provides handlers for the new topic-based WebSocket system,
-supporting subscription to fiche and thread events.
+All inbound and outbound messages use the unified Envelope format.
+Legacy flat-JSON messages are no longer accepted.
 """
 
 import logging
@@ -147,30 +147,16 @@ async def send_to_client(
     *,
     topic: Optional[str] = None,
 ) -> bool:
-    """Send a message to a client if they are connected.
+    """Send an envelope-format message to a connected client.
+
+    All outgoing frames **must** already be valid Envelope dicts (with keys
+    ``v``, ``type``, ``topic``, ``ts``, ``data``).  Callers are responsible
+    for constructing envelopes before calling this function.
 
     Args:
-        client_id: The client ID to send to
-        message: The message to send
-
-    Returns:
-        bool: True if message was sent, False if client not found
-    """
-    """Low-level helper to push a JSON-serialisable payload to a single client.
-
-    Every outgoing frame **must** follow the unified *Envelope* contract.
-    For compatibility, messages that don't already have envelope structure
-    are automatically wrapped in envelopes.
-
-    Args:
-        client_id: Recipient connection id (uuid4 string)
-        message:  Arbitrary JSON-serialisable mapping.  If the mapping lacks
-            the mandatory envelope keys (``v``, ``topic``, ``ts``) it will be
-            embedded into a new envelope automatically.
-        topic:    Optional topic string.  Required when *message* itself does
-            not include a topic.  Helpers such as ``handle_fiche_subscription``
-            therefore forward their known topic so the wrapper logic can
-            construct a valid envelope.
+        client_id: Recipient connection id (uuid4 string).
+        message:  Envelope dict ready to be serialised to JSON.
+        topic:    Unused — kept for signature compatibility during migration.
 
     Returns:
         True when the frame was queued for sending, False if the *client_id*
@@ -180,38 +166,8 @@ async def send_to_client(
     if client_id not in topic_manager.active_connections:
         return False
 
-    # ------------------------------------------------------------------
-    # Envelope wrapping
-    # ------------------------------------------------------------------
-
-    # Envelope structure is mandatory – wrap any payload that does not yet
-    # include the required keys.
-
-    # All outgoing messages must use unified Envelope format
     try:
-        # Extract req_id if available from the original message
-        req_id = None
-        if isinstance(message, dict):
-            req_id = message.get("message_id")
-
-        # If message is already an envelope, use it directly
-        if isinstance(message, dict) and all(k in message for k in ["v", "type", "topic", "ts", "data"]):
-            payload = message
-        else:
-            # Create envelope for non-envelope messages
-            message_type = message.get("type", "unknown") if isinstance(message, dict) else "unknown"
-            envelope_topic = topic or "system"
-            data = message.get("data", message) if isinstance(message, dict) else message
-
-            envelope = Envelope.create(
-                message_type=message_type,
-                topic=envelope_topic,
-                data=data,
-                req_id=req_id,
-            )
-            payload = envelope.model_dump()
-
-        await topic_manager.active_connections[client_id].send_json(payload)  # type: ignore[arg-type]
+        await topic_manager.active_connections[client_id].send_json(message)  # type: ignore[arg-type]
         return True
     except Exception as e:  # noqa: BLE001 – log & swallow
         logger.error("Error sending to client %s: %s", client_id, e)
@@ -358,31 +314,31 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
         await send_error(client_id, "Failed to process subscription", envelope.req_id)
 
 
-async def handle_unsubscribe(client_id: str, message: Dict[str, Any], _: Session) -> None:
+async def handle_unsubscribe(client_id: str, envelope: Envelope, _: Session) -> None:
     """Handle topic unsubscription requests.
 
     Args:
         client_id: The client ID that sent the message
-        message: The unsubscription message
+        envelope: The unsubscription envelope
         _: Unused database session
     """
     try:
-        message_id = message.get("message_id", "")
-        for topic in message.get("topics", []):
+        unsub_data = UnsubscribeData.model_validate(envelope.data)
+        message_id = unsub_data.message_id or envelope.req_id or ""
+        for topic in unsub_data.topics:
             await topic_manager.unsubscribe_from_topic(client_id, topic)
 
-        # Send confirmation message back to client
-        await send_to_client(
-            client_id,
-            {
-                "type": "unsubscribe_success",
-                "message_id": message_id,
-                "topics": message.get("topics", []),
-            },
+        # Send confirmation envelope back to client
+        ack_envelope = Envelope.create(
+            message_type="unsubscribe_success",
+            topic="system",
+            data={"message_id": message_id, "topics": unsub_data.topics},
+            req_id=message_id,
         )
+        await send_to_client(client_id, ack_envelope.model_dump())
     except Exception as e:
         logger.error(f"Error handling unsubscribe: {str(e)}")
-        await send_error(client_id, "Failed to process unsubscribe", message.get("message_id", ""))
+        await send_error(client_id, "Failed to process unsubscribe", envelope.req_id)
 
 
 # Message handler dispatcher
@@ -415,18 +371,15 @@ _INBOUND_SCHEMA_MAP: Dict[str, type[BaseModel]] = {
 
 
 # ---------------------------------------------------------------------------
-# Dedicated helpers for chat‑centric message types introduced in
-# the legacy WebSocket protocol. They wrap the existing topic
-# subscription mechanism so the rest of the system (topic_manager &
-# event_bus) continues to operate unchanged.
+# Dedicated helpers for chat-centric message types. All accept Envelope.
 
 
-async def handle_subscribe_thread(client_id: str, message: Dict[str, Any], db: Session) -> None:  # noqa: D401
+async def handle_subscribe_thread(client_id: str, envelope: Envelope, db: Session) -> None:  # noqa: D401
     """Handle a *subscribe_thread* request.
 
     DEPRECATED: Thread subscriptions removed. All streaming now goes to user:{user_id} topic.
     """
-    message_id = message.get("message_id", "")
+    message_id = envelope.req_id or ""
     await send_error(
         client_id,
         "subscribe_thread is deprecated. All streaming is automatically delivered to user:{user_id}",
@@ -434,18 +387,14 @@ async def handle_subscribe_thread(client_id: str, message: Dict[str, Any], db: S
     )
 
 
-async def handle_send_message(client_id: str, message: Dict[str, Any], db: Session) -> None:  # noqa: D401
+async def handle_send_message(client_id: str, envelope: Envelope, db: Session) -> None:  # noqa: D401
     """Persist a new message to a thread and broadcast it."""
 
     try:
-        # Extract and validate data from message dict
-        thread_id = message.get("thread_id")
-        content = message.get("content")
-        message_id = message.get("message_id", "")
-
-        if thread_id is None or content is None:
-            await send_error(client_id, "Missing thread_id or content in send_message", message_id)
-            return
+        send_data = SendMessageData.model_validate(envelope.data)
+        message_id = envelope.req_id or ""
+        thread_id = send_data.thread_id
+        content = send_data.content
 
         # Validate thread exists and get fiche owner
         thread = crud.get_thread(db, thread_id)
@@ -485,14 +434,14 @@ async def handle_send_message(client_id: str, message: Dict[str, Any], db: Sessi
 
         # Broadcast to user-scoped topic (all streaming goes to user:{user_id})
         topic = f"user:{fiche.owner_id}"
-        envelope = Envelope.create(
+        broadcast_envelope = Envelope.create(
             message_type="thread_message",
             topic=topic,
             data=thread_msg_data.model_dump(),
             req_id=message_id,
         )
 
-        await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
+        await topic_manager.broadcast_to_topic(topic, broadcast_envelope.model_dump())
 
         # We intentionally do **not** publish a secondary
         # ``THREAD_MESSAGE_CREATED`` event here. The freshly‑created
@@ -502,7 +451,7 @@ async def handle_send_message(client_id: str, message: Dict[str, Any], db: Sessi
 
     except Exception as e:
         logger.error(f"Error in handle_send_message: {str(e)}")
-        await send_error(client_id, "Failed to send message", message.get("message_id"))
+        await send_error(client_id, "Failed to send message", envelope.req_id)
 
 
 # Register the chat-specific handlers in the dispatcher
@@ -511,67 +460,61 @@ MESSAGE_HANDLERS["send_message"] = handle_send_message
 
 
 async def dispatch_message(client_id: str, message: Dict[str, Any], db: Session) -> None:
-    """Dispatch a message to the appropriate handler.
+    """Dispatch an envelope-format message to the appropriate handler.
+
+    All inbound messages **must** be valid Envelope dicts.  Legacy flat-JSON
+    payloads are rejected with a protocol error.
 
     Args:
         client_id: The client ID that sent the message
-        message: The message to dispatch (raw dict or envelope)
+        message: Envelope dict (must contain v, type, topic, ts, data)
         db: Database session
     """
     try:
-        # Handle both envelope and legacy format messages
-        if "type" in message and "data" in message and "topic" in message:
-            # New envelope format
+        # ------------------------------------------------------------------
+        # Parse envelope — reject non-envelope payloads
+        # ------------------------------------------------------------------
+        try:
             envelope = Envelope.model_validate(message)
-            message_type = envelope.type
-            message_data = envelope.data
-        else:
-            # Legacy format - convert to envelope-like structure
-            message_type = message.get("type")
-            envelope = None
-            message_data = message
+        except ValidationError:
+            await send_error(client_id, "INVALID_ENVELOPE: all messages must use envelope format", close_code=1002)
+            return
+
+        message_type = envelope.type
+        message_data = envelope.data
 
         # ------------------------------------------------------------------
         # 1) Fast-fail on completely unknown "type" field.
         # ------------------------------------------------------------------
         if message_type not in MESSAGE_HANDLERS:
-            await send_error(client_id, f"Unknown message type: {message_type}")
+            await send_error(client_id, f"Unknown message type: {message_type}", envelope.req_id)
             return
 
         # ------------------------------------------------------------------
         # 2) Schema validation using Pydantic models defined in
         #    ``_INBOUND_SCHEMA_MAP``.  We do **not** trust handlers to repeat
-        #    validation – doing it centrally prevents duplicate effort and
+        #    validation — doing it centrally prevents duplicate effort and
         #    guarantees identical error semantics across all message types.
         # ------------------------------------------------------------------
-
         model_cls = _INBOUND_SCHEMA_MAP.get(message_type)
         if model_cls is not None:
             try:
-                # Validate the data portion, not the entire envelope
                 model_cls.model_validate(message_data)
             except ValidationError as exc:
                 logger.debug("Schema validation failed for %s: %s", message_type, exc)
                 await send_error(
                     client_id,
                     "INVALID_PAYLOAD",
-                    envelope.req_id if envelope else message.get("message_id"),
+                    envelope.req_id,
                     close_code=1002,
                 )
-                # Draft spec says we should close with 1002 on protocol error;
                 return
 
-        # Forward to handler - pass envelope for envelope-aware handlers, message for legacy handlers
+        # ------------------------------------------------------------------
+        # 3) Forward to handler — all handlers accept (client_id, Envelope, db).
+        # ------------------------------------------------------------------
         handler = MESSAGE_HANDLERS[message_type]
-        if message_type in ["ping", "pong", "subscribe"]:
-            # These handlers expect Envelope objects
-            if envelope is None:
-                # Create envelope for legacy messages
-                envelope = Envelope.create(message_type=message_type, topic="system", data=message_data, req_id=message.get("message_id"))
-            await handler(client_id, envelope, db)
-        else:
-            # Legacy handlers expect dict messages
-            await handler(client_id, message, db)
+        await handler(client_id, envelope, db)
 
     except Exception as e:
         logger.error(f"Error dispatching message: {str(e)}")

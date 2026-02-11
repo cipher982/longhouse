@@ -21,6 +21,26 @@ export interface WebSocketMessage {
   [key: string]: unknown;
 }
 
+/**
+ * Create an envelope-format message for the WS protocol.
+ * All outbound messages must use this format.
+ */
+export function createEnvelope(
+  type: string,
+  topic: string,
+  data: Record<string, unknown>,
+  reqId?: string,
+): WebSocketMessage {
+  return {
+    v: 1,
+    type,
+    topic,
+    ts: Date.now(),
+    data,
+    ...(reqId != null ? { req_id: reqId } : {}),
+  };
+}
+
 interface UseWebSocketOptions {
   // Authentication
   includeAuth?: boolean;
@@ -155,12 +175,9 @@ export function useWebSocket(
       message = { type: 'message', data: event.data };
     }
 
-    // Handle heartbeat protocol
+    // Handle heartbeat protocol — respond with envelope-format pong
     if (message.type === 'ping') {
-      sendMessage({
-        type: 'pong',
-        data: { timestamp: Date.now() }
-      });
+      sendMessage(createEnvelope('pong', 'system', { timestamp: Date.now() }));
       return;
     }
 

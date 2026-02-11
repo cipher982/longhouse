@@ -16,7 +16,13 @@ def ws_client(test_client: TestClient):
 
 def test_envelope_ping(ws_client):
     """Test that ping responses are wrapped in Envelope."""
-    ws_client.send_json({"type": "ping", "timestamp": 123456789, "message_id": "test-ping-1"})
+    ping_envelope = Envelope.create(
+        message_type="ping",
+        topic="system",
+        data={"timestamp": 123456789},
+        req_id="test-ping-1",
+    )
+    ws_client.send_json(ping_envelope.model_dump())
     response = ws_client.receive_json()
     # Envelope fields
     assert response["v"] == 1

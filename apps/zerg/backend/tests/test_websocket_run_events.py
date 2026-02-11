@@ -1,5 +1,7 @@
 import pytest
 
+from zerg.generated.ws_messages import Envelope
+
 
 @pytest.fixture
 def ws_client(client):
@@ -12,13 +14,14 @@ def ws_client(client):
 async def test_run_update_ws_events(ws_client, client, sample_fiche):
     """When a run is triggered, WebSocket subscribers receive run_update events"""
     fiche_id = sample_fiche.id
-    # Subscribe to fiche topic
-    subscribe_msg = {
-        "type": "subscribe",
-        "topics": [f"fiche:{fiche_id}"],
-        "message_id": "sub-run-updates",
-    }
-    ws_client.send_json(subscribe_msg)
+    # Subscribe to fiche topic using envelope format
+    subscribe_envelope = Envelope.create(
+        message_type="subscribe",
+        topic="system",
+        data={"topics": [f"fiche:{fiche_id}"], "message_id": "sub-run-updates"},
+        req_id="sub-run-updates",
+    )
+    ws_client.send_json(subscribe_envelope.model_dump())
 
     # Expect initial fiche_state message
     init = ws_client.receive_json()

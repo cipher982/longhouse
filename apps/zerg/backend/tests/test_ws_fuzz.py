@@ -128,24 +128,34 @@ def test_ws_fuzz_roundtrip(client, db_session, data):  # type: ignore[valid-type
     with client.websocket_connect("/api/ws") as websocket:  # type: ignore[func-returns-value]
         # Ensure we are subscribed so *send_message* broadcasts come back
         # to this client.  We reuse the helper to keep traffic realistic.
-        websocket.send_json(
-            {
-                "type": "subscribe",
-                "topics": [f"user:{user.id}"],
-                "message_id": f"init-{uuid.uuid4()}",
-            }
+        from zerg.generated.ws_messages import Envelope
+
+        init_msg_id = f"init-{uuid.uuid4()}"
+        subscribe_env = Envelope.create(
+            message_type="subscribe",
+            topic="system",
+            data={"topics": [f"user:{user.id}"], "message_id": init_msg_id},
+            req_id=init_msg_id,
         )
+        websocket.send_json(subscribe_env.model_dump())
 
         # Consume any optional payloads (subscribe_thread currently does not
         # send immediate data, but future versions might).  We use *poll*
         # style with a very small timeout so we never hang.
         _drain_messages(websocket, timeout=0.05)
 
-        # Iterate through the random sequence.
+        # Iterate through the random sequence — wrap each payload in Envelope.
         for msg in messages:
-            if msg["type"] == "ping":
+            msg_type = msg["type"]
+            env = Envelope.create(
+                message_type=msg_type,
+                topic="system",
+                data=msg,
+                req_id=msg.get("message_id"),
+            )
+            if msg_type == "ping":
                 start = time.perf_counter()
-                websocket.send_json(msg)
+                websocket.send_json(env.model_dump())
 
                 # Must receive *pong* within 100 ms --------------------
                 response = _receive_with_timeout(websocket, 0.1)
@@ -156,7 +166,7 @@ def test_ws_fuzz_roundtrip(client, db_session, data):  # type: ignore[valid-type
                 # Non-ping messages – simply send and allow the backend to
                 # process. We opportunistically drain the queue afterwards
                 # so the *receive* buffer does not grow unbounded.
-                websocket.send_json(msg)
+                websocket.send_json(env.model_dump())
                 _drain_messages(websocket, timeout=0.05)
 
         # If we reach this point without assertion failure the example

@@ -113,12 +113,14 @@ async def websocket_endpoint(
         if initial_topics:
             with db_session() as db:
                 topics = [t.strip() for t in initial_topics.split(",")]
-                subscribe_msg = {
-                    "type": "subscribe",
-                    "topics": topics,
-                    "message_id": f"auto-subscribe-{uuid.uuid4()}",
-                }
-                await dispatch_message(client_id, subscribe_msg, db)
+                msg_id = f"auto-subscribe-{uuid.uuid4()}"
+                subscribe_envelope = Envelope.create(
+                    message_type="subscribe",
+                    topic="system",
+                    data={"topics": topics, "message_id": msg_id},
+                    req_id=msg_id,
+                )
+                await dispatch_message(client_id, subscribe_envelope.model_dump(), db)
 
         # Main message loop
         while True:
