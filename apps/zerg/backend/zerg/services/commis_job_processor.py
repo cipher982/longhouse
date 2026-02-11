@@ -526,18 +526,11 @@ class CommisJobProcessor:
             git_repo = job_config.get("git_repo")
             resume_session_id = job_config.get("resume_session_id")
 
-            if not git_repo:
-                job.status = "failed"
-                job.error = "Workspace execution requires git_repo in job config"
-                job.finished_at = datetime.now(timezone.utc)
-                db.commit()
-                logger.error(f"Commis job {job_id} failed: missing git_repo")
-                return
-
             # Generate a unique commis_id for artifact storage
             commis_id = f"ws-{job_id}-{uuid.uuid4().hex[:8]}"
             job.commis_id = commis_id
             base_branch = job_config.get("base_branch", "main")
+            is_scratch = not git_repo  # Scratch workspace (no git clone)
 
             # Commit commis_id before long-running execution
             db.commit()
@@ -557,18 +550,28 @@ class CommisJobProcessor:
             logger.warning(f"Failed to initialize artifact store for workspace job {job_id}, continuing without it: {e}")
 
         workspace = None
+        scratch_dir = None
         diff = ""
         result = None
         execution_error = None
 
         try:
-            # 1. Set up workspace (no DB needed)
-            logger.info(f"Setting up workspace for job {job_id}")
-            workspace = await workspace_manager.setup(
-                repo_url=git_repo,
-                run_id=commis_id,
-                base_branch=base_branch,
-            )
+            if is_scratch:
+                # 1a. Scratch workspace: create a temp directory (no git clone)
+                import tempfile
+
+                scratch_dir = Path(tempfile.mkdtemp(prefix=f"commis-{job_id}-"))
+                logger.info(f"Created scratch workspace for job {job_id} at {scratch_dir}")
+                workspace_path = scratch_dir
+            else:
+                # 1b. Git workspace: clone repo and set up branch
+                logger.info(f"Setting up workspace for job {job_id}")
+                workspace = await workspace_manager.setup(
+                    repo_url=git_repo,
+                    run_id=commis_id,
+                    base_branch=base_branch,
+                )
+                workspace_path = workspace.path
 
             # 2. Create commis directory for artifacts (best-effort, don't fail job)
             if artifact_store:
@@ -578,7 +581,7 @@ class CommisJobProcessor:
                         config={
                             "execution_mode": "workspace",
                             "git_repo": git_repo,
-                            "workspace_path": str(workspace.path),
+                            "workspace_path": str(workspace_path),
                         },
                         commis_id=commis_id,
                     )
@@ -595,7 +598,7 @@ class CommisJobProcessor:
 
                     prepared_resume_id = await prepare_session_for_resume(
                         session_id=resume_session_id,
-                        workspace_path=workspace.path,
+                        workspace_path=workspace_path,
                     )
                     logger.info(f"Prepared session {resume_session_id} for resume as {prepared_resume_id}")
                 except Exception as resume_error:
@@ -607,7 +610,7 @@ class CommisJobProcessor:
                 from zerg.services.workspace_manager import inject_agents_md
 
                 inject_agents_md(
-                    workspace.path,
+                    workspace_path,
                     project_name=job_config.get("project"),
                 )
             except Exception as agents_md_error:
@@ -620,8 +623,8 @@ class CommisJobProcessor:
 
                 settings = get_settings()
                 api_url = settings.public_site_url or f"http://localhost:{_DEFAULT_CALLBACK_PORT}"
-                inject_mcp_settings(workspace.path, api_url=api_url)
-                inject_codex_mcp_settings(workspace.path, api_url=api_url)
+                inject_mcp_settings(workspace_path, api_url=api_url)
+                inject_codex_mcp_settings(workspace_path, api_url=api_url)
             except Exception as mcp_error:
                 logger.warning(f"Failed to inject MCP settings for job {job_id}: {mcp_error}")
 
@@ -634,7 +637,7 @@ class CommisJobProcessor:
                 from zerg.services.workspace_manager import inject_commis_hooks
 
                 inject_commis_hooks(
-                    workspace.path,
+                    workspace_path,
                     verify_command=job_config.get("verify_command"),
                 )
             except Exception as hooks_error:
@@ -658,32 +661,33 @@ class CommisJobProcessor:
                     logger.warning(f"Failed to emit commis_started event for job {job_id}: {started_error}")
 
             # 6. Run commis in workspace (LONG-RUNNING - no DB session held!)
-            logger.info(f"Running workspace commis for job {job_id} in {workspace.path}")
+            logger.info(f"Running workspace commis for job {job_id} in {workspace_path}")
             hook_env = _build_hook_env(job_id)
             result = await cloud_executor.run_commis(
                 task=job_task,
-                workspace_path=workspace.path,
+                workspace_path=workspace_path,
                 model=job_model,
                 resume_session_id=prepared_resume_id,
                 env_vars=hook_env,
             )
 
-            # 7. Capture git diff (best-effort, don't fail job on diff errors)
-            try:
-                diff = await workspace_manager.capture_diff(workspace)
-                if diff:
-                    if artifact_store:
-                        artifact_store.save_artifact(commis_id, "diff.patch", diff)
-                    logger.info(f"Captured diff for job {job_id}: {len(diff)} bytes")
-            except Exception as diff_error:
-                logger.warning(f"Failed to capture diff for job {job_id}: {diff_error}")
-                diff = ""  # Ensure diff is empty on error
+            # 7. Capture git diff (best-effort, skip for scratch workspaces)
+            if workspace:
+                try:
+                    diff = await workspace_manager.capture_diff(workspace)
+                    if diff:
+                        if artifact_store:
+                            artifact_store.save_artifact(commis_id, "diff.patch", diff)
+                        logger.info(f"Captured diff for job {job_id}: {len(diff)} bytes")
+                except Exception as diff_error:
+                    logger.warning(f"Failed to capture diff for job {job_id}: {diff_error}")
+                    diff = ""  # Ensure diff is empty on error
 
             # 8. Ingest session JSONL into agent timeline (best-effort)
             if result and result.status == "success":
                 try:
                     _ingest_workspace_session(
-                        workspace_path=workspace.path,
+                        workspace_path=workspace_path,
                         job_id=job_id,
                         commis_id=commis_id,
                         job_started_at=job_started_at,
@@ -698,6 +702,15 @@ class CommisJobProcessor:
             if commis_id and artifact_store:
                 try:
                     artifact_store.complete_commis(commis_id, status="failed", error=str(e))
+                except Exception:
+                    pass
+        finally:
+            # Clean up scratch workspace (temp dir)
+            if scratch_dir and scratch_dir.exists():
+                import shutil
+
+                try:
+                    shutil.rmtree(scratch_dir)
                 except Exception:
                     pass
 
