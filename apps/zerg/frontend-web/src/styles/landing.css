@@ -469,6 +469,14 @@
     color: var(--color-brand-primary);
   }
 
+  .landing-hero-enterprise-link:focus-visible {
+    color: var(--color-brand-primary);
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
+    text-decoration: underline;
+    border-radius: var(--radius-sm);
+  }
+
   .landing-cta-text {
     color: var(--color-text-secondary);
     background: transparent;
@@ -1252,7 +1260,7 @@
   }
 
   .deployment-comparison-col-header--highlighted {
-    color: var(--color-brand-primary) !important;
+    color: var(--color-text-primary);
     background: rgba(99, 102, 241, 0.08);
   }
 
@@ -1289,7 +1297,8 @@
     background: rgba(99, 102, 241, 0.10);
   }
 
-  .deployment-comparison-table tbody tr:not(:last-child) td {
+  .deployment-comparison-table tbody tr:not(:last-child) td,
+  .deployment-comparison-table tbody tr:not(:last-child) th {
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   }
 
