@@ -240,14 +240,21 @@ def google_callback(code: str | None = None, error: str | None = None, db: Sessi
 
     email = email.strip().lower()
 
-    # Upsert user
+    # Upsert user (handle concurrent callbacks for same email)
     user = db.query(User).filter(User.email == email).first()
     if not user:
-        user = User(email=email)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        logger.info(f"Created new user: {email}")
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            user = User(email=email)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            logger.info(f"Created new user: {email}")
+        except IntegrityError:
+            db.rollback()
+            user = db.query(User).filter(User.email == email).first()
+            logger.info(f"Concurrent signup resolved for: {email}")
     else:
         logger.info(f"Existing user logged in: {email}")
 

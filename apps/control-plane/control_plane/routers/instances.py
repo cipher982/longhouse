@@ -270,5 +270,5 @@ def issue_login_token(instance_id: int, db: Session = Depends(get_db)):
         "instance": inst.subdomain,
         "exp": int(time.time()) + expires_in,
     }
-    token = _encode_jwt(payload, settings.jwt_secret)
+    token = _encode_jwt(payload, settings.instance_jwt_secret)
     return TokenOut(token=token, expires_in=expires_in)

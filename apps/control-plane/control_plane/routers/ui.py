@@ -47,6 +47,7 @@ small { color: #6b7280; }
 .status-active { color: #059669; font-weight: 600; }
 .status-provisioning { color: #d97706; font-weight: 600; }
 .status-canceled { color: #dc2626; font-weight: 600; }
+.status-failed { color: #dc2626; font-weight: 600; }
 .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid #e5e7eb;
            border-top-color: #111; border-radius: 50%; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -135,7 +136,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
 
-    if instance and instance.status not in ("deprovisioned",):
+    if instance and instance.status not in ("deprovisioned", "failed"):
         # Has instance — show it
         instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
         status_class = f"status-{instance.status}" if instance.status in ("active", "provisioning", "canceled") else ""
@@ -144,8 +145,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         <h1>Your Instance</h1>
         <div class="card">
           <p><strong>URL:</strong> <a href="{instance_url}" target="_blank">{instance_url}</a></p>
-          <p><strong>Status:</strong> <span class="{status_class}">{instance.status}</span></p>
-          <p><strong>Subscription:</strong> {user.subscription_status or 'none'}</p>
+          <p><strong>Status:</strong> <span class="{status_class}">{html.escape(instance.status)}</span></p>
+          <p><strong>Subscription:</strong> {html.escape(user.subscription_status or 'none')}</p>
           <div style="margin-top: 1rem;">
             <a href="{instance_url}" class="btn btn-primary" target="_blank">Open Instance</a>
             <a href="/billing/portal-redirect" class="btn btn-secondary" style="margin-left: 0.5rem;">Manage Billing</a>
@@ -255,6 +256,17 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
         # Already ready — redirect to instance
         instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
         return RedirectResponse(instance_url, status_code=302)
+
+    if instance.status == "failed":
+        body = """
+        <h1>Something went wrong</h1>
+        <div class="card">
+          <p>Your instance failed to provision. Please contact support.</p>
+          <a href="mailto:hello@longhouse.ai?subject=Provisioning%20failure" class="btn btn-primary">Contact Support</a>
+          <a href="/dashboard" class="btn btn-secondary" style="margin-left: 0.5rem;">Back</a>
+        </div>
+        """
+        return _page("Provisioning Failed", body)
 
     # Provisioning in progress — poll health
     instance_url = f"https://{instance.subdomain}.{settings.root_domain}"

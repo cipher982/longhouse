@@ -125,8 +125,13 @@ def _handle_checkout_completed(data: dict, db: Session) -> None:
         logger.info(f"Instance already exists for {user.email} ({existing.subdomain}), skipping provision")
         return
 
-    # Derive subdomain from email (before @, sanitized)
-    subdomain = user.email.split("@")[0].lower().replace(".", "-").replace("+", "-")
+    # Derive subdomain from email (before @, sanitized to valid DNS label)
+    import re
+
+    subdomain = user.email.split("@")[0].lower()
+    subdomain = re.sub(r"[^a-z0-9-]", "-", subdomain).strip("-")[:63]
+    if not subdomain:
+        subdomain = "user"
     # Ensure uniqueness
     base = subdomain
     counter = 1
@@ -154,6 +159,10 @@ def _handle_checkout_completed(data: dict, db: Session) -> None:
         logger.info(f"Provisioned instance {subdomain} for {user.email}")
     except Exception:
         logger.exception(f"Failed to provision instance for {user.email}")
+        # Record failure so dashboard shows error instead of infinite spinner
+        failed = Instance(user_id=user.id, subdomain=subdomain, container_name="", data_path="", status="failed")
+        db.add(failed)
+        db.commit()
 
 
 def _handle_subscription_updated(data: dict, db: Session) -> None:
