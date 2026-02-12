@@ -21,6 +21,7 @@ class ModelProvider(str, Enum):
 
     OPENAI = "openai"
     GROQ = "groq"
+    ANTHROPIC = "anthropic"
 
 
 class ModelConfig:
@@ -157,11 +158,14 @@ def get_model_for_use_case(use_case: str) -> str:
     - summarization: TIER_2 (cost-sensitive)
     - bulk_classification: TIER_3 (high volume, simple)
     - ci_test: TIER_3 (fast/cheap for CI)
+
+    Values can be tier references (e.g. "TIER_1") or direct model IDs (e.g. "glm-4.7").
     """
-    tier = _USE_CASES.get(use_case)
-    if not tier:
+    tier_or_model = _USE_CASES.get(use_case)
+    if not tier_or_model:
         raise ValueError(f"Unknown use case: {use_case}. Valid: {list(_USE_CASES.keys())}")
-    return _TIERS[tier]
+    # Resolve tier reference, or return as direct model ID
+    return _TIERS.get(tier_or_model, tier_or_model)
 
 
 # =============================================================================
@@ -212,3 +216,61 @@ def get_tier_model(tier: str) -> str:
     if tier not in _TIERS:
         raise ValueError(f"Unknown tier: {tier}. Valid: {list(_TIERS.keys())}")
     return _TIERS[tier]
+
+
+# =============================================================================
+# LLM CLIENT FACTORY - Get a ready-to-use async client for a use case
+# =============================================================================
+
+
+def get_llm_client_for_use_case(use_case: str) -> tuple:
+    """Get an async LLM client + model string for a use case.
+
+    Resolves the use case → tier → model → provider chain from models.json,
+    then creates the appropriate SDK client (OpenAI or Anthropic).
+
+    API keys are read from env vars based on provider:
+      - openai/groq: OPENAI_API_KEY (or GROQ_API_KEY for groq)
+      - anthropic: ANTHROPIC_API_KEY
+
+    Returns:
+        (client, model_id, provider) tuple. Caller must close the client.
+
+    Raises:
+        ValueError: If no API key is configured for the resolved provider.
+    """
+    model_id = get_model_for_use_case(use_case)
+    model_config = MODELS_BY_ID.get(model_id)
+    if not model_config:
+        raise ValueError(f"Model {model_id} not found in models config")
+
+    provider = model_config.provider
+    base_url = model_config.base_url
+
+    if provider == ModelProvider.ANTHROPIC:
+        from anthropic import AsyncAnthropic
+
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY required for anthropic provider")
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        return AsyncAnthropic(**kwargs), model_id, provider
+
+    # OpenAI-compatible providers (openai, groq)
+    from openai import AsyncOpenAI
+
+    if provider == ModelProvider.GROQ:
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY required for groq provider")
+    else:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY required for openai provider")
+
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return AsyncOpenAI(**kwargs), model_id, provider

@@ -23,7 +23,6 @@ import gzip
 import hashlib
 import hmac
 import logging
-import os
 import re
 from collections import defaultdict
 from datetime import datetime
@@ -442,50 +441,41 @@ class BriefingResponse(BaseModel):
 
 async def _summarize_via_anthropic(
     transcript: Any,
-    api_key: str,
+    client: Any,
     model: str,
 ) -> Any:
-    """Summarize a transcript using z.ai's Anthropic-compatible API.
+    """Summarize a transcript using an Anthropic-compatible client.
 
     Returns a SessionSummary (same type as quick_summary).
     """
-    from anthropic import AsyncAnthropic
-
     from zerg.services.session_processing import SessionSummary
     from zerg.services.session_processing import safe_parse_json
     from zerg.services.session_processing.summarize import _QUICK_SYSTEM
     from zerg.services.session_processing.summarize import _build_user_prompt
 
-    client = AsyncAnthropic(
-        api_key=api_key,
-        base_url="https://api.z.ai/api/anthropic",
+    user_prompt = _build_user_prompt(transcript)
+    response = await client.messages.create(
+        model=model,
+        max_tokens=512,
+        system=_QUICK_SYSTEM,
+        messages=[{"role": "user", "content": user_prompt}],
     )
-    try:
-        user_prompt = _build_user_prompt(transcript)
-        response = await client.messages.create(
-            model=model,
-            max_tokens=512,
-            system=_QUICK_SYSTEM,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
 
-        raw = response.content[0].text if response.content else ""
-        parsed = safe_parse_json(raw)
+    raw = response.content[0].text if response.content else ""
+    parsed = safe_parse_json(raw)
 
-        if isinstance(parsed, dict):
-            return SessionSummary(
-                session_id=transcript.session_id,
-                title=parsed.get("title", "Untitled Session"),
-                summary=parsed.get("summary", raw),
-            )
-
+    if isinstance(parsed, dict):
         return SessionSummary(
             session_id=transcript.session_id,
-            title="Untitled Session",
-            summary=raw.strip()[:500] if raw.strip() else "No summary generated.",
+            title=parsed.get("title", "Untitled Session"),
+            summary=parsed.get("summary", raw),
         )
-    finally:
-        await client.close()
+
+    return SessionSummary(
+        session_id=transcript.session_id,
+        title="Untitled Session",
+        summary=raw.strip()[:500] if raw.strip() else "No summary generated.",
+    )
 
 
 async def _generate_summary_background(session_id: str) -> None:
@@ -494,27 +484,29 @@ async def _generate_summary_background(session_id: str) -> None:
     Queries events from DB, builds transcript, calls LLM for quick summary,
     and stores the result on the session record.
 
+    LLM provider/model is resolved from models.json via get_llm_client_for_use_case().
+
     Skips if:
     - Session already has a summary (idempotent)
-    - No LLM API key is configured
+    - No API key configured for the resolved provider
+    - Testing or LLM disabled
     """
     from zerg.database import get_session_factory
+    from zerg.models_config import ModelProvider
+    from zerg.models_config import get_llm_client_for_use_case
     from zerg.services.session_processing import build_transcript
     from zerg.services.session_processing import quick_summary
 
     settings = get_settings()
 
-    # Check for available LLM client
-    # Prefer ZAI_API_KEY (flat-rate), fall back to OPENAI_API_KEY
-    zai_key = os.getenv("ZAI_API_KEY")
-    openai_key = settings.openai_api_key
-
-    if not zai_key and not openai_key:
-        logger.debug("No LLM API key configured, skipping summary generation for %s", session_id)
-        return
-
     if settings.testing or settings.llm_disabled:
         logger.debug("LLM disabled or testing mode, skipping summary for %s", session_id)
+        return
+
+    try:
+        client, model, provider = get_llm_client_for_use_case("summarization")
+    except ValueError as e:
+        logger.debug("Skipping summary for %s: %s", session_id, e)
         return
 
     session_factory = get_session_factory()
@@ -564,35 +556,11 @@ async def _generate_summary_background(session_id: str) -> None:
             logger.debug("Empty transcript for session %s, skipping summary", session_id)
             return
 
-        # Create LLM client
-        # z.ai only exposes Anthropic-compatible API, so use anthropic SDK for it.
-        # SUMMARY_BASE_URL overrides the default endpoint for OpenAI-compat providers.
-        summary_base_url = os.getenv("SUMMARY_BASE_URL")
-        summary_model = os.getenv("SUMMARY_MODEL")
-
-        if zai_key and not summary_base_url:
-            # z.ai → Anthropic-compatible endpoint
-            summary = await _summarize_via_anthropic(transcript, zai_key, summary_model or "glm-4.7")
+        # Call LLM — dispatch based on provider from models.json
+        if provider == ModelProvider.ANTHROPIC:
+            summary = await _summarize_via_anthropic(transcript, client, model)
         else:
-            from openai import AsyncOpenAI
-
-            if summary_base_url:
-                client = AsyncOpenAI(
-                    api_key=zai_key or openai_key,
-                    base_url=summary_base_url,
-                )
-                model = summary_model or "glm-4.7"
-            else:
-                client = AsyncOpenAI(api_key=openai_key)
-                model = summary_model or "gpt-5-mini"
-
-            try:
-                summary = await quick_summary(transcript, client, model)
-            finally:
-                try:
-                    await client.close()
-                except Exception:
-                    pass
+            summary = await quick_summary(transcript, client, model)
 
         # Store on session record
         session.summary = summary.summary
@@ -605,6 +573,10 @@ async def _generate_summary_background(session_id: str) -> None:
         logger.exception("Failed to generate summary for session %s", session_id)
     finally:
         db.close()
+        try:
+            await client.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
