@@ -3,8 +3,6 @@
 Tests cover:
     - SessionSummary dataclass creation
     - quick_summary with mock AsyncOpenAI client
-    - structured_summary with mock client
-    - batch_summarize with mock client and concurrency
     - _format_age helper (relative time formatting)
     - GET /agents/briefing endpoint format
 """
@@ -23,9 +21,7 @@ import pytest
 
 from zerg.services.session_processing import SessionSummary
 from zerg.services.session_processing import SessionTranscript
-from zerg.services.session_processing import batch_summarize
 from zerg.services.session_processing import quick_summary
-from zerg.services.session_processing import structured_summary
 from zerg.services.session_processing.transcript import SessionMessage
 from zerg.services.session_processing.transcript import Turn
 
@@ -207,148 +203,6 @@ class TestQuickSummary:
         user_msg = messages[1]["content"]
         assert "zerg" in user_msg
         assert "claude" in user_msg
-
-
-# =====================================================================
-# structured_summary
-# =====================================================================
-
-
-class TestStructuredSummary:
-    @pytest.mark.asyncio
-    async def test_structured_summary_full_json(self):
-        """structured_summary should parse all fields from JSON."""
-        response_json = """{
-            "title": "Fix Login Bug",
-            "topic": "authentication",
-            "outcome": "Login now validates passwords.",
-            "summary": "Fixed password validation in login.py.",
-            "bullets": ["Added validation", "Updated tests", "Fixed edge case"],
-            "tags": ["auth", "bugfix", "login"]
-        }"""
-        client = _mock_client(response_json)
-        transcript = _make_transcript()
-
-        result = await structured_summary(transcript, client, model="test-model")
-
-        assert result.title == "Fix Login Bug"
-        assert result.topic == "authentication"
-        assert result.outcome == "Login now validates passwords."
-        assert result.summary == "Fixed password validation in login.py."
-        assert result.bullets == ["Added validation", "Updated tests", "Fixed edge case"]
-        assert result.tags == ["auth", "bugfix", "login"]
-
-    @pytest.mark.asyncio
-    async def test_structured_summary_normalizes_tags(self):
-        """structured_summary should lowercase and hyphenate tags."""
-        response_json = '{"title": "T", "summary": "S", "tags": ["Bug Fix", "AUTH"]}'
-        client = _mock_client(response_json)
-        transcript = _make_transcript()
-
-        result = await structured_summary(transcript, client)
-
-        assert "bug-fix" in result.tags
-        assert "auth" in result.tags
-
-    @pytest.mark.asyncio
-    async def test_structured_summary_fallback(self):
-        """structured_summary should fall back gracefully on bad JSON."""
-        client = _mock_client("Not JSON at all")
-        transcript = _make_transcript()
-
-        result = await structured_summary(transcript, client)
-
-        assert result.title == "Untitled Session"
-        assert "Not JSON" in result.summary
-
-
-# =====================================================================
-# batch_summarize
-# =====================================================================
-
-
-class TestBatchSummarize:
-    @pytest.mark.asyncio
-    async def test_batch_summarize_multiple(self):
-        """batch_summarize should summarize multiple transcripts."""
-        response_json = '{"title": "Session Work", "summary": "Did some work."}'
-        client = _mock_client(response_json)
-        transcripts = [_make_transcript(f"sess-{i}") for i in range(3)]
-
-        results = await batch_summarize(transcripts, client, model="test-model", max_concurrent=2)
-
-        assert len(results) == 3
-        assert all(isinstance(r, SessionSummary) for r in results)
-        # Each should have the correct session_id
-        session_ids = {r.session_id for r in results}
-        assert session_ids == {"sess-0", "sess-1", "sess-2"}
-
-    @pytest.mark.asyncio
-    async def test_batch_summarize_empty(self):
-        """batch_summarize with empty list returns empty list."""
-        client = _mock_client('{"title": "T", "summary": "S"}')
-
-        results = await batch_summarize([], client)
-
-        assert results == []
-
-    @pytest.mark.asyncio
-    async def test_batch_summarize_handles_errors(self):
-        """batch_summarize should skip sessions that fail."""
-        client = AsyncMock()
-        # First call succeeds, second raises
-        mock_choice = MagicMock()
-        mock_choice.message.content = '{"title": "Good", "summary": "OK."}'
-        mock_response = MagicMock()
-        mock_response.choices = [mock_choice]
-
-        call_count = 0
-
-        async def _side_effect(**kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise RuntimeError("LLM error")
-            return mock_response
-
-        client.chat.completions.create = AsyncMock(side_effect=_side_effect)
-        transcripts = [_make_transcript(f"sess-{i}") for i in range(3)]
-
-        results = await batch_summarize(transcripts, client, max_concurrent=1)
-
-        # 2 succeed, 1 fails
-        assert len(results) == 2
-
-    @pytest.mark.asyncio
-    async def test_batch_concurrency_limit(self):
-        """batch_summarize should respect max_concurrent."""
-        concurrent_count = 0
-        max_observed = 0
-
-        response_json = '{"title": "T", "summary": "S"}'
-        mock_choice = MagicMock()
-        mock_choice.message.content = response_json
-        mock_response = MagicMock()
-        mock_response.choices = [mock_choice]
-
-        client = AsyncMock()
-
-        async def _tracked_create(**kwargs):
-            nonlocal concurrent_count, max_observed
-            concurrent_count += 1
-            if concurrent_count > max_observed:
-                max_observed = concurrent_count
-            await asyncio.sleep(0.05)  # Simulate LLM latency
-            concurrent_count -= 1
-            return mock_response
-
-        client.chat.completions.create = AsyncMock(side_effect=_tracked_create)
-        transcripts = [_make_transcript(f"sess-{i}") for i in range(6)]
-
-        results = await batch_summarize(transcripts, client, max_concurrent=2)
-
-        assert len(results) == 6
-        assert max_observed <= 2
 
 
 # =====================================================================

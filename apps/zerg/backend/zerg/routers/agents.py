@@ -461,6 +461,61 @@ class BriefingResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _events_to_dicts(events: list[AgentEvent]) -> list[dict]:
+    """Convert ORM AgentEvent rows to plain dicts for summarization."""
+    return [
+        {
+            "role": e.role,
+            "content_text": e.content_text,
+            "tool_name": e.tool_name,
+            "tool_input_json": e.tool_input_json,
+            "tool_output_text": e.tool_output_text,
+            "timestamp": e.timestamp,
+            "session_id": str(e.session_id),
+        }
+        for e in events
+    ]
+
+
+async def _summarize_and_persist(
+    session: AgentSession,
+    events: list[AgentEvent],
+    db: Session,
+    client: Any,
+    model: str,
+) -> Any:
+    """Summarize session events via LLM and persist to DB.
+
+    Converts events to dicts, calls summarize_events(), writes summary
+    fields on the session, and commits. Does NOT manage db session
+    lifecycle — caller is responsible for open/close/rollback.
+
+    Returns the SessionSummary or None if the transcript was empty.
+    """
+    from zerg.services.session_processing import summarize_events
+
+    event_dicts = _events_to_dicts(events)
+
+    summary = await summarize_events(
+        event_dicts,
+        client=client,
+        model=model,
+        metadata={
+            "project": session.project,
+            "provider": session.provider,
+            "git_branch": session.git_branch,
+        },
+    )
+
+    if not summary:
+        return None
+
+    session.summary = summary.summary
+    session.summary_title = summary.title
+    db.commit()
+    return summary
+
+
 async def _generate_summary_background(session_id: str) -> None:
     """Background task: generate and cache summary for a session.
 
@@ -476,7 +531,6 @@ async def _generate_summary_background(session_id: str) -> None:
     """
     from zerg.database import get_session_factory
     from zerg.models_config import get_llm_client_for_use_case
-    from zerg.services.session_processing import summarize_events
 
     settings = get_settings()
 
@@ -485,7 +539,7 @@ async def _generate_summary_background(session_id: str) -> None:
         return
 
     try:
-        client, model, provider = get_llm_client_for_use_case("summarization")
+        client, model, _provider = get_llm_client_for_use_case("summarization")
     except ValueError as e:
         logger.warning("Summarization misconfigured — session %s will NOT be summarized: %s", session_id, e)
         return
@@ -506,39 +560,12 @@ async def _generate_summary_background(session_id: str) -> None:
             logger.debug("No events for session %s, skipping summary", session_id)
             return
 
-        event_dicts = [
-            {
-                "role": e.role,
-                "content_text": e.content_text,
-                "tool_name": e.tool_name,
-                "tool_input_json": e.tool_input_json,
-                "tool_output_text": e.tool_output_text,
-                "timestamp": e.timestamp,
-                "session_id": str(e.session_id),
-            }
-            for e in events
-        ]
+        summary = await _summarize_and_persist(session, events, db, client, model)
 
-        summary = await summarize_events(
-            event_dicts,
-            client=client,
-            model=model,
-            provider=provider,
-            metadata={
-                "project": session.project,
-                "provider": session.provider,
-                "git_branch": session.git_branch,
-            },
-        )
-
-        if not summary:
+        if summary:
+            logger.info("Generated summary for session %s: %s", session_id, summary.title)
+        else:
             logger.debug("Empty transcript for session %s, skipping summary", session_id)
-            return
-
-        session.summary = summary.summary
-        session.summary_title = summary.title
-        db.commit()
-        logger.info("Generated summary for session %s: %s", session_id, summary.title)
 
     except Exception:
         db.rollback()
@@ -791,7 +818,7 @@ async def backfill_summaries(
 
     # Validate LLM config before starting
     try:
-        client, model, provider = get_llm_client_for_use_case("summarization")
+        client, model, _provider = get_llm_client_for_use_case("summarization")
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -806,7 +833,6 @@ async def backfill_summaries(
             force=force,
             client=client,
             model=model,
-            provider=provider,
             total=total,
         )
     )
@@ -834,7 +860,6 @@ async def _run_backfill(
     force: bool,
     client: Any,
     model: str,
-    provider: Any,
     total: int,
     _engine: Any = None,
 ) -> None:
@@ -842,7 +867,6 @@ async def _run_backfill(
     from sqlalchemy.pool import NullPool
 
     from zerg.database import make_engine
-    from zerg.services.session_processing import summarize_events
 
     _backfill_state.update(running=True, backfilled=0, skipped=0, errors=0, remaining=total, total=total)
     semaphore = asyncio.Semaphore(concurrency)
@@ -880,38 +904,12 @@ async def _run_backfill(
                             _backfill_state["skipped"] += 1
                             return
 
-                        event_dicts = [
-                            {
-                                "role": e.role,
-                                "content_text": e.content_text,
-                                "tool_name": e.tool_name,
-                                "tool_input_json": e.tool_input_json,
-                                "tool_output_text": e.tool_output_text,
-                                "timestamp": e.timestamp,
-                                "session_id": str(e.session_id),
-                            }
-                            for e in events
-                        ]
-
-                        summary = await summarize_events(
-                            event_dicts,
-                            client=client,
-                            model=model,
-                            provider=provider,
-                            metadata={
-                                "project": sess.project,
-                                "provider": sess.provider,
-                                "git_branch": sess.git_branch,
-                            },
-                        )
+                        summary = await _summarize_and_persist(sess, events, db, client, model)
 
                         if not summary:
                             _backfill_state["skipped"] += 1
                             return
 
-                        sess.summary = summary.summary
-                        sess.summary_title = summary.title
-                        db.commit()
                         _backfill_state["backfilled"] += 1
 
                 except Exception as exc:
