@@ -629,123 +629,79 @@ class TestGenerateSummaryBackground:
 # =====================================================================
 
 
-class TestBackfillSummariesEndpoint:
+class TestBackfillSummaries:
     @pytest.mark.asyncio
-    async def test_backfill_unsummarized_sessions_returns_counts(self, tmp_path):
-        """Backfill should summarize eligible sessions and report counts."""
-        from zerg.routers.agents import backfill_summaries
+    async def test_run_backfill_summarizes_sessions(self, tmp_path):
+        """_run_backfill should summarize unsummarized sessions and update state."""
+        from zerg.routers.agents import _backfill_state
+        from zerg.routers.agents import _run_backfill
 
         db = _setup_db(tmp_path)
+        SessionFactory = db.__class__  # get the Session class to use as factory
 
-        _seed_session(db, hours_ago=1, num_events=5)  # backfill
-        _seed_session(db, hours_ago=2, num_events=4)  # backfill
+        _seed_session(db, hours_ago=1, num_events=5)
+        _seed_session(db, hours_ago=2, num_events=4)
         _seed_session(db, hours_ago=3, num_events=0)  # skipped (no events)
-        _seed_session(
-            db,
-            hours_ago=4,
-            summary="Already summarized.",
-            summary_title="Done",
-            num_events=3,
-        )
+        _seed_session(db, summary="Already done.", summary_title="Done", hours_ago=4, num_events=3)
 
         mock_client = _mock_llm_client(
-            '{"title": "Backfilled Session", "summary": "Generated summary from transcript."}'
+            '{"title": "Backfilled Session", "summary": "Generated summary."}'
         )
 
-        with patch(
-            "zerg.models_config.get_llm_client_for_use_case",
-            return_value=(mock_client, "test-model", "openai"),
-        ):
-            result = await backfill_summaries(
+        # Build a real sessionmaker bound to the same test engine
+        test_session_factory = sessionmaker(bind=db.get_bind())
+
+        with patch("zerg.database.get_session_factory", return_value=test_session_factory):
+            await _run_backfill(
+                concurrency=3,
                 project=None,
-                limit=50,
-                max_concurrent=3,
                 force=False,
-                db=db,
-                _auth=None,
-                _single=None,
+                client=mock_client,
+                model="test-model",
+                provider="openai",
+                total=3,
             )
 
-        assert result.backfilled == 2
-        assert result.skipped == 1
-        assert result.errors == 0
-        assert result.remaining == 1
-        assert mock_client.chat.completions.create.await_count == 2
+        assert _backfill_state["running"] is False
+        assert _backfill_state["backfilled"] == 2
+        assert _backfill_state["skipped"] == 1
+        assert _backfill_state["errors"] == 0
 
-        remaining_unsummarized = db.query(AgentSession).filter(AgentSession.summary.is_(None)).count()
-        assert remaining_unsummarized == 1
+        # Refresh to see changes from other sessions
+        db.expire_all()
+        remaining = db.query(AgentSession).filter(AgentSession.summary.is_(None)).count()
+        assert remaining == 1
         db.close()
 
     @pytest.mark.asyncio
-    async def test_backfill_noop_when_all_sessions_already_summarized(self, tmp_path):
-        """Backfill should return zero counts when no sessions need summaries."""
+    async def test_backfill_endpoint_returns_nothing_to_do(self, tmp_path):
+        """Backfill endpoint should return nothing_to_do when all summarized."""
+        from zerg.routers.agents import _backfill_state
         from zerg.routers.agents import backfill_summaries
 
+        _backfill_state["running"] = False
         db = _setup_db(tmp_path)
 
-        _seed_session(db, summary="Existing summary 1.", summary_title="S1", num_events=4)
-        _seed_session(db, summary="Existing summary 2.", summary_title="S2", num_events=4)
+        _seed_session(db, summary="Done.", summary_title="S1", num_events=4)
 
-        with patch("zerg.models_config.get_llm_client_for_use_case") as mock_factory:
-            result = await backfill_summaries(
-                project=None,
-                limit=50,
-                max_concurrent=3,
-                force=False,
-                db=db,
-                _auth=None,
-                _single=None,
-            )
-
-        assert result.backfilled == 0
-        assert result.skipped == 0
-        assert result.errors == 0
-        assert result.remaining == 0
-        mock_factory.assert_not_called()
-        db.close()
-
-    @pytest.mark.asyncio
-    async def test_backfill_respects_limit(self, tmp_path):
-        """Backfill should process no more than `limit` sessions per call."""
-        from zerg.routers.agents import backfill_summaries
-
-        db = _setup_db(tmp_path)
-
-        for i in range(5):
-            _seed_session(db, hours_ago=float(i), num_events=4)
-
-        mock_client = _mock_llm_client(
-            '{"title": "Limited Backfill", "summary": "Backfilled within requested batch size."}'
+        result = await backfill_summaries(
+            concurrency=5,
+            project=None,
+            force=False,
+            db=db,
+            _auth=None,
+            _single=None,
         )
 
-        with patch(
-            "zerg.models_config.get_llm_client_for_use_case",
-            return_value=(mock_client, "test-model", "openai"),
-        ):
-            result = await backfill_summaries(
-                project=None,
-                limit=2,
-                max_concurrent=3,
-                force=False,
-                db=db,
-                _auth=None,
-                _single=None,
-            )
-
-        assert result.backfilled == 2
-        assert result.skipped == 0
-        assert result.errors == 0
-        assert result.remaining == 3
-        assert mock_client.chat.completions.create.await_count == 2
-
-        summarized_count = db.query(AgentSession).filter(AgentSession.summary.isnot(None)).count()
-        assert summarized_count == 2
+        assert result.status == "nothing_to_do"
+        assert result.total == 0
         db.close()
 
     @pytest.mark.asyncio
-    async def test_backfill_counts_llm_errors_without_crashing(self, tmp_path):
-        """Backfill should tolerate LLM failures and report them in `errors`."""
-        from zerg.routers.agents import backfill_summaries
+    async def test_run_backfill_tolerates_llm_errors(self, tmp_path):
+        """_run_backfill should count errors without crashing."""
+        from zerg.routers.agents import _backfill_state
+        from zerg.routers.agents import _run_backfill
 
         db = _setup_db(tmp_path)
 
@@ -753,26 +709,24 @@ class TestBackfillSummariesEndpoint:
         _seed_session(db, hours_ago=2, num_events=5)
 
         failing_client = AsyncMock()
-        failing_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("LLM API down"))
+        failing_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("LLM down"))
 
-        with patch(
-            "zerg.models_config.get_llm_client_for_use_case",
-            return_value=(failing_client, "test-model", "openai"),
-        ):
-            result = await backfill_summaries(
+        test_session_factory = sessionmaker(bind=db.get_bind())
+
+        with patch("zerg.database.get_session_factory", return_value=test_session_factory):
+            await _run_backfill(
+                concurrency=3,
                 project=None,
-                limit=50,
-                max_concurrent=3,
                 force=False,
-                db=db,
-                _auth=None,
-                _single=None,
+                client=failing_client,
+                model="test-model",
+                provider="openai",
+                total=2,
             )
 
-        assert result.backfilled == 0
-        assert result.skipped == 0
-        assert result.errors == 2
-        assert result.remaining == 2
+        assert _backfill_state["running"] is False
+        assert _backfill_state["backfilled"] == 0
+        assert _backfill_state["errors"] == 2
         db.close()
 
 

@@ -386,10 +386,20 @@ class DemoSeedResponse(BaseModel):
 class BackfillSummariesResponse(BaseModel):
     """Response for summary backfill endpoint."""
 
-    backfilled: int = Field(..., description="Number of sessions successfully summarized")
-    skipped: int = Field(..., description="Number of sessions skipped (no events/empty transcript)")
-    errors: int = Field(..., description="Number of sessions that failed summarization")
-    remaining: int = Field(..., description="Number of sessions still missing summaries")
+    status: str = Field(..., description="'started', 'already_running', or 'nothing_to_do'")
+    total: int = Field(0, description="Total sessions to process")
+    message: str = Field("", description="Human-readable status message")
+
+
+class BackfillProgressResponse(BaseModel):
+    """Response for backfill progress check."""
+
+    running: bool
+    backfilled: int = 0
+    skipped: int = 0
+    errors: int = 0
+    remaining: int = 0
+    total: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -735,91 +745,144 @@ async def get_briefing(
         )
 
 
+_backfill_state: dict[str, Any] = {
+    "running": False,
+    "backfilled": 0,
+    "skipped": 0,
+    "errors": 0,
+    "remaining": 0,
+    "total": 0,
+}
+
+
 @router.post("/backfill-summaries", response_model=BackfillSummariesResponse)
 async def backfill_summaries(
+    concurrency: int = Query(5, ge=1, le=20, description="Max concurrent LLM requests"),
     project: Optional[str] = Query(None, description="Optional project filter"),
-    limit: int = Query(50, ge=1, le=200, description="Max sessions to summarize this run"),
-    max_concurrent: int = Query(3, ge=1, le=5, description="Max concurrent LLM requests"),
     force: bool = Query(False, description="Re-summarize sessions that already have summaries"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
 ) -> BackfillSummariesResponse:
-    """Backfill missing summaries for historical sessions.
+    """Start backfilling missing summaries as a background task.
 
-    Processes at most ``limit`` sessions (most recent first),
-    summarizes each transcript synchronously, and persists ``summary`` + ``summary_title``.
-    Safe to call repeatedly. Use ``force=true`` to re-summarize all sessions.
+    Returns immediately. Check progress via GET /backfill-summaries.
     """
     from zerg.models_config import get_llm_client_for_use_case
+
+    if _backfill_state["running"]:
+        return BackfillSummariesResponse(
+            status="already_running",
+            total=_backfill_state["total"],
+            message=f"Backfill in progress: {_backfill_state['backfilled']}/{_backfill_state['total']} done",
+        )
+
+    # Count target sessions
+    query = db.query(AgentSession)
+    if not force:
+        query = query.filter(AgentSession.summary.is_(None))
+    if project:
+        query = query.filter(AgentSession.project == project)
+    total = query.count()
+
+    if total == 0:
+        return BackfillSummariesResponse(status="nothing_to_do", total=0, message="No sessions to backfill")
+
+    # Validate LLM config before starting
+    try:
+        client, model, provider = get_llm_client_for_use_case("summarization")
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Summarization is misconfigured: {e}",
+        )
+
+    # Launch background task
+    asyncio.create_task(
+        _run_backfill(
+            concurrency=concurrency,
+            project=project,
+            force=force,
+            client=client,
+            model=model,
+            provider=provider,
+            total=total,
+        )
+    )
+
+    return BackfillSummariesResponse(
+        status="started",
+        total=total,
+        message=f"Backfill started for {total} sessions at concurrency {concurrency}",
+    )
+
+
+@router.get("/backfill-summaries", response_model=BackfillProgressResponse)
+async def backfill_progress(
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> BackfillProgressResponse:
+    """Check backfill progress."""
+    return BackfillProgressResponse(**_backfill_state)
+
+
+async def _run_backfill(
+    *,
+    concurrency: int,
+    project: str | None,
+    force: bool,
+    client: Any,
+    model: str,
+    provider: Any,
+    total: int,
+) -> None:
+    """Background backfill — processes all matching sessions with a semaphore."""
+    from zerg.database import get_session_factory
     from zerg.services.session_processing import summarize_events
 
-    def _target_query():
-        query = db.query(AgentSession)
-        if not force:
-            query = query.filter(AgentSession.summary.is_(None))
-        if project:
-            query = query.filter(AgentSession.project == project)
-        return query
-
-    def _unsummarized_query():
-        query = db.query(AgentSession).filter(AgentSession.summary.is_(None))
-        if project:
-            query = query.filter(AgentSession.project == project)
-        return query
-
-    backfilled = 0
-    skipped = 0
-    errors = 0
-    client = None
+    _backfill_state.update(running=True, backfilled=0, skipped=0, errors=0, remaining=total, total=total)
+    semaphore = asyncio.Semaphore(concurrency)
 
     try:
-        sessions = _target_query().order_by(AgentSession.started_at.desc()).limit(limit).all()
-        if not sessions:
-            return BackfillSummariesResponse(backfilled=0, skipped=0, errors=0, remaining=0)
+        SessionFactory = get_session_factory()
 
-        try:
-            client, model, provider = get_llm_client_for_use_case("summarization")
-        except ValueError as e:
-            logger.warning("Backfill summarization misconfigured: %s", e)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Summarization is misconfigured: {e}",
-            )
+        with SessionFactory() as db:
+            query = db.query(AgentSession)
+            if not force:
+                query = query.filter(AgentSession.summary.is_(None))
+            if project:
+                query = query.filter(AgentSession.project == project)
+            session_ids = [s.id for s in query.order_by(AgentSession.started_at.desc()).all()]
 
-        # Pre-fetch events for all sessions, build event dicts
-        session_data: list[tuple[AgentSession, list[dict]]] = []
-        for session in sessions:
-            try:
-                events = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.timestamp).all()
-                if not events:
-                    skipped += 1
-                    continue
-                event_dicts = [
-                    {
-                        "role": e.role,
-                        "content_text": e.content_text,
-                        "tool_name": e.tool_name,
-                        "tool_input_json": e.tool_input_json,
-                        "tool_output_text": e.tool_output_text,
-                        "timestamp": e.timestamp,
-                        "session_id": str(e.session_id),
-                    }
-                    for e in events
-                ]
-                session_data.append((session, event_dicts))
-            except Exception:
-                errors += 1
-                logger.exception("Failed preparing events for session %s", session.id)
+        async def _process_one(session_id: UUID) -> None:
+            async with semaphore:
+                try:
+                    with SessionFactory() as db:
+                        sess = db.query(AgentSession).get(session_id)
+                        if not sess:
+                            _backfill_state["skipped"] += 1
+                            return
 
-        if session_data:
-            semaphore = asyncio.Semaphore(max_concurrent)
+                        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+                        if not events:
+                            _backfill_state["skipped"] += 1
+                            return
 
-            async def _summarize_one(sess: AgentSession, evts: list[dict]) -> tuple[AgentSession, Any, Exception | None]:
-                async with semaphore:
-                    try:
+                        event_dicts = [
+                            {
+                                "role": e.role,
+                                "content_text": e.content_text,
+                                "tool_name": e.tool_name,
+                                "tool_input_json": e.tool_input_json,
+                                "tool_output_text": e.tool_output_text,
+                                "timestamp": e.timestamp,
+                                "session_id": str(e.session_id),
+                            }
+                            for e in events
+                        ]
+
                         summary = await summarize_events(
-                            evts,
+                            event_dicts,
                             client=client,
                             model=model,
                             provider=provider,
@@ -829,50 +892,39 @@ async def backfill_summaries(
                                 "git_branch": sess.git_branch,
                             },
                         )
-                        return sess, summary, None
-                    except Exception as exc:
-                        return sess, None, exc
 
-            tasks = [_summarize_one(sess, evts) for sess, evts in session_data]
-            outcomes = await asyncio.gather(*tasks)
+                        if not summary:
+                            _backfill_state["skipped"] += 1
+                            return
 
-            for sess, summary, err in outcomes:
-                if err is not None:
-                    errors += 1
-                    logger.warning("Failed backfill summary for session %s: %s", sess.id, err)
-                    continue
-                if not summary:
-                    skipped += 1
-                    continue
+                        sess.summary = summary.summary
+                        sess.summary_title = summary.title
+                        db.commit()
+                        _backfill_state["backfilled"] += 1
 
-                sess.summary = summary.summary
-                sess.summary_title = summary.title
-                db.commit()
-                backfilled += 1
+                except Exception:
+                    logger.exception("Backfill failed for session %s", session_id)
+                    _backfill_state["errors"] += 1
+                finally:
+                    _backfill_state["remaining"] = max(0, _backfill_state["remaining"] - 1)
 
-        remaining = _unsummarized_query().count()
-        return BackfillSummariesResponse(
-            backfilled=backfilled,
-            skipped=skipped,
-            errors=errors,
-            remaining=remaining,
-        )
+        tasks = [_process_one(sid) for sid in session_ids]
+        await asyncio.gather(*tasks)
 
-    except HTTPException:
-        raise
     except Exception:
-        db.rollback()
-        logger.exception("Failed to backfill agent session summaries")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to backfill summaries",
-        )
+        logger.exception("Backfill task crashed")
     finally:
-        if client is not None:
-            try:
-                await client.close()
-            except Exception:
-                pass
+        _backfill_state["running"] = False
+        try:
+            await client.close()
+        except Exception:
+            pass
+        logger.info(
+            "Backfill complete: %d backfilled, %d skipped, %d errors",
+            _backfill_state["backfilled"],
+            _backfill_state["skipped"],
+            _backfill_state["errors"],
+        )
 
 
 @router.get("/sessions", response_model=SessionsListResponse)
