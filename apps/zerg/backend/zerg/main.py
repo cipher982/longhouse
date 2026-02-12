@@ -652,7 +652,7 @@ async def lifespan(app: FastAPI):
                 logger.exception(f"Failed to start commis_job_processor in E2E mode: {e}")
 
         # Validate summarization pipeline config (fail-fast on misconfiguration)
-        if not _settings.testing and not _settings.llm_disabled:
+        if not _settings.testing and not _settings.llm_disabled and not _settings.demo_mode:
             from zerg.models_config import get_active_models_profile
             from zerg.models_config import validate_use_case_llm_config
 
