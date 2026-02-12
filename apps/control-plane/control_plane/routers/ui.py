@@ -254,7 +254,7 @@ def open_instance(request: Request, db: Session = Depends(get_db)):
     )
 
     # Redirect to instance SSO endpoint — sets cookie and redirects to /timeline
-    sso_url = f"{instance_url}/auth/sso?token={token}"
+    sso_url = f"{instance_url}/api/auth/sso?token={token}"
     return RedirectResponse(sso_url, status_code=302)
 
 
