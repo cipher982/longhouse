@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import Header
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 
@@ -60,6 +61,27 @@ def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+@router.get("/me", response_model=InstanceOut)
+def my_instance(request: Request, db: Session = Depends(get_db)):
+    """Get the current user's instance (session auth, not admin)."""
+    from control_plane.routers.auth import get_current_user
+
+    user = get_current_user(request, db)
+    inst = db.query(Instance).filter(Instance.user_id == user.id).first()
+    if not inst:
+        raise HTTPException(status_code=404, detail="No instance found")
+
+    return InstanceOut(
+        id=inst.id,
+        email=user.email,
+        subdomain=inst.subdomain,
+        container_name=inst.container_name,
+        status=inst.status,
+        created_at=inst.created_at,
+        last_health_at=inst.last_health_at,
+    )
 
 
 @router.get("", response_model=InstanceList, dependencies=[Depends(require_admin)])

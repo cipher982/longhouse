@@ -11,6 +11,16 @@ class Settings(BaseSettings):
     jwt_secret: str
     database_url: str
 
+    # Google OAuth (control plane login)
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+
+    # Stripe
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    stripe_price_id: str | None = None
+    stripe_publishable_key: str | None = None
+
     # Docker/provisioning
     docker_host: str = "unix:///var/run/docker.sock"
     image: str = "ghcr.io/cipher982/longhouse-runtime:latest"

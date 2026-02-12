@@ -51,7 +51,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Section | Status | Notes |
 |---------|--------|-------|
 | Session Processing (3.5) | 100% | Core module + summarize + briefing + hook + integration tests + consumer migration all done |
-| Full Signup Flow | ~50% | Scaffold + provisioner + CI gate + runtime image + routing done; OAuth/Stripe/landing pending |
+| Full Signup Flow | ~90% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs done; needs deploy + smoke test |
 
 ### Not Started
 | Section | Status | Notes |
@@ -357,7 +357,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Architecture:** Tiny FastAPI control plane handles signup/billing/provisioning. Uses Docker API directly (not Coolify). Runtime image bundles frontend + backend per user.
 
-**Current state (2026-02-11):** Scaffold exists, provisioner works, runtime image auto-builds. Missing: OAuth, Stripe, public signup, cross-subdomain auth, landing page wiring.
+**Current state (2026-02-12):** OAuth, Stripe, webhooks, provisioning trigger, dashboard, provisioning status page, and landing page CTAs all implemented. Needs deploy to zerg + Google OAuth credentials + Stripe product setup + smoke test.
 
 **Decisions / Notes (2026-02-04):**
 - Control plane + user instances will live on **zerg** (single host for now).
@@ -373,22 +373,14 @@ Update screenshots to show Timeline, not old dashboard.
 - [ ] Manual provision smoke test: test2/test3 instances provisioned + routed (needs rerun)
 - [x] Add control-plane → instance auth bridge endpoint — dual-secret validation + email-based user resolution (commits `a2709611`, `d911d500`)
 
-### Phase 1: Scaffold + Auth ⚠️ PARTIAL
+### Phase 1: Scaffold + Auth ✅
 
 - [x] Create `apps/control-plane/` directory structure (FastAPI app, models, routers, services)
 - [x] Add provisioner service (Docker API client with Caddy labels)
 - [x] Add Instance model with subdomain, container_name, state
 - [x] Admin API + minimal HTML UI for manual provisioning
 - [x] Add User model with Stripe fields (fields only; no Stripe logic yet)
-- [ ] Add Google OAuth for control plane login/signup
-
-**OAuth details:**
-- Google OAuth via `authlib` or `httpx-oauth` (match existing pattern if any)
-- `GET /auth/google` → redirect to Google consent screen
-- `GET /auth/google/callback` → exchange code, upsert User, set session cookie
-- User model already has `email`, `stripe_customer_id`, `subscription_status`
-- Return JWT in HttpOnly cookie (control plane domain: `control.longhouse.ai`)
-- Protect all `/api/*` routes except `/auth/*` and `/webhooks/*`
+- [x] Add Google OAuth for control plane login/signup — `GET /auth/google` redirect + `/auth/google/callback` exchange + JWT session cookie + `get_current_user` dependency
 
 ### Phase 2: Stripe Integration (3)
 
@@ -396,37 +388,13 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Existing code:** `billing.py` and `webhooks.py` exist as stubs. User model has `stripe_customer_id` and `subscription_status` fields.
 
-- [ ] Add `stripe` dependency to control plane `pyproject.toml`
-- [ ] Implement `POST /checkout` → create Stripe Checkout session
-  - Requires authenticated user (from OAuth)
-  - Creates Stripe customer if `stripe_customer_id` is null
-  - Returns checkout session URL for redirect
-  - Use `mode="subscription"` with a single price ID (configured via env var `STRIPE_PRICE_ID`)
-  - Set `success_url` to `control.longhouse.ai/provisioning?session_id={CHECKOUT_SESSION_ID}`
-  - Set `cancel_url` to `longhouse.ai` (back to landing)
-  - Pass `client_reference_id=user.id` and `customer_email=user.email`
-- [ ] Implement `POST /webhooks/stripe` → verify signature + handle events
-  - Verify webhook signature using `STRIPE_WEBHOOK_SECRET` env var
-  - Handle `checkout.session.completed`:
-    1. Look up user by `client_reference_id`
-    2. Store `stripe_customer_id` and `stripe_subscription_id` on User
-    3. Set `subscription_status = "active"`
-    4. Trigger provisioning (create container + subdomain)
-    5. Send welcome email (optional, defer if no email infra)
-  - Handle `customer.subscription.updated`:
-    1. Update `subscription_status` based on `subscription.status`
-    2. If `past_due` or `unpaid`, flag instance (don't kill immediately)
-  - Handle `customer.subscription.deleted`:
-    1. Set `subscription_status = "canceled"`
-    2. Trigger graceful deprovisioning (stop container, preserve data for N days)
-  - Handle `invoice.payment_failed`:
-    1. Log warning, update status to `past_due`
-    2. User gets grace period before deprovision
-- [ ] Implement `POST /billing/portal` → create Stripe billing portal session
-  - Requires `stripe_customer_id` on User
-  - Returns portal URL for redirect (manage subscription, update payment, cancel)
-- [ ] Add env vars: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`, `STRIPE_PUBLISHABLE_KEY`
-- [ ] Add idempotency: webhook handler must be safe to replay (check subscription_status before re-provisioning)
+- [x] Add `stripe>=11.0` dependency to control plane `pyproject.toml`
+- [x] Implement `POST /billing/checkout` — session auth, creates Stripe customer + checkout session
+- [x] Implement `POST /webhooks/stripe` — signature verification + 4 event handlers (checkout.session.completed, subscription.updated, subscription.deleted, invoice.payment_failed)
+- [x] Webhook: checkout.session.completed triggers auto-provisioning (derives subdomain from email, uniqueness check, calls Provisioner)
+- [x] Implement `POST /billing/portal` — Stripe billing portal session
+- [x] Add env vars to config + docker-compose: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`
+- [x] Idempotency: webhook checks subscription_status + existing instance before re-provisioning
 
 ### Phase 3: Docker Provisioning ✅ MOSTLY DONE
 
@@ -434,10 +402,10 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] Provision container with Caddy labels for subdomain routing
 - [x] Create SQLite volume per user at `/var/lib/docker/data/longhouse/{subdomain}`
 - [x] Implement deprovision (stop + remove container)
-- [ ] Add health check polling after provision (method exists, not wired in routes/UI)
+- [x] Add health check polling after provision — provisioning status page polls instance health
 - [x] Build and push runtime image (`docker/runtime.dockerfile`) to ghcr.io — auto-builds on push via `runtime-image.yml`, publishes to `ghcr.io/cipher982/longhouse-runtime:latest`
 - [x] Update CONTROL_PLANE_IMAGE to use runtime image — default now `ghcr.io/cipher982/longhouse-runtime:latest`
-- [ ] Wire provisioning trigger from Stripe webhook (Phase 2 → Phase 3 handoff)
+- [x] Wire provisioning trigger from Stripe webhook — checkout.session.completed → Provisioner.provision_instance()
 
 ### Phase 3.5: Provisioning E2E Gate ✅
 
@@ -445,34 +413,24 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] Add GitHub workflow on cube ARC runners (`.github/workflows/provision-e2e.yml`)
 - [x] Add CI-only port publishing + writable instance data root for provisioning tests
 
-### Phase 4: Cross-Subdomain Auth (2)
+### Phase 4: Cross-Subdomain Auth (2) — DEFERRED
 
-**Goal:** After OAuth + payment + provisioning, user is seamlessly logged into their instance.
+**Status:** Backend endpoints exist on both sides (CP `login-token` + instance `accept-token`). Dashboard currently links to instance URL directly; user uses instance's own password auth. Full cross-subdomain SSO deferred until needed.
 
-- Note: current control-plane `/api/instances/{id}/login-token` uses `sub=email` + control-plane JWT secret; instance `/api/auth/accept-token` expects numeric user_id + instance secret → will fail until aligned.
-- [ ] Control plane issues short-lived JWT on successful OAuth/provisioning
-  - JWT contains: `sub=user_email`, `instance=subdomain`, `exp=5min`
-  - Signed with a shared secret between control plane and instance (`CONTROL_PLANE_SHARED_SECRET`)
-- [ ] Redirect to `{user}.longhouse.ai/api/auth/accept-token?token=xxx`
-- [ ] Instance validates token at `/api/auth/accept-token` (code exists, needs alignment)
-  - Verify JWT signature using shared secret
-  - Look up or create local user by email
-  - Set HttpOnly session cookie on instance subdomain
-- [ ] Instance sets session cookie, user is logged in
-- [ ] Handle returning users: "Sign In" → OAuth → look up existing instance → redirect with token
+- [x] Control plane `login-token` endpoint exists (issues JWT with `sub=user_id` + `email` claim)
+- [x] Instance `accept-token` endpoint exists and handles CP-issued tokens (dual-secret validation)
+- [ ] Wire auto-redirect after provisioning: dashboard "Open Instance" link could include accept-token for seamless SSO
+- [ ] Handle returning users: "Sign In" → OAuth → find instance → redirect with token
 
-### Phase 5: Landing Page Integration (1)
+### Phase 5: Landing Page + Control Plane UI ✅
 
-**Goal:** Landing page CTAs drive the full signup flow end-to-end.
-
-- [ ] Add "Get Started" CTA → `control.longhouse.ai/auth/google` (OAuth entry point)
-- [ ] After OAuth success, redirect to `/checkout` (Stripe) if no active subscription
-- [ ] After checkout success, show provisioning status page (`/provisioning?session_id=...`)
-  - Poll for container health, show spinner/progress
-  - On healthy, redirect to `{user}.longhouse.ai` with auth token
-- [ ] "Sign In" CTA → `control.longhouse.ai/auth/google` → find existing instance → redirect
-- [ ] Show instance status on landing page if user has active session cookie
-- [ ] Handle edge cases: returning user with canceled subscription, user with no instance yet
+- [x] Hero CTA: "Get Hosted →" → `control.longhouse.ai/auth/google`
+- [x] Pricing CTA: "Get Started" on hosted tier → `control.longhouse.ai/auth/google`
+- [x] Control plane home: shows "Sign in with Google" for unauthenticated, redirects to dashboard for authenticated
+- [x] Dashboard: shows instance URL/status if provisioned, checkout button if not subscribed, provisioning redirect if in-progress
+- [x] Provisioning status page: spinner + health poll + auto-redirect when instance is ready
+- [x] Billing portal redirect: dashboard "Manage Billing" → Stripe portal
+- [x] Removed WaitlistModal references from hero + pricing sections
 
 ### End-to-End User Journey
 

@@ -5,11 +5,9 @@
  * Covers both deployment model and pricing in one section.
  */
 
-import { useState } from "react";
 import config from "../../lib/config";
 import { CheckCircleIcon } from "../icons";
 import { Button } from "../ui";
-import { WaitlistModal } from "./WaitlistModal";
 
 interface PricingTier {
   name: string;
@@ -24,8 +22,6 @@ interface PricingTier {
 }
 
 export function PricingSection() {
-  const [showWaitlist, setShowWaitlist] = useState(false);
-
   const handleGetStarted = () => {
     if (config.demoMode || !config.authEnabled) {
       window.location.href = "/timeline";
@@ -34,8 +30,8 @@ export function PricingSection() {
     document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleJoinWaitlist = () => {
-    setShowWaitlist(true);
+  const handleGetHosted = () => {
+    window.location.href = "https://control.longhouse.ai/auth/google";
   };
 
   const tiers: PricingTier[] = [
@@ -67,9 +63,8 @@ export function PricingSection() {
         "Automatic updates and backups",
         "Your own subdomain",
       ],
-      ctaText: "Join Waitlist",
-      ctaAction: handleJoinWaitlist,
-      comingSoon: true,
+      ctaText: "Get Started",
+      ctaAction: handleGetHosted,
     },
   ];
 
@@ -77,7 +72,7 @@ export function PricingSection() {
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
         <h2 className="landing-section-title">Simple Pricing</h2>
-        <p className="landing-section-subtitle">Self-host free forever. Hosted beta coming soon.</p>
+        <p className="landing-section-subtitle">Self-host free forever, or let us run it.</p>
 
         <div className="landing-pricing-grid">
           {tiers.map((tier, index) => (
@@ -85,7 +80,7 @@ export function PricingSection() {
               key={index}
               className={`landing-pricing-card ${tier.highlighted ? "highlighted" : ""} ${tier.comingSoon ? "coming-soon" : ""}`}
             >
-              {tier.comingSoon && <div className="landing-pricing-badge">Coming Soon</div>}
+              {tier.comingSoon && <div className="landing-pricing-badge">Beta</div>}
               <div className="landing-pricing-header">
                 <h3 className="landing-pricing-name">{tier.name}</h3>
                 <div className="landing-pricing-price">
@@ -117,7 +112,6 @@ export function PricingSection() {
         </div>
       </div>
 
-      {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} source="pricing_hosted" />}
     </section>
   );
 }

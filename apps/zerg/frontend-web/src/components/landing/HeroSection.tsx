@@ -1,9 +1,7 @@
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../ui";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 import { InstallSection } from "./InstallSection";
-import { WaitlistModal } from "./WaitlistModal";
 import config from "../../lib/config";
 
 interface HeroSectionProps {
@@ -13,14 +11,13 @@ interface HeroSectionProps {
 
 export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _heroAnimationsEnabled }: HeroSectionProps) {
   const navigate = useNavigate();
-  const [showWaitlist, setShowWaitlist] = useState(false);
 
   const handleSelfHost = () => {
     document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleHostedBeta = () => {
-    setShowWaitlist(true);
+    window.location.href = "https://control.longhouse.ai/auth/google";
   };
 
   return (
@@ -42,7 +39,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </p>
 
           <p className="landing-hero-note">
-            Local-first. Self-host anytime. Hosted beta waitlist open.
+            Local-first. Self-host free, or we host it for $5/mo.
           </p>
 
           <div className="landing-hero-ctas">
@@ -55,7 +52,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
               </Button>
             ) : (
               <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
-                Join Waitlist &rarr;
+                Get Hosted &rarr;
               </Button>
             )}
           </div>
@@ -98,7 +95,6 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
         </div>
       </div>
 
-      {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} source="hero_hosted" />}
     </section>
   );
 }
