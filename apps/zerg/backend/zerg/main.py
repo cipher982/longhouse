@@ -50,7 +50,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from zerg.constants import API_PREFIX
 from zerg.constants import FICHES_PREFIX
 from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
@@ -753,6 +752,11 @@ async def lifespan(app: FastAPI):
 # Create FastAPI APP with lifespan handler
 app = FastAPI(redirect_slashes=True, lifespan=lifespan)
 
+# API sub-application — owns all /api/* routes.
+# Mounted on the parent `app` at "/api" so the SPA catch-all can never
+# intercept API requests (wrong paths like /auth/sso get SPA HTML, not 200 JSON).
+api_app = FastAPI(redirect_slashes=True)
+
 
 # ========================================================================
 # OPENAPI SCHEMA EXPORT - Phase 1 of Contract Enforcement
@@ -766,13 +770,21 @@ def custom_openapi():
 
     from fastapi.openapi.utils import get_openapi
 
+    # Generate schema from the API sub-app routes (which live without /api prefix),
+    # then prepend /api to every path so the schema reflects the real public URLs.
     openapi_schema = get_openapi(
         title="Longhouse API",
         version="1.0.0",
         description="Complete REST API specification for Longhouse. "
         "This schema is the single source of truth for frontend-backend contracts.",
-        routes=app.routes,
+        routes=api_app.routes,
     )
+
+    # Prepend /api to all paths so the schema matches the mounted prefix
+    prefixed_paths = {}
+    for path, ops in openapi_schema.get("paths", {}).items():
+        prefixed_paths[f"/api{path}"] = ops
+    openapi_schema["paths"] = prefixed_paths
 
     # Add server information
     openapi_schema["servers"] = [
@@ -860,50 +872,57 @@ from zerg.middleware.safe_error_response import SafeErrorResponseMiddleware
 
 app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 
-# Include our API routers with centralized prefixes
-app.include_router(fiches_router, prefix=f"{API_PREFIX}{FICHES_PREFIX}")
-app.include_router(mcp_servers_router, prefix=f"{API_PREFIX}")  # MCP servers nested under fiches
-app.include_router(threads_router, prefix=f"{API_PREFIX}{THREADS_PREFIX}")
-app.include_router(models_router, prefix=f"{API_PREFIX}{MODELS_PREFIX}")
-app.include_router(websocket_router, prefix=API_PREFIX)
-app.include_router(admin_router, prefix=API_PREFIX)
-app.include_router(admin_bootstrap_router, prefix=API_PREFIX)  # Bootstrap API for config seeding
-app.include_router(email_webhook_router, prefix=f"{API_PREFIX}")
-app.include_router(pubsub_webhook_router, prefix=f"{API_PREFIX}")
-app.include_router(channels_webhooks_router, prefix=f"{API_PREFIX}")  # Channel plugin webhooks (Telegram, etc.)
-app.include_router(connectors_router, prefix=f"{API_PREFIX}")
-app.include_router(triggers_router, prefix=f"{API_PREFIX}")
-app.include_router(knowledge_router, prefix=f"{API_PREFIX}")
-app.include_router(runs_router, prefix=f"{API_PREFIX}")
-app.include_router(runners_router, prefix=f"{API_PREFIX}")  # Runners execution infrastructure
-app.include_router(auth_router, prefix=f"{API_PREFIX}")
-app.include_router(oauth_router, prefix=f"{API_PREFIX}")  # OAuth for third-party connectors
-app.include_router(users_router, prefix=f"{API_PREFIX}")
-app.include_router(contacts_router, prefix=f"{API_PREFIX}")  # User approved contacts for email/SMS
-app.include_router(oikos_router)  # Oikos integration - includes /api/oikos prefix
-app.include_router(oikos_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for run continuation
-app.include_router(commis_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for commis hooks
-app.include_router(sync_router)  # Conversation sync - includes /api/oikos/sync prefix
-app.include_router(stream_router)  # Resumable SSE v1 - includes /api/stream prefix
-app.include_router(system_router, prefix=API_PREFIX)
+# Include API routers on the api_app sub-application (mounted at /api).
+# Routers that previously used API_PREFIX ("/api") now use no prefix or their
+# relative sub-prefix since the /api mount point handles the top-level prefix.
+api_app.include_router(fiches_router, prefix=FICHES_PREFIX)
+api_app.include_router(mcp_servers_router)  # MCP servers nested under fiches
+api_app.include_router(threads_router, prefix=THREADS_PREFIX)
+api_app.include_router(models_router, prefix=MODELS_PREFIX)
+api_app.include_router(websocket_router)
+api_app.include_router(admin_router)
+api_app.include_router(admin_bootstrap_router)  # Bootstrap API for config seeding
+api_app.include_router(email_webhook_router)
+api_app.include_router(pubsub_webhook_router)
+api_app.include_router(channels_webhooks_router)  # Channel plugin webhooks (Telegram, etc.)
+api_app.include_router(connectors_router)
+api_app.include_router(triggers_router)
+api_app.include_router(knowledge_router)
+api_app.include_router(runs_router)
+api_app.include_router(runners_router)  # Runners execution infrastructure
+api_app.include_router(auth_router)
+api_app.include_router(oauth_router)  # OAuth for third-party connectors
+api_app.include_router(users_router)
+api_app.include_router(contacts_router)  # User approved contacts for email/SMS
+api_app.include_router(oikos_router)  # Oikos integration — self-prefixed /oikos
+api_app.include_router(oikos_internal_router)  # Internal endpoints for run continuation
+api_app.include_router(commis_internal_router)  # Internal endpoints for commis hooks
+api_app.include_router(sync_router)  # Conversation sync — self-prefixed /oikos/sync
+api_app.include_router(stream_router)  # Resumable SSE v1 — self-prefixed /stream
+api_app.include_router(system_router)
+api_app.include_router(ops_router)
+api_app.include_router(ops_beacon_router)  # Public beacon (no auth)
+api_app.include_router(fiche_config_router)
+api_app.include_router(fiche_connectors_router)  # Fiche connector credentials
+api_app.include_router(account_connectors_router)  # Account-level connector credentials
+api_app.include_router(funnel_router)  # Funnel tracking
+api_app.include_router(waitlist_router)  # Public waitlist signup
+api_app.include_router(job_settings_router)  # Job secrets + repo config (before jobs_router to avoid /{job_id} catch-all)
+api_app.include_router(jobs_router)  # Scheduled jobs management
+api_app.include_router(traces_router)  # Trace Explorer (admin only)
+api_app.include_router(reliability_router)  # Reliability Dashboard (admin only)
+api_app.include_router(skills_router)  # Skills Platform for workspace-scoped tools
+api_app.include_router(session_chat_router)  # Forum session chat (drop-in)
+api_app.include_router(agents_router)  # Agents schema for cross-provider session tracking
+api_app.include_router(device_tokens_router)  # Per-device authentication tokens
+
+# metrics_router stays on parent app — Prometheus expects /metrics at root
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
-app.include_router(ops_router, prefix=f"{API_PREFIX}")
-app.include_router(ops_beacon_router, prefix=f"{API_PREFIX}")  # Public beacon (no auth)
-app.include_router(fiche_config_router, prefix=f"{API_PREFIX}")
-app.include_router(fiche_connectors_router, prefix=f"{API_PREFIX}")  # Fiche connector credentials
-app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account-level connector credentials
-app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
-app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
-app.include_router(
-    job_settings_router, prefix=f"{API_PREFIX}"
-)  # Job secrets + repo config (before jobs_router to avoid /{job_id} catch-all)
-app.include_router(jobs_router, prefix=f"{API_PREFIX}")  # Scheduled jobs management
-app.include_router(traces_router, prefix=f"{API_PREFIX}")  # Trace Explorer (admin only)
-app.include_router(reliability_router, prefix=f"{API_PREFIX}")  # Reliability Dashboard (admin only)
-app.include_router(skills_router, prefix=f"{API_PREFIX}")  # Skills Platform for workspace-scoped tools
-app.include_router(session_chat_router, prefix=f"{API_PREFIX}")  # Forum session chat (drop-in)
-app.include_router(agents_router, prefix=f"{API_PREFIX}")  # Agents schema for cross-provider session tracking
-app.include_router(device_tokens_router, prefix=f"{API_PREFIX}")  # Per-device authentication tokens
+
+# Mount the API sub-app at /api — this gives it full ownership of /api/*.
+# Any request to /api/... is routed to api_app; the parent's SPA catch-all
+# can never intercept API paths.
+app.mount("/api", api_app)
 
 # ---------------------------------------------------------------------------
 
@@ -957,7 +976,7 @@ async def read_root():
     return {"message": "Longhouse API is running"}
 
 
-@app.get(f"{API_PREFIX}/health/db", operation_id="health_db_check")
+@api_app.get("/health/db", operation_id="health_db_check")
 async def health_db():
     """Database readiness check - verifies critical tables are initialized.
 
@@ -990,15 +1009,15 @@ async def health_db():
         )
 
 
-@app.get(f"{API_PREFIX}/livez", operation_id="livez_check_get")
-@app.head(f"{API_PREFIX}/livez", operation_id="livez_check_head", include_in_schema=False)
+@api_app.get("/livez", operation_id="livez_check_get")
+@api_app.head("/livez", operation_id="livez_check_head", include_in_schema=False)
 async def livez_check():
     """Liveness probe: process is up and serving requests."""
     return {"status": "ok"}
 
 
-@app.get(f"{API_PREFIX}/health", operation_id="health_check_get")
-@app.head(f"{API_PREFIX}/health", operation_id="health_check_head", include_in_schema=False)
+@api_app.get("/health", operation_id="health_check_get")
+@api_app.head("/health", operation_id="health_check_head", include_in_schema=False)
 async def health_check():
     """Readiness probe: core dependencies are available."""
     from pathlib import Path

@@ -240,6 +240,7 @@ if _eval_mode != "live":
         _sre_module.ChatOpenAI = _StubChatOpenAI
 
 # Import app after all engine setup and mocks are in place
+from zerg.main import api_app
 from zerg.main import app
 
 
@@ -358,13 +359,13 @@ def client(db_session, auth_headers):
         finally:
             pass
 
-    app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[get_db] = override_get_db
 
     with TestClient(app, backend="asyncio") as client:
         client.headers = auth_headers
         yield client
 
-    app.dependency_overrides = {}
+    api_app.dependency_overrides = {}
 
 
 @pytest.fixture
@@ -377,12 +378,12 @@ def unauthenticated_client(db_session):
         finally:
             pass
 
-    app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[get_db] = override_get_db
 
     with TestClient(app, backend="asyncio") as client:
         yield client
 
-    app.dependency_overrides = {}
+    api_app.dependency_overrides = {}
 
 
 @pytest.fixture
@@ -395,12 +396,12 @@ def unauthenticated_client_no_raise(db_session):
         finally:
             pass
 
-    app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[get_db] = override_get_db
 
     with TestClient(app, backend="asyncio", raise_server_exceptions=False) as client:
         yield client
 
-    app.dependency_overrides = {}
+    api_app.dependency_overrides = {}
 
 
 @pytest.fixture
@@ -413,12 +414,12 @@ def test_client(db_session):
         finally:
             pass
 
-    app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[get_db] = override_get_db
 
     with TestClient(app, backend="asyncio") as client:
         yield client
 
-    app.dependency_overrides = {}
+    api_app.dependency_overrides = {}
 
 
 @pytest.fixture
