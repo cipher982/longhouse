@@ -487,9 +487,15 @@ class TestGenerateSummaryBackground:
 
         factory = sessionmaker(bind=db.get_bind())
 
-        mock_client = _mock_llm_client(
-            '{"title": "Fix Login Bug", "summary": "Fixed the login validation issue in auth.py."}'
+        # Mock the Anthropic summarizer (ZAI path)
+        from zerg.services.session_processing import SessionSummary
+
+        mock_summary = SessionSummary(
+            session_id=str(session.id),
+            title="Fix Login Bug",
+            summary="Fixed the login validation issue in auth.py.",
         )
+        mock_summarize = AsyncMock(return_value=mock_summary)
 
         mock_settings = MagicMock()
         mock_settings.testing = False
@@ -499,7 +505,7 @@ class TestGenerateSummaryBackground:
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            patch("openai.AsyncOpenAI", return_value=mock_client),
+            patch("zerg.routers.agents._summarize_via_anthropic", mock_summarize),
             patch.dict("os.environ", {"ZAI_API_KEY": "test-key"}),
         ):
             await _generate_summary_background(str(session.id))
@@ -521,9 +527,8 @@ class TestGenerateSummaryBackground:
 
         factory = sessionmaker(bind=db.get_bind())
 
-        # Mock client that raises an exception
-        mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("LLM API down"))
+        # Mock summarizer that raises an exception
+        mock_summarize = AsyncMock(side_effect=RuntimeError("LLM API down"))
 
         mock_settings = MagicMock()
         mock_settings.testing = False
@@ -533,7 +538,7 @@ class TestGenerateSummaryBackground:
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            patch("openai.AsyncOpenAI", return_value=mock_client),
+            patch("zerg.routers.agents._summarize_via_anthropic", mock_summarize),
             patch.dict("os.environ", {"ZAI_API_KEY": "test-key"}),
         ):
             # Should not raise
