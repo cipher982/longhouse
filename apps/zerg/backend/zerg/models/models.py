@@ -818,6 +818,82 @@ class UserDailySmsCounter(Base):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Job Secrets – Arbitrary key-value secrets for scheduled jobs
+# ---------------------------------------------------------------------------
+
+
+class JobSecret(Base):
+    """Encrypted secret for scheduled jobs (arbitrary key-value).
+
+    Unlike ConnectorCredential (locked to ConnectorType enum), job secrets
+    are free-form keys defined by job authors. Jobs declare needed secrets
+    in their JobConfig.secrets list; only declared secrets are injected at
+    runtime.
+
+    Resolution order: DB first, env var fallback (self-hosted compatibility).
+    """
+
+    __tablename__ = "job_secrets"
+    __table_args__ = (UniqueConstraint("owner_id", "key", name="uix_job_secret_owner_key"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    owner_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    key = Column(String(255), nullable=False)  # e.g. "LIFE_HUB_DB_URL"
+    encrypted_value = Column(Text, nullable=False)  # Fernet AES-GCM
+    description = Column(String(500), nullable=True)  # Optional hint for UI
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    owner = relationship("User", backref="job_secrets")
+
+
+# ---------------------------------------------------------------------------
+# Job Repo Config – Per-user git repo for job scripts
+# ---------------------------------------------------------------------------
+
+
+class JobRepoConfig(Base):
+    """Per-user git repo configuration for job scripts.
+
+    Stores repo URL, branch, and encrypted PAT. One config per user.
+    When present, overrides JOBS_GIT_REPO_URL / JOBS_GIT_TOKEN env vars.
+    """
+
+    __tablename__ = "job_repo_configs"
+    __table_args__ = (UniqueConstraint("owner_id", name="uix_job_repo_config_owner"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    owner_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    repo_url = Column(String(500), nullable=False)  # https://github.com/user/jobs.git
+    branch = Column(String(100), nullable=False, default="main")
+    encrypted_token = Column(Text, nullable=True)  # Fernet-encrypted PAT (nullable = public repo)
+
+    last_sync_sha = Column(String(40), nullable=True)
+    last_sync_at = Column(DateTime, nullable=True)
+    last_sync_error = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    owner = relationship("User", backref="job_repo_config")
+
+
 class EmailSendLog(Base):
     """Audit log for sent emails.
 
