@@ -440,6 +440,54 @@ class BriefingResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+async def _summarize_via_anthropic(
+    transcript: Any,
+    api_key: str,
+    model: str,
+) -> Any:
+    """Summarize a transcript using z.ai's Anthropic-compatible API.
+
+    Returns a SessionSummary (same type as quick_summary).
+    """
+    from anthropic import AsyncAnthropic
+
+    from zerg.services.session_processing import SessionSummary
+    from zerg.services.session_processing import safe_parse_json
+    from zerg.services.session_processing.summarize import _QUICK_SYSTEM
+    from zerg.services.session_processing.summarize import _build_user_prompt
+
+    client = AsyncAnthropic(
+        api_key=api_key,
+        base_url="https://api.z.ai/api/anthropic",
+    )
+    try:
+        user_prompt = _build_user_prompt(transcript)
+        response = await client.messages.create(
+            model=model,
+            max_tokens=512,
+            system=_QUICK_SYSTEM,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+
+        raw = response.content[0].text if response.content else ""
+        parsed = safe_parse_json(raw)
+
+        if isinstance(parsed, dict):
+            return SessionSummary(
+                session_id=transcript.session_id,
+                title=parsed.get("title", "Untitled Session"),
+                summary=parsed.get("summary", raw),
+            )
+
+        return SessionSummary(
+            session_id=transcript.session_id,
+            title="Untitled Session",
+            summary=raw.strip()[:500] if raw.strip() else "No summary generated.",
+        )
+    finally:
+        await client.close()
+
+
 async def _generate_summary_background(session_id: str) -> None:
     """Background task: generate and cache summary for a session.
 
@@ -517,25 +565,34 @@ async def _generate_summary_background(session_id: str) -> None:
             return
 
         # Create LLM client
-        from openai import AsyncOpenAI
+        # z.ai only exposes Anthropic-compatible API, so use anthropic SDK for it.
+        # SUMMARY_BASE_URL overrides the default endpoint for OpenAI-compat providers.
+        summary_base_url = os.getenv("SUMMARY_BASE_URL")
+        summary_model = os.getenv("SUMMARY_MODEL")
 
-        if zai_key:
-            client = AsyncOpenAI(
-                api_key=zai_key,
-                base_url="https://api.z.ai/v1",
-            )
-            model = "glm-4.7"
+        if zai_key and not summary_base_url:
+            # z.ai → Anthropic-compatible endpoint
+            summary = await _summarize_via_anthropic(transcript, zai_key, summary_model or "glm-4.7")
         else:
-            client = AsyncOpenAI(api_key=openai_key)
-            model = "gpt-5-mini"
+            from openai import AsyncOpenAI
 
-        try:
-            summary = await quick_summary(transcript, client, model)
-        finally:
+            if summary_base_url:
+                client = AsyncOpenAI(
+                    api_key=zai_key or openai_key,
+                    base_url=summary_base_url,
+                )
+                model = summary_model or "glm-4.7"
+            else:
+                client = AsyncOpenAI(api_key=openai_key)
+                model = summary_model or "gpt-5-mini"
+
             try:
-                await client.close()
-            except Exception:
-                pass
+                summary = await quick_summary(transcript, client, model)
+            finally:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
 
         # Store on session record
         session.summary = summary.summary
