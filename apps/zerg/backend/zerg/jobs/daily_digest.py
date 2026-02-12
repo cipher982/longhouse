@@ -156,6 +156,7 @@ def _fetch_events_as_dicts(db: Session, session_id: str) -> list[dict]:
             "role": e.role,
             "content_text": e.content_text,
             "tool_name": e.tool_name,
+            "tool_input_json": e.tool_input_json,
             "tool_output_text": e.tool_output_text,
             "timestamp": e.timestamp,
             "session_id": str(e.session_id),
@@ -175,7 +176,6 @@ async def map_session(
     client: AsyncOpenAI,
     model: str,
     semaphore: asyncio.Semaphore,
-    provider: str = "openai",
 ) -> tuple[DigestSessionSummary | None, Usage]:
     """Summarize a single session (map phase).
 
@@ -194,7 +194,6 @@ async def map_session(
                 event_dicts,
                 client=client,
                 model=model,
-                provider=provider,
                 metadata={
                     "project": session.project,
                     "provider": session.provider,
@@ -204,6 +203,13 @@ async def map_session(
 
             if not result:
                 return None, usage
+
+            # Persist summary as side effect (avoid re-summarizing later)
+            session_obj = db.query(AgentSession).get(session.id)
+            if session_obj and not session_obj.summary:
+                session_obj.summary = result.summary
+                session_obj.summary_title = result.title
+                db.commit()
 
             return (
                 DigestSessionSummary(

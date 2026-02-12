@@ -1,19 +1,14 @@
-"""LLM summarization — quick, structured, and batch modes.
-
-Provider-aware: supports OpenAI-compatible chat completions and
-Anthropic-compatible messages APIs.
+"""LLM summarization — quick summary via OpenAI-compatible chat completions.
 
 Primary entry point for downstream consumers:
 
 - :func:`summarize_events` — events in, SessionSummary out. Handles
-  transcript building, context-window-aware truncation, and provider dispatch.
+  transcript building, context-window-aware truncation, and LLM call.
   Used by: ingest background summarizer, backfill endpoint, daily digest.
 
 Lower-level (used by summarize_events internally):
 
 - :func:`quick_summary` — 2-4 sentence summary for briefings and digests
-- :func:`structured_summary` — structured JSON for memory files
-- :func:`batch_summarize` — batch with concurrency control
 """
 
 from __future__ import annotations
@@ -23,7 +18,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -55,17 +49,6 @@ _QUICK_SYSTEM = (
     '- "title": 3-8 word title (Title Case)\n'
     '- "summary": 2-4 sentence summary of what was worked on and accomplished\n'
     "Be specific about files, features, or bugs. JSON only, no markdown fences."
-)
-
-_STRUCTURED_SYSTEM = (
-    "You summarize AI coding sessions into structured JSON. Return JSON with keys:\n"
-    '- "title": 3-8 word title (Title Case)\n'
-    '- "topic": short topic phrase\n'
-    '- "outcome": one-sentence outcome\n'
-    '- "summary": 2-4 sentence summary\n'
-    '- "bullets": 3-6 short bullet points of key actions\n'
-    '- "tags": 3-6 lowercase tags (no spaces, use hyphens)\n'
-    "Be specific and factual. JSON only, no markdown fences."
 )
 
 
@@ -229,150 +212,6 @@ async def quick_summary(
     return _parse_quick_summary_raw(raw, transcript.session_id)
 
 
-async def quick_summary_anthropic(
-    transcript: SessionTranscript,
-    client: Any,
-    model: str = "glm-4.7",
-) -> SessionSummary:
-    """Generate a quick summary using an Anthropic-compatible client."""
-    user_prompt = _build_user_prompt(transcript)
-
-    response = await client.messages.create(
-        model=model,
-        max_tokens=512,
-        system=_QUICK_SYSTEM,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-
-    raw = response.content[0].text if response.content else ""
-    return _parse_quick_summary_raw(raw, transcript.session_id)
-
-
-async def quick_summary_for_provider(
-    transcript: SessionTranscript,
-    client: Any,
-    model: str,
-    provider: Any,
-) -> SessionSummary:
-    """Dispatch quick-summary call based on provider value."""
-    provider_value = str(getattr(provider, "value", provider or "")).lower()
-    if provider_value == "anthropic":
-        return await quick_summary_anthropic(transcript, client, model)
-    return await quick_summary(transcript, client, model)
-
-
-async def structured_summary(
-    transcript: SessionTranscript,
-    client: AsyncOpenAI,
-    model: str = "gpt-5-mini",
-) -> SessionSummary:
-    """Generate a structured JSON summary. For memory files.
-
-    Args:
-        transcript: Cleaned session transcript.
-        client: Async OpenAI-compatible client (caller configures base_url/api_key).
-        model: Model identifier.
-
-    Returns:
-        A :class:`SessionSummary` with all fields populated.
-    """
-    user_prompt = _build_user_prompt(transcript)
-
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": _STRUCTURED_SYSTEM},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-
-    if not response.choices:
-        return SessionSummary(
-            session_id=transcript.session_id,
-            title="Untitled Session",
-            summary="No summary generated.",
-        )
-
-    raw = response.choices[0].message.content or ""
-    parsed = safe_parse_json(raw)
-
-    if isinstance(parsed, dict):
-        bullets = parsed.get("bullets")
-        if isinstance(bullets, list):
-            bullets = [str(b) for b in bullets]
-        else:
-            bullets = None
-
-        tags = parsed.get("tags")
-        if isinstance(tags, list):
-            tags = [str(t).lower().replace(" ", "-") for t in tags]
-        else:
-            tags = None
-
-        return SessionSummary(
-            session_id=transcript.session_id,
-            title=parsed.get("title", "Untitled Session"),
-            summary=parsed.get("summary", raw),
-            topic=parsed.get("topic"),
-            outcome=parsed.get("outcome"),
-            bullets=bullets,
-            tags=tags,
-        )
-
-    # Fallback
-    return SessionSummary(
-        session_id=transcript.session_id,
-        title="Untitled Session",
-        summary=raw.strip()[:500] if raw.strip() else "No summary generated.",
-    )
-
-
-async def batch_summarize(
-    transcripts: list[SessionTranscript],
-    client: AsyncOpenAI,
-    model: str = "glm-4.7",
-    max_concurrent: int = 3,
-) -> list[SessionSummary]:
-    """Batch-summarize multiple transcripts with concurrency control.
-
-    Args:
-        transcripts: List of session transcripts.
-        client: Async OpenAI-compatible client.
-        model: Model identifier.
-        max_concurrent: Max concurrent LLM calls (semaphore limit). Must be >= 1.
-
-    Returns:
-        List of :class:`SessionSummary` (one per transcript, failed ones skipped).
-
-    Raises:
-        ValueError: If max_concurrent < 1 (would deadlock the semaphore).
-    """
-    if max_concurrent < 1:
-        raise ValueError("max_concurrent must be >= 1")
-    semaphore = asyncio.Semaphore(max_concurrent)
-    results: list[SessionSummary] = []
-
-    async def _summarize_one(t: SessionTranscript) -> SessionSummary | None:
-        async with semaphore:
-            try:
-                return await quick_summary(t, client, model)
-            except Exception:
-                logger.exception("Failed to summarize session %s", t.session_id)
-                return None
-
-    tasks = [_summarize_one(t) for t in transcripts]
-    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-
-    for outcome in outcomes:
-        if isinstance(outcome, Exception):
-            logger.error("Batch summarize error: %s", outcome)
-            continue
-        if outcome is not None:
-            results.append(outcome)
-
-    return results
-
-
 # ---------------------------------------------------------------------------
 # High-level entry point — events in, SessionSummary out
 # ---------------------------------------------------------------------------
@@ -386,9 +225,8 @@ DEFAULT_CONTEXT_BUDGET = 120_000
 async def summarize_events(
     events: list[dict],
     *,
-    client: Any,
+    client: AsyncOpenAI,
     model: str,
-    provider: Any,
     metadata: dict | None = None,
     context_budget: int = DEFAULT_CONTEXT_BUDGET,
     timeout_seconds: float = 120,
@@ -401,9 +239,8 @@ async def summarize_events(
     Args:
         events: List of dicts matching AgentEvent shape (role, content_text,
             timestamp, tool_name, tool_input_json, tool_output_text, session_id).
-        client: Async LLM client (OpenAI or Anthropic SDK).
+        client: Async OpenAI-compatible client (caller configures base_url/api_key).
         model: Model identifier string.
-        provider: Provider enum or string ("openai", "anthropic", etc.).
         metadata: Optional dict with project, provider, git_branch keys
             for prompt context.
         context_budget: Max tokens for the transcript. Sessions exceeding this
@@ -426,6 +263,6 @@ async def summarize_events(
         return None
 
     return await asyncio.wait_for(
-        quick_summary_for_provider(transcript, client, model, provider),
+        quick_summary(transcript, client, model),
         timeout=timeout_seconds,
     )

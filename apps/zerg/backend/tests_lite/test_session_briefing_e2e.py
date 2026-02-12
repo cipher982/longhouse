@@ -519,49 +519,6 @@ class TestGenerateSummaryBackground:
         db.close()
 
     @pytest.mark.asyncio
-    async def test_generates_summary_via_anthropic_path(self, tmp_path):
-        """Background task should use _summarize_via_anthropic for anthropic provider."""
-        db = _setup_db(tmp_path)
-        session = _seed_session(db, num_events=6)
-        assert session.summary is None
-
-        from zerg.routers.agents import _generate_summary_background
-
-        factory = sessionmaker(bind=db.get_bind())
-
-        # Mock an Anthropic-style client (messages.create instead of chat.completions)
-        mock_client = AsyncMock()
-        mock_message_content = MagicMock()
-        mock_message_content.text = '{"title": "Deploy Auth Service", "summary": "Deployed the auth service to production."}'
-        mock_response = MagicMock()
-        mock_response.content = [mock_message_content]
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-
-        mock_settings = MagicMock()
-        mock_settings.testing = False
-        mock_settings.llm_disabled = False
-
-        with (
-            patch("zerg.database.get_session_factory", return_value=factory),
-            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            patch(
-                "zerg.models_config.get_llm_client_for_use_case",
-                return_value=(mock_client, "glm-4.7", "anthropic"),
-            ),
-        ):
-            await _generate_summary_background(str(session.id))
-
-        db.refresh(session)
-        assert session.summary is not None
-        assert "auth service" in session.summary
-        assert session.summary_title == "Deploy Auth Service"
-
-        # Verify messages.create was called (not chat.completions.create)
-        mock_client.messages.create.assert_awaited_once()
-
-        db.close()
-
-    @pytest.mark.asyncio
     async def test_handles_llm_error_gracefully(self, tmp_path):
         """Background task should catch LLM errors and not crash."""
         db = _setup_db(tmp_path)
@@ -654,7 +611,6 @@ class TestBackfillSummaries:
             force=False,
             client=mock_client,
             model="test-model",
-            provider="openai",
             total=3,
             _engine=db.get_bind(),
         )
@@ -714,7 +670,6 @@ class TestBackfillSummaries:
             force=False,
             client=failing_client,
             model="test-model",
-            provider="openai",
             total=2,
             _engine=db.get_bind(),
         )
