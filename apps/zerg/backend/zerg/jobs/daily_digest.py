@@ -37,14 +37,12 @@ from zerg.models.connector import Connector
 from zerg.models.user import User
 from zerg.models_config import get_model_for_use_case
 from zerg.services import gmail_api
-from zerg.services.session_processing import build_transcript
-from zerg.services.session_processing import quick_summary
+from zerg.services.session_processing import summarize_events
 from zerg.utils import crypto
 
 logger = logging.getLogger(__name__)
 
 # Constants
-SESSION_TOKEN_BUDGET = 8000  # Max tokens per session for summarization
 MAX_CONCURRENT_MAPS = 3  # Limit concurrent LLM calls
 
 
@@ -180,8 +178,8 @@ async def map_session(
 ) -> tuple[DigestSessionSummary | None, Usage]:
     """Summarize a single session (map phase).
 
-    Uses session_processing.build_transcript() for event cleaning/tokenization
-    and session_processing.quick_summary() for LLM summarization.
+    Uses summarize_events() — the shared entry point that handles
+    transcript building, context-window truncation, and LLM dispatch.
     """
     usage = Usage()
 
@@ -191,29 +189,20 @@ async def map_session(
             if not event_dicts:
                 return None, usage
 
-            # Build transcript with noise stripping, redaction, and token budget
-            transcript = build_transcript(
+            result = await summarize_events(
                 event_dicts,
-                include_tool_calls=False,
-                strip_noise=True,
-                redact_secrets=True,
-                token_budget=SESSION_TOKEN_BUDGET,
+                client=client,
+                model=model,
+                provider="openai",
+                metadata={
+                    "project": session.project,
+                    "provider": session.provider,
+                    "git_branch": session.git_branch,
+                },
             )
 
-            if not transcript.messages:
+            if not result:
                 return None, usage
-
-            # Enrich transcript metadata for the summarizer prompt
-            transcript.metadata = {
-                "project": session.project,
-                "provider": session.provider,
-                "git_branch": session.git_branch,
-                "user_messages": session.user_messages,
-                "assistant_messages": session.assistant_messages,
-                "tool_calls": session.tool_calls,
-            }
-
-            result = await quick_summary(transcript, client, model)
 
             return (
                 DigestSessionSummary(

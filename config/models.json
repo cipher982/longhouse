@@ -131,10 +131,10 @@
       "$comment": "Default OSS profile: no overrides"
     },
     "david": {
-      "$comment": "David's instance: keep conversation on OpenAI, run summarization on z.ai free tier",
+      "$comment": "David's instance: summarization on gpt-5-mini (fast, large context window)",
       "text": {
         "useCases": {
-          "summarization": "glm-4.7-flash"
+          "summarization": "gpt-5-mini"
         }
       }
     }
