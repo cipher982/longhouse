@@ -847,9 +847,8 @@ async def backfill_summaries(
 
                 sess.summary = summary.summary
                 sess.summary_title = summary.title
+                db.commit()
                 backfilled += 1
-
-        db.commit()
 
         remaining = _unsummarized_query().count()
         return BackfillSummariesResponse(

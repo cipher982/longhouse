@@ -175,6 +175,7 @@ async def map_session(
     client: AsyncOpenAI,
     model: str,
     semaphore: asyncio.Semaphore,
+    provider: str = "openai",
 ) -> tuple[DigestSessionSummary | None, Usage]:
     """Summarize a single session (map phase).
 
@@ -193,7 +194,7 @@ async def map_session(
                 event_dicts,
                 client=client,
                 model=model,
-                provider="openai",
+                provider=provider,
                 metadata={
                     "project": session.project,
                     "provider": session.provider,
