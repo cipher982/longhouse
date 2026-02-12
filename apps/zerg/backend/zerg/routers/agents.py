@@ -440,47 +440,6 @@ class BriefingResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-async def _summarize_via_anthropic(
-    transcript: Any,
-    client: Any,
-    model: str,
-) -> Any:
-    """Summarize a transcript using an Anthropic-compatible client.
-
-    Returns a SessionSummary (same type as quick_summary).
-    """
-    from zerg.services.session_processing import SessionSummary
-    from zerg.services.session_processing import safe_parse_json
-    from zerg.services.session_processing.summarize import _QUICK_SYSTEM
-    from zerg.services.session_processing.summarize import _build_user_prompt
-
-    user_prompt = _build_user_prompt(transcript)
-    response = await client.messages.create(
-        model=model,
-        max_tokens=512,
-        system=_QUICK_SYSTEM,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-
-    raw = response.content[0].text if response.content else ""
-    parsed = safe_parse_json(raw)
-
-    if isinstance(parsed, dict):
-        title = parsed.get("title")
-        summary = parsed.get("summary")
-        return SessionSummary(
-            session_id=transcript.session_id,
-            title=title if isinstance(title, str) and title.strip() else "Untitled Session",
-            summary=summary if isinstance(summary, str) and summary.strip() else raw,
-        )
-
-    return SessionSummary(
-        session_id=transcript.session_id,
-        title="Untitled Session",
-        summary=raw.strip()[:500] if raw.strip() else "No summary generated.",
-    )
-
-
 async def _generate_summary_background(session_id: str) -> None:
     """Background task: generate and cache summary for a session.
 
@@ -495,10 +454,9 @@ async def _generate_summary_background(session_id: str) -> None:
     - Testing or LLM disabled
     """
     from zerg.database import get_session_factory
-    from zerg.models_config import ModelProvider
     from zerg.models_config import get_llm_client_for_use_case
     from zerg.services.session_processing import build_transcript
-    from zerg.services.session_processing import quick_summary
+    from zerg.services.session_processing import quick_summary_for_provider
 
     settings = get_settings()
 
@@ -559,11 +517,11 @@ async def _generate_summary_background(session_id: str) -> None:
             logger.debug("Empty transcript for session %s, skipping summary", session_id)
             return
 
-        # Call LLM — dispatch based on provider from models.json (60s timeout)
-        if provider == ModelProvider.ANTHROPIC:
-            summary = await asyncio.wait_for(_summarize_via_anthropic(transcript, client, model), timeout=60)
-        else:
-            summary = await asyncio.wait_for(quick_summary(transcript, client, model), timeout=60)
+        # Call LLM via provider-aware dispatch from models.json (60s timeout)
+        summary = await asyncio.wait_for(
+            quick_summary_for_provider(transcript, client, model, provider),
+            timeout=60,
+        )
 
         # Store on session record
         session.summary = summary.summary
