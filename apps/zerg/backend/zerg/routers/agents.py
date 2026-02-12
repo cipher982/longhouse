@@ -757,7 +757,7 @@ _backfill_state: dict[str, Any] = {
 
 @router.post("/backfill-summaries", response_model=BackfillSummariesResponse)
 async def backfill_summaries(
-    concurrency: int = Query(5, ge=1, le=20, description="Max concurrent LLM requests"),
+    concurrency: int = Query(5, ge=1, le=200, description="Max concurrent LLM requests"),
     project: Optional[str] = Query(None, description="Optional project filter"),
     force: bool = Query(False, description="Re-summarize sessions that already have summaries"),
     db: Session = Depends(get_db),
