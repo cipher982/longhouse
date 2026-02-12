@@ -159,21 +159,28 @@ def set_repo_config(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Set or update repo config (token encrypted at rest)."""
-    encrypted_token = encrypt(request.token) if request.token else None
+    """Set or update repo config (token encrypted at rest).
+
+    On update, only fields explicitly included in the request body are
+    changed.  Omitting ``branch`` or ``token`` preserves the existing value.
+    """
+    provided = request.model_fields_set
 
     existing = db.query(JobRepoConfig).filter(JobRepoConfig.owner_id == current_user.id).first()
 
     if existing:
         existing.repo_url = request.repo_url
-        existing.branch = request.branch
-        existing.encrypted_token = encrypted_token
+        if "branch" in provided:
+            existing.branch = request.branch
+        if "token" in provided:
+            existing.encrypted_token = encrypt(request.token) if request.token else None
         # Clear sync state on config change
         existing.last_sync_sha = None
         existing.last_sync_at = None
         existing.last_sync_error = None
         logger.info("Updated job repo config for user %d", current_user.id)
     else:
+        encrypted_token = encrypt(request.token) if request.token else None
         config = JobRepoConfig(
             owner_id=current_user.id,
             repo_url=request.repo_url,
@@ -231,11 +238,15 @@ def delete_repo_config(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/jobs/repo/sync")
+@router.post("/jobs/settings/sync")
 async def trigger_repo_sync(
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Trigger an immediate git pull (uses the currently active git sync service)."""
+    """Trigger an immediate git pull (uses the currently active git sync service).
+
+    Note: This is distinct from /api/jobs/repo/sync (admin-only, local repo sync).
+    This endpoint triggers a remote fetch + reset on the git sync service.
+    """
     from zerg.jobs.git_sync import get_git_sync_service
 
     service = get_git_sync_service()
