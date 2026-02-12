@@ -105,7 +105,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 | What | URL | How |
 |------|-----|-----|
 | Marketing site | https://longhouse.ai | Coolify app `longhouse-demo` |
-| User instance | https://david.longhouse.ai | Manual Docker container `longhouse-david` |
+| User instance | https://david.longhouse.ai | Docker Compose stack (`docker/docker-compose.david.yml`) |
 | Control plane | https://control.longhouse.ai | Coolify app `longhouse-control-plane` |
 
 ### Before Push
@@ -128,13 +128,14 @@ coolify deploy name longhouse-demo
 coolify deploy name longhouse-control-plane
 ```
 
-**3. User instance (manual Docker):**
+**3. User instance (Docker Compose):**
 ```bash
-ssh zerg 'docker pull ghcr.io/cipher982/longhouse-runtime:latest'
-ssh zerg 'docker stop longhouse-david && docker rm longhouse-david'
-# Recreate: inspect old container for env vars, then docker run with same config
-# Key flags: --network coolify, -v /var/lib/docker/data/longhouse/david:/data
-# Caddy labels: caddy=david.longhouse.ai, caddy.reverse_proxy={{upstreams 8000}}
+# First time only: create secrets file from template and fill real values
+ssh zerg 'cd ~/git/zerg && cp docker/david.env.template docker/david.env'
+
+# Redeploy
+ssh zerg 'cd ~/git/zerg && docker compose -f docker/docker-compose.david.yml pull'
+ssh zerg 'cd ~/git/zerg && docker compose -f docker/docker-compose.david.yml up -d'
 ```
 
 ### Verify Deploy
@@ -155,7 +156,7 @@ coolify app logs longhouse-control-plane               # Control plane
 2. Push to main (triggers GHCR build if code changed)
 3. Deploy marketing site: `coolify deploy name longhouse-demo`
 4. Deploy control plane: `coolify deploy name longhouse-control-plane`
-5. Pull + recreate `longhouse-david` container on zerg
+5. Pull + `docker compose -f docker/docker-compose.david.yml up -d` on zerg
 6. Verify: `make verify-prod` + check `longhouse.ai` title
 7. Report result to user
 

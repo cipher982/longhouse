@@ -147,6 +147,7 @@ Evaluate newer integration paths for tighter commis control vs. current hatch su
 - [x] Migrate `daily_digest.py` to use `session_processing.transcript` + `session_processing.summarize` — replaced inline transcript building, noise stripping, and LLM calls with `build_transcript()` + `quick_summary()`
 - [x] Consolidate `safe_parse_json` — exported from `session_processing`, replaced duplicates in `memory_summarizer.py` and `title_generator.py`
 - [x] Delete duplicate inline logic — removed `_safe_parse_json` from memory_summarizer + title_generator, removed inline message classes and noise patterns from daily_digest
+- [x] Add `POST /api/agents/backfill-summaries` one-shot endpoint + tests to summarize legacy `summary IS NULL` sessions in bounded batches
 
 ### Phase 4: Semantic Search + Embeddings (4)
 

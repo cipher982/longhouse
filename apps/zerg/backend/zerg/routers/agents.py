@@ -2,6 +2,7 @@
 
 Provides endpoints for:
 - POST /api/agents/ingest - Ingest sessions and events from AI coding tools
+- POST /api/agents/backfill-summaries - Backfill missing session summaries
 - GET /api/agents/sessions - List sessions with filters
 - GET /api/agents/sessions/{id} - Get session details
 - GET /api/agents/sessions/{id}/events - Get session events
@@ -382,6 +383,15 @@ class DemoSeedResponse(BaseModel):
     sessions_created: int
 
 
+class BackfillSummariesResponse(BaseModel):
+    """Response for summary backfill endpoint."""
+
+    backfilled: int = Field(..., description="Number of sessions successfully summarized")
+    skipped: int = Field(..., description="Number of sessions skipped (no events/empty transcript)")
+    errors: int = Field(..., description="Number of sessions that failed summarization")
+    remaining: int = Field(..., description="Number of sessions still missing summaries")
+
+
 # ---------------------------------------------------------------------------
 # Briefing helpers
 # ---------------------------------------------------------------------------
@@ -733,6 +743,154 @@ async def get_briefing(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get briefing",
         )
+
+
+@router.post("/backfill-summaries", response_model=BackfillSummariesResponse)
+async def backfill_summaries(
+    project: Optional[str] = Query(None, description="Optional project filter"),
+    limit: int = Query(50, ge=1, le=200, description="Max sessions to summarize this run"),
+    max_concurrent: int = Query(3, ge=1, le=5, description="Max concurrent LLM requests"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> BackfillSummariesResponse:
+    """Backfill missing summaries for historical sessions.
+
+    Processes at most ``limit`` sessions with ``summary IS NULL`` (most recent first),
+    summarizes each transcript synchronously, and persists ``summary`` + ``summary_title``.
+    Safe to call repeatedly.
+    """
+    from zerg.models_config import get_llm_client_for_use_case
+    from zerg.services.session_processing import build_transcript
+    from zerg.services.session_processing import quick_summary_for_provider
+
+    def _unsummarized_query():
+        query = db.query(AgentSession).filter(AgentSession.summary.is_(None))
+        if project:
+            query = query.filter(AgentSession.project == project)
+        return query
+
+    backfilled = 0
+    skipped = 0
+    errors = 0
+    client = None
+
+    try:
+        sessions = _unsummarized_query().order_by(AgentSession.started_at.desc()).limit(limit).all()
+        if not sessions:
+            return BackfillSummariesResponse(backfilled=0, skipped=0, errors=0, remaining=0)
+
+        try:
+            client, model, provider = get_llm_client_for_use_case("summarization")
+        except ValueError as e:
+            logger.warning("Backfill summarization misconfigured: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Summarization is misconfigured: {e}",
+            )
+
+        transcripts_by_session: dict[UUID, Any] = {}
+        sessions_by_id: dict[UUID, AgentSession] = {}
+
+        for session in sessions:
+            try:
+                events = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.timestamp).all()
+                if not events:
+                    skipped += 1
+                    continue
+
+                event_dicts = [
+                    {
+                        "role": e.role,
+                        "content_text": e.content_text,
+                        "tool_name": e.tool_name,
+                        "tool_input_json": e.tool_input_json,
+                        "tool_output_text": e.tool_output_text,
+                        "timestamp": e.timestamp,
+                        "session_id": str(e.session_id),
+                    }
+                    for e in events
+                ]
+
+                transcript = build_transcript(
+                    event_dicts,
+                    include_tool_calls=False,
+                    token_budget=8000,
+                )
+                transcript.metadata = {
+                    "project": session.project,
+                    "provider": session.provider,
+                    "git_branch": session.git_branch,
+                }
+                if not transcript.messages:
+                    skipped += 1
+                    continue
+
+                transcripts_by_session[session.id] = transcript
+                sessions_by_id[session.id] = session
+            except Exception:
+                errors += 1
+                logger.exception("Failed preparing transcript for session %s during summary backfill", session.id)
+
+        if transcripts_by_session:
+            semaphore = asyncio.Semaphore(max_concurrent)
+
+            async def _summarize_one(session_id: UUID) -> tuple[UUID, Any, Exception | None]:
+                async with semaphore:
+                    try:
+                        summary = await quick_summary_for_provider(
+                            transcripts_by_session[session_id],
+                            client,
+                            model,
+                            provider,
+                        )
+                        return session_id, summary, None
+                    except Exception as exc:
+                        return session_id, None, exc
+
+            tasks = [_summarize_one(session_id) for session_id in transcripts_by_session]
+            outcomes = await asyncio.gather(*tasks)
+
+            for session_id, summary, err in outcomes:
+                if err is not None:
+                    errors += 1
+                    logger.warning("Failed backfill summary for session %s: %s", session_id, err)
+                    continue
+
+                session = sessions_by_id.get(session_id)
+                if not session or session.summary:
+                    skipped += 1
+                    continue
+
+                session.summary = summary.summary
+                session.summary_title = summary.title
+                backfilled += 1
+
+        db.commit()
+
+        remaining = _unsummarized_query().count()
+        return BackfillSummariesResponse(
+            backfilled=backfilled,
+            skipped=skipped,
+            errors=errors,
+            remaining=remaining,
+        )
+
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to backfill agent session summaries")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to backfill summaries",
+        )
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
 
 @router.get("/sessions", response_model=SessionsListResponse)
