@@ -240,16 +240,16 @@ class TestAttachToRunStream:
     async def async_client(self, db_session, auth_headers):
         """Asynchronous client for testing SSE streams."""
         from zerg.database import get_db
-        from zerg.main import app
+        from zerg.main import api_app, app
 
         def override_get_db():
             yield db_session
 
-        app.dependency_overrides[get_db] = override_get_db
+        api_app.dependency_overrides[get_db] = override_get_db
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
             ac.headers.update(auth_headers)
             yield ac
-        app.dependency_overrides = {}
+        api_app.dependency_overrides = {}
 
     @pytest.mark.asyncio
     async def test_attach_to_completed_run(self, async_client, db_session, run_components):

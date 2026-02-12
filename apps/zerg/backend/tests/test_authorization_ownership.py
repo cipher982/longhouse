@@ -4,6 +4,7 @@ import pytest
 
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
+from zerg.main import api_app
 from zerg.main import app
 
 
@@ -41,13 +42,13 @@ async def test_non_owner_cannot_run_thread(client, db_session):
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: other
+    api_app.dependency_overrides[get_current_user] = lambda: other
     try:
         resp = client.post(f"/api/threads/{thread.id}/runs")
         assert resp.status_code == 403, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 @pytest.mark.asyncio
@@ -66,7 +67,7 @@ async def test_non_owner_cannot_create_thread_for_others_fiche(client, db_sessio
     )
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: other
+    api_app.dependency_overrides[get_current_user] = lambda: other
     try:
         resp = client.post(
             "/api/threads",
@@ -75,7 +76,7 @@ async def test_non_owner_cannot_create_thread_for_others_fiche(client, db_sessio
         assert resp.status_code == 403, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 @pytest.mark.asyncio
@@ -85,7 +86,7 @@ async def test_non_owner_cannot_post_messages(client, db_session):
     _, thread = _mk_fiche_thread(db_session, owner.id)
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: other
+    api_app.dependency_overrides[get_current_user] = lambda: other
     try:
         resp = client.post(
             f"/api/threads/{thread.id}/messages",
@@ -94,7 +95,7 @@ async def test_non_owner_cannot_post_messages(client, db_session):
         assert resp.status_code == 403, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 @pytest.mark.asyncio
@@ -113,13 +114,13 @@ async def test_non_owner_cannot_run_fiche_task(client, db_session):
     )
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: other
+    api_app.dependency_overrides[get_current_user] = lambda: other
     try:
         resp = client.post(f"/api/fiches/{fiche.id}/task")
         assert resp.status_code == 403, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 @pytest.mark.asyncio
@@ -131,7 +132,7 @@ async def test_non_owner_cannot_read_agents_or_runs(client, db_session):
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: other
+    api_app.dependency_overrides[get_current_user] = lambda: other
     try:
         resp = client.get(f"/api/fiches/{fiche.id}")
         assert resp.status_code == 403, resp.text
@@ -155,4 +156,4 @@ async def test_non_owner_cannot_read_agents_or_runs(client, db_session):
         assert resp.status_code == 403, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]

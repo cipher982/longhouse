@@ -2,6 +2,7 @@ import contextlib
 
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
+from zerg.main import api_app
 from zerg.main import app
 
 
@@ -33,32 +34,32 @@ def test_read_thread_ownership_enforced(client, db_session):
     from zerg.dependencies.auth import get_current_user
 
     # Other user should be forbidden
-    app.dependency_overrides[get_current_user] = lambda: other
+    api_app.dependency_overrides[get_current_user] = lambda: other
     try:
         r = client.get(f"/api/threads/{thread.id}")
         assert r.status_code == 403, r.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
     # Owner allowed
-    app.dependency_overrides[get_current_user] = lambda: owner
+    api_app.dependency_overrides[get_current_user] = lambda: owner
     try:
         r = client.get(f"/api/threads/{thread.id}")
         assert r.status_code == 200, r.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
     # Admin allowed
     admin = _user(db_session, "admin@local", "ADMIN")
-    app.dependency_overrides[get_current_user] = lambda: admin
+    api_app.dependency_overrides[get_current_user] = lambda: admin
     try:
         r = client.get(f"/api/threads/{thread.id}")
         assert r.status_code == 200, r.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 def test_list_threads_scoped_to_owner(client, db_session):
@@ -105,7 +106,7 @@ def test_list_threads_scoped_to_owner(client, db_session):
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: owner
+    api_app.dependency_overrides[get_current_user] = lambda: owner
     try:
         resp = client.get("/api/threads")
         assert resp.status_code == 200, resp.text
@@ -115,7 +116,7 @@ def test_list_threads_scoped_to_owner(client, db_session):
         assert other_thread.id not in ids
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 def test_update_thread_ownership_enforced(client, db_session):
@@ -143,21 +144,21 @@ def test_update_thread_ownership_enforced(client, db_session):
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: other
+    api_app.dependency_overrides[get_current_user] = lambda: other
     try:
         resp = client.put(f"/api/threads/{thread.id}", json={"title": "nope"})
         assert resp.status_code == 403, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
-    app.dependency_overrides[get_current_user] = lambda: owner
+    api_app.dependency_overrides[get_current_user] = lambda: owner
     try:
         resp = client.put(f"/api/threads/{thread.id}", json={"title": "ok"})
         assert resp.status_code == 200, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 def test_delete_thread_ownership_enforced(client, db_session):
@@ -185,18 +186,18 @@ def test_delete_thread_ownership_enforced(client, db_session):
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: other
+    api_app.dependency_overrides[get_current_user] = lambda: other
     try:
         resp = client.delete(f"/api/threads/{thread.id}")
         assert resp.status_code == 403, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
-    app.dependency_overrides[get_current_user] = lambda: owner
+    api_app.dependency_overrides[get_current_user] = lambda: owner
     try:
         resp = client.delete(f"/api/threads/{thread.id}")
         assert resp.status_code == 204, resp.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]

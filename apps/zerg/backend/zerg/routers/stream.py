@@ -39,7 +39,7 @@ from zerg.services.event_store import EventStore
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/stream", tags=["stream"])
+router = APIRouter(prefix="/stream", tags=["stream"])
 
 
 def _json_default(value):  # type: ignore[no-untyped-def]

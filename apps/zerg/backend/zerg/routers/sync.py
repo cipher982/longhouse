@@ -25,7 +25,7 @@ from zerg.models.sync import SyncOperation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/oikos/sync", tags=["sync"])
+router = APIRouter(prefix="/oikos/sync", tags=["sync"])
 
 
 # ---------------------------------------------------------------------------

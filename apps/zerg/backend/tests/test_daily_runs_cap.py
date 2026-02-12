@@ -4,6 +4,7 @@ import pytest
 
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
+from zerg.main import api_app
 from zerg.main import app
 
 
@@ -45,7 +46,7 @@ async def test_non_admin_daily_runs_cap_blocks_on_third(client, db_session, monk
     user = _ensure_user_role(db_session, "dev@local", "USER")
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: user
+    api_app.dependency_overrides[get_current_user] = lambda: user
 
     try:
         # Prepare fiche + thread
@@ -67,7 +68,7 @@ async def test_non_admin_daily_runs_cap_blocks_on_third(client, db_session, monk
         assert r3.status_code == 429, r3.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 @pytest.mark.asyncio
@@ -77,7 +78,7 @@ async def test_admin_exempt_from_daily_runs_cap(client, db_session, monkeypatch)
     admin = _ensure_user_role(db_session, "admin@local", "ADMIN")
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: admin
+    api_app.dependency_overrides[get_current_user] = lambda: admin
     try:
         fiche, thread = _create_fiche_and_thread(db_session, admin.id)
         # First run
@@ -90,7 +91,7 @@ async def test_admin_exempt_from_daily_runs_cap(client, db_session, monkeypatch)
         assert r2.status_code == 202
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 @pytest.mark.asyncio
@@ -100,7 +101,7 @@ async def test_task_run_respects_daily_cap(client, db_session, monkeypatch):
     user = _ensure_user_role(db_session, "user1@local", "USER")
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: user
+    api_app.dependency_overrides[get_current_user] = lambda: user
     try:
         fiche = crud.create_fiche(
             db_session,
@@ -120,4 +121,4 @@ async def test_task_run_respects_daily_cap(client, db_session, monkeypatch):
         assert r2.status_code == 429, r2.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]

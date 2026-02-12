@@ -4,6 +4,7 @@ import pytest
 
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
+from zerg.main import api_app
 from zerg.main import app
 
 
@@ -46,7 +47,7 @@ async def test_user_budget_denies_when_exhausted(client, db_session, monkeypatch
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: user
+    api_app.dependency_overrides[get_current_user] = lambda: user
     try:
         fiche, thread = _fiche_and_thread(db_session, user.id)
 
@@ -61,7 +62,7 @@ async def test_user_budget_denies_when_exhausted(client, db_session, monkeypatch
         assert "budget" in r.text.lower()
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
 
 @pytest.mark.asyncio
@@ -72,7 +73,7 @@ async def test_admin_exempt_from_budgets(client, db_session, monkeypatch):
     admin = _ensure_user_role(db_session, "admin-budget@local", "ADMIN")
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: admin
+    api_app.dependency_overrides[get_current_user] = lambda: admin
     try:
         fiche, thread = _fiche_and_thread(db_session, admin.id)
 
@@ -87,4 +88,4 @@ async def test_admin_exempt_from_budgets(client, db_session, monkeypatch):
         assert r.status_code == 202, r.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]

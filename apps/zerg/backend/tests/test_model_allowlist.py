@@ -7,6 +7,7 @@ from tests.conftest import TEST_COMMIS_MODEL
 from tests.conftest import TEST_MODEL
 from zerg.config import Settings
 from zerg.crud import crud
+from zerg.main import api_app
 from zerg.main import app
 
 
@@ -107,7 +108,7 @@ async def test_non_admin_create_fiche_disallowed_model(client, db_session, _dev_
     # Attempt to create fiche with a disallowed model
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: _dev_user
+    api_app.dependency_overrides[get_current_user] = lambda: _dev_user
     try:
         with patch("zerg.routers.fiches.get_settings", return_value=mock_settings):
             resp = client.post(
@@ -123,7 +124,7 @@ async def test_non_admin_create_fiche_disallowed_model(client, db_session, _dev_
             )
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
     assert resp.status_code == 422, resp.text
     assert "not allowed" in resp.json()["detail"]
 
@@ -134,7 +135,7 @@ async def test_non_admin_create_fiche_allowed_model(client, db_session, _dev_use
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: _dev_user
+    api_app.dependency_overrides[get_current_user] = lambda: _dev_user
     try:
         with patch("zerg.routers.fiches.get_settings", return_value=mock_settings):
             resp = client.post(
@@ -150,7 +151,7 @@ async def test_non_admin_create_fiche_allowed_model(client, db_session, _dev_use
             )
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert data["model"] == TEST_COMMIS_MODEL
@@ -164,7 +165,7 @@ async def test_admin_bypasses_model_allowlist(client, db_session):
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: admin
+    api_app.dependency_overrides[get_current_user] = lambda: admin
     try:
         with patch("zerg.routers.fiches.get_settings", return_value=mock_settings):
             resp = client.post(
@@ -181,7 +182,7 @@ async def test_admin_bypasses_model_allowlist(client, db_session):
     finally:
         # Clean override regardless of assertion outcome
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
     assert resp.status_code == 201, resp.text
     assert resp.json()["model"] == TEST_MODEL
@@ -192,13 +193,13 @@ async def test_models_endpoint_filtered_for_non_admin(client, db_session, _dev_u
     mock_settings = _mock_settings_with_allowlist(TEST_COMMIS_MODEL)
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: _dev_user
+    api_app.dependency_overrides[get_current_user] = lambda: _dev_user
     try:
         with patch("zerg.routers.models.get_settings", return_value=mock_settings):
             resp = client.get("/api/models/")
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
     assert resp.status_code == 200
     ids = {m["id"] for m in resp.json()}
     assert ids == {TEST_COMMIS_MODEL}
@@ -211,13 +212,13 @@ async def test_models_endpoint_admin_sees_all(client, db_session):
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: admin
+    api_app.dependency_overrides[get_current_user] = lambda: admin
     try:
         with patch("zerg.routers.models.get_settings", return_value=mock_settings):
             resp = client.get("/api/models/")
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
     assert resp.status_code == 200
     ids = {m["id"] for m in resp.json()}
@@ -231,7 +232,7 @@ async def test_non_admin_update_fiche_disallowed_model(client, db_session, _dev_
     # Ensure current user is non-admin dev user
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: _dev_user
+    api_app.dependency_overrides[get_current_user] = lambda: _dev_user
     try:
         with patch("zerg.routers.fiches.get_settings", return_value=mock_settings):
             # Create an allowed fiche first
@@ -259,4 +260,4 @@ async def test_non_admin_update_fiche_disallowed_model(client, db_session, _dev_
             assert resp2.status_code == 422, resp2.text
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]

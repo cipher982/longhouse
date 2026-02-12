@@ -62,7 +62,7 @@ from zerg.voice import router as oikos_voice
 logger = logging.getLogger(__name__)
 
 # Main router
-router = APIRouter(prefix="/api/oikos", tags=["oikos"])
+router = APIRouter(prefix="/oikos", tags=["oikos"])
 
 # Include sub-routers (they all have /api/oikos prefix already, so we strip it here)
 router.include_router(oikos_fiches.router, prefix="", tags=["oikos"])

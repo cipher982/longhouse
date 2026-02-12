@@ -248,7 +248,7 @@ class TestServiceLoginRaceConditions:
             from fastapi.testclient import TestClient
 
             from zerg.database import get_db
-            from zerg.main import app
+            from zerg.main import api_app, app
 
             # Need to override get_db for each client
             def override_get_db():
@@ -261,7 +261,7 @@ class TestServiceLoginRaceConditions:
                 finally:
                     session.close()
 
-            app.dependency_overrides[get_db] = override_get_db
+            api_app.dependency_overrides[get_db] = override_get_db
 
             with TestClient(app, backend="asyncio", raise_server_exceptions=False) as client:
                 return client.post(

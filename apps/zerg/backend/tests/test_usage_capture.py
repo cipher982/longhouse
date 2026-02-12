@@ -4,6 +4,7 @@ import pytest
 
 from tests.conftest import TEST_COMMIS_MODEL
 from zerg.crud import crud
+from zerg.main import api_app
 from zerg.main import app
 
 
@@ -69,12 +70,12 @@ async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatc
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: user
+    api_app.dependency_overrides[get_current_user] = lambda: user
     try:
         resp = client.post(f"/api/threads/{thread.id}/runs")
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
     assert resp.status_code == 202, resp.text
 
@@ -130,12 +131,12 @@ async def test_usage_missing_leaves_totals_null(client, db_session, monkeypatch)
 
     from zerg.dependencies.auth import get_current_user
 
-    app.dependency_overrides[get_current_user] = lambda: user
+    api_app.dependency_overrides[get_current_user] = lambda: user
     try:
         resp = client.post(f"/api/threads/{thread.id}/runs")
     finally:
         with contextlib.suppress(Exception):
-            del app.dependency_overrides[get_current_user]
+            del api_app.dependency_overrides[get_current_user]
 
     assert resp.status_code == 202, resp.text
     runs = crud.list_runs(db_session, fiche.id, limit=1)

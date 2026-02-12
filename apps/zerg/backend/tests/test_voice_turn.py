@@ -131,7 +131,7 @@ async def test_run_voice_turn_happy_path(monkeypatch):
 def test_voice_turn_endpoint_success(monkeypatch):
     """API endpoint should return transcript + response."""
     import zerg.voice.router as voice_router
-    from zerg.main import app
+    from zerg.main import api_app, app
     from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
@@ -151,7 +151,7 @@ def test_voice_turn_endpoint_success(monkeypatch):
         ),
     )
 
-    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
             "/api/oikos/voice/turn",
@@ -160,7 +160,7 @@ def test_voice_turn_endpoint_success(monkeypatch):
             data={"return_audio": "true"},
         )
     finally:
-        app.dependency_overrides.pop(get_current_oikos_user, None)
+        api_app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 200
     data = response.json()
@@ -174,7 +174,7 @@ def test_voice_turn_endpoint_success(monkeypatch):
 def test_voice_turn_accepts_webm_with_codecs(monkeypatch):
     """Endpoint should accept browser content-type with codec parameters."""
     import zerg.voice.router as voice_router
-    from zerg.main import app
+    from zerg.main import api_app, app
     from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
@@ -194,7 +194,7 @@ def test_voice_turn_accepts_webm_with_codecs(monkeypatch):
         ),
     )
 
-    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
             "/api/oikos/voice/turn",
@@ -203,7 +203,7 @@ def test_voice_turn_accepts_webm_with_codecs(monkeypatch):
             data={"return_audio": "true"},
         )
     finally:
-        app.dependency_overrides.pop(get_current_oikos_user, None)
+        api_app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 200
 
@@ -211,7 +211,7 @@ def test_voice_turn_accepts_webm_with_codecs(monkeypatch):
 def test_voice_turn_empty_transcription_returns_422_with_message_id(monkeypatch):
     """Empty transcription should return 422 with status=error and message_id for correlation."""
     import zerg.voice.router as voice_router
-    from zerg.main import app
+    from zerg.main import api_app, app
     from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
@@ -229,7 +229,7 @@ def test_voice_turn_empty_transcription_returns_422_with_message_id(monkeypatch)
         ),
     )
 
-    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
             "/api/oikos/voice/turn",
@@ -238,7 +238,7 @@ def test_voice_turn_empty_transcription_returns_422_with_message_id(monkeypatch)
             data={"return_audio": "true", "message_id": "test-correlation-id"},
         )
     finally:
-        app.dependency_overrides.pop(get_current_oikos_user, None)
+        api_app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 422
     data = response.json()
@@ -249,12 +249,12 @@ def test_voice_turn_empty_transcription_returns_422_with_message_id(monkeypatch)
 
 def test_voice_turn_unsupported_audio_type_returns_400_with_message_id():
     """Unsupported audio type should return 400 with message_id."""
-    from zerg.main import app
+    from zerg.main import api_app, app
     from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
 
-    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
             "/api/oikos/voice/turn",
@@ -263,7 +263,7 @@ def test_voice_turn_unsupported_audio_type_returns_400_with_message_id():
             data={"return_audio": "false", "message_id": "test-unsupported-type"},
         )
     finally:
-        app.dependency_overrides.pop(get_current_oikos_user, None)
+        api_app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 400
     data = response.json()
@@ -275,7 +275,7 @@ def test_voice_turn_unsupported_audio_type_returns_400_with_message_id():
 def test_voice_turn_server_error_returns_500_with_message_id(monkeypatch):
     """Server errors should return 500 with message_id."""
     import zerg.voice.router as voice_router
-    from zerg.main import app
+    from zerg.main import api_app, app
     from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
@@ -293,7 +293,7 @@ def test_voice_turn_server_error_returns_500_with_message_id(monkeypatch):
         ),
     )
 
-    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
             "/api/oikos/voice/turn",
@@ -302,7 +302,7 @@ def test_voice_turn_server_error_returns_500_with_message_id(monkeypatch):
             data={"return_audio": "false", "message_id": "test-server-error"},
         )
     finally:
-        app.dependency_overrides.pop(get_current_oikos_user, None)
+        api_app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 500
     data = response.json()
@@ -358,7 +358,7 @@ async def test_run_voice_turn_passes_message_id(monkeypatch):
 def test_voice_turn_endpoint_with_message_id(monkeypatch):
     """API endpoint should accept and return message_id."""
     import zerg.voice.router as voice_router
-    from zerg.main import app
+    from zerg.main import api_app, app
     from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
@@ -380,7 +380,7 @@ def test_voice_turn_endpoint_with_message_id(monkeypatch):
         ),
     )
 
-    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
             "/api/oikos/voice/turn",
@@ -389,7 +389,7 @@ def test_voice_turn_endpoint_with_message_id(monkeypatch):
             data={"return_audio": "true", "message_id": test_message_id},
         )
     finally:
-        app.dependency_overrides.pop(get_current_oikos_user, None)
+        api_app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 200
     data = response.json()
@@ -400,7 +400,7 @@ def test_voice_turn_endpoint_with_message_id(monkeypatch):
 def test_voice_transcribe_endpoint_success(monkeypatch):
     """Transcribe endpoint should return transcript without oikos execution."""
     import zerg.voice.router as voice_router
-    from zerg.main import app
+    from zerg.main import api_app, app
     from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
@@ -411,7 +411,7 @@ def test_voice_transcribe_endpoint_success(monkeypatch):
 
     monkeypatch.setattr(voice_router, "get_stt_service", lambda: FakeSTT())
 
-    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
             "/api/oikos/voice/transcribe",
@@ -420,7 +420,7 @@ def test_voice_transcribe_endpoint_success(monkeypatch):
             data={"message_id": "voice-msg-123"},
         )
     finally:
-        app.dependency_overrides.pop(get_current_oikos_user, None)
+        api_app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 200
     data = response.json()
@@ -432,7 +432,7 @@ def test_voice_transcribe_endpoint_success(monkeypatch):
 def test_voice_tts_endpoint_success(monkeypatch):
     """TTS endpoint should return audio payload."""
     import zerg.voice.router as voice_router
-    from zerg.main import app
+    from zerg.main import api_app, app
     from zerg.routers.oikos_auth import get_current_oikos_user
 
     client = TestClient(app)
@@ -443,7 +443,7 @@ def test_voice_tts_endpoint_success(monkeypatch):
         lambda: SimpleNamespace(testing=True, llm_disabled=False),
     )
 
-    app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[get_current_oikos_user] = lambda: SimpleNamespace(id=1)
     try:
         response = client.post(
             "/api/oikos/voice/tts",
@@ -451,7 +451,7 @@ def test_voice_tts_endpoint_success(monkeypatch):
             json={"text": "hello", "message_id": "voice-msg-tts"},
         )
     finally:
-        app.dependency_overrides.pop(get_current_oikos_user, None)
+        api_app.dependency_overrides.pop(get_current_oikos_user, None)
 
     assert response.status_code == 200
     data = response.json()
