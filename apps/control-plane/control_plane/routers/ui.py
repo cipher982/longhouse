@@ -182,6 +182,11 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
         status_class = f"status-{instance.status}" if instance.status in ("active", "provisioning", "canceled") else ""
 
+        billing_btn = (
+            '<a href="/billing/portal-redirect" class="btn btn-secondary">Manage Billing</a>'
+            if user.stripe_customer_id else ""
+        )
+
         body = f"""
         <h1>Your Instance</h1>
         <div class="card">
@@ -193,12 +198,12 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             </div>
             <div class="meta-item">
               <span class="meta-label">Plan</span>
-              <span class="meta-value">{html.escape(user.subscription_status or 'none')}</span>
+              <span class="meta-value">{html.escape(user.subscription_status or 'free')}</span>
             </div>
           </div>
           <div class="actions">
-            <a href="{instance_url}" class="btn btn-primary" target="_blank">Open Instance</a>
-            <a href="/billing/portal-redirect" class="btn btn-secondary">Manage Billing</a>
+            <a href="/dashboard/open-instance" class="btn btn-primary">Open Instance</a>
+            {billing_btn}
           </div>
         </div>
         """
@@ -223,6 +228,34 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         """
 
     return _page("Dashboard", body)
+
+
+@router.get("/dashboard/open-instance", response_class=HTMLResponse)
+def open_instance(request: Request, db: Session = Depends(get_db)):
+    """Issue a login token and redirect user to their instance with auto-auth."""
+    user = _get_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse("/auth/google", status_code=302)
+
+    instance = db.query(Instance).filter(Instance.user_id == user.id).first()
+    if not instance:
+        return RedirectResponse("/dashboard", status_code=302)
+
+    instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
+
+    # Issue a short-lived JWT signed with the instance JWT secret
+    import time
+
+    from control_plane.routers.instances import _encode_jwt
+
+    token = _encode_jwt(
+        {"sub": str(user.id), "email": user.email, "exp": int(time.time()) + 300},
+        settings.instance_jwt_secret,
+    )
+
+    # Redirect to instance SSO endpoint — sets cookie and redirects to /timeline
+    sso_url = f"{instance_url}/auth/sso?token={token}"
+    return RedirectResponse(sso_url, status_code=302)
 
 
 @router.post("/dashboard/checkout")

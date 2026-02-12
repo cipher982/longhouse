@@ -754,6 +754,26 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
     return TokenOut(access_token=access_token, expires_in=expires_in)
 
 
+@router.get("/sso")
+def sso_redirect(token: str, response: Response, db: Session = Depends(get_db)):
+    """Cross-subdomain SSO: accept token via URL param, set cookie, redirect.
+
+    Used by the control plane to sign users into their instance:
+    control.longhouse.ai → david.longhouse.ai/auth/sso?token=xxx → /timeline
+    """
+    from fastapi.responses import RedirectResponse as _Redirect
+
+    # Reuse accept-token validation logic (sets cookie on response)
+    accept_token(response, {"token": token}, db)
+
+    # Copy cookie headers to a redirect response
+    redirect = _Redirect("/timeline", status_code=302)
+    for header_name, header_value in response.headers.items():
+        if header_name.lower() == "set-cookie":
+            redirect.headers.append("set-cookie", header_value)
+    return redirect
+
+
 # ---------------------------------------------------------------------------
 # Password auth for OSS self-hosters
 # ---------------------------------------------------------------------------
