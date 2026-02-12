@@ -19,11 +19,60 @@ from pathlib import Path
 from typing import Any
 from typing import Awaitable
 from typing import Callable
+from typing import Required
+from typing import TypedDict
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger(__name__)
+
+
+class SecretField(TypedDict, total=False):
+    """Rich metadata for a job secret declaration.
+
+    Mirrors the CredentialField pattern from connectors/registry.py.
+    Plain strings in JobConfig.secrets are auto-normalized to SecretField(key=...).
+    """
+
+    key: Required[str]  # env var name, e.g. "LIFE_HUB_DB_URL"
+    label: str  # human-readable, e.g. "Life Hub Database URL"
+    type: str  # input type: "password" | "text" | "url" (default "password")
+    placeholder: str  # hint, e.g. "postgresql://..."
+    description: str  # longer help text
+    required: bool  # default True
+
+
+def _normalize_secret_fields(raw: list[str | SecretField]) -> list[SecretField]:
+    """Normalize mixed list to list of SecretField dicts.
+
+    Skips malformed entries (dicts missing 'key') with a warning.
+    """
+    result = []
+    for item in raw:
+        if isinstance(item, str):
+            result.append(SecretField(key=item))
+        elif isinstance(item, dict) and "key" in item:
+            result.append(item)
+        else:
+            logger.warning("Skipping malformed secret entry: %s", item)
+    return result
+
+
+def _extract_secret_keys(raw: list[str | SecretField]) -> list[str]:
+    """Extract just the key names from a mixed secrets list.
+
+    Skips malformed entries (dicts missing 'key') with a warning.
+    """
+    keys = []
+    for item in raw:
+        if isinstance(item, str):
+            keys.append(item)
+        elif isinstance(item, dict) and "key" in item:
+            keys.append(item["key"])
+        else:
+            logger.warning("Skipping malformed secret entry: %s", item)
+    return keys
 
 
 def _invoke_job_func(config: JobConfig) -> Awaitable[dict[str, Any]]:
@@ -42,7 +91,7 @@ def _invoke_job_func(config: JobConfig) -> Awaitable[dict[str, Any]]:
 
         with db_session() as db:
             # For direct (non-queue) execution, use owner_id=1 (single-tenant default)
-            secrets = resolve_secrets(owner_id=1, declared_keys=config.secrets, db=db)
+            secrets = resolve_secrets(owner_id=1, declared_keys=_extract_secret_keys(config.secrets), db=db)
 
         ctx = JobContext(job_id=config.id, secrets=secrets)
         return config.func(ctx)
@@ -65,7 +114,7 @@ class JobConfig:
     project: str | None = None  # Project this job belongs to
     description: str = ""
     queue_mode: bool = True  # Use durable queue (False = direct execution for debugging)
-    secrets: list[str] = field(default_factory=list)  # Declared secret keys needed at runtime
+    secrets: list[str | SecretField] = field(default_factory=list)  # Declared secret keys (str or rich SecretField)
 
 
 @dataclass
@@ -438,7 +487,10 @@ __all__ = [
     "JobConfig",
     "JobRegistry",
     "JobRunResult",
+    "SecretField",
     "job_registry",
     "register_all_jobs",
     "_invoke_job_func",
+    "_normalize_secret_fields",
+    "_extract_secret_keys",
 ]
