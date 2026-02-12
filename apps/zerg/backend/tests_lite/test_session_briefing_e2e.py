@@ -648,19 +648,16 @@ class TestBackfillSummaries:
             '{"title": "Backfilled Session", "summary": "Generated summary."}'
         )
 
-        # Build a real sessionmaker bound to the same test engine
-        test_session_factory = sessionmaker(bind=db.get_bind())
-
-        with patch("zerg.database.get_session_factory", return_value=test_session_factory):
-            await _run_backfill(
-                concurrency=3,
-                project=None,
-                force=False,
-                client=mock_client,
-                model="test-model",
-                provider="openai",
-                total=3,
-            )
+        await _run_backfill(
+            concurrency=3,
+            project=None,
+            force=False,
+            client=mock_client,
+            model="test-model",
+            provider="openai",
+            total=3,
+            _engine=db.get_bind(),
+        )
 
         assert _backfill_state["running"] is False
         assert _backfill_state["backfilled"] == 2
@@ -711,18 +708,16 @@ class TestBackfillSummaries:
         failing_client = AsyncMock()
         failing_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("LLM down"))
 
-        test_session_factory = sessionmaker(bind=db.get_bind())
-
-        with patch("zerg.database.get_session_factory", return_value=test_session_factory):
-            await _run_backfill(
-                concurrency=3,
-                project=None,
-                force=False,
-                client=failing_client,
-                model="test-model",
-                provider="openai",
-                total=2,
-            )
+        await _run_backfill(
+            concurrency=3,
+            project=None,
+            force=False,
+            client=failing_client,
+            model="test-model",
+            provider="openai",
+            total=2,
+            _engine=db.get_bind(),
+        )
 
         assert _backfill_state["running"] is False
         assert _backfill_state["backfilled"] == 0
