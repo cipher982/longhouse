@@ -8,6 +8,7 @@ on:
     paths:
       - "apps/zerg/backend/**"
       - "apps/zerg/frontend-web/**"
+      - "config/**"
       - "docker/runtime.dockerfile"
       - ".github/workflows/runtime-image.yml"
   workflow_dispatch: {}
