@@ -57,6 +57,15 @@
           "reasoning": true,
           "reasoningNone": true
         }
+      },
+      "glm-4.7": {
+        "displayName": "GLM 4.7 (z.ai)",
+        "provider": "anthropic",
+        "description": "Zhipu GLM-4.7 via z.ai Anthropic-compatible API - flat-rate",
+        "baseUrl": "https://api.z.ai/api/anthropic",
+        "capabilities": {
+          "reasoning": true
+        }
       }
     }
   },

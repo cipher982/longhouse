@@ -385,12 +385,16 @@ class TestGenerateSummaryBackground:
         mock_settings = MagicMock()
         mock_settings.testing = False
         mock_settings.llm_disabled = False
-        mock_settings.openai_api_key = None
+
+        mock_client = AsyncMock()
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            patch.dict("os.environ", {"ZAI_API_KEY": "test-key"}),
+            patch(
+                "zerg.models_config.get_llm_client_for_use_case",
+                return_value=(mock_client, "test-model", "openai"),
+            ),
         ):
             await _generate_summary_background(str(session.id))
 
@@ -414,20 +418,17 @@ class TestGenerateSummaryBackground:
         mock_settings = MagicMock()
         mock_settings.testing = False
         mock_settings.llm_disabled = False
-        mock_settings.openai_api_key = None
 
-        import os
-
-        old_key = os.environ.pop("ZAI_API_KEY", None)
-        try:
-            with (
-                patch("zerg.database.get_session_factory", return_value=factory),
-                patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            ):
-                await _generate_summary_background(str(session.id))
-        finally:
-            if old_key:
-                os.environ["ZAI_API_KEY"] = old_key
+        # get_llm_client_for_use_case raises ValueError when no key is configured
+        with (
+            patch("zerg.database.get_session_factory", return_value=factory),
+            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch(
+                "zerg.models_config.get_llm_client_for_use_case",
+                side_effect=ValueError("OPENAI_API_KEY required"),
+            ),
+        ):
+            await _generate_summary_background(str(session.id))
 
         # Session should still have no summary
         db.refresh(session)
@@ -460,12 +461,16 @@ class TestGenerateSummaryBackground:
         mock_settings = MagicMock()
         mock_settings.testing = False
         mock_settings.llm_disabled = False
-        mock_settings.openai_api_key = None
+
+        mock_client = AsyncMock()
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            patch.dict("os.environ", {"ZAI_API_KEY": "test-key"}),
+            patch(
+                "zerg.models_config.get_llm_client_for_use_case",
+                return_value=(mock_client, "test-model", "openai"),
+            ),
         ):
             await _generate_summary_background(str(session.id))
 
@@ -487,26 +492,22 @@ class TestGenerateSummaryBackground:
 
         factory = sessionmaker(bind=db.get_bind())
 
-        # Mock the Anthropic summarizer (ZAI path)
-        from zerg.services.session_processing import SessionSummary
-
-        mock_summary = SessionSummary(
-            session_id=str(session.id),
-            title="Fix Login Bug",
-            summary="Fixed the login validation issue in auth.py.",
+        # Mock the OpenAI client (quick_summary path)
+        mock_client = _mock_llm_client(
+            '{"title": "Fix Login Bug", "summary": "Fixed the login validation issue in auth.py."}'
         )
-        mock_summarize = AsyncMock(return_value=mock_summary)
 
         mock_settings = MagicMock()
         mock_settings.testing = False
         mock_settings.llm_disabled = False
-        mock_settings.openai_api_key = None
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            patch("zerg.routers.agents._summarize_via_anthropic", mock_summarize),
-            patch.dict("os.environ", {"ZAI_API_KEY": "test-key"}),
+            patch(
+                "zerg.models_config.get_llm_client_for_use_case",
+                return_value=(mock_client, "test-model", "openai"),
+            ),
         ):
             await _generate_summary_background(str(session.id))
 
@@ -527,19 +528,21 @@ class TestGenerateSummaryBackground:
 
         factory = sessionmaker(bind=db.get_bind())
 
-        # Mock summarizer that raises an exception
-        mock_summarize = AsyncMock(side_effect=RuntimeError("LLM API down"))
+        # Mock client where the LLM call itself fails
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("LLM API down"))
 
         mock_settings = MagicMock()
         mock_settings.testing = False
         mock_settings.llm_disabled = False
-        mock_settings.openai_api_key = None
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            patch("zerg.routers.agents._summarize_via_anthropic", mock_summarize),
-            patch.dict("os.environ", {"ZAI_API_KEY": "test-key"}),
+            patch(
+                "zerg.models_config.get_llm_client_for_use_case",
+                return_value=(mock_client, "test-model", "openai"),
+            ),
         ):
             # Should not raise
             await _generate_summary_background(str(session.id))
@@ -561,12 +564,16 @@ class TestGenerateSummaryBackground:
         mock_settings = MagicMock()
         mock_settings.testing = False
         mock_settings.llm_disabled = False
-        mock_settings.openai_api_key = None
+
+        mock_client = AsyncMock()
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
-            patch.dict("os.environ", {"ZAI_API_KEY": "test-key"}),
+            patch(
+                "zerg.models_config.get_llm_client_for_use_case",
+                return_value=(mock_client, "test-model", "openai"),
+            ),
         ):
             # Should not raise for non-existent UUID
             await _generate_summary_background(str(uuid4()))
