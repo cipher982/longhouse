@@ -570,7 +570,13 @@ async def lifespan(app: FastAPI):
                                 row = db.query(JobRepoConfig).first()
                                 if row:
                                     token = decrypt(row.encrypted_token) if row.encrypted_token else None
-                                    logger.info("Using DB repo config: %s (branch=%s)", row.repo_url, row.branch)
+                                    # Sanitize URL for logging (strip embedded credentials)
+                                    from urllib.parse import urlparse
+                                    from urllib.parse import urlunparse
+
+                                    _parsed = urlparse(row.repo_url)
+                                    _safe_url = urlunparse(_parsed._replace(netloc=_parsed.netloc.split("@")[-1]))
+                                    logger.info("Using DB repo config: %s (branch=%s)", _safe_url, row.branch)
                                     return {"repo_url": row.repo_url, "branch": row.branch, "token": token}
                         except Exception as e:
                             logger.warning("Failed to query DB repo config: %s", e)

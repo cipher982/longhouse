@@ -278,6 +278,30 @@ class TestRepoConfigAPI:
         data = client.get("/api/jobs/repo/config").json()
         assert data["has_token"] is False
 
+    def test_partial_update_preserves_token_and_branch(self, client):
+        """Updating only repo_url should not reset branch or clear token."""
+        # Create with all fields
+        client.post(
+            "/api/jobs/repo/config",
+            json={
+                "repo_url": "https://github.com/user/original.git",
+                "branch": "develop",
+                "token": "ghp_secret",
+            },
+        )
+
+        # Update only repo_url (branch and token not in request body)
+        resp = client.post(
+            "/api/jobs/repo/config",
+            json={"repo_url": "https://github.com/user/updated.git"},
+        )
+        assert resp.status_code == 200
+
+        data = client.get("/api/jobs/repo/config").json()
+        assert data["repo_url"] == "https://github.com/user/updated.git"
+        assert data["branch"] == "develop"  # Preserved, not reset to "main"
+        assert data["has_token"] is True  # Preserved, not cleared
+
 
 # ---------------------------------------------------------------------------
 # Unit: Signature detection dispatch
