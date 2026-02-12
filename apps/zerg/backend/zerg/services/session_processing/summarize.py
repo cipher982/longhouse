@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -109,7 +110,7 @@ def _build_user_prompt(transcript: SessionTranscript) -> str:
 
 
 def safe_parse_json(text: str | None) -> dict | None:
-    """Parse JSON from LLM output, tolerating markdown fences."""
+    """Parse JSON from LLM output, tolerating markdown fences and unquoted values."""
     if not text:
         return None
     # Strip markdown code fences if present
@@ -125,15 +126,31 @@ def safe_parse_json(text: str | None) -> dict | None:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        # Try to extract JSON object
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                return json.loads(cleaned[start : end + 1])
-            except json.JSONDecodeError:
-                return None
-        return None
+        pass
+
+    # Try to extract JSON object substring
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        fragment = cleaned[start : end + 1]
+        try:
+            return json.loads(fragment)
+        except json.JSONDecodeError:
+            pass
+
+        # Handle unquoted string values (e.g. "title": Some Text Here)
+        # Only match values that don't start with a quote (after optional whitespace)
+        fixed = re.sub(
+            r'("(?:title|summary|topic|outcome)")\s*:\s*' r'(?!\s*"|\s*\d|\s*true|\s*false|\s*null|\s*\[|\s*\{)(.+?)(?=,\s*"|\s*\})',
+            lambda m: f'{m.group(1)}: "{m.group(2).strip()}"',
+            fragment,
+        )
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+
+    return None
 
 
 def _parse_quick_summary_raw(raw: str, session_id: str) -> SessionSummary:
@@ -142,16 +159,32 @@ def _parse_quick_summary_raw(raw: str, session_id: str) -> SessionSummary:
     if isinstance(parsed, dict):
         title = parsed.get("title")
         summary = parsed.get("summary")
+        title_str = title if isinstance(title, str) and title.strip() else "Untitled Session"
+        # If summary key missing/empty, use title rather than storing raw JSON
+        if isinstance(summary, str) and summary.strip():
+            summary_str = summary.strip()
+        else:
+            summary_str = title_str
         return SessionSummary(
             session_id=session_id,
-            title=title if isinstance(title, str) and title.strip() else "Untitled Session",
-            summary=summary if isinstance(summary, str) and summary.strip() else raw,
+            title=title_str,
+            summary=summary_str,
+        )
+
+    # Could not parse JSON at all — use raw text (not JSON) as summary
+    stripped = raw.strip()
+    # Guard: if it looks like unparsed JSON, don't store it verbatim
+    if stripped.startswith("{"):
+        return SessionSummary(
+            session_id=session_id,
+            title="Untitled Session",
+            summary="No summary generated.",
         )
 
     return SessionSummary(
         session_id=session_id,
         title="Untitled Session",
-        summary=raw.strip()[:500] if raw.strip() else "No summary generated.",
+        summary=stripped[:500] if stripped else "No summary generated.",
     )
 
 
