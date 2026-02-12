@@ -167,10 +167,12 @@ async def quick_summary(
     parsed = safe_parse_json(raw)
 
     if isinstance(parsed, dict):
+        title = parsed.get("title")
+        summary = parsed.get("summary")
         return SessionSummary(
             session_id=transcript.session_id,
-            title=parsed.get("title", "Untitled Session"),
-            summary=parsed.get("summary", raw),
+            title=title if isinstance(title, str) and title.strip() else "Untitled Session",
+            summary=summary if isinstance(summary, str) and summary.strip() else raw,
         )
 
     # Fallback: use raw text as summary

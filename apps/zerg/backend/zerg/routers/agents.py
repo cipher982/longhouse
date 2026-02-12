@@ -19,6 +19,7 @@ Rate Limiting:
 - Returns HTTP 429 with Retry-After header when exceeded
 """
 
+import asyncio
 import gzip
 import hashlib
 import hmac
@@ -465,10 +466,12 @@ async def _summarize_via_anthropic(
     parsed = safe_parse_json(raw)
 
     if isinstance(parsed, dict):
+        title = parsed.get("title")
+        summary = parsed.get("summary")
         return SessionSummary(
             session_id=transcript.session_id,
-            title=parsed.get("title", "Untitled Session"),
-            summary=parsed.get("summary", raw),
+            title=title if isinstance(title, str) and title.strip() else "Untitled Session",
+            summary=summary if isinstance(summary, str) and summary.strip() else raw,
         )
 
     return SessionSummary(
@@ -556,11 +559,11 @@ async def _generate_summary_background(session_id: str) -> None:
             logger.debug("Empty transcript for session %s, skipping summary", session_id)
             return
 
-        # Call LLM — dispatch based on provider from models.json
+        # Call LLM — dispatch based on provider from models.json (60s timeout)
         if provider == ModelProvider.ANTHROPIC:
-            summary = await _summarize_via_anthropic(transcript, client, model)
+            summary = await asyncio.wait_for(_summarize_via_anthropic(transcript, client, model), timeout=60)
         else:
-            summary = await quick_summary(transcript, client, model)
+            summary = await asyncio.wait_for(quick_summary(transcript, client, model), timeout=60)
 
         # Store on session record
         session.summary = summary.summary

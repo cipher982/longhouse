@@ -104,7 +104,7 @@
       "routing_decision": "TIER_1",
       "tool_selection": "TIER_1",
       "commis_task": "TIER_1",
-      "summarization": "TIER_1",
+      "summarization": "TIER_2",
       "bulk_classification": "TIER_3",
       "ci_test": "TIER_3"
     },
