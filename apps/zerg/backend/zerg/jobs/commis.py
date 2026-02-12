@@ -58,6 +58,29 @@ def _retry_delay(attempt: int) -> int:
     return min(60 * (2 ** max(attempt - 1, 0)), 3600)
 
 
+def _invoke_job(job_def) -> asyncio.coroutines:
+    """Invoke a job function with or without JobContext based on signature.
+
+    Uses the same signature detection as registry._invoke_job_func but
+    for the queue execution path.
+    """
+    import inspect
+
+    sig = inspect.signature(job_def.func)
+    if sig.parameters:
+        from zerg.database import db_session
+        from zerg.jobs.context import JobContext
+        from zerg.jobs.secret_resolver import resolve_secrets
+
+        with db_session() as db:
+            secrets = resolve_secrets(owner_id=1, declared_keys=job_def.secrets, db=db)
+
+        ctx = JobContext(job_id=job_def.id, secrets=secrets)
+        return job_def.func(ctx)
+    else:
+        return job_def.func()
+
+
 async def enqueue_missed_runs(now: datetime | None = None) -> None:
     """Backfill missed runs based on last scheduled_for timestamps.
 
@@ -203,7 +226,6 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
         await complete_job(queue_job.id, "dead", "Job not registered or disabled", owner=owner)
         return
 
-    job_func = job_def.func
     timeout_seconds = job_def.timeout_seconds
     tags = job_def.tags
     project = job_def.project
@@ -257,9 +279,9 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
     error_text = None
 
     try:
-        # Execute the job function with timeout
+        # Execute the job function with timeout, dispatching via signature
         await asyncio.wait_for(
-            job_func(),
+            _invoke_job(job_def),
             timeout=timeout_seconds,
         )
         status = "success"

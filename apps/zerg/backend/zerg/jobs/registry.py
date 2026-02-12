@@ -9,6 +9,7 @@ Provides a centralized registry for all scheduled jobs, with:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass
 from dataclasses import field
@@ -25,6 +26,31 @@ from apscheduler.triggers.cron import CronTrigger
 logger = logging.getLogger(__name__)
 
 
+def _invoke_job_func(config: JobConfig) -> Awaitable[dict[str, Any]]:
+    """Invoke job func with or without JobContext based on signature.
+
+    - ``run()`` (zero params): legacy style, called with no args.
+    - ``run(ctx)`` (one+ params): new style, receives a ``JobContext``
+      with only the declared secrets injected.
+    """
+    sig = inspect.signature(config.func)
+    if sig.parameters:
+        # New-style: inject JobContext with declared secrets
+        from zerg.database import db_session
+        from zerg.jobs.context import JobContext
+        from zerg.jobs.secret_resolver import resolve_secrets
+
+        with db_session() as db:
+            # For direct (non-queue) execution, use owner_id=1 (single-tenant default)
+            secrets = resolve_secrets(owner_id=1, declared_keys=config.secrets, db=db)
+
+        ctx = JobContext(job_id=config.id, secrets=secrets)
+        return config.func(ctx)
+    else:
+        # Legacy: zero-arg, uses os.environ directly
+        return config.func()
+
+
 @dataclass
 class JobConfig:
     """Configuration for a scheduled job."""
@@ -39,6 +65,7 @@ class JobConfig:
     project: str | None = None  # Project this job belongs to
     description: str = ""
     queue_mode: bool = True  # Use durable queue (False = direct execution for debugging)
+    secrets: list[str] = field(default_factory=list)  # Declared secret keys needed at runtime
 
 
 @dataclass
@@ -185,9 +212,9 @@ class JobRegistry:
         while attempts < max_attempts:
             attempts += 1
             try:
-                # Execute with timeout
+                # Execute with timeout, dispatching based on function signature
                 result = await asyncio.wait_for(
-                    config.func(),
+                    _invoke_job_func(config),
                     timeout=config.timeout_seconds,
                 )
                 # Success - break out of retry loop
@@ -413,4 +440,5 @@ __all__ = [
     "JobRunResult",
     "job_registry",
     "register_all_jobs",
+    "_invoke_job_func",
 ]

@@ -72,6 +72,7 @@ from zerg.routers.fiche_config import router as fiche_config_router
 from zerg.routers.fiche_connectors import router as fiche_connectors_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
+from zerg.routers.job_settings import router as job_settings_router
 from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
@@ -555,13 +556,43 @@ async def lifespan(app: FastAPI):
                     from zerg.jobs.git_sync import set_git_sync_service
                     from zerg.jobs.registry import register_all_jobs
 
+                    def _resolve_repo_config() -> dict | None:
+                        """Resolve repo config: DB first, env var fallback.
+
+                        Returns dict with repo_url, branch, token keys, or None.
+                        """
+                        try:
+                            from zerg.database import db_session
+                            from zerg.models.models import JobRepoConfig
+                            from zerg.utils.crypto import decrypt
+
+                            with db_session() as db:
+                                row = db.query(JobRepoConfig).first()
+                                if row:
+                                    token = decrypt(row.encrypted_token) if row.encrypted_token else None
+                                    logger.info("Using DB repo config: %s (branch=%s)", row.repo_url, row.branch)
+                                    return {"repo_url": row.repo_url, "branch": row.branch, "token": token}
+                        except Exception as e:
+                            logger.warning("Failed to query DB repo config: %s", e)
+
+                        # Fallback to env vars
+                        if _settings.jobs_git_repo_url:
+                            return {
+                                "repo_url": _settings.jobs_git_repo_url,
+                                "branch": _settings.jobs_git_branch,
+                                "token": _settings.jobs_git_token,
+                            }
+                        return None
+
+                    repo_config = _resolve_repo_config()
+
                     # Initialize git sync service if configured
-                    if _settings.jobs_git_repo_url:
+                    if repo_config:
                         git_service = GitSyncService(
-                            repo_url=_settings.jobs_git_repo_url,
+                            repo_url=repo_config["repo_url"],
                             local_path=Path(_settings.jobs_dir),
-                            branch=_settings.jobs_git_branch,
-                            token=_settings.jobs_git_token,
+                            branch=repo_config["branch"],
+                            token=repo_config.get("token"),
                         )
 
                         # Clone repo (blocking - required for git jobs)
@@ -842,6 +873,9 @@ app.include_router(fiche_connectors_router, prefix=f"{API_PREFIX}")  # Fiche con
 app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account-level connector credentials
 app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
 app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
+app.include_router(
+    job_settings_router, prefix=f"{API_PREFIX}"
+)  # Job secrets + repo config (before jobs_router to avoid /{job_id} catch-all)
 app.include_router(jobs_router, prefix=f"{API_PREFIX}")  # Scheduled jobs management
 app.include_router(traces_router, prefix=f"{API_PREFIX}")  # Trace Explorer (admin only)
 app.include_router(reliability_router, prefix=f"{API_PREFIX}")  # Reliability Dashboard (admin only)
