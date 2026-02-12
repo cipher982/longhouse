@@ -902,8 +902,8 @@ async def _run_backfill(
                         db.commit()
                         _backfill_state["backfilled"] += 1
 
-                except Exception:
-                    logger.exception("Backfill failed for session %s", session_id)
+                except Exception as exc:
+                    logger.error("Backfill failed for session %s: %s: %s", session_id, type(exc).__name__, exc)
                     _backfill_state["errors"] += 1
                 finally:
                     _backfill_state["remaining"] = max(0, _backfill_state["remaining"] - 1)
