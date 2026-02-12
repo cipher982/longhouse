@@ -509,7 +509,7 @@ async def _generate_summary_background(session_id: str) -> None:
     try:
         client, model, provider = get_llm_client_for_use_case("summarization")
     except ValueError as e:
-        logger.debug("Skipping summary for %s: %s", session_id, e)
+        logger.warning("Summarization misconfigured — session %s will NOT be summarized: %s", session_id, e)
         return
 
     session_factory = get_session_factory()
