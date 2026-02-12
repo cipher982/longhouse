@@ -56,6 +56,8 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 
 **Stack:** FastAPI + SQLAlchemy + SQLite (dev/OSS) or Postgres (prod control-plane). React frontend. See `VISION.md` for details.
 
+**LLM model config:** `config/models.json` is the single source of truth — models, tiers, use cases, and routing profiles. Set `MODELS_PROFILE` env var to select per-instance overrides (default `oss`). Each model can declare `apiKeyEnvVar` for its required API key. See `models_config.py:get_llm_client_for_use_case()` for the factory.
+
 ## Conventions
 
 - **Backend**: FastAPI + Pydantic, `apps/zerg/backend/zerg/`
