@@ -47,6 +47,7 @@ from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker as _sessionmaker
 
 from zerg.config import get_settings
 from zerg.database import get_db
@@ -835,16 +836,27 @@ async def _run_backfill(
     model: str,
     provider: Any,
     total: int,
+    _engine: Any = None,
 ) -> None:
     """Background backfill — processes all matching sessions with a semaphore."""
-    from zerg.database import get_session_factory
+    from sqlalchemy.pool import NullPool
+
+    from zerg.database import make_engine
     from zerg.services.session_processing import summarize_events
 
     _backfill_state.update(running=True, backfilled=0, skipped=0, errors=0, remaining=total, total=total)
     semaphore = asyncio.Semaphore(concurrency)
+    owns_engine = _engine is None
 
     try:
-        SessionFactory = get_session_factory()
+        if _engine is None:
+            # Use NullPool for backfill — avoids QueuePool exhaustion at high concurrency.
+            # Each task opens/closes its own connection; SQLite WAL mode handles concurrency.
+            settings = get_settings()
+            backfill_engine = make_engine(settings.database_url, poolclass=NullPool)
+        else:
+            backfill_engine = _engine
+        SessionFactory = _sessionmaker(bind=backfill_engine)
 
         with SessionFactory() as db:
             query = db.query(AgentSession)
@@ -919,6 +931,11 @@ async def _run_backfill(
             await client.close()
         except Exception:
             pass
+        if owns_engine:
+            try:
+                backfill_engine.dispose()
+            except Exception:
+                pass
         logger.info(
             "Backfill complete: %d backfilled, %d skipped, %d errors",
             _backfill_state["backfilled"],
