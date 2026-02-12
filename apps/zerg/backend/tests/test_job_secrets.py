@@ -359,3 +359,280 @@ class TestSignatureDetection:
         assert len(received_ctx) == 1
         assert received_ctx[0].job_id == "new-job"
         assert isinstance(received_ctx[0], JobContext)
+
+    def test_ctx_arg_dispatch_with_secret_field(self, db_session):
+        """Jobs with SecretField dicts in secrets should resolve correctly."""
+        from zerg.jobs.registry import JobConfig, SecretField, _invoke_job_func
+
+        received_ctx = []
+
+        async def new_style_run(ctx: JobContext):
+            received_ctx.append(ctx)
+            return {"ok": True}
+
+        config = JobConfig(
+            id="rich-secret-job",
+            cron="* * * * *",
+            func=new_style_run,
+            secrets=[SecretField(key="DB_URL", label="Database URL", type="url")],
+        )
+
+        @contextmanager
+        def fake_db_session():
+            yield db_session
+
+        with patch("zerg.database.db_session", fake_db_session):
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_invoke_job_func(config))
+            finally:
+                loop.close()
+
+        assert len(received_ctx) == 1
+        assert received_ctx[0].job_id == "rich-secret-job"
+
+
+# ---------------------------------------------------------------------------
+# Unit: SecretField helpers
+# ---------------------------------------------------------------------------
+
+
+class TestSecretFieldHelpers:
+    def test_normalize_strings(self):
+        from zerg.jobs.registry import _normalize_secret_fields
+
+        result = _normalize_secret_fields(["KEY_A", "KEY_B"])
+        assert len(result) == 2
+        assert result[0] == {"key": "KEY_A"}
+        assert result[1] == {"key": "KEY_B"}
+
+    def test_normalize_secret_fields(self):
+        from zerg.jobs.registry import SecretField, _normalize_secret_fields
+
+        sf = SecretField(key="MY_KEY", label="My Key", type="password")
+        result = _normalize_secret_fields([sf])
+        assert len(result) == 1
+        assert result[0]["key"] == "MY_KEY"
+        assert result[0]["label"] == "My Key"
+
+    def test_normalize_mixed(self):
+        from zerg.jobs.registry import SecretField, _normalize_secret_fields
+
+        sf = SecretField(key="RICH", label="Rich Key", type="url")
+        result = _normalize_secret_fields(["PLAIN", sf])
+        assert len(result) == 2
+        assert result[0] == {"key": "PLAIN"}
+        assert result[1]["key"] == "RICH"
+        assert result[1]["label"] == "Rich Key"
+
+    def test_normalize_empty(self):
+        from zerg.jobs.registry import _normalize_secret_fields
+
+        assert _normalize_secret_fields([]) == []
+
+    def test_extract_keys_strings(self):
+        from zerg.jobs.registry import _extract_secret_keys
+
+        assert _extract_secret_keys(["A", "B"]) == ["A", "B"]
+
+    def test_extract_keys_secret_fields(self):
+        from zerg.jobs.registry import SecretField, _extract_secret_keys
+
+        sf = SecretField(key="MY_KEY", label="Label")
+        assert _extract_secret_keys([sf]) == ["MY_KEY"]
+
+    def test_extract_keys_mixed(self):
+        from zerg.jobs.registry import SecretField, _extract_secret_keys
+
+        sf = SecretField(key="RICH")
+        assert _extract_secret_keys(["PLAIN", sf]) == ["PLAIN", "RICH"]
+
+    def test_extract_keys_empty(self):
+        from zerg.jobs.registry import _extract_secret_keys
+
+        assert _extract_secret_keys([]) == []
+
+    def test_normalize_skips_malformed_dict(self):
+        """Dicts missing 'key' are skipped."""
+        from zerg.jobs.registry import _normalize_secret_fields
+
+        result = _normalize_secret_fields(["GOOD", {"label": "no key"}])
+        assert len(result) == 1
+        assert result[0]["key"] == "GOOD"
+
+    def test_extract_keys_skips_malformed_dict(self):
+        """Dicts missing 'key' are skipped."""
+        from zerg.jobs.registry import _extract_secret_keys
+
+        result = _extract_secret_keys(["GOOD", {"label": "no key"}])
+        assert result == ["GOOD"]
+
+    def test_job_config_backwards_compat(self):
+        """JobConfig.secrets still accepts plain strings."""
+        from zerg.jobs.registry import JobConfig
+
+        async def noop():
+            return {}
+
+        config = JobConfig(id="compat", cron="* * * * *", func=noop, secrets=["A", "B"])
+        assert config.secrets == ["A", "B"]
+
+    def test_job_config_rich_secrets(self):
+        """JobConfig.secrets accepts SecretField dicts."""
+        from zerg.jobs.registry import JobConfig, SecretField
+
+        async def noop():
+            return {}
+
+        sf = SecretField(key="DB_URL", label="Database", type="url")
+        config = JobConfig(id="rich", cron="* * * * *", func=noop, secrets=[sf, "PLAIN"])
+        assert len(config.secrets) == 2
+
+
+# ---------------------------------------------------------------------------
+# Integration: Secrets status endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestSecretsStatus:
+    def _register_test_job(self, secrets=None):
+        """Register a temporary job in the registry for testing."""
+        from zerg.jobs.registry import JobConfig, job_registry
+
+        async def noop():
+            return {}
+
+        config = JobConfig(
+            id="test-status-job",
+            cron="0 * * * *",
+            func=noop,
+            secrets=secrets or [],
+        )
+        # Force-register (overwrite if exists)
+        job_registry._jobs[config.id] = config
+        return config
+
+    def _cleanup_test_job(self):
+        from zerg.jobs.registry import job_registry
+
+        job_registry._jobs.pop("test-status-job", None)
+
+    def test_status_no_secrets(self, client):
+        self._register_test_job(secrets=[])
+        try:
+            resp = client.get("/api/jobs/test-status-job/secrets/status")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["job_id"] == "test-status-job"
+            assert data["secrets"] == []
+        finally:
+            self._cleanup_test_job()
+
+    def test_status_unconfigured_secret(self, client):
+        self._register_test_job(secrets=["NONEXISTENT_XYZ_123"])
+        try:
+            resp = client.get("/api/jobs/test-status-job/secrets/status")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data["secrets"]) == 1
+            assert data["secrets"][0]["key"] == "NONEXISTENT_XYZ_123"
+            assert data["secrets"][0]["configured"] is False
+        finally:
+            self._cleanup_test_job()
+
+    def test_status_configured_in_db(self, client):
+        # Store a secret first
+        client.put("/api/jobs/secrets/STATUS_DB_KEY", json={"value": "secret-val"})
+        self._register_test_job(secrets=["STATUS_DB_KEY"])
+        try:
+            resp = client.get("/api/jobs/test-status-job/secrets/status")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data["secrets"]) == 1
+            assert data["secrets"][0]["key"] == "STATUS_DB_KEY"
+            assert data["secrets"][0]["configured"] is True
+        finally:
+            self._cleanup_test_job()
+
+    def test_status_configured_in_env(self, client):
+        self._register_test_job(secrets=["STATUS_ENV_KEY"])
+        try:
+            with patch.dict(os.environ, {"STATUS_ENV_KEY": "env-value"}):
+                resp = client.get("/api/jobs/test-status-job/secrets/status")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["secrets"][0]["configured"] is True
+        finally:
+            self._cleanup_test_job()
+
+    def test_status_rich_metadata(self, client):
+        from zerg.jobs.registry import SecretField
+
+        self._register_test_job(
+            secrets=[
+                SecretField(
+                    key="DB_URL",
+                    label="Database URL",
+                    type="url",
+                    placeholder="postgresql://...",
+                    description="Main database connection string",
+                    required=True,
+                ),
+            ]
+        )
+        try:
+            resp = client.get("/api/jobs/test-status-job/secrets/status")
+            assert resp.status_code == 200
+            data = resp.json()
+            s = data["secrets"][0]
+            assert s["key"] == "DB_URL"
+            assert s["label"] == "Database URL"
+            assert s["type"] == "url"
+            assert s["placeholder"] == "postgresql://..."
+            assert s["description"] == "Main database connection string"
+            assert s["required"] is True
+            assert s["configured"] is False
+        finally:
+            self._cleanup_test_job()
+
+    def test_status_job_not_found(self, client):
+        resp = client.get("/api/jobs/nonexistent-job-xyz/secrets/status")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Integration: list_jobs includes secrets metadata
+# ---------------------------------------------------------------------------
+
+
+class TestListJobsSecrets:
+    def test_list_jobs_includes_secrets_field(self, client):
+        from zerg.jobs.registry import JobConfig, SecretField, job_registry
+
+        async def noop():
+            return {}
+
+        config = JobConfig(
+            id="list-secrets-test",
+            cron="0 * * * *",
+            func=noop,
+            secrets=[
+                SecretField(key="API_KEY", label="API Key", type="password"),
+                "PLAIN_SECRET",
+            ],
+        )
+        job_registry._jobs[config.id] = config
+        try:
+            resp = client.get("/api/jobs/")
+            assert resp.status_code == 200
+            data = resp.json()
+            # Find our test job
+            job = next((j for j in data["jobs"] if j["id"] == "list-secrets-test"), None)
+            assert job is not None
+            assert len(job["secrets"]) == 2
+            assert job["secrets"][0]["key"] == "API_KEY"
+            assert job["secrets"][0]["label"] == "API Key"
+            assert job["secrets"][1]["key"] == "PLAIN_SECRET"
+            assert job["secrets"][1]["label"] is None
+        finally:
+            job_registry._jobs.pop("list-secrets-test", None)

@@ -70,10 +70,11 @@ def _invoke_job(job_def) -> asyncio.coroutines:
     if sig.parameters:
         from zerg.database import db_session
         from zerg.jobs.context import JobContext
+        from zerg.jobs.registry import _extract_secret_keys
         from zerg.jobs.secret_resolver import resolve_secrets
 
         with db_session() as db:
-            secrets = resolve_secrets(owner_id=1, declared_keys=job_def.secrets, db=db)
+            secrets = resolve_secrets(owner_id=1, declared_keys=_extract_secret_keys(job_def.secrets), db=db)
 
         ctx = JobContext(job_id=job_def.id, secrets=secrets)
         return job_def.func(ctx)

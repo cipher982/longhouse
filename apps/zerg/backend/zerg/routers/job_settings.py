@@ -30,7 +30,9 @@ from zerg.schemas.job_settings_schemas import JobRepoConfigRequest
 from zerg.schemas.job_settings_schemas import JobRepoConfigResponse
 from zerg.schemas.job_settings_schemas import JobRepoVerifyResponse
 from zerg.schemas.job_settings_schemas import JobSecretListItem
+from zerg.schemas.job_settings_schemas import JobSecretsStatusResponse
 from zerg.schemas.job_settings_schemas import JobSecretUpsertRequest
+from zerg.schemas.job_settings_schemas import SecretStatusItem
 from zerg.utils.crypto import encrypt
 
 logger = logging.getLogger(__name__)
@@ -109,6 +111,71 @@ def delete_job_secret(
     db.commit()
     logger.info("Deleted job secret '%s' for user %d", key, current_user.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Secrets status (per-job view)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/jobs/{job_id}/secrets/status", response_model=JobSecretsStatusResponse)
+async def get_job_secrets_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> JobSecretsStatusResponse:
+    """Show which secrets a job declares and whether each is configured.
+
+    Checks the DB secrets store and env vars for each declared key.
+    """
+    from zerg.jobs.registry import _normalize_secret_fields
+    from zerg.jobs.registry import job_registry
+    from zerg.jobs.registry import register_all_jobs
+
+    # Ensure jobs are loaded (matches lazy-init pattern in jobs router)
+    if not job_registry.list_jobs():
+        await register_all_jobs(scheduler=None)
+
+    config = job_registry.get(job_id)
+    if not config:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+
+    normalized = _normalize_secret_fields(config.secrets)
+
+    # Gather configured keys: DB + env
+    import os
+
+    declared_keys = [sf["key"] for sf in normalized]
+    db_keys: set[str] = set()
+    if declared_keys:
+        rows = (
+            db.query(JobSecret.key)
+            .filter(
+                JobSecret.owner_id == current_user.id,
+                JobSecret.key.in_(declared_keys),
+            )
+            .all()
+        )
+        db_keys = {row.key for row in rows}
+
+    items = []
+    for sf in normalized:
+        key = sf["key"]
+        # Match resolver's truthiness check: empty-string env vars don't count
+        configured = key in db_keys or bool(os.environ.get(key))
+        items.append(
+            SecretStatusItem(
+                key=key,
+                label=sf.get("label"),
+                type=sf.get("type", "password"),
+                placeholder=sf.get("placeholder"),
+                description=sf.get("description"),
+                required=sf.get("required", True),
+                configured=configured,
+            )
+        )
+
+    return JobSecretsStatusResponse(job_id=job_id, secrets=items)
 
 
 # ---------------------------------------------------------------------------

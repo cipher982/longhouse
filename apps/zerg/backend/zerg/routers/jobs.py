@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from zerg.dependencies.auth import require_admin
+from zerg.jobs.registry import _normalize_secret_fields
 from zerg.jobs.registry import job_registry
 from zerg.jobs.registry import register_all_jobs
 from zerg.models.models import User as UserModel
@@ -25,6 +26,17 @@ logger = logging.getLogger(__name__)
 
 
 # Pydantic schemas for API responses
+class SecretFieldInfo(BaseModel):
+    """Secret field metadata for API responses."""
+
+    key: str
+    label: str | None = None
+    type: str = "password"
+    placeholder: str | None = None
+    description: str | None = None
+    required: bool = True
+
+
 class JobInfo(BaseModel):
     """Job information for API responses."""
 
@@ -36,6 +48,7 @@ class JobInfo(BaseModel):
     tags: list[str]
     project: str | None
     description: str
+    secrets: list[SecretFieldInfo] = []
 
 
 class JobListResponse(BaseModel):
@@ -54,6 +67,21 @@ class JobRunResponse(BaseModel):
     result: dict[str, Any] | None = None
     error: str | None = None
     error_type: str | None = None
+
+
+def _job_info_from_config(config) -> JobInfo:
+    """Build a JobInfo from a JobConfig, normalizing secret fields."""
+    return JobInfo(
+        id=config.id,
+        cron=config.cron,
+        enabled=config.enabled,
+        timeout_seconds=config.timeout_seconds,
+        max_attempts=config.max_attempts,
+        tags=config.tags,
+        project=config.project,
+        description=config.description,
+        secrets=[SecretFieldInfo(**sf) for sf in _normalize_secret_fields(config.secrets)],
+    )
 
 
 router = APIRouter(
@@ -231,19 +259,7 @@ async def list_jobs(
     await _ensure_jobs_registered()
 
     jobs = job_registry.list_jobs(enabled_only=enabled_only)
-    job_infos = [
-        JobInfo(
-            id=j.id,
-            cron=j.cron,
-            enabled=j.enabled,
-            timeout_seconds=j.timeout_seconds,
-            max_attempts=j.max_attempts,
-            tags=j.tags,
-            project=j.project,
-            description=j.description,
-        )
-        for j in jobs
-    ]
+    job_infos = [_job_info_from_config(j) for j in jobs]
 
     return JobListResponse(jobs=job_infos, total=len(job_infos))
 
@@ -260,16 +276,7 @@ async def get_job(
     if not config:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    return JobInfo(
-        id=config.id,
-        cron=config.cron,
-        enabled=config.enabled,
-        timeout_seconds=config.timeout_seconds,
-        max_attempts=config.max_attempts,
-        tags=config.tags,
-        project=config.project,
-        description=config.description,
-    )
+    return _job_info_from_config(config)
 
 
 @router.post("/{job_id}/run", response_model=JobRunResponse)
@@ -321,16 +328,7 @@ async def enable_job(
     config = job_registry.get(job_id)
     logger.info("Job enabled: %s (by user %s)", job_id, current_user.email)
 
-    return JobInfo(
-        id=config.id,
-        cron=config.cron,
-        enabled=config.enabled,
-        timeout_seconds=config.timeout_seconds,
-        max_attempts=config.max_attempts,
-        tags=config.tags,
-        project=config.project,
-        description=config.description,
-    )
+    return _job_info_from_config(config)
 
 
 @router.post("/{job_id}/disable", response_model=JobInfo)
@@ -347,16 +345,7 @@ async def disable_job(
     config = job_registry.get(job_id)
     logger.info("Job disabled: %s (by user %s)", job_id, current_user.email)
 
-    return JobInfo(
-        id=config.id,
-        cron=config.cron,
-        enabled=config.enabled,
-        timeout_seconds=config.timeout_seconds,
-        max_attempts=config.max_attempts,
-        tags=config.tags,
-        project=config.project,
-        description=config.description,
-    )
+    return _job_info_from_config(config)
 
 
 # Queue state endpoint schemas

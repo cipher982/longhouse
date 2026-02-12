@@ -63,3 +63,27 @@ class JobRepoVerifyResponse(BaseModel):
     success: bool
     error: Optional[str] = None
     commit_sha: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Job Secrets Status
+# ---------------------------------------------------------------------------
+
+
+class SecretStatusItem(BaseModel):
+    """Per-secret status showing metadata and whether it's configured."""
+
+    key: str
+    label: Optional[str] = None
+    type: str = "password"
+    placeholder: Optional[str] = None
+    description: Optional[str] = None
+    required: bool = True
+    configured: bool = False
+
+
+class JobSecretsStatusResponse(BaseModel):
+    """Response for GET /jobs/{job_id}/secrets/status."""
+
+    job_id: str
+    secrets: list[SecretStatusItem]
