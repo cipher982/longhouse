@@ -515,7 +515,6 @@ async def _generate_summary_background(session_id: str) -> None:
         transcript = build_transcript(
             event_dicts,
             include_tool_calls=False,
-            token_budget=8000,
         )
         transcript.metadata = {
             "project": session.project,
@@ -750,19 +749,28 @@ async def backfill_summaries(
     project: Optional[str] = Query(None, description="Optional project filter"),
     limit: int = Query(50, ge=1, le=200, description="Max sessions to summarize this run"),
     max_concurrent: int = Query(3, ge=1, le=5, description="Max concurrent LLM requests"),
+    force: bool = Query(False, description="Re-summarize sessions that already have summaries"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
 ) -> BackfillSummariesResponse:
     """Backfill missing summaries for historical sessions.
 
-    Processes at most ``limit`` sessions with ``summary IS NULL`` (most recent first),
+    Processes at most ``limit`` sessions (most recent first),
     summarizes each transcript synchronously, and persists ``summary`` + ``summary_title``.
-    Safe to call repeatedly.
+    Safe to call repeatedly. Use ``force=true`` to re-summarize all sessions.
     """
     from zerg.models_config import get_llm_client_for_use_case
     from zerg.services.session_processing import build_transcript
     from zerg.services.session_processing import quick_summary_for_provider
+
+    def _target_query():
+        query = db.query(AgentSession)
+        if not force:
+            query = query.filter(AgentSession.summary.is_(None))
+        if project:
+            query = query.filter(AgentSession.project == project)
+        return query
 
     def _unsummarized_query():
         query = db.query(AgentSession).filter(AgentSession.summary.is_(None))
@@ -776,7 +784,7 @@ async def backfill_summaries(
     client = None
 
     try:
-        sessions = _unsummarized_query().order_by(AgentSession.started_at.desc()).limit(limit).all()
+        sessions = _target_query().order_by(AgentSession.started_at.desc()).limit(limit).all()
         if not sessions:
             return BackfillSummariesResponse(backfilled=0, skipped=0, errors=0, remaining=0)
 
@@ -815,7 +823,6 @@ async def backfill_summaries(
                 transcript = build_transcript(
                     event_dicts,
                     include_tool_calls=False,
-                    token_budget=8000,
                 )
                 transcript.metadata = {
                     "project": session.project,
@@ -858,7 +865,7 @@ async def backfill_summaries(
                     continue
 
                 session = sessions_by_id.get(session_id)
-                if not session or session.summary:
+                if not session:
                     skipped += 1
                     continue
 
