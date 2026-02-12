@@ -625,7 +625,155 @@ class TestGenerateSummaryBackground:
 
 
 # =====================================================================
-# Test 7: BriefingResponse model
+# Test 7: Backfill summary endpoint
+# =====================================================================
+
+
+class TestBackfillSummariesEndpoint:
+    @pytest.mark.asyncio
+    async def test_backfill_unsummarized_sessions_returns_counts(self, tmp_path):
+        """Backfill should summarize eligible sessions and report counts."""
+        from zerg.routers.agents import backfill_summaries
+
+        db = _setup_db(tmp_path)
+
+        _seed_session(db, hours_ago=1, num_events=5)  # backfill
+        _seed_session(db, hours_ago=2, num_events=4)  # backfill
+        _seed_session(db, hours_ago=3, num_events=0)  # skipped (no events)
+        _seed_session(
+            db,
+            hours_ago=4,
+            summary="Already summarized.",
+            summary_title="Done",
+            num_events=3,
+        )
+
+        mock_client = _mock_llm_client(
+            '{"title": "Backfilled Session", "summary": "Generated summary from transcript."}'
+        )
+
+        with patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(mock_client, "test-model", "openai"),
+        ):
+            result = await backfill_summaries(
+                project=None,
+                limit=50,
+                max_concurrent=3,
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+
+        assert result.backfilled == 2
+        assert result.skipped == 1
+        assert result.errors == 0
+        assert result.remaining == 1
+        assert mock_client.chat.completions.create.await_count == 2
+
+        remaining_unsummarized = db.query(AgentSession).filter(AgentSession.summary.is_(None)).count()
+        assert remaining_unsummarized == 1
+        db.close()
+
+    @pytest.mark.asyncio
+    async def test_backfill_noop_when_all_sessions_already_summarized(self, tmp_path):
+        """Backfill should return zero counts when no sessions need summaries."""
+        from zerg.routers.agents import backfill_summaries
+
+        db = _setup_db(tmp_path)
+
+        _seed_session(db, summary="Existing summary 1.", summary_title="S1", num_events=4)
+        _seed_session(db, summary="Existing summary 2.", summary_title="S2", num_events=4)
+
+        with patch("zerg.models_config.get_llm_client_for_use_case") as mock_factory:
+            result = await backfill_summaries(
+                project=None,
+                limit=50,
+                max_concurrent=3,
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+
+        assert result.backfilled == 0
+        assert result.skipped == 0
+        assert result.errors == 0
+        assert result.remaining == 0
+        mock_factory.assert_not_called()
+        db.close()
+
+    @pytest.mark.asyncio
+    async def test_backfill_respects_limit(self, tmp_path):
+        """Backfill should process no more than `limit` sessions per call."""
+        from zerg.routers.agents import backfill_summaries
+
+        db = _setup_db(tmp_path)
+
+        for i in range(5):
+            _seed_session(db, hours_ago=float(i), num_events=4)
+
+        mock_client = _mock_llm_client(
+            '{"title": "Limited Backfill", "summary": "Backfilled within requested batch size."}'
+        )
+
+        with patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(mock_client, "test-model", "openai"),
+        ):
+            result = await backfill_summaries(
+                project=None,
+                limit=2,
+                max_concurrent=3,
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+
+        assert result.backfilled == 2
+        assert result.skipped == 0
+        assert result.errors == 0
+        assert result.remaining == 3
+        assert mock_client.chat.completions.create.await_count == 2
+
+        summarized_count = db.query(AgentSession).filter(AgentSession.summary.isnot(None)).count()
+        assert summarized_count == 2
+        db.close()
+
+    @pytest.mark.asyncio
+    async def test_backfill_counts_llm_errors_without_crashing(self, tmp_path):
+        """Backfill should tolerate LLM failures and report them in `errors`."""
+        from zerg.routers.agents import backfill_summaries
+
+        db = _setup_db(tmp_path)
+
+        _seed_session(db, hours_ago=1, num_events=5)
+        _seed_session(db, hours_ago=2, num_events=5)
+
+        failing_client = AsyncMock()
+        failing_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("LLM API down"))
+
+        with patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(failing_client, "test-model", "openai"),
+        ):
+            result = await backfill_summaries(
+                project=None,
+                limit=50,
+                max_concurrent=3,
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+
+        assert result.backfilled == 0
+        assert result.skipped == 0
+        assert result.errors == 2
+        assert result.remaining == 2
+        db.close()
+
+
+# =====================================================================
+# Test 8: BriefingResponse model
 # =====================================================================
 
 
@@ -662,7 +810,7 @@ class TestBriefingResponseModel:
 
 
 # =====================================================================
-# Test 8: _format_age edge cases
+# Test 9: _format_age edge cases
 # =====================================================================
 
 
@@ -692,7 +840,7 @@ class TestFormatAgeEdgeCases:
 
 
 # =====================================================================
-# Test 9: Multiple projects in briefing (isolation)
+# Test 10: Multiple projects in briefing (isolation)
 # =====================================================================
 
 
@@ -725,7 +873,7 @@ class TestProjectIsolation:
 
 
 # =====================================================================
-# Test 10: Briefing ordering (most recent first)
+# Test 11: Briefing ordering (most recent first)
 # =====================================================================
 
 

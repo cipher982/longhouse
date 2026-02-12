@@ -1,0 +1,18 @@
+services:
+  longhouse-david:
+    image: ghcr.io/cipher982/longhouse-runtime:latest
+    container_name: longhouse-david
+    restart: unless-stopped
+    env_file:
+      - ./david.env
+    volumes:
+      - /var/lib/docker/data/longhouse/david:/data
+    networks:
+      - coolify
+    labels:
+      - caddy=david.longhouse.ai
+      - caddy.reverse_proxy={{upstreams 8000}}
+
+networks:
+  coolify:
+    external: true
