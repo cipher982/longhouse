@@ -8,18 +8,20 @@ Public API:
     content: strip_noise(), redact_secrets(), is_tool_result()
     tokens:  count_tokens(), truncate()
     transcript: build_transcript(), detect_turns(), SessionMessage, Turn, SessionTranscript
-    summarize: quick_summary(), structured_summary(), batch_summarize(), SessionSummary
+    summarize: summarize_events(), quick_summary(), structured_summary(), batch_summarize(), SessionSummary
 """
 
 from .content import is_tool_result
 from .content import redact_secrets
 from .content import strip_noise
+from .summarize import DEFAULT_CONTEXT_BUDGET
 from .summarize import SessionSummary
 from .summarize import batch_summarize
 from .summarize import quick_summary
 from .summarize import quick_summary_for_provider
 from .summarize import safe_parse_json
 from .summarize import structured_summary
+from .summarize import summarize_events
 from .tokens import count_tokens
 from .tokens import truncate
 from .transcript import SessionMessage
@@ -43,6 +45,8 @@ __all__ = [
     "build_transcript",
     "detect_turns",
     # summarize
+    "summarize_events",
+    "DEFAULT_CONTEXT_BUDGET",
     "SessionSummary",
     "quick_summary",
     "quick_summary_for_provider",

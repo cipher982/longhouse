@@ -51,14 +51,15 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Section | Status | Notes |
 |---------|--------|-------|
 | Session Processing (3.5) | 100% | Core module + summarize + briefing + hook + integration tests + consumer migration all done |
-| Control Plane | ~50% | Scaffold + provisioner + CI gate + runtime image + routing done; OAuth/billing pending |
+| Full Signup Flow | ~50% | Scaffold + provisioner + CI gate + runtime image + routing done; OAuth/Stripe/landing pending |
 
 ### Not Started
 | Section | Status | Notes |
 |---------|--------|-------|
 | Semantic Search (Phase 4) | 0% | No embeddings, no sqlite-vec |
 | Forum Discovery UX | 0% | No presence events, no bucket UI |
-| Stripe Integration | 0% | Control plane Phase 2 |
+| Frontend: Job Secrets UI | 0% | SecretField metadata landed; no frontend yet |
+| Pre-flight Job Validation | 0% | Enable/disable is blind toggle; no secret checks |
 
 > Changelogs archived. See git log for session details.
 
@@ -68,7 +69,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 1. **HN Launch Prep** — ✅ All blockers resolved. Landing page done; E2E infra-smoke + chat-send streaming fixed; video walkthrough optional. [Details](#launch-hn-launch-readiness--remaining-4)
 2. **Public Launch Checklist** — ✅ Complete. All items done including UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
-3. **Control Plane: OAuth + Stripe (Phases 1-2)** — Add Google OAuth at control plane level and Stripe checkout/webhooks for hosted beta signup flow. [Details](#infra-control-plane--hosted-beta-8)
+3. **Full Signup Flow (OAuth + Stripe + Provisioning)** — User clicks "Get Started" → Google OAuth → Stripe checkout → auto-provision instance. Requires OAuth, Stripe integration, and landing page wiring. [Details](#infra-full-signup-flow-8)
+4. **Frontend: Job Secrets UI** — Settings page for managing job secrets with SecretField metadata (labels, types, placeholders). Backend API exists; needs React UI. [Details](#product-frontend-job-secrets-ui-4)
+5. **Pre-flight Job Validation** — Block job enable when required secrets are missing. Wire status endpoint into enable flow + frontend guards. [Details](#product-pre-flight-job-validation-3)
 
 ---
 
@@ -175,14 +178,16 @@ Includes life-hub embedding pipeline migration to Longhouse.
 > ✅ **Archived** — All 6 P0 items complete (auth, demo, CTAs, README, FTS5, QA). See git history.
 
 ### P1 — Hosted Beta (Stretch)
-| Priority | Task | Est |
-|----------|------|-----|
-| 1 | Control Plane Scaffold | 1 day |
-| 2 | Stripe Integration | 1 day |
-| 3 | Docker Provisioning | 1 day |
-| 4 | Cross-subdomain Auth | 0.5 day |
+| Priority | Task | Status |
+|----------|------|--------|
+| 1 | Control Plane Scaffold | ✅ Done |
+| 2 | Docker Provisioning | ✅ Done |
+| 3 | Google OAuth (control plane) | Not started |
+| 4 | Stripe Integration | Not started |
+| 5 | Cross-subdomain Auth | Not started |
+| 6 | Landing Page Integration | Not started |
 
-**Minimum for launch:** P0 only (self-hosted works end-to-end).
+**Minimum for launch:** P0 only (self-hosted works end-to-end). Full signup flow tracked in [Full Signup Flow section](#infra-full-signup-flow-8).
 
 ---
 
@@ -346,13 +351,13 @@ Update screenshots to show Timeline, not old dashboard.
 
 ---
 
-## [Infra] Control Plane — Hosted Beta (8)
+## [Infra] Full Signup Flow (8)
 
-**What it enables:** Users sign up at longhouse.ai → get their own instance (alice.longhouse.ai)
+**What it enables:** User clicks "Get Started" on longhouse.ai → Google OAuth → Stripe checkout → auto-provisioned instance at `{user}.longhouse.ai`
 
-**Architecture:** Tiny FastAPI app that handles signup/billing/provisioning. Uses Docker API directly (not Coolify).
+**Architecture:** Tiny FastAPI control plane handles signup/billing/provisioning. Uses Docker API directly (not Coolify). Runtime image bundles frontend + backend per user.
 
-**Scope:** Only if P0 OSS GA is complete.
+**Current state (2026-02-11):** Scaffold exists, provisioner works, runtime image auto-builds. Missing: OAuth, Stripe, public signup, cross-subdomain auth, landing page wiring.
 
 **Decisions / Notes (2026-02-04):**
 - Control plane + user instances will live on **zerg** (single host for now).
@@ -374,16 +379,54 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] Add provisioner service (Docker API client with Caddy labels)
 - [x] Add Instance model with subdomain, container_name, state
 - [x] Admin API + minimal HTML UI for manual provisioning
-- [ ] Add Google OAuth (control plane only, not per-instance)
 - [x] Add User model with Stripe fields (fields only; no Stripe logic yet)
+- [ ] Add Google OAuth for control plane login/signup
+
+**OAuth details:**
+- Google OAuth via `authlib` or `httpx-oauth` (match existing pattern if any)
+- `GET /auth/google` → redirect to Google consent screen
+- `GET /auth/google/callback` → exchange code, upsert User, set session cookie
+- User model already has `email`, `stripe_customer_id`, `subscription_status`
+- Return JWT in HttpOnly cookie (control plane domain: `control.longhouse.ai`)
+- Protect all `/api/*` routes except `/auth/*` and `/webhooks/*`
 
 ### Phase 2: Stripe Integration (3)
 
-- [ ] Add `POST /checkout` → create Stripe checkout session
-- [ ] Add `POST /webhooks/stripe` → handle payment events
-- [ ] On `invoice.paid` → trigger provisioning
-- [ ] On `customer.subscription.deleted` → trigger deprovisioning
-- [ ] Add billing portal link (`POST /billing/portal`)
+**Pre-reqs:** `stripe` Python SDK not in dependencies yet. Add to `apps/control-plane/pyproject.toml`.
+
+**Existing code:** `billing.py` and `webhooks.py` exist as stubs. User model has `stripe_customer_id` and `subscription_status` fields.
+
+- [ ] Add `stripe` dependency to control plane `pyproject.toml`
+- [ ] Implement `POST /checkout` → create Stripe Checkout session
+  - Requires authenticated user (from OAuth)
+  - Creates Stripe customer if `stripe_customer_id` is null
+  - Returns checkout session URL for redirect
+  - Use `mode="subscription"` with a single price ID (configured via env var `STRIPE_PRICE_ID`)
+  - Set `success_url` to `control.longhouse.ai/provisioning?session_id={CHECKOUT_SESSION_ID}`
+  - Set `cancel_url` to `longhouse.ai` (back to landing)
+  - Pass `client_reference_id=user.id` and `customer_email=user.email`
+- [ ] Implement `POST /webhooks/stripe` → verify signature + handle events
+  - Verify webhook signature using `STRIPE_WEBHOOK_SECRET` env var
+  - Handle `checkout.session.completed`:
+    1. Look up user by `client_reference_id`
+    2. Store `stripe_customer_id` and `stripe_subscription_id` on User
+    3. Set `subscription_status = "active"`
+    4. Trigger provisioning (create container + subdomain)
+    5. Send welcome email (optional, defer if no email infra)
+  - Handle `customer.subscription.updated`:
+    1. Update `subscription_status` based on `subscription.status`
+    2. If `past_due` or `unpaid`, flag instance (don't kill immediately)
+  - Handle `customer.subscription.deleted`:
+    1. Set `subscription_status = "canceled"`
+    2. Trigger graceful deprovisioning (stop container, preserve data for N days)
+  - Handle `invoice.payment_failed`:
+    1. Log warning, update status to `past_due`
+    2. User gets grace period before deprovision
+- [ ] Implement `POST /billing/portal` → create Stripe billing portal session
+  - Requires `stripe_customer_id` on User
+  - Returns portal URL for redirect (manage subscription, update payment, cancel)
+- [ ] Add env vars: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`, `STRIPE_PUBLISHABLE_KEY`
+- [ ] Add idempotency: webhook handler must be safe to replay (check subscription_status before re-provisioning)
 
 ### Phase 3: Docker Provisioning ✅ MOSTLY DONE
 
@@ -394,6 +437,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [ ] Add health check polling after provision (method exists, not wired in routes/UI)
 - [x] Build and push runtime image (`docker/runtime.dockerfile`) to ghcr.io — auto-builds on push via `runtime-image.yml`, publishes to `ghcr.io/cipher982/longhouse-runtime:latest`
 - [x] Update CONTROL_PLANE_IMAGE to use runtime image — default now `ghcr.io/cipher982/longhouse-runtime:latest`
+- [ ] Wire provisioning trigger from Stripe webhook (Phase 2 → Phase 3 handoff)
 
 ### Phase 3.5: Provisioning E2E Gate ✅
 
@@ -403,20 +447,51 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Phase 4: Cross-Subdomain Auth (2)
 
+**Goal:** After OAuth + payment + provisioning, user is seamlessly logged into their instance.
+
 - Note: current control-plane `/api/instances/{id}/login-token` uses `sub=email` + control-plane JWT secret; instance `/api/auth/accept-token` expects numeric user_id + instance secret → will fail until aligned.
-- [ ] Control plane issues JWT on successful OAuth
-- [ ] Redirect to `{user}.longhouse.ai?auth_token=xxx`
-- [ ] Instance validates token at `/api/auth/accept-token` (code exists)
+- [ ] Control plane issues short-lived JWT on successful OAuth/provisioning
+  - JWT contains: `sub=user_email`, `instance=subdomain`, `exp=5min`
+  - Signed with a shared secret between control plane and instance (`CONTROL_PLANE_SHARED_SECRET`)
+- [ ] Redirect to `{user}.longhouse.ai/api/auth/accept-token?token=xxx`
+- [ ] Instance validates token at `/api/auth/accept-token` (code exists, needs alignment)
+  - Verify JWT signature using shared secret
+  - Look up or create local user by email
+  - Set HttpOnly session cookie on instance subdomain
 - [ ] Instance sets session cookie, user is logged in
+- [ ] Handle returning users: "Sign In" → OAuth → look up existing instance → redirect with token
 
 ### Phase 5: Landing Page Integration (1)
 
-- [ ] Update landing page CTAs to call control plane endpoints
-- [ ] "Get Started" → `/signup` (OAuth) → `/checkout` (Stripe) → provision → redirect
-- [ ] "Sign In" → `/login` (OAuth) → redirect to existing instance
-- [ ] Show instance status on landing page if logged in
+**Goal:** Landing page CTAs drive the full signup flow end-to-end.
 
-**Files:** `apps/control-plane/`, `docker/runtime.dockerfile`
+- [ ] Add "Get Started" CTA → `control.longhouse.ai/auth/google` (OAuth entry point)
+- [ ] After OAuth success, redirect to `/checkout` (Stripe) if no active subscription
+- [ ] After checkout success, show provisioning status page (`/provisioning?session_id=...`)
+  - Poll for container health, show spinner/progress
+  - On healthy, redirect to `{user}.longhouse.ai` with auth token
+- [ ] "Sign In" CTA → `control.longhouse.ai/auth/google` → find existing instance → redirect
+- [ ] Show instance status on landing page if user has active session cookie
+- [ ] Handle edge cases: returning user with canceled subscription, user with no instance yet
+
+### End-to-End User Journey
+
+```
+1. User visits longhouse.ai, clicks "Get Started"
+2. → Redirects to control.longhouse.ai/auth/google
+3. → Google OAuth consent screen
+4. → Callback creates/finds User, sets control plane cookie
+5. → If no subscription: redirect to /checkout
+6. → Stripe Checkout (hosted page)
+7. → On success: webhook fires checkout.session.completed
+8. → Webhook handler: set subscription active, provision container
+9. → User sees provisioning page (polls for health)
+10. → Container healthy: redirect to alice.longhouse.ai?token=xxx
+11. → Instance validates token, sets session cookie
+12. → User lands on their Timeline, ready to connect CLI
+```
+
+**Files:** `apps/control-plane/`, `docker/runtime.dockerfile`, landing page components
 
 **Infra status (verified 2026-02-11):**
 - ✅ Control plane deployed via Coolify (`longhouse-control-plane`), healthy at `control.longhouse.ai/health`
@@ -425,6 +500,118 @@ Update screenshots to show Timeline, not old dashboard.
 - ⚠️ Docker socket access from control plane container (needs verify)
 - ⚠️ Postgres for control plane DB (separate container via docker-compose)
 - ✅ Runtime image auto-builds on push via `runtime-image.yml` → `ghcr.io/cipher982/longhouse-runtime:latest`
+
+---
+
+## [Product] Frontend: Job Secrets UI (4)
+
+**Goal:** Settings page where users manage job secrets with rich form fields powered by SecretField metadata. Backend API is complete (`GET /api/jobs/secrets`, `PUT /api/jobs/secrets/{key}`, `DELETE /api/jobs/secrets/{key}`, `GET /api/jobs/{job_id}/secrets/status`). Needs React UI.
+
+**Existing patterns (follow these):**
+- **SettingsPage** (`apps/zerg/frontend/src/pages/SettingsPage.tsx`) — card-based sections, closest layout pattern
+- **SwarmOpsPage** (`SwarmOpsPage.tsx`) — master-detail with list panel + detail panel (use for per-job secret status view)
+- **UI components:** `Card`, `Input`, `Button`, `Badge`, `SectionHeader` — custom components, no external UI library
+- **API client:** `services/api/` with domain modules (e.g., `services/api/sessions.ts`), uses react-query for cache/fetch
+- **Auth:** HttpOnly cookie, no token management needed in frontend
+
+### Phase 1: Secrets Management Page (3)
+
+- [ ] Add `services/api/jobSecrets.ts` — API client module
+  - `listSecrets()` → `GET /api/jobs/secrets`
+  - `upsertSecret(key, value, description?)` → `PUT /api/jobs/secrets/{key}`
+  - `deleteSecret(key)` → `DELETE /api/jobs/secrets/{key}`
+  - `getJobSecretsStatus(jobId)` → `GET /api/jobs/{job_id}/secrets/status`
+- [ ] Add `pages/JobSecretsPage.tsx` — main secrets management page
+  - Table/list of existing secrets (key + description + timestamps)
+  - "Add Secret" button → inline form or modal
+  - Per-secret actions: edit (re-enter value), delete (with confirmation)
+  - Secret values never displayed (API doesn't return them) — show "••••••••" or "configured" badge
+- [ ] Add route in `App.tsx` — `/settings/secrets` or `/jobs/secrets` (match existing nav structure)
+- [ ] Add nav link in sidebar/settings navigation
+- [ ] Use react-query hooks: `useQuery` for list, `useMutation` for upsert/delete with cache invalidation
+
+### Phase 2: Per-Job Secret Status View (2)
+
+- [ ] Add `components/JobSecretStatus.tsx` — shows which secrets a job needs and which are configured
+  - Uses `GET /api/jobs/{job_id}/secrets/status` response
+  - Renders SecretField metadata: label (fallback to key), type hint, placeholder, description, required badge
+  - Green check / red X for `configured` status
+  - "Configure" button next to unconfigured secrets → opens upsert form pre-filled with key
+  - Progress indicator: "3 of 5 secrets configured"
+- [ ] Integrate into job detail view (wherever individual job config is shown)
+  - If job list page exists: expand row or detail panel shows secret status
+  - If not: standalone at `/jobs/{jobId}/secrets`
+- [ ] Form rendering based on SecretField metadata:
+  - `type: "password"` → password input (default)
+  - `type: "text"` → text input
+  - `type: "url"` → url input with validation
+  - `placeholder` → input placeholder
+  - `description` → help text below input
+  - `required` → asterisk + validation
+- [ ] Inline upsert form: user can configure a secret directly from the status view without navigating away
+
+### Phase 3: Polish (1)
+
+- [ ] Empty state for no secrets configured — guidance text + link to docs
+- [ ] Toast notifications on save/delete success/failure
+- [ ] Keyboard shortcuts: Escape to cancel form, Enter to submit
+- [ ] Loading skeletons while fetching
+- [ ] Mobile-responsive layout (secrets page should work on tablet)
+
+**Files:** `apps/zerg/frontend/src/pages/JobSecretsPage.tsx`, `apps/zerg/frontend/src/services/api/jobSecrets.ts`, `apps/zerg/frontend/src/components/JobSecretStatus.tsx`
+
+---
+
+## [Product] Pre-flight Job Validation (3)
+
+**Goal:** Prevent jobs from running when required secrets are missing. Currently, enable/disable is a blind toggle — missing secrets only surface as runtime `RuntimeError` from `require_secret()` in `JobContext`. The status API (`GET /api/jobs/{job_id}/secrets/status`) already returns `configured: bool` per secret; this work wires that data into enforcement points.
+
+**Current behavior:**
+- `POST /api/jobs/{id}/enable` → sets `enabled=True`, no checks
+- Job runs on schedule → `resolve_secrets()` returns empty string for missing keys → `ctx.require_secret("KEY")` raises `RuntimeError` → job fails with retry
+- User sees failure in job history but has no upfront warning
+
+**Target behavior:**
+- Enable endpoint checks required secrets are configured → returns 409 with missing list if not
+- Frontend shows warning before enable, blocks toggle if secrets missing
+- Queue admission optionally skips jobs with missing required secrets (reduces noise)
+
+### Phase 1: Backend Enforcement (2)
+
+- [ ] Add `_check_required_secrets(job_id, owner_id, db)` helper in `routers/jobs.py`
+  - Calls `_normalize_secret_fields(config.secrets)` to get declared secrets
+  - Checks DB + env for each required secret (reuse logic from `get_job_secrets_status`)
+  - Returns list of missing required secret keys (empty = all good)
+- [ ] Update `POST /api/jobs/{id}/enable` to call `_check_required_secrets()`
+  - If missing secrets: return `409 Conflict` with `{"detail": "Missing required secrets", "missing": ["KEY1", "KEY2"]}`
+  - If all configured: proceed with enable as before
+  - Note: `POST /api/jobs/{id}/disable` should NOT check (always allow disable)
+- [ ] Add `force` query param: `POST /api/jobs/{id}/enable?force=true` bypasses check
+  - For power users / env-var-only setups where secrets aren't in DB
+  - Log warning when force-enabled with missing secrets
+- [ ] Optional: queue admission guard in `commis.py` `enqueue_scheduled_run()`
+  - Before enqueueing, quick-check if required secrets exist
+  - If missing, log warning and skip enqueue (don't crash, don't retry)
+  - Configurable: `JOB_PREFLIGHT_ENABLED=true` env var (default true)
+
+### Phase 2: Frontend Guards (1)
+
+- [ ] Job list/detail: show warning badge when required secrets are missing
+  - Use `GET /api/jobs/{job_id}/secrets/status` to check
+  - Yellow warning icon + "2 secrets missing" text
+- [ ] Enable toggle: if secrets missing, show confirmation dialog
+  - "This job requires 2 unconfigured secrets: OPENAI_API_KEY, LIFE_HUB_DB_URL. It will fail on next run."
+  - Buttons: "Configure Secrets" (navigate to secrets page) / "Enable Anyway" (force=true) / "Cancel"
+- [ ] After configuring a secret, auto-refresh job status badges (react-query invalidation)
+
+### Phase 3: Job History Context (1)
+
+- [ ] When a job fails due to `RuntimeError` from `require_secret()`, tag the failure
+  - Parse error_type in job run result — if `RuntimeError` and message matches "Secret .* not found", mark as `missing_secret` failure type
+  - Show distinct UI treatment in job history: "Failed: missing secret KEY" with link to configure
+- [ ] Add "last failure reason" summary to job list view — helps users see at a glance which jobs need attention
+
+**Files:** `apps/zerg/backend/zerg/routers/jobs.py`, `apps/zerg/backend/zerg/jobs/commis.py`, frontend job components
 
 ---
 

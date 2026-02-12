@@ -1,7 +1,15 @@
 """LLM summarization — quick, structured, and batch modes.
 
 Provider-aware: supports OpenAI-compatible chat completions and
-Anthropic-compatible messages APIs. Three entry points:
+Anthropic-compatible messages APIs.
+
+Primary entry point for downstream consumers:
+
+- :func:`summarize_events` — events in, SessionSummary out. Handles
+  transcript building, context-window-aware truncation, and provider dispatch.
+  Used by: ingest background summarizer, backfill endpoint, daily digest.
+
+Lower-level (used by summarize_events internally):
 
 - :func:`quick_summary` — 2-4 sentence summary for briefings and digests
 - :func:`structured_summary` — structured JSON for memory files
@@ -19,6 +27,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from .transcript import SessionTranscript
+from .transcript import build_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -329,3 +338,61 @@ async def batch_summarize(
             results.append(outcome)
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# High-level entry point — events in, SessionSummary out
+# ---------------------------------------------------------------------------
+
+# Default context window budget (tokens). GLM-4.7-Flash = 200k, gpt-5-mini = 128k.
+# Leave headroom for system prompt + output. Sessions under this pass through
+# untouched; only the ~1.5% that exceed it get head+tail sandwich truncation.
+DEFAULT_CONTEXT_BUDGET = 120_000
+
+
+async def summarize_events(
+    events: list[dict],
+    *,
+    client: Any,
+    model: str,
+    provider: Any,
+    metadata: dict | None = None,
+    context_budget: int = DEFAULT_CONTEXT_BUDGET,
+    timeout_seconds: float = 120,
+) -> SessionSummary | None:
+    """Summarize a session from raw event dicts — single entry point.
+
+    Handles the full pipeline: events → transcript (with context-window-aware
+    truncation for long sessions) → LLM call → SessionSummary.
+
+    Args:
+        events: List of dicts matching AgentEvent shape (role, content_text,
+            timestamp, tool_name, tool_input_json, tool_output_text, session_id).
+        client: Async LLM client (OpenAI or Anthropic SDK).
+        model: Model identifier string.
+        provider: Provider enum or string ("openai", "anthropic", etc.).
+        metadata: Optional dict with project, provider, git_branch keys
+            for prompt context.
+        context_budget: Max tokens for the transcript. Sessions exceeding this
+            get head+tail sandwich truncation. Default 120k (safe for most models).
+        timeout_seconds: Max time for the LLM call.
+
+    Returns:
+        SessionSummary on success, None if transcript is empty.
+    """
+    transcript = build_transcript(
+        events,
+        include_tool_calls=False,
+        token_budget=context_budget,
+    )
+
+    if metadata:
+        transcript.metadata = metadata
+
+    if not transcript.messages:
+        return None
+
+    return await asyncio.wait_for(
+        quick_summary_for_provider(transcript, client, model, provider),
+        timeout=timeout_seconds,
+    )

@@ -465,8 +465,7 @@ async def _generate_summary_background(session_id: str) -> None:
     """
     from zerg.database import get_session_factory
     from zerg.models_config import get_llm_client_for_use_case
-    from zerg.services.session_processing import build_transcript
-    from zerg.services.session_processing import quick_summary_for_provider
+    from zerg.services.session_processing import summarize_events
 
     settings = get_settings()
 
@@ -483,7 +482,6 @@ async def _generate_summary_background(session_id: str) -> None:
     session_factory = get_session_factory()
     db = session_factory()
     try:
-        # Check idempotency
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if not session:
             logger.warning("Session %s not found for summary generation", session_id)
@@ -492,13 +490,11 @@ async def _generate_summary_background(session_id: str) -> None:
             logger.debug("Session %s already has a summary, skipping", session_id)
             return
 
-        # Fetch events
         events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
         if not events:
             logger.debug("No events for session %s, skipping summary", session_id)
             return
 
-        # Build transcript (event dicts)
         event_dicts = [
             {
                 "role": e.role,
@@ -512,27 +508,22 @@ async def _generate_summary_background(session_id: str) -> None:
             for e in events
         ]
 
-        transcript = build_transcript(
+        summary = await summarize_events(
             event_dicts,
-            include_tool_calls=False,
+            client=client,
+            model=model,
+            provider=provider,
+            metadata={
+                "project": session.project,
+                "provider": session.provider,
+                "git_branch": session.git_branch,
+            },
         )
-        transcript.metadata = {
-            "project": session.project,
-            "provider": session.provider,
-            "git_branch": session.git_branch,
-        }
 
-        if not transcript.messages:
+        if not summary:
             logger.debug("Empty transcript for session %s, skipping summary", session_id)
             return
 
-        # Call LLM via provider-aware dispatch from models.json (60s timeout)
-        summary = await asyncio.wait_for(
-            quick_summary_for_provider(transcript, client, model, provider),
-            timeout=60,
-        )
-
-        # Store on session record
         session.summary = summary.summary
         session.summary_title = summary.title
         db.commit()
@@ -761,8 +752,7 @@ async def backfill_summaries(
     Safe to call repeatedly. Use ``force=true`` to re-summarize all sessions.
     """
     from zerg.models_config import get_llm_client_for_use_case
-    from zerg.services.session_processing import build_transcript
-    from zerg.services.session_processing import quick_summary_for_provider
+    from zerg.services.session_processing import summarize_events
 
     def _target_query():
         query = db.query(AgentSession)
@@ -797,16 +787,14 @@ async def backfill_summaries(
                 detail=f"Summarization is misconfigured: {e}",
             )
 
-        transcripts_by_session: dict[UUID, Any] = {}
-        sessions_by_id: dict[UUID, AgentSession] = {}
-
+        # Pre-fetch events for all sessions, build event dicts
+        session_data: list[tuple[AgentSession, list[dict]]] = []
         for session in sessions:
             try:
                 events = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.timestamp).all()
                 if not events:
                     skipped += 1
                     continue
-
                 event_dicts = [
                     {
                         "role": e.role,
@@ -819,58 +807,46 @@ async def backfill_summaries(
                     }
                     for e in events
                 ]
-
-                transcript = build_transcript(
-                    event_dicts,
-                    include_tool_calls=False,
-                )
-                transcript.metadata = {
-                    "project": session.project,
-                    "provider": session.provider,
-                    "git_branch": session.git_branch,
-                }
-                if not transcript.messages:
-                    skipped += 1
-                    continue
-
-                transcripts_by_session[session.id] = transcript
-                sessions_by_id[session.id] = session
+                session_data.append((session, event_dicts))
             except Exception:
                 errors += 1
-                logger.exception("Failed preparing transcript for session %s during summary backfill", session.id)
+                logger.exception("Failed preparing events for session %s", session.id)
 
-        if transcripts_by_session:
+        if session_data:
             semaphore = asyncio.Semaphore(max_concurrent)
 
-            async def _summarize_one(session_id: UUID) -> tuple[UUID, Any, Exception | None]:
+            async def _summarize_one(sess: AgentSession, evts: list[dict]) -> tuple[AgentSession, Any, Exception | None]:
                 async with semaphore:
                     try:
-                        summary = await quick_summary_for_provider(
-                            transcripts_by_session[session_id],
-                            client,
-                            model,
-                            provider,
+                        summary = await summarize_events(
+                            evts,
+                            client=client,
+                            model=model,
+                            provider=provider,
+                            metadata={
+                                "project": sess.project,
+                                "provider": sess.provider,
+                                "git_branch": sess.git_branch,
+                            },
                         )
-                        return session_id, summary, None
+                        return sess, summary, None
                     except Exception as exc:
-                        return session_id, None, exc
+                        return sess, None, exc
 
-            tasks = [_summarize_one(session_id) for session_id in transcripts_by_session]
+            tasks = [_summarize_one(sess, evts) for sess, evts in session_data]
             outcomes = await asyncio.gather(*tasks)
 
-            for session_id, summary, err in outcomes:
+            for sess, summary, err in outcomes:
                 if err is not None:
                     errors += 1
-                    logger.warning("Failed backfill summary for session %s: %s", session_id, err)
+                    logger.warning("Failed backfill summary for session %s: %s", sess.id, err)
                     continue
-
-                session = sessions_by_id.get(session_id)
-                if not session:
+                if not summary:
                     skipped += 1
                     continue
 
-                session.summary = summary.summary
-                session.summary_title = summary.title
+                sess.summary = summary.summary
+                sess.summary_title = summary.title
                 backfilled += 1
 
         db.commit()
