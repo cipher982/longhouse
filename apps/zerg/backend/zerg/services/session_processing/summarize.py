@@ -1,7 +1,7 @@
 """LLM summarization — quick, structured, and batch modes.
 
-Provider-agnostic: takes an ``openai.AsyncOpenAI`` client (caller configures
-base_url / api_key). Three entry points:
+Provider-aware: supports OpenAI-compatible chat completions and
+Anthropic-compatible messages APIs. Three entry points:
 
 - :func:`quick_summary` — 2-4 sentence summary for briefings and digests
 - :func:`structured_summary` — structured JSON for memory files
@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -126,6 +127,25 @@ def safe_parse_json(text: str | None) -> dict | None:
         return None
 
 
+def _parse_quick_summary_raw(raw: str, session_id: str) -> SessionSummary:
+    """Parse quick-summary JSON output with robust fallback behavior."""
+    parsed = safe_parse_json(raw)
+    if isinstance(parsed, dict):
+        title = parsed.get("title")
+        summary = parsed.get("summary")
+        return SessionSummary(
+            session_id=session_id,
+            title=title if isinstance(title, str) and title.strip() else "Untitled Session",
+            summary=summary if isinstance(summary, str) and summary.strip() else raw,
+        )
+
+    return SessionSummary(
+        session_id=session_id,
+        title="Untitled Session",
+        summary=raw.strip()[:500] if raw.strip() else "No summary generated.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -164,23 +184,39 @@ async def quick_summary(
         )
 
     raw = response.choices[0].message.content or ""
-    parsed = safe_parse_json(raw)
+    return _parse_quick_summary_raw(raw, transcript.session_id)
 
-    if isinstance(parsed, dict):
-        title = parsed.get("title")
-        summary = parsed.get("summary")
-        return SessionSummary(
-            session_id=transcript.session_id,
-            title=title if isinstance(title, str) and title.strip() else "Untitled Session",
-            summary=summary if isinstance(summary, str) and summary.strip() else raw,
-        )
 
-    # Fallback: use raw text as summary
-    return SessionSummary(
-        session_id=transcript.session_id,
-        title="Untitled Session",
-        summary=raw.strip()[:500] if raw.strip() else "No summary generated.",
+async def quick_summary_anthropic(
+    transcript: SessionTranscript,
+    client: Any,
+    model: str = "glm-4.7",
+) -> SessionSummary:
+    """Generate a quick summary using an Anthropic-compatible client."""
+    user_prompt = _build_user_prompt(transcript)
+
+    response = await client.messages.create(
+        model=model,
+        max_tokens=512,
+        system=_QUICK_SYSTEM,
+        messages=[{"role": "user", "content": user_prompt}],
     )
+
+    raw = response.content[0].text if response.content else ""
+    return _parse_quick_summary_raw(raw, transcript.session_id)
+
+
+async def quick_summary_for_provider(
+    transcript: SessionTranscript,
+    client: Any,
+    model: str,
+    provider: Any,
+) -> SessionSummary:
+    """Dispatch quick-summary call based on provider value."""
+    provider_value = str(getattr(provider, "value", provider or "")).lower()
+    if provider_value == "anthropic":
+        return await quick_summary_anthropic(transcript, client, model)
+    return await quick_summary(transcript, client, model)
 
 
 async def structured_summary(

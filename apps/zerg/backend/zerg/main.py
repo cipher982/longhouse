@@ -652,22 +652,23 @@ async def lifespan(app: FastAPI):
                 logger.exception(f"Failed to start commis_job_processor in E2E mode: {e}")
 
         # Validate summarization pipeline config (fail-fast on misconfiguration)
-        if not _settings.testing:
-            try:
-                from zerg.models_config import get_llm_client_for_use_case
+        if not _settings.testing and not _settings.llm_disabled:
+            from zerg.models_config import get_active_models_profile
+            from zerg.models_config import validate_use_case_llm_config
 
-                client, model, provider = get_llm_client_for_use_case("summarization")
-                logger.info("Summarization configured: model=%s provider=%s", model, provider)
-                try:
-                    await client.close()
-                except Exception:
-                    pass
-            except ValueError as e:
-                logger.warning("Summarization NOT configured — ingested sessions will NOT get summaries: %s", e)
+            model, provider, key_env = validate_use_case_llm_config("summarization")
+            logger.info(
+                "Summarization configured: profile=%s model=%s provider=%s key_env=%s",
+                get_active_models_profile(),
+                model,
+                provider.value,
+                key_env,
+            )
 
         logger.info("Application startup complete")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
+        raise
 
     yield  # Application is running
 

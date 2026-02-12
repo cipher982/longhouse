@@ -63,6 +63,7 @@
         "provider": "anthropic",
         "description": "Zhipu GLM-4.7 via z.ai Anthropic-compatible API - flat-rate",
         "baseUrl": "https://api.z.ai/api/anthropic",
+        "apiKeyEnvVar": "ZAI_API_KEY",
         "capabilities": {
           "reasoning": true
         }
@@ -111,6 +112,21 @@
     "realtime": {
       "voice_conversation": "TIER_1",
       "voice_test": "TIER_2"
+    }
+  },
+
+  "routingProfiles": {
+    "$comment": "Optional per-instance overrides. Select with MODELS_PROFILE (default: oss).",
+    "oss": {
+      "$comment": "Default OSS profile: no overrides"
+    },
+    "david": {
+      "$comment": "David's instance: keep conversation on OpenAI, run summarization on z.ai",
+      "text": {
+        "useCases": {
+          "summarization": "glm-4.7"
+        }
+      }
     }
   },
 

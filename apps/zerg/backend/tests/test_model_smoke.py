@@ -19,6 +19,13 @@ from zerg.models_config import ModelProvider
 from zerg.models_config import get_model_by_id
 
 
+def _assert_tier_or_model_reference(value: str, *, context: str) -> None:
+    assert value in _TIERS or value in _MODELS, (
+        f"{context} references invalid value '{value}'. "
+        f"Expected one of tiers={set(_TIERS.keys())} or models={set(_MODELS.keys())}"
+    )
+
+
 class TestModelConfigSchema:
     """Validate models.json schema structure."""
 
@@ -78,6 +85,15 @@ class TestModelConfigSchema:
         """All models referenced in tiers must exist."""
         for tier_name, model_id in _TIERS.items():
             assert model_id in _MODELS, f"Tier {tier_name} references non-existent model '{model_id}'"
+
+    def test_api_key_env_var_is_valid_when_present(self):
+        """Optional apiKeyEnvVar must be a non-empty string."""
+        for model_id, model_info in _MODELS.items():
+            api_key_env = model_info.get("apiKeyEnvVar")
+            if api_key_env is None:
+                continue
+            assert isinstance(api_key_env, str), f"{model_id} apiKeyEnvVar must be a string"
+            assert api_key_env.strip(), f"{model_id} apiKeyEnvVar cannot be empty"
 
 
 class TestModelConfigLoading:
@@ -164,15 +180,53 @@ class TestUseCaseMapping:
     """Validate use case to tier mappings."""
 
     def test_all_use_cases_map_to_valid_tiers(self):
-        """Use case mappings should reference valid tiers."""
+        """Use case mappings should reference valid tiers or direct model IDs."""
         use_cases = _CONFIG["useCases"]["text"]
-        valid_tiers = set(_TIERS.keys())
-        for use_case, tier in use_cases.items():
-            assert tier in valid_tiers, f"Use case '{use_case}' maps to invalid tier '{tier}'"
+        for use_case, tier_or_model in use_cases.items():
+            _assert_tier_or_model_reference(tier_or_model, context=f"useCases.text.{use_case}")
 
     def test_default_tiers_are_valid(self):
-        """Default tier mappings should be valid."""
+        """Default mappings should reference valid tiers or direct model IDs."""
         defaults = _CONFIG["defaults"]["text"]
-        valid_tiers = set(_TIERS.keys())
-        for context, tier in defaults.items():
-            assert tier in valid_tiers, f"Default '{context}' maps to invalid tier '{tier}'"
+        for context, tier_or_model in defaults.items():
+            _assert_tier_or_model_reference(tier_or_model, context=f"defaults.text.{context}")
+
+
+class TestRoutingProfiles:
+    """Validate optional routingProfiles overrides."""
+
+    def test_routing_profiles_reference_valid_use_cases(self):
+        """Profile text.useCases entries should point to known use cases and valid references."""
+        profiles = _CONFIG.get("routingProfiles", {})
+        base_use_cases = set(_CONFIG["useCases"]["text"].keys())
+        for profile_name, profile_cfg in profiles.items():
+            if profile_name.startswith("$") or not isinstance(profile_cfg, dict):
+                continue
+            text_cfg = profile_cfg.get("text", {})
+            use_cases = text_cfg.get("useCases", {})
+            for use_case, tier_or_model in use_cases.items():
+                assert use_case in base_use_cases, (
+                    f"routingProfiles.{profile_name}.text.useCases has unknown use case '{use_case}'"
+                )
+                _assert_tier_or_model_reference(
+                    tier_or_model,
+                    context=f"routingProfiles.{profile_name}.text.useCases.{use_case}",
+                )
+
+    def test_routing_profiles_reference_valid_defaults(self):
+        """Profile text.defaults entries should point to known defaults and valid references."""
+        profiles = _CONFIG.get("routingProfiles", {})
+        base_defaults = set(_CONFIG["defaults"]["text"].keys())
+        for profile_name, profile_cfg in profiles.items():
+            if profile_name.startswith("$") or not isinstance(profile_cfg, dict):
+                continue
+            text_cfg = profile_cfg.get("text", {})
+            defaults = text_cfg.get("defaults", {})
+            for default_name, tier_or_model in defaults.items():
+                assert default_name in base_defaults, (
+                    f"routingProfiles.{profile_name}.text.defaults has unknown key '{default_name}'"
+                )
+                _assert_tier_or_model_reference(
+                    tier_or_model,
+                    context=f"routingProfiles.{profile_name}.text.defaults.{default_name}",
+                )
