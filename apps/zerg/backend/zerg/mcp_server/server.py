@@ -426,6 +426,31 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": str(exc)})
 
     # ------------------------------------------------------------------
+    # Tool: get_reflections
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def get_reflections(
+        project: str | None = None,
+        limit: int = 5,
+    ) -> str:
+        """Query recent reflection runs — automated analysis of sessions for insights.
+
+        Returns the history of reflection runs showing what was analyzed and
+        what insights were extracted. Use query_insights to see the actual insights.
+
+        Args:
+            project: Filter by project name (optional).
+            limit: Maximum results to return (default 5).
+        """
+        try:
+            resp = await client.get_reflections(project=project, limit=limit)
+            if resp.status_code != 200:
+                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+            return resp.text
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
+    # ------------------------------------------------------------------
     # Tool: recall
     # ------------------------------------------------------------------
     @server.tool()

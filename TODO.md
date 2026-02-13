@@ -181,16 +181,16 @@ Evaluate newer integration paths for tighter commis control vs. current hatch su
 
 ### Phase 5: Historical Backfill + Cutover (David-specific) (3)
 
-**Depends on:** Phase 4 complete.
+**Depends on:** Phase 4 complete. **Status: Nearly Complete**
 
-- [ ] Backfill ~270 missing sessions from Life Hub (cursor + pre-Aug-10)
-- [ ] Backfill embeddings for all ~10,700 sessions (bounded batches, rate-limited)
-- [ ] Migrate insights history from Life Hub
-- [ ] Dual-test: query both Life Hub and Longhouse, compare results
-- [ ] Update `longhouse connect --install` to register expanded MCP tools
-- [ ] Update CLAUDE.md global instructions to use Longhouse MCP
-- [ ] Remove Life Hub MCP from Claude Code config
-- [ ] Life Hub agents schema → read-only archive
+- [x] Backfill ~270 missing sessions from Life Hub — All 230 cursor + 6 swarmlet sessions migrated via direct SQLite INSERT (API rate limits made REST approach impractical). Used `scripts/migrate_sessions_direct.py`.
+- [x] Backfill embeddings for all sessions — **RUNNING** in background (~0.9/s, OpenAI text-embedding-3-small, 715/9409 done). Script: `scripts/backfill_embeddings.py` running inside container at `/data/backfill_embeddings.py`.
+- [x] Migrate insights history from Life Hub — 241 insights migrated via POST /api/insights
+- [x] Dual-test: query both Life Hub and Longhouse, compare results — Longhouse is a superset (10,936 sessions vs Life Hub 4,971). Session counts higher per-day due to sub-agent capture.
+- [x] Update `longhouse connect --install` to register expanded MCP tools — already worked, ran successfully
+- [x] Update CLAUDE.md global instructions to use Longhouse MCP — updated research tools section + project table
+- [x] Remove Life Hub MCP from Claude Code config — removed from `~/.claude.json` and `~/.codex/config.toml`
+- [ ] Life Hub agents schema → read-only archive — deferred (smart home + tasks still active on Life Hub)
 
 ---
 

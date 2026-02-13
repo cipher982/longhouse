@@ -194,8 +194,13 @@ export default function LandingPage() {
   };
 
   const handleSignIn = () => {
-    // In production, navigate to timeline — AuthGuard will show the login screen
-    navigate("/timeline");
+    if (config.demoMode) {
+      // Demo site: go to the hosted control plane auth
+      window.location.href = "https://control.longhouse.ai";
+    } else {
+      // Production instance: AuthGuard will show the login screen
+      navigate("/timeline");
+    }
   };
 
   return (

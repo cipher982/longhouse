@@ -26,7 +26,7 @@ export function PricingSection() {
   };
 
   const handleGetHosted = () => {
-    window.location.href = "https://control.longhouse.ai/auth/google";
+    window.location.href = "https://control.longhouse.ai";
   };
 
   const tiers: PricingTier[] = [

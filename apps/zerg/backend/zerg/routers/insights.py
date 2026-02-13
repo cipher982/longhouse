@@ -24,6 +24,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
 from zerg.models.work import Insight
 from zerg.routers.agents import require_single_tenant
 from zerg.routers.agents import verify_agents_read_access
@@ -94,9 +95,9 @@ async def create_insight(
     updates its confidence and appends to observations instead of creating a new one.
     """
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=INSIGHT_DEDUP_WINDOW_DAYS)
 
-        # Dedup: look for existing insight with same title + project within 7 days
+        # Dedup: look for existing insight with same title + project
         query = db.query(Insight).filter(
             Insight.title == body.title,
             Insight.created_at >= cutoff,
@@ -128,6 +129,44 @@ async def create_insight(
             db.refresh(existing)
 
             return _insight_to_response(existing)
+
+        # Cross-project dedup: check for same title in ANY project within 7 days
+        cross_match = (
+            db.query(Insight)
+            .filter(
+                Insight.title == body.title,
+                Insight.created_at >= cutoff,
+            )
+            .first()
+        )
+
+        if cross_match:
+            # Merge into the cross-project match
+            if body.confidence is not None:
+                cross_match.confidence = body.confidence
+
+            observations = cross_match.observations or []
+            prefix = f"[{body.project}] " if body.project else ""
+            observation_entry = f"{datetime.now(timezone.utc).isoformat()}: {prefix}{body.description or body.title}"
+            observations.append(observation_entry)
+            cross_match.observations = observations
+
+            # Add source project as tag if not already present
+            existing_tags = cross_match.tags or []
+            if body.project and body.project not in existing_tags:
+                cross_match.tags = existing_tags + [body.project]
+                from sqlalchemy.orm.attributes import flag_modified as _flag_modified
+
+                _flag_modified(cross_match, "tags")
+
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(cross_match, "observations")
+
+            db.commit()
+            db.refresh(cross_match)
+
+            return _insight_to_response(cross_match)
 
         # Create new insight
         insight = Insight(
