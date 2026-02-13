@@ -1,10 +1,12 @@
-"""Google OAuth for control plane signup/login.
+"""Auth for control plane: email+password and Google OAuth.
 
 Flow:
-  GET  /auth/google          → redirect to Google consent screen
-  GET  /auth/google/callback  → exchange code, upsert user, set session cookie
-  GET  /auth/status           → check if authenticated
-  POST /auth/logout           → clear session cookie
+  POST /auth/signup            → create user with email+password, set session cookie
+  POST /auth/login             → verify email+password, set session cookie
+  GET  /auth/google            → redirect to Google consent screen
+  GET  /auth/google/callback   → exchange code, upsert user, set session cookie
+  GET  /auth/status            → check if authenticated
+  POST /auth/logout            → clear session cookie
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -22,6 +25,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
+from fastapi import Form
 from fastapi import Response
 from fastapi import status
 from fastapi.responses import RedirectResponse
@@ -134,6 +138,31 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
 
 
 # ---------------------------------------------------------------------------
+# Password hashing (PBKDF2 — same pattern as provisioner.py)
+# ---------------------------------------------------------------------------
+
+
+def _hash_password(password: str) -> str:
+    """Hash a password with PBKDF2-SHA256 and a random salt."""
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000)
+    return f"pbkdf2:sha256:600000${salt.hex()}${dk.hex()}"
+
+
+def _verify_password(password: str, hash_string: str) -> bool:
+    """Verify a password against a PBKDF2 hash string."""
+    try:
+        _, _, rest = hash_string.partition("pbkdf2:sha256:600000$")
+        salt_hex, _, dk_hex = rest.partition("$")
+        salt = bytes.fromhex(salt_hex)
+        expected_dk = bytes.fromhex(dk_hex)
+        actual_dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000)
+        return hmac.compare_digest(expected_dk, actual_dk)
+    except (ValueError, AttributeError):
+        return False
+
+
+# ---------------------------------------------------------------------------
 # OAuth helpers
 # ---------------------------------------------------------------------------
 
@@ -194,6 +223,72 @@ def _get_userinfo(access_token: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+@router.post("/signup")
+def email_signup(
+    email: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Create a new user with email + password."""
+    email = email.strip().lower()
+
+    if len(password) < 8:
+        from fastapi.responses import RedirectResponse as _RR
+
+        return _RR(f"/signup?error=Password+must+be+at+least+8+characters", status_code=303)
+
+    if password != password_confirm:
+        from fastapi.responses import RedirectResponse as _RR
+
+        return _RR(f"/signup?error=Passwords+do+not+match", status_code=303)
+
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        from fastapi.responses import RedirectResponse as _RR
+
+        return _RR(f"/signup?error=An+account+with+this+email+already+exists", status_code=303)
+
+    user = User(email=email, password_hash=_hash_password(password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    logger.info(f"Created new user via email signup: {email}")
+
+    session_token = _issue_session_token(user)
+    response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=303)
+    _set_session(response, session_token)
+    return response
+
+
+@router.post("/login")
+def email_login(
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Authenticate with email + password."""
+    email = email.strip().lower()
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not user.password_hash:
+        from fastapi.responses import RedirectResponse as _RR
+
+        return _RR("/?error=Invalid+email+or+password", status_code=303)
+
+    if not _verify_password(password, user.password_hash):
+        from fastapi.responses import RedirectResponse as _RR
+
+        return _RR("/?error=Invalid+email+or+password", status_code=303)
+
+    logger.info(f"User logged in via email: {email}")
+
+    session_token = _issue_session_token(user)
+    response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=303)
+    _set_session(response, session_token)
+    return response
 
 
 @router.get("/google")

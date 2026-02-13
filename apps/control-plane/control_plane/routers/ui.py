@@ -148,20 +148,82 @@ def _get_user_from_cookie(request: Request, db: Session) -> User | None:
 
 
 @router.get("/", response_class=HTMLResponse)
-def home(request: Request, db: Session = Depends(get_db)):
+def home(request: Request, error: str | None = None, db: Session = Depends(get_db)):
     user = _get_user_from_cookie(request, db)
     if user:
         return RedirectResponse("/dashboard", status_code=302)
+
+    error_html = ""
+    if error:
+        error_html = f'''<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#fca5a5;font-size:0.9rem;">{html.escape(error)}</div>'''
 
     body = f"""
     <div class="hero-center">
       <h1>Longhouse</h1>
       <p class="subtitle">Sign in to manage your hosted instance.</p>
-      <a href="/auth/google" class="btn btn-primary google-btn">{_GOOGLE_ICON} Continue with Google</a>
-      <p style="margin-top:2rem;"><a href="https://longhouse.ai" style="color:#9898a3;font-size:0.875rem;">&larr; Back to longhouse.ai</a></p>
+    </div>
+    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+      {error_html}
+      <form method="post" action="/auth/login">
+        <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
+        <label>Password <input type="password" name="password" required minlength="8" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"></label>
+        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Sign In</button>
+      </form>
+      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+        Don\'t have an account? <a href="/signup">Create one</a>
+      </p>
+    </div>
+    <div style="max-width:400px;margin:0 auto;">
+      <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;">
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
+        <span style="color:#9898a3;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em;">or</span>
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
+      </div>
+      <a href="/auth/google" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;">{_GOOGLE_ICON} Continue with Google</a>
+      <p style="text-align:center;margin-top:2rem;"><a href="https://longhouse.ai" style="color:#9898a3;font-size:0.875rem;">&larr; Back to longhouse.ai</a></p>
     </div>
     """
     return _page("Home", body, nav=False)
+
+
+@router.get("/signup", response_class=HTMLResponse)
+def signup_page(request: Request, error: str | None = None, db: Session = Depends(get_db)):
+    user = _get_user_from_cookie(request, db)
+    if user:
+        return RedirectResponse("/dashboard", status_code=302)
+
+    error_html = ""
+    if error:
+        error_html = f'''<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#fca5a5;font-size:0.9rem;">{html.escape(error)}</div>'''
+
+    body = f"""
+    <div class="hero-center">
+      <h1>Create Account</h1>
+      <p class="subtitle">Get started with Longhouse.</p>
+    </div>
+    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+      {error_html}
+      <form method="post" action="/auth/signup">
+        <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
+        <label>Password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters"></label>
+        <label>Confirm password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password"></label>
+        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Create Account</button>
+      </form>
+      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+        Already have an account? <a href="/">Sign in</a>
+      </p>
+    </div>
+    <div style="max-width:400px;margin:0 auto;">
+      <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;">
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
+        <span style="color:#9898a3;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em;">or</span>
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
+      </div>
+      <a href="/auth/google" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;">{_GOOGLE_ICON} Continue with Google</a>
+      <p style="text-align:center;margin-top:2rem;"><a href="https://longhouse.ai" style="color:#9898a3;font-size:0.875rem;">&larr; Back to longhouse.ai</a></p>
+    </div>
+    """
+    return _page("Sign Up", body, nav=False)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +235,7 @@ def home(request: Request, db: Session = Depends(get_db)):
 def dashboard(request: Request, db: Session = Depends(get_db)):
     user = _get_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse("/auth/google", status_code=302)
+        return RedirectResponse("/", status_code=302)
 
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
 
@@ -235,7 +297,7 @@ def open_instance(request: Request, db: Session = Depends(get_db)):
     """Issue a login token and redirect user to their instance with auto-auth."""
     user = _get_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse("/auth/google", status_code=302)
+        return RedirectResponse("/", status_code=302)
 
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
     if not instance:
@@ -263,7 +325,7 @@ def dashboard_checkout(request: Request, db: Session = Depends(get_db)):
     """Trigger Stripe checkout from dashboard — redirect to Stripe."""
     user = _get_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse("/auth/google", status_code=302)
+        return RedirectResponse("/", status_code=302)
 
     # Delegate to the billing API
     from control_plane.routers.billing import _get_stripe
@@ -322,7 +384,7 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
     """Show provisioning progress. Polls /api/instances/{id} for health."""
     user = _get_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse("/auth/google", status_code=302)
+        return RedirectResponse("/", status_code=302)
 
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
 
