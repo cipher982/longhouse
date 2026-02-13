@@ -1,7 +1,8 @@
-"""Work tracking models — insights and file reservations.
+"""Work tracking models — insights, action proposals, and file reservations.
 
-These models support agent infrastructure: tracking learnings across sessions
-and preventing file edit conflicts in multi-agent workflows.
+These models support agent infrastructure: tracking learnings across sessions,
+surfacing actionable proposals for human review, and preventing file edit
+conflicts in multi-agent workflows.
 """
 
 from uuid import uuid4
@@ -41,6 +42,28 @@ class Insight(AgentsBase):
     session_id = Column(GUID(), nullable=True)  # Source session (optional)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ActionProposal(AgentsBase):
+    """A proposed action derived from a high-confidence insight.
+
+    Created during reflection when the judge attaches an action_blurb to an
+    insight.  Users review proposals in the Longhouse UI and approve or decline
+    them.  Approved proposals become tasks visible in agent briefings.
+    """
+
+    __tablename__ = "action_proposals"
+
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    insight_id = Column(GUID(), nullable=False, index=True)  # FK to insights.id (loose)
+    reflection_run_id = Column(GUID(), nullable=True)  # FK to reflection_runs.id (loose)
+    project = Column(String(255), nullable=True, index=True)
+    title = Column(String(255), nullable=False)  # Short action title
+    action_blurb = Column(Text, nullable=False)  # What should be done
+    status = Column(String(20), default="pending", index=True)  # pending, approved, declined
+    decided_at = Column(DateTime, nullable=True)  # When user approved/declined
+    task_description = Column(Text, nullable=True)  # Generated on approve (task body)
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class ReflectionRun(AgentsBase):

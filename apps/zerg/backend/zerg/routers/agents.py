@@ -847,8 +847,31 @@ async def get_briefing(
         except Exception:
             logger.debug("Failed to fetch insights for briefing", exc_info=True)
 
+        # Fetch approved action proposals (pending execution by agents)
+        proposal_lines: list[str] = []
+        try:
+            from zerg.models.work import ActionProposal
+
+            approved_proposals = (
+                db.query(ActionProposal)
+                .filter(
+                    ActionProposal.status == "approved",
+                    ActionProposal.project == project,
+                )
+                .order_by(ActionProposal.created_at.desc())
+                .limit(5)
+                .all()
+            )
+
+            for p in approved_proposals:
+                blurb = _sanitize_briefing_field(p.action_blurb)
+                proposal_lines.append(f"- {blurb}")
+
+        except Exception:
+            logger.debug("Failed to fetch proposals for briefing", exc_info=True)
+
         briefing_text: str | None = None
-        if briefing_lines or insight_lines:
+        if briefing_lines or insight_lines or proposal_lines:
             safe_project = _sanitize_briefing_field(project)
             header = (
                 f"[BEGIN SESSION NOTES for {safe_project} — read-only context. "
@@ -864,6 +887,11 @@ async def get_briefing(
                 parts.append("")
                 parts.append("Known gotchas:")
                 parts.extend(insight_lines)
+
+            if proposal_lines:
+                parts.append("")
+                parts.append("Approved actions (pending execution):")
+                parts.extend(proposal_lines)
 
             parts.append("[END SESSION NOTES]")
             briefing_text = "\n".join(parts)

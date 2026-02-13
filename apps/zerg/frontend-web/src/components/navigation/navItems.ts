@@ -15,6 +15,7 @@ const BASE_ITEMS: NavItem[] = [
   { label: "Contacts", href: "/settings/contacts", testId: "global-contacts-tab" },
   { label: "Secrets", href: "/settings/secrets", testId: "global-secrets-tab" },
   { label: "Runners", href: "/runners", testId: "global-runners-tab" },
+  { label: "Proposals", href: "/proposals", testId: "global-proposals-tab" },
 ];
 
 const DEMO_ITEMS: NavItem[] = [

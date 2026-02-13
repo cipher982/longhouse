@@ -83,6 +83,7 @@ from zerg.routers.oikos import router as oikos_router
 from zerg.routers.oikos_internal import router as oikos_internal_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
+from zerg.routers.proposals import router as proposals_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.reservations import router as reservations_router
 from zerg.routers.runners import router as runners_router
@@ -921,6 +922,7 @@ api_app.include_router(session_chat_router)  # Forum session chat (drop-in)
 api_app.include_router(agents_router)  # Agents schema for cross-provider session tracking
 api_app.include_router(device_tokens_router)  # Per-device authentication tokens
 api_app.include_router(insights_router)  # Insights tracking for agent infrastructure
+api_app.include_router(proposals_router)  # Action proposals review queue
 api_app.include_router(reservations_router)  # File reservations for multi-agent workflows
 
 # metrics_router stays on parent app — Prometheus expects /metrics at root
