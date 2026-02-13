@@ -453,6 +453,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if "needs_embedding" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN needs_embedding INTEGER DEFAULT 1"))
                 conn.execute(text("UPDATE sessions SET needs_embedding = 1 WHERE needs_embedding IS NULL"))
+            if "reflected_at" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN reflected_at DATETIME"))
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
