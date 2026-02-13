@@ -372,30 +372,31 @@ class EmbeddingConfig:
 def get_embedding_config() -> EmbeddingConfig | None:
     """Load embedding config from models.json.
 
-    Returns None if:
-    - No embedding config in models.json
-    - Required API key env var is not set
-
-    This allows graceful degradation for OSS users without API keys.
+    Tries default provider first, then falls through to alternatives.
+    Returns None if no provider has a valid API key.
     """
     embedding_cfg = _CONFIG.get("embedding")
     if not embedding_cfg:
         return None
 
+    # Build candidate list: default first, then alternatives
+    candidates: list[dict] = []
     default = embedding_cfg.get("default")
-    if not default:
-        return None
+    if default:
+        candidates.append(default)
+    for alt in (embedding_cfg.get("alternatives") or {}).values():
+        candidates.append(alt)
 
-    api_key_env = default.get("apiKeyEnvVar", "")
-    api_key = os.getenv(api_key_env, "") if api_key_env else ""
+    for candidate in candidates:
+        api_key_env = candidate.get("apiKeyEnvVar", "")
+        api_key = os.getenv(api_key_env, "") if api_key_env else ""
+        if api_key:
+            return EmbeddingConfig(
+                provider=candidate["provider"],
+                model=candidate["model"],
+                dims=candidate["dims"],
+                api_key_env_var=api_key_env,
+                api_key=api_key,
+            )
 
-    if not api_key:
-        return None
-
-    return EmbeddingConfig(
-        provider=default["provider"],
-        model=default["model"],
-        dims=default["dims"],
-        api_key_env_var=api_key_env,
-        api_key=api_key,
-    )
+    return None
