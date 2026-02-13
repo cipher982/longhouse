@@ -263,6 +263,8 @@ class SessionResponse(BaseModel):
     user_messages: int = Field(..., description="User message count")
     assistant_messages: int = Field(..., description="Assistant message count")
     tool_calls: int = Field(..., description="Tool call count")
+    summary: Optional[str] = Field(None, description="Session summary")
+    summary_title: Optional[str] = Field(None, description="Short session title")
     match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role for matching event")
@@ -512,25 +514,23 @@ async def _summarize_and_persist(
 
     session.summary = summary.summary
     session.summary_title = summary.title
+    session.summary_event_count = len(events)
     db.commit()
     return summary
 
 
 async def _generate_summary_background(session_id: str) -> None:
-    """Background task: generate and cache summary for a session.
+    """Background task: generate/update summary for a session (incremental).
 
-    Queries events from DB, builds transcript, calls LLM for quick summary,
-    and stores the result on the session record.
-
-    LLM provider/model is resolved from models.json via get_llm_client_for_use_case().
-
-    Skips if:
-    - Session already has a summary (idempotent)
-    - No API key configured for the resolved provider
-    - Testing or LLM disabled
+    Uses incremental_summary() with a nano-tier model for cheap, fast updates.
+    Compare-and-swap (CAS) guard prevents stale overwrites from concurrent tasks.
+    Throttles: skips if fewer than 2 new user/assistant messages since last summary.
     """
+    from sqlalchemy import update
+
     from zerg.database import get_session_factory
     from zerg.models_config import get_llm_client_for_use_case
+    from zerg.services.session_processing import incremental_summary
 
     settings = get_settings()
 
@@ -539,10 +539,14 @@ async def _generate_summary_background(session_id: str) -> None:
         return
 
     try:
-        client, model, _provider = get_llm_client_for_use_case("summarization")
-    except ValueError as e:
-        logger.warning("Summarization misconfigured — session %s will NOT be summarized: %s", session_id, e)
-        return
+        client, model, _provider = get_llm_client_for_use_case("summary_update")
+    except ValueError:
+        # Fall back to summarization use case if summary_update not configured
+        try:
+            client, model, _provider = get_llm_client_for_use_case("summarization")
+        except ValueError as e:
+            logger.warning("Summarization misconfigured — session %s will NOT be summarized: %s", session_id, e)
+            return
 
     session_factory = get_session_factory()
     db = session_factory()
@@ -551,21 +555,77 @@ async def _generate_summary_background(session_id: str) -> None:
         if not session:
             logger.warning("Session %s not found for summary generation", session_id)
             return
-        if session.summary:
-            logger.debug("Session %s already has a summary, skipping", session_id)
-            return
 
-        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
-        if not events:
+        all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+        if not all_events:
             logger.debug("No events for session %s, skipping summary", session_id)
             return
 
-        summary = await _summarize_and_persist(session, events, db, client, model)
+        old_count = session.summary_event_count or 0
+        new_events = all_events[old_count:]
+        total_count = len(all_events)
 
+        if not new_events:
+            logger.debug("No new events for session %s, skipping summary", session_id)
+            return
+
+        # Throttle: skip if fewer than 2 new user/assistant messages
+        new_event_dicts = _events_to_dicts(new_events)
+        meaningful_count = sum(1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text"))
+        if meaningful_count < 2:
+            # Still update count to prevent reprocessing these events
+            result = db.execute(
+                update(AgentSession)
+                .where(AgentSession.id == session_id)
+                .where(AgentSession.summary_event_count == old_count)
+                .values(summary_event_count=total_count)
+            )
+            if result.rowcount > 0:
+                db.commit()
+            return
+
+        summary = await incremental_summary(
+            session_id=str(session.id),
+            current_summary=session.summary,
+            current_title=session.summary_title,
+            new_events=new_event_dicts,
+            client=client,
+            model=model,
+            metadata={
+                "project": session.project,
+                "provider": session.provider,
+                "git_branch": session.git_branch,
+            },
+        )
+
+        # CAS update: only write if summary_event_count hasn't changed
         if summary:
-            logger.info("Generated summary for session %s: %s", session_id, summary.title)
+            result = db.execute(
+                update(AgentSession)
+                .where(AgentSession.id == session_id)
+                .where(AgentSession.summary_event_count == old_count)
+                .values(
+                    summary=summary.summary,
+                    summary_title=summary.title,
+                    summary_event_count=total_count,
+                )
+            )
+            if result.rowcount == 0:
+                logger.debug("CAS conflict for session %s, another task already updated", session_id)
+                return
+            db.commit()
+            logger.info("Updated summary for session %s: %s", session_id, summary.title)
         else:
-            logger.debug("Empty transcript for session %s, skipping summary", session_id)
+            # No meaningful messages — still advance cursor
+            result = db.execute(
+                update(AgentSession)
+                .where(AgentSession.id == session_id)
+                .where(AgentSession.summary_event_count == old_count)
+                .values(summary_event_count=total_count)
+            )
+            if result.rowcount > 0:
+                db.commit()
+            logger.debug("No meaningful content for session %s, advanced cursor only", session_id)
 
     except Exception:
         db.rollback()
@@ -1366,6 +1426,8 @@ async def semantic_search_sessions(
                     user_messages=session.user_messages or 0,
                     assistant_messages=session.assistant_messages or 0,
                     tool_calls=session.tool_calls or 0,
+                    summary=session.summary,
+                    summary_title=session.summary_title,
                     match_snippet=f"Similarity: {score_map.get(str(session.id), 0):.3f}",
                 )
             )
@@ -1510,6 +1572,8 @@ async def list_sessions(
                     user_messages=s.user_messages or 0,
                     assistant_messages=s.assistant_messages or 0,
                     tool_calls=s.tool_calls or 0,
+                    summary=s.summary,
+                    summary_title=s.summary_title,
                     match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                     match_snippet=(match_map.get(s.id) or {}).get("snippet"),
                     match_role=(match_map.get(s.id) or {}).get("role"),
@@ -1802,6 +1866,8 @@ async def get_session(
         user_messages=session.user_messages or 0,
         assistant_messages=session.assistant_messages or 0,
         tool_calls=session.tool_calls or 0,
+        summary=session.summary,
+        summary_title=session.summary_title,
     )
 
 

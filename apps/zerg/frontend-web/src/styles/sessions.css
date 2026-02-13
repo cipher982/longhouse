@@ -818,6 +818,61 @@
   }
 
   /* ---------------------------------------------------------------------------
+   * Session Card Summary & Active State
+   * ---------------------------------------------------------------------------*/
+
+  .session-card--active {
+    border-left: 3px solid var(--color-intent-success);
+  }
+
+  .session-active-indicator {
+    font-size: 10px;
+    font-weight: var(--font-weight-medium);
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
+    color: var(--color-intent-success);
+    border: 1px solid color-mix(in srgb, var(--color-intent-success) 30%, transparent);
+  }
+
+  .session-card-summary {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  /* ---------------------------------------------------------------------------
+   * Session Detail Summary Header
+   * ---------------------------------------------------------------------------*/
+
+  .session-detail-summary {
+    padding: var(--space-4);
+    background: var(--surface-glass-1);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-lg);
+  }
+
+  .session-detail-summary-label {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-2);
+  }
+
+  .session-detail-summary-text {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  /* ---------------------------------------------------------------------------
    * Responsive
    * ---------------------------------------------------------------------------*/
 

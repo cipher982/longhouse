@@ -398,7 +398,9 @@ export default function SessionDetailPage() {
     );
   }
 
-  const title = session.project || session.git_branch || "Session";
+  const title = (session.summary_title && session.summary_title !== "Untitled Session")
+    ? session.summary_title
+    : session.project || session.git_branch || "Session";
   const turnCount = session.user_messages + session.assistant_messages;
 
   // Resume is available for Claude-provider sessions (they support --resume)
@@ -531,6 +533,14 @@ export default function SessionDetailPage() {
             {session.git_repo && (
               <span className="git-repo">{session.git_repo}</span>
             )}
+          </div>
+        )}
+
+        {/* Summary */}
+        {session.summary && (
+          <div className="session-detail-summary">
+            <div className="session-detail-summary-label">Summary</div>
+            <div className="session-detail-summary-text">{session.summary}</div>
           </div>
         )}
 
