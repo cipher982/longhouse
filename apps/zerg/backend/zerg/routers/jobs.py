@@ -9,17 +9,22 @@ Provides endpoints to:
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Query
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
 from zerg.jobs.registry import _normalize_secret_fields
 from zerg.jobs.registry import job_registry
 from zerg.jobs.registry import register_all_jobs
+from zerg.models.models import JobSecret
 from zerg.models.models import User as UserModel
 
 logger = logging.getLogger(__name__)
@@ -314,19 +319,77 @@ async def run_job(
     )
 
 
+def _check_required_secrets(job_id: str, owner_id: int, db: Session) -> list[str]:
+    """Check which required secrets are missing for a job.
+
+    Returns a list of missing required secret keys (empty = all good).
+    """
+    config = job_registry.get(job_id)
+    if not config:
+        return []
+
+    normalized = _normalize_secret_fields(config.secrets)
+    required_keys = [sf["key"] for sf in normalized if sf.get("required", True)]
+    if not required_keys:
+        return []
+
+    # Check DB for configured secrets
+    db_keys: set[str] = set()
+    rows = (
+        db.query(JobSecret.key)
+        .filter(
+            JobSecret.owner_id == owner_id,
+            JobSecret.key.in_(required_keys),
+        )
+        .all()
+    )
+    db_keys = {row.key for row in rows}
+
+    # Check env vars as fallback
+    missing = []
+    for key in required_keys:
+        if key not in db_keys and not os.environ.get(key):
+            missing.append(key)
+
+    return missing
+
+
 @router.post("/{job_id}/enable", response_model=JobInfo)
 async def enable_job(
     job_id: str,
+    force: bool = Query(False, description="Bypass secret checks"),
     current_user: UserModel = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
-    """Enable a job for scheduled execution."""
+    """Enable a job for scheduled execution.
+
+    Checks that all required secrets are configured before enabling.
+    Returns 409 Conflict if required secrets are missing (use force=true to bypass).
+    """
     await _ensure_jobs_registered()
+
+    config = job_registry.get(job_id)
+    if not config:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+
+    if not force:
+        missing = _check_required_secrets(job_id, current_user.id, db)
+        if missing:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Missing required secrets",
+                    "missing": missing,
+                },
+            )
 
     if not job_registry.enable(job_id):
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    config = job_registry.get(job_id)
-    logger.info("Job enabled: %s (by user %s)", job_id, current_user.email)
+    if force:
+        logger.warning("Job force-enabled with potential missing secrets: %s (by user %s)", job_id, current_user.email)
+    else:
+        logger.info("Job enabled: %s (by user %s)", job_id, current_user.email)
 
     return _job_info_from_config(config)
 

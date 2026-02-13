@@ -13,6 +13,7 @@ const BASE_ITEMS: NavItem[] = [
   { label: "Forum", href: "/forum", testId: "global-forum-tab" },
   { label: "Integrations", href: "/settings/integrations", testId: "global-integrations-tab" },
   { label: "Contacts", href: "/settings/contacts", testId: "global-contacts-tab" },
+  { label: "Secrets", href: "/settings/secrets", testId: "global-secrets-tab" },
   { label: "Runners", href: "/runners", testId: "global-runners-tab" },
 ];
 

@@ -15,6 +15,7 @@ import ContactsPage from "../pages/ContactsPage";
 import DevicesPage from "../pages/DevicesPage";
 import KnowledgeSourcesPage from "../pages/KnowledgeSourcesPage";
 import AdminPage from "../pages/AdminPage";
+import JobSecretsPage from "../pages/JobSecretsPage";
 import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
 import TraceExplorerPage from "../pages/TraceExplorerPage";
@@ -311,6 +312,14 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <DevicesPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/settings/secrets",
+          element: (
+            <ErrorBoundary>
+              <JobSecretsPage />
             </ErrorBoundary>
           )
         },
