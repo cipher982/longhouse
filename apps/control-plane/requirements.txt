@@ -58,20 +58,22 @@ python-multipart==0.0.22
 pyyaml==6.0.3
     # via uvicorn
 requests==2.32.5
-    # via docker
+    # via
+    #   docker
+    #   stripe
 sqlalchemy==2.0.46
     # via longhouse-control-plane (pyproject.toml)
 starlette==0.50.0
     # via fastapi
+stripe==14.3.0
+    # via longhouse-control-plane (pyproject.toml)
 typing-extensions==4.15.0
     # via
-    #   anyio
     #   fastapi
-    #   psycopg
     #   pydantic
     #   pydantic-core
     #   sqlalchemy
-    #   starlette
+    #   stripe
     #   typing-inspection
 typing-inspection==0.4.2
     # via
