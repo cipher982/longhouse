@@ -81,6 +81,12 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
     if password:
         env["LONGHOUSE_PASSWORD"] = password
 
+    # Instance Google OAuth (if configured)
+    if settings.instance_google_client_id:
+        env["GOOGLE_CLIENT_ID"] = settings.instance_google_client_id
+    if settings.instance_google_client_secret:
+        env["GOOGLE_CLIENT_SECRET"] = settings.instance_google_client_secret
+
     return env
 
 
