@@ -5,7 +5,6 @@
  * Covers both deployment model and pricing in one section.
  */
 
-import config from "../../lib/config";
 import { CheckCircleIcon } from "../icons";
 import { Button } from "../ui";
 
@@ -23,10 +22,6 @@ interface PricingTier {
 
 export function PricingSection() {
   const handleGetStarted = () => {
-    if (config.demoMode || !config.authEnabled) {
-      window.location.href = "/timeline";
-      return;
-    }
     document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
   };
 
