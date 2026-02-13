@@ -1,12 +1,11 @@
 """Embedding generation and session chunking pipeline.
 
 Generates embeddings for session search (session-level) and recall (turn-level).
-Supports Gemini (default) and OpenAI providers.
+Uses OpenAI text-embedding-3-small (256 dims) as the sole provider.
 """
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 from dataclasses import dataclass
@@ -28,7 +27,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Max tokens for embedding input (Gemini limit is 2048, keep buffer)
+# Max tokens for embedding input (OpenAI limit is 8191, keep conservative)
 MAX_EMBEDDING_TOKENS = 1800
 
 
@@ -56,8 +55,8 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def estimate_tokens_gemini(text: str) -> int:
-    """Conservative token estimate for Gemini (char-based, ~3 chars/token)."""
+def estimate_tokens(text: str) -> int:
+    """Conservative token estimate (char-based, ~3 chars/token)."""
     return len(text) // 3
 
 
@@ -72,41 +71,11 @@ def bytes_to_embedding(data: bytes, dims: int) -> np.ndarray:
 
 
 async def generate_embedding(text: str, config: "EmbeddingConfig") -> np.ndarray:
-    """Generate an embedding vector for the given text.
-
-    Dispatches to Gemini or OpenAI based on config.provider.
-    """
-    if config.provider == "gemini":
-        return await _generate_gemini(text, config)
-    elif config.provider == "openai":
-        return await _generate_openai(text, config)
-    else:
-        raise ValueError(f"Unknown embedding provider: {config.provider}")
-
-
-async def _generate_gemini(text: str, config: "EmbeddingConfig") -> np.ndarray:
-    """Generate embedding via Gemini API.
-
-    The Gemini client is synchronous, so we run it in a thread to avoid
-    blocking the event loop.
-    """
-    from google import genai
-
-    def _call() -> np.ndarray:
-        client = genai.Client(api_key=config.api_key)
-        result = client.models.embed_content(
-            model=config.model,
-            contents=text,
-            config={"output_dimensionality": config.dims},
-        )
-        return np.array(result.embeddings[0].values, dtype=np.float32)
-
-    return await asyncio.to_thread(_call)
-
-
-async def _generate_openai(text: str, config: "EmbeddingConfig") -> np.ndarray:
-    """Generate embedding via OpenAI API."""
+    """Generate an embedding vector via OpenAI API."""
     from openai import AsyncOpenAI
+
+    if config.provider != "openai":
+        raise ValueError(f"Unsupported embedding provider: {config.provider}. Only 'openai' is supported.")
 
     client = AsyncOpenAI(api_key=config.api_key)
     try:

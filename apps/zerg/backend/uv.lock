@@ -574,32 +574,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/83/1d/d6466de3a5249d35e832a52834115ca9d1d0de6abc22065f049707516d47/google_auth-2.48.0-py3-none-any.whl", hash = "sha256:2e2a537873d449434252a9632c28bfc268b0adb1e53f9fb62afc5333a975903f", size = 236499, upload-time = "2026-01-26T19:22:45.099Z" },
 ]
 
-[package.optional-dependencies]
-requests = [
-    { name = "requests" },
-]
-
-[[package]]
-name = "google-genai"
-version = "1.63.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "distro" },
-    { name = "google-auth", extra = ["requests"] },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "requests" },
-    { name = "sniffio" },
-    { name = "tenacity" },
-    { name = "typing-extensions" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/46/d7/07ec5dadd0741f09e89f3ff5f0ce051ce2aa3a76797699d661dc88def077/google_genai-1.63.0.tar.gz", hash = "sha256:dc76cab810932df33cbec6c7ef3ce1538db5bef27aaf78df62ac38666c476294", size = 491970, upload-time = "2026-02-11T23:46:28.472Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/c8/ba32159e553fab787708c612cf0c3a899dafe7aca81115d841766e3bfe69/google_genai-1.63.0-py3-none-any.whl", hash = "sha256:6206c13fc20f332703ca7375bea7c191c82f95d6781c29936c6982d86599b359", size = 724747, upload-time = "2026-02-11T23:46:26.697Z" },
-]
-
 [[package]]
 name = "greenlet"
 version = "3.1.1"
@@ -990,7 +964,6 @@ dependencies = [
     { name = "edge-tts" },
     { name = "fastapi" },
     { name = "google-auth" },
-    { name = "google-genai" },
     { name = "httpx", extra = ["http2"] },
     { name = "jsonschema" },
     { name = "mcp" },
@@ -1041,7 +1014,6 @@ requires-dist = [
     { name = "edge-tts", specifier = ">=7.0.0" },
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "google-auth", specifier = ">=2.40.3" },
-    { name = "google-genai", specifier = ">=1.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "langchain-core", marker = "extra == 'dev'", specifier = ">=1.2.5" },

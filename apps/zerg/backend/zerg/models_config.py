@@ -362,41 +362,40 @@ def get_llm_client_for_use_case(use_case: str) -> tuple:
 class EmbeddingConfig:
     """Configuration for embedding generation."""
 
-    provider: str  # "gemini" or "openai"
-    model: str  # e.g. "gemini-embedding-001"
+    provider: str  # "openai"
+    model: str  # e.g. "text-embedding-3-small"
     dims: int  # e.g. 256
-    api_key_env_var: str  # e.g. "GEMINI_API_KEY"
+    api_key_env_var: str  # e.g. "OPENAI_API_KEY"
     api_key: str  # actual key value
 
 
 def get_embedding_config() -> EmbeddingConfig | None:
     """Load embedding config from models.json.
 
-    Tries default provider first, then falls through to alternatives.
-    Returns None if no provider has a valid API key.
+    Uses ONLY the configured default provider. Returns None if
+    the required API key is not set (graceful degradation for OSS users).
+
+    Never falls through to alternatives — mixing embedding providers
+    produces incompatible vector spaces that break semantic search.
     """
     embedding_cfg = _CONFIG.get("embedding")
     if not embedding_cfg:
         return None
 
-    # Build candidate list: default first, then alternatives
-    candidates: list[dict] = []
     default = embedding_cfg.get("default")
-    if default:
-        candidates.append(default)
-    for alt in (embedding_cfg.get("alternatives") or {}).values():
-        candidates.append(alt)
+    if not default:
+        return None
 
-    for candidate in candidates:
-        api_key_env = candidate.get("apiKeyEnvVar", "")
-        api_key = os.getenv(api_key_env, "") if api_key_env else ""
-        if api_key:
-            return EmbeddingConfig(
-                provider=candidate["provider"],
-                model=candidate["model"],
-                dims=candidate["dims"],
-                api_key_env_var=api_key_env,
-                api_key=api_key,
-            )
+    api_key_env = default.get("apiKeyEnvVar", "")
+    api_key = os.getenv(api_key_env, "") if api_key_env else ""
 
-    return None
+    if not api_key:
+        return None
+
+    return EmbeddingConfig(
+        provider=default["provider"],
+        model=default["model"],
+        dims=default["dims"],
+        api_key_env_var=api_key_env,
+        api_key=api_key,
+    )
