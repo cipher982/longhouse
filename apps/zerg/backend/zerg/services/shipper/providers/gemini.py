@@ -179,7 +179,7 @@ class GeminiProvider:
                 content_text=content,
                 source_offset=0,
                 raw_type=f"gemini-{msg_type}",
-                raw_line="",
+                raw_line=json.dumps(msg),
             )
 
         # Emit tool call events (embedded in gemini messages)
@@ -207,7 +207,7 @@ class GeminiProvider:
                     tool_input_json=(tc_args if isinstance(tc_args, dict) else None),
                     source_offset=0,
                     raw_type="gemini-tool_call",
-                    raw_line="",
+                    raw_line=json.dumps(msg),
                 )
 
             # Tool result event
@@ -228,7 +228,7 @@ class GeminiProvider:
                             tool_output_text=(str(output) if not isinstance(output, str) else output),
                             source_offset=0,
                             raw_type="gemini-tool_result",
-                            raw_line="",
+                            raw_line=json.dumps(msg),
                         )
 
     def extract_metadata(self, path: Path) -> ParsedSession:

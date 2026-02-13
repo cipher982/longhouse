@@ -578,6 +578,47 @@ async def _generate_summary_background(session_id: str) -> None:
             pass
 
 
+async def _generate_embeddings_background(session_id: str) -> None:
+    """Background task: generate embeddings for a session.
+
+    Independent of summary success — checks needs_embedding flag.
+    Skips silently if embedding config is unavailable.
+    """
+    from zerg.database import get_session_factory
+    from zerg.models_config import get_embedding_config
+
+    config = get_embedding_config()
+    if not config:
+        return  # No embedding provider configured
+
+    session_factory = get_session_factory()
+    db = session_factory()
+    try:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if not session:
+            return
+        if getattr(session, "needs_embedding", 1) == 0:
+            return
+
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+        if not events:
+            return
+
+        from zerg.services.embedding_cache import EmbeddingCache
+        from zerg.services.session_processing.embeddings import embed_session
+
+        count = await embed_session(session_id, session, events, config, db)
+        if count > 0:
+            logger.info("Generated %d embeddings for session %s", count, session_id)
+            EmbeddingCache().invalidate()
+
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to generate embeddings for session %s", session_id)
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -691,6 +732,10 @@ async def ingest_session(
         if result.events_inserted > 0:
             background_tasks.add_task(
                 _generate_summary_background,
+                str(result.session_id),
+            )
+            background_tasks.add_task(
+                _generate_embeddings_background,
                 str(result.session_id),
             )
 
@@ -940,6 +985,384 @@ async def _run_backfill(
             _backfill_state["skipped"],
             _backfill_state["errors"],
         )
+
+
+# ---------------------------------------------------------------------------
+# Embedding backfill
+# ---------------------------------------------------------------------------
+
+
+class BackfillEmbeddingsResponse(BaseModel):
+    """Response for embedding backfill endpoint."""
+
+    status: str = Field(..., description="'started', 'already_running', or 'nothing_to_do'")
+    total: int = Field(0, description="Total sessions to process")
+    message: str = Field("", description="Human-readable status message")
+
+
+class BackfillEmbeddingsProgressResponse(BaseModel):
+    """Response for embedding backfill progress check."""
+
+    running: bool
+    embedded: int = 0
+    skipped: int = 0
+    errors: int = 0
+    remaining: int = 0
+    total: int = 0
+
+
+_embedding_backfill_state: dict[str, Any] = {
+    "running": False,
+    "embedded": 0,
+    "skipped": 0,
+    "errors": 0,
+    "remaining": 0,
+    "total": 0,
+}
+
+
+@router.post("/backfill-embeddings", response_model=BackfillEmbeddingsResponse)
+async def backfill_embeddings(
+    concurrency: int = Query(5, ge=1, le=50, description="Max concurrent embedding requests"),
+    batch_size: int = Query(50, ge=1, le=200, description="Sessions per batch"),
+    max_batches: int = Query(10, ge=1, le=100, description="Max batches to process"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> BackfillEmbeddingsResponse:
+    """Start backfilling embeddings for sessions that need them."""
+    from zerg.models_config import get_embedding_config
+
+    if _embedding_backfill_state["running"]:
+        return BackfillEmbeddingsResponse(
+            status="already_running",
+            total=_embedding_backfill_state["total"],
+            message=f"Backfill in progress: {_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done",
+        )
+
+    config = get_embedding_config()
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Embedding not configured — set GEMINI_API_KEY or OPENAI_API_KEY",
+        )
+
+    # Count sessions needing embeddings
+    from sqlalchemy import text as sa_text
+
+    row = db.execute(sa_text("SELECT COUNT(*) FROM sessions WHERE needs_embedding = 1")).scalar()
+    total = min(row or 0, batch_size * max_batches)
+
+    if total == 0:
+        return BackfillEmbeddingsResponse(status="nothing_to_do", total=0, message="No sessions need embedding")
+
+    asyncio.create_task(
+        _run_embedding_backfill(
+            concurrency=concurrency,
+            batch_size=batch_size,
+            max_batches=max_batches,
+            config=config,
+            total=total,
+        )
+    )
+
+    return BackfillEmbeddingsResponse(
+        status="started",
+        total=total,
+        message=f"Backfill started for up to {total} sessions at concurrency {concurrency}",
+    )
+
+
+@router.get("/backfill-embeddings", response_model=BackfillEmbeddingsProgressResponse)
+async def backfill_embeddings_progress(
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> BackfillEmbeddingsProgressResponse:
+    """Check embedding backfill progress."""
+    return BackfillEmbeddingsProgressResponse(**_embedding_backfill_state)
+
+
+async def _run_embedding_backfill(
+    *,
+    concurrency: int,
+    batch_size: int,
+    max_batches: int,
+    config: Any,
+    total: int,
+) -> None:
+    """Background backfill — processes sessions needing embeddings."""
+    from sqlalchemy import text as sa_text
+    from sqlalchemy.pool import NullPool
+
+    from zerg.database import make_engine
+    from zerg.services.session_processing.embeddings import embed_session
+
+    _embedding_backfill_state.update(running=True, embedded=0, skipped=0, errors=0, remaining=total, total=total)
+    semaphore = asyncio.Semaphore(concurrency)
+    settings = get_settings()
+
+    try:
+        backfill_engine = make_engine(settings.database_url, poolclass=NullPool)
+        SessionFactory = _sessionmaker(bind=backfill_engine)
+
+        processed = 0
+        for batch_num in range(max_batches):
+            with SessionFactory() as db:
+                rows = db.execute(
+                    sa_text("SELECT id FROM sessions WHERE needs_embedding = 1 LIMIT :limit"),
+                    {"limit": batch_size},
+                ).fetchall()
+
+            if not rows:
+                break
+
+            async def _process_one(sid: str) -> None:
+                async with semaphore:
+                    try:
+                        with SessionFactory() as db:
+                            session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+                            if not session:
+                                _embedding_backfill_state["skipped"] += 1
+                                return
+
+                            events = db.query(AgentEvent).filter(AgentEvent.session_id == sid).order_by(AgentEvent.timestamp).all()
+                            if not events:
+                                # Mark as done even with no events
+                                db.execute(sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"), {"sid": sid})
+                                db.commit()
+                                _embedding_backfill_state["skipped"] += 1
+                                return
+
+                            await embed_session(sid, session, events, config, db)
+                            _embedding_backfill_state["embedded"] += 1
+
+                    except Exception as exc:
+                        logger.error("Embedding backfill failed for %s: %s: %s", sid, type(exc).__name__, exc)
+                        _embedding_backfill_state["errors"] += 1
+                    finally:
+                        _embedding_backfill_state["remaining"] = max(0, _embedding_backfill_state["remaining"] - 1)
+
+            tasks = [_process_one(str(row[0])) for row in rows]
+            await asyncio.gather(*tasks)
+            processed += len(rows)
+
+            # Periodic WAL checkpoint
+            if processed % 100 == 0:
+                try:
+                    with backfill_engine.connect() as conn:
+                        conn.execute(sa_text("PRAGMA wal_checkpoint(TRUNCATE)"))
+                except Exception:
+                    pass
+
+    except Exception:
+        logger.exception("Embedding backfill crashed")
+    finally:
+        _embedding_backfill_state["running"] = False
+        # Invalidate the cache so subsequent searches pick up new embeddings
+        if _embedding_backfill_state["embedded"] > 0:
+            try:
+                from zerg.services.embedding_cache import EmbeddingCache
+
+                EmbeddingCache().invalidate()
+            except Exception:
+                logger.warning("Failed to invalidate embedding cache after backfill")
+        try:
+            backfill_engine.dispose()
+        except Exception:
+            pass
+        logger.info(
+            "Embedding backfill complete: %d embedded, %d skipped, %d errors",
+            _embedding_backfill_state["embedded"],
+            _embedding_backfill_state["skipped"],
+            _embedding_backfill_state["errors"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Semantic search + Recall
+# ---------------------------------------------------------------------------
+
+
+class SemanticSearchResponse(BaseModel):
+    """Response for semantic search."""
+
+    sessions: List[SessionResponse]
+    total: int
+
+
+class RecallMatch(BaseModel):
+    """A single recall match with context."""
+
+    session_id: str
+    chunk_index: int
+    score: float
+    event_index_start: Optional[int] = None
+    event_index_end: Optional[int] = None
+    total_events: int = 0
+    context: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class RecallResponse(BaseModel):
+    """Response for recall endpoint."""
+
+    matches: List[RecallMatch]
+    total: int
+
+
+@router.get("/sessions/semantic", response_model=SemanticSearchResponse)
+async def semantic_search_sessions(
+    query: str = Query(..., description="Search query"),
+    project: Optional[str] = Query(None, description="Filter by project"),
+    provider: Optional[str] = Query(None, description="Filter by provider"),
+    days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
+    limit: int = Query(10, ge=1, le=50, description="Max results"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> SemanticSearchResponse:
+    """Search sessions by semantic similarity using embeddings.
+
+    Falls back to empty results if embeddings are not configured.
+    """
+    from zerg.models_config import get_embedding_config
+    from zerg.services.embedding_cache import EmbeddingCache
+    from zerg.services.session_processing.embeddings import generate_embedding
+
+    config = get_embedding_config()
+    if not config:
+        return SemanticSearchResponse(sessions=[], total=0)
+
+    # Generate query embedding
+    query_vec = await generate_embedding(query, config)
+
+    # Load cache if needed
+    cache = EmbeddingCache()
+    if not cache._session_loaded:
+        cache.load_session_embeddings(db, config.model, config.dims)
+
+    # Build session filter from date/project/provider constraints
+    since = datetime.now(timezone.utc) - timedelta(days=days_back)
+    filter_query = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
+    if project:
+        filter_query = filter_query.filter(AgentSession.project == project)
+    if provider:
+        filter_query = filter_query.filter(AgentSession.provider == provider)
+    valid_ids = {str(row[0]) for row in filter_query.all()}
+
+    # Search
+    results = cache.search_sessions(query_vec, limit=limit, session_filter=valid_ids)
+
+    # Fetch full session objects
+    session_ids = [sid for sid, _ in results]
+    score_map = {sid: score for sid, score in results}
+
+    sessions = []
+    for sid in session_ids:
+        session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+        if session:
+            sessions.append(
+                SessionResponse(
+                    id=str(session.id),
+                    provider=session.provider,
+                    project=session.project,
+                    device_id=session.device_id,
+                    cwd=session.cwd,
+                    git_repo=session.git_repo,
+                    git_branch=session.git_branch,
+                    started_at=session.started_at,
+                    ended_at=session.ended_at,
+                    user_messages=session.user_messages or 0,
+                    assistant_messages=session.assistant_messages or 0,
+                    tool_calls=session.tool_calls or 0,
+                    match_snippet=f"Similarity: {score_map.get(str(session.id), 0):.3f}",
+                )
+            )
+
+    return SemanticSearchResponse(sessions=sessions, total=len(sessions))
+
+
+@router.get("/recall", response_model=RecallResponse)
+async def recall_sessions(
+    query: str = Query(..., description="What to search for"),
+    project: Optional[str] = Query(None, description="Filter by project"),
+    since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
+    max_results: int = Query(5, ge=1, le=20, description="Max matches"),
+    context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> RecallResponse:
+    """Recall specific knowledge from past sessions.
+
+    Searches turn-level embeddings and returns context windows around matches.
+    """
+    from zerg.models_config import get_embedding_config
+    from zerg.services.embedding_cache import EmbeddingCache
+    from zerg.services.session_processing.embeddings import generate_embedding
+
+    config = get_embedding_config()
+    if not config:
+        return RecallResponse(matches=[], total=0)
+
+    from zerg.services.session_processing.content import redact_secrets
+
+    query_vec = await generate_embedding(query, config)
+
+    cache = EmbeddingCache()
+    if not cache._session_loaded:
+        cache.load_session_embeddings(db, config.model, config.dims)
+    if not cache._turn_loaded:
+        cache.load_turn_embeddings(db, config.model, config.dims)
+
+    # Build session filter
+    since = datetime.now(timezone.utc) - timedelta(days=since_days)
+    filter_query = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
+    if project:
+        filter_query = filter_query.filter(AgentSession.project == project)
+    valid_ids = {str(row[0]) for row in filter_query.all()}
+
+    results = cache.search_turns(query_vec, limit=max_results, session_filter=valid_ids)
+
+    matches = []
+    for session_id, chunk_index, score, event_start, event_end in results:
+        # Fetch context window
+        events_query = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp)
+        all_events = events_query.all()
+        total_events = len(all_events)
+
+        context = []
+        if event_start is not None and event_end is not None:
+            window_start = max(0, event_start - context_turns)
+            window_end = min(total_events, event_end + context_turns + 1)
+            for i in range(window_start, window_end):
+                if i < len(all_events):
+                    e = all_events[i]
+                    content = redact_secrets(e.content_text or "")
+                    if len(content) > 500:
+                        content = content[:500] + "..."
+                    context.append(
+                        {
+                            "index": i,
+                            "role": e.role,
+                            "content": content,
+                            "tool_name": e.tool_name,
+                            "is_match": event_start <= i <= event_end,
+                        }
+                    )
+
+        matches.append(
+            RecallMatch(
+                session_id=session_id,
+                chunk_index=chunk_index,
+                score=score,
+                event_index_start=event_start,
+                event_index_end=event_end,
+                total_events=total_events,
+                context=context,
+            )
+        )
+
+    return RecallResponse(matches=matches, total=len(matches))
 
 
 @router.get("/sessions", response_model=SessionsListResponse)

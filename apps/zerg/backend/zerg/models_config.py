@@ -12,6 +12,7 @@ Select per-instance routing overrides via:
 
 import json
 import os
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Dict
@@ -350,3 +351,51 @@ def get_llm_client_for_use_case(use_case: str) -> tuple:
     if base_url:
         kwargs["base_url"] = base_url
     return AsyncOpenAI(**kwargs), model_id, provider
+
+
+# =============================================================================
+# EMBEDDING CONFIG
+# =============================================================================
+
+
+@dataclass
+class EmbeddingConfig:
+    """Configuration for embedding generation."""
+
+    provider: str  # "gemini" or "openai"
+    model: str  # e.g. "gemini-embedding-001"
+    dims: int  # e.g. 256
+    api_key_env_var: str  # e.g. "GEMINI_API_KEY"
+    api_key: str  # actual key value
+
+
+def get_embedding_config() -> EmbeddingConfig | None:
+    """Load embedding config from models.json.
+
+    Returns None if:
+    - No embedding config in models.json
+    - Required API key env var is not set
+
+    This allows graceful degradation for OSS users without API keys.
+    """
+    embedding_cfg = _CONFIG.get("embedding")
+    if not embedding_cfg:
+        return None
+
+    default = embedding_cfg.get("default")
+    if not default:
+        return None
+
+    api_key_env = default.get("apiKeyEnvVar", "")
+    api_key = os.getenv(api_key_env, "") if api_key_env else ""
+
+    if not api_key:
+        return None
+
+    return EmbeddingConfig(
+        provider=default["provider"],
+        model=default["model"],
+        dims=default["dims"],
+        api_key_env_var=api_key_env,
+        api_key=api_key,
+    )
