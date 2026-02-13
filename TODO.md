@@ -46,6 +46,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | UI Smoke WS Filter | DONE | WebSocket connection errors excluded from visual smoke test (commit `112a697e`) |
 | UI Smoke Baselines | DONE | All 4 smoke tests pass; baselines regenerated for app, public, mobile pages (commits `fdad1dc2`, `2aacf872`) |
 | E2E Chat-Send Streaming | DONE | Root cause: APP_PUBLIC_URL leak → WS wrong port. Fixed env + added WS wait guard (commit `61bf95c9`) |
+| Agent Infra Consolidation (Phase 4) | 100% | Embeddings + insights + reservations + semantic search + recall + 7 MCP tools + 22 tests. 10 new files, 15 modified. |
 
 ### In Progress
 | Section | Status | Notes |
@@ -56,10 +57,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### Not Started
 | Section | Status | Notes |
 |---------|--------|-------|
-| Semantic Search (Phase 4) | 0% | No embeddings, no sqlite-vec |
 | Forum Discovery UX | 0% | No presence events, no bucket UI |
-| Frontend: Job Secrets UI | 0% | SecretField metadata landed; no frontend yet |
-| Pre-flight Job Validation | 0% | Enable/disable is blind toggle; no secret checks |
+| Frontend: Job Secrets UI | Phase 1 done | Secrets CRUD + job status + enable/disable on `/settings/secrets` |
+| Pre-flight Job Validation | Phase 1-2 done | Backend 409 + force param + frontend enable guard |
 
 > Changelogs archived. See git log for session details.
 
@@ -69,9 +69,10 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 1. **HN Launch Prep** — ✅ All blockers resolved. Landing page done; E2E infra-smoke + chat-send streaming fixed; video walkthrough optional. [Details](#launch-hn-launch-readiness--remaining-4)
 2. **Public Launch Checklist** — ✅ Complete. All items done including UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
-3. **Full Signup Flow (OAuth + Stripe + Provisioning)** — User clicks "Get Started" → Google OAuth → Stripe checkout → auto-provision instance. Requires OAuth, Stripe integration, and landing page wiring. [Details](#infra-full-signup-flow-8)
-4. **Frontend: Job Secrets UI** — Settings page for managing job secrets with SecretField metadata (labels, types, placeholders). Backend API exists; needs React UI. [Details](#product-frontend-job-secrets-ui-4)
-5. **Pre-flight Job Validation** — Block job enable when required secrets are missing. Wire status endpoint into enable flow + frontend guards. [Details](#product-pre-flight-job-validation-3)
+3. **Agent Infrastructure Consolidation** — Migrate embeddings, semantic search, recall, insights, file reservations from Life Hub → Longhouse. Spec finalized (v3, Codex-reviewed). [Details](#phase-4-agent-infrastructure-consolidation-8)
+4. **Full Signup Flow (OAuth + Stripe + Provisioning)** — User clicks "Get Started" → Google OAuth → Stripe checkout → auto-provision instance. Requires OAuth, Stripe integration, and landing page wiring. [Details](#infra-full-signup-flow-8)
+5. **Frontend: Job Secrets UI** — Settings page for managing job secrets with SecretField metadata (labels, types, placeholders). Backend API exists; needs React UI. [Details](#product-frontend-job-secrets-ui-4)
+6. **Pre-flight Job Validation** — Block job enable when required secrets are missing. Wire status endpoint into enable flow + frontend guards. [Details](#product-pre-flight-job-validation-3)
 
 ---
 
@@ -152,21 +153,44 @@ Evaluate newer integration paths for tighter commis control vs. current hatch su
 - [x] Delete duplicate inline logic — removed `_safe_parse_json` from memory_summarizer + title_generator, removed inline message classes and noise patterns from daily_digest
 - [x] Add `POST /api/agents/backfill-summaries` one-shot endpoint + tests to summarize legacy `summary IS NULL` sessions in bounded batches
 
-### Phase 4: Semantic Search + Embeddings (4)
+### Phase 4: Agent Infrastructure Consolidation (8)
 
-Includes life-hub embedding pipeline migration to Longhouse.
+**Spec:** `docs/specs/agent-infrastructure-consolidation.md` (v3, Codex-reviewed)
+**Goal:** Migrate embeddings, semantic search, recall, insights, and file reservations from Life Hub → Longhouse. Cut over MCP.
 
-- [ ] Add `session_processing/embeddings.py` (embed client, chunk builder, map-reduce)
-- [ ] Choose embedding storage: sqlite-vec vs brute-force vs API-call-on-ingest
-- [ ] Compute embeddings on session event ingest (background or sync)
-- [ ] Add `semantic_search_sessions` Oikos tool
-- [ ] Make semantic search optional: `pip install longhouse[semantic]`
-- [ ] Semantic briefing enhancement: "you solved a similar problem 2 weeks ago"
+**Phase 1 — Foundation (sequential):**
+- [x] Fix Gemini `raw_json=""` gap in `shipper/providers/gemini.py`
+- [x] Add embedding config to `config/models.json` + `models_config.py` loader
+- [x] Add `SessionEmbedding` model + `needs_embedding` column on `AgentSession` + import in `database.py`
+- [x] Embedding client (Gemini default, OpenAI alt) + sanitize with `strip_noise`/`redact_secrets`
+- [x] Chunking pipeline (`session_processing/embeddings.py`) with event index mapping
+- [x] Wire into ingest (BackgroundTask, independent of summary success)
+- [x] Backfill endpoint (`POST /api/agents/backfill-embeddings`)
 
-### Phase 5: Historical Backfill (David-specific) (2)
-- [ ] Write one-time script: pull sessions from Life Hub API → Longhouse `/api/agents/ingest`
-- [ ] Verify session counts match between Life Hub and Longhouse
-- [ ] Stop using Life Hub MCP for agent memory
+**Phase 1 — Track A (depends on foundation):**
+- [x] Embedding cache (in-memory numpy array, lazy-load turn-level)
+- [x] Upgrade `search_sessions` MCP tool (semantic mode, hybrid FTS+rerank)
+- [x] Add `recall` MCP tool (chunk-level search + event window retrieval)
+
+**Phase 1 — Track B (independent, can parallel):**
+- [x] Insights table + `POST /api/insights` + `GET /api/insights` + MCP tools (`log_insight`, `query_insights`)
+- [x] File reservations table + API + MCP tools (`reserve_file`, `check_reservation`, `release_reservation`)
+
+**Phase 1 — Tests:**
+- [x] `tests_lite/test_embeddings.py`, `test_insights.py`, `test_reservations.py`, `test_semantic_search.py`
+
+### Phase 5: Historical Backfill + Cutover (David-specific) (3)
+
+**Depends on:** Phase 4 complete.
+
+- [ ] Backfill ~270 missing sessions from Life Hub (cursor + pre-Aug-10)
+- [ ] Backfill embeddings for all ~10,700 sessions (bounded batches, rate-limited)
+- [ ] Migrate insights history from Life Hub
+- [ ] Dual-test: query both Life Hub and Longhouse, compare results
+- [ ] Update `longhouse connect --install` to register expanded MCP tools
+- [ ] Update CLAUDE.md global instructions to use Longhouse MCP
+- [ ] Remove Life Hub MCP from Claude Code config
+- [ ] Life Hub agents schema → read-only archive
 
 ---
 
@@ -474,19 +498,23 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Phase 1: Secrets Management Page (3)
 
-- [ ] Add `services/api/jobSecrets.ts` — API client module
-  - `listSecrets()` → `GET /api/jobs/secrets`
-  - `upsertSecret(key, value, description?)` → `PUT /api/jobs/secrets/{key}`
-  - `deleteSecret(key)` → `DELETE /api/jobs/secrets/{key}`
+- [x] Add `services/api/jobSecrets.ts` — API client module (+ types: `JobSecretListItem`, `JobInfo`, etc.)
+  - `listJobSecrets()` → `GET /api/jobs/secrets`
+  - `upsertJobSecret(key, data)` → `PUT /api/jobs/secrets/{key}`
+  - `deleteJobSecret(key)` → `DELETE /api/jobs/secrets/{key}`
   - `getJobSecretsStatus(jobId)` → `GET /api/jobs/{job_id}/secrets/status`
-- [ ] Add `pages/JobSecretsPage.tsx` — main secrets management page
-  - Table/list of existing secrets (key + description + timestamps)
-  - "Add Secret" button → inline form or modal
-  - Per-secret actions: edit (re-enter value), delete (with confirmation)
-  - Secret values never displayed (API doesn't return them) — show "••••••••" or "configured" badge
-- [ ] Add route in `App.tsx` — `/settings/secrets` or `/jobs/secrets` (match existing nav structure)
-- [ ] Add nav link in sidebar/settings navigation
-- [ ] Use react-query hooks: `useQuery` for list, `useMutation` for upsert/delete with cache invalidation
+  - `listJobs()` → `GET /api/jobs`
+  - `enableJob(jobId, force)` → `POST /api/jobs/{id}/enable`
+  - `disableJob(jobId)` → `POST /api/jobs/{id}/disable`
+- [x] Add `hooks/useJobSecrets.ts` — React Query hooks for all operations
+- [x] Add `pages/JobSecretsPage.tsx` — main secrets management page
+  - Card 1: secrets table (key, description, configured badge, updated date, edit/delete)
+  - Card 2: job status list with enable/disable toggle + secret indicators
+  - Inline add/edit forms, delete confirmation
+  - Secret values never displayed — show "configured" badge
+- [x] Add route in `App.tsx` — `/settings/secrets`
+- [x] Add nav link "Secrets" in `navItems.ts`
+- [x] React-query hooks: `useQuery` for list, `useMutation` for upsert/delete with cache invalidation
 
 ### Phase 2: Per-Job Secret Status View (2)
 
@@ -536,17 +564,17 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Phase 1: Backend Enforcement (2)
 
-- [ ] Add `_check_required_secrets(job_id, owner_id, db)` helper in `routers/jobs.py`
+- [x] Add `_check_required_secrets(job_id, owner_id, db)` helper in `routers/jobs.py`
   - Calls `_normalize_secret_fields(config.secrets)` to get declared secrets
-  - Checks DB + env for each required secret (reuse logic from `get_job_secrets_status`)
+  - Checks DB + env for each required secret
   - Returns list of missing required secret keys (empty = all good)
-- [ ] Update `POST /api/jobs/{id}/enable` to call `_check_required_secrets()`
-  - If missing secrets: return `409 Conflict` with `{"detail": "Missing required secrets", "missing": ["KEY1", "KEY2"]}`
+- [x] Update `POST /api/jobs/{id}/enable` to call `_check_required_secrets()`
+  - If missing secrets: return `409 Conflict` with `{"detail": {"message": "Missing required secrets", "missing": ["KEY1", "KEY2"]}}`
   - If all configured: proceed with enable as before
-  - Note: `POST /api/jobs/{id}/disable` should NOT check (always allow disable)
-- [ ] Add `force` query param: `POST /api/jobs/{id}/enable?force=true` bypasses check
+  - `POST /api/jobs/{id}/disable` does NOT check (always allows disable)
+- [x] Add `force` query param: `POST /api/jobs/{id}/enable?force=true` bypasses check
   - For power users / env-var-only setups where secrets aren't in DB
-  - Log warning when force-enabled with missing secrets
+  - Logs warning when force-enabled with missing secrets
 - [ ] Optional: queue admission guard in `commis.py` `enqueue_scheduled_run()`
   - Before enqueueing, quick-check if required secrets exist
   - If missing, log warning and skip enqueue (don't crash, don't retry)
@@ -554,13 +582,13 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Phase 2: Frontend Guards (1)
 
-- [ ] Job list/detail: show warning badge when required secrets are missing
-  - Use `GET /api/jobs/{job_id}/secrets/status` to check
-  - Yellow warning icon + "2 secrets missing" text
-- [ ] Enable toggle: if secrets missing, show confirmation dialog
-  - "This job requires 2 unconfigured secrets: OPENAI_API_KEY, LIFE_HUB_DB_URL. It will fail on next run."
-  - Buttons: "Configure Secrets" (navigate to secrets page) / "Enable Anyway" (force=true) / "Cancel"
-- [ ] After configuring a secret, auto-refresh job status badges (react-query invalidation)
+- [x] Job list/detail: show warning badge when required secrets are missing
+  - `useJobSecretsStatus(jobId)` per job panel, shows `{configured}/{total} secrets` badge
+  - Green/yellow dot indicators per secret
+- [x] Enable toggle: if secrets missing, show 409-driven warning dialog
+  - "This job requires N unconfigured secrets: KEY1, KEY2."
+  - Buttons: "Configure Secrets" (scrolls to secrets section) / "Enable Anyway" (force=true) / "Cancel"
+- [x] After configuring a secret, auto-refresh job status badges (react-query invalidation on `["job-secrets"]` + `["job-secrets-status"]`)
 
 ### Phase 3: Job History Context (1)
 
@@ -691,13 +719,9 @@ Close the remaining open questions from VISION.md.
 
 > Phases 1-2 archived -- FTS5 search bar + 4 Oikos session tools all done. Remaining: embeddings.
 
-### Phase 3: Embeddings for Oikos (Optional)
+### Phase 3: Embeddings for Oikos
 
-- [ ] Embed session events on ingest (background job or sync)
-- [ ] Add `semantic_search_sessions` tool for Oikos
-- [ ] Vector search via sqlite-vec or pgvector
-
-**Test:** "Find where I implemented retry logic" returns relevant sessions in <100ms (search bar) or with reasoning (Oikos).
+> **Superseded by Agent Infrastructure Consolidation (Phase 4 in Harness section).** Spec: `docs/specs/agent-infrastructure-consolidation.md`. Embeddings, semantic search, recall, insights, and file reservations are all covered there.
 
 ---
 
