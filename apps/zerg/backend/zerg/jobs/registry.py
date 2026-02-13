@@ -468,6 +468,17 @@ async def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue
 
     Returns count of jobs scheduled.
     """
+    # Import builtin job modules (self-register on import)
+    # Each module calls job_registry.register() at module level
+    try:
+        import zerg.jobs.daily_digest  # noqa: F401
+    except Exception as e:
+        logger.warning("Failed to import daily_digest job: %s", e)
+    try:
+        import zerg.jobs.reflection  # noqa: F401
+    except Exception as e:
+        logger.warning("Failed to import reflection job: %s", e)
+
     # Load external jobs from git manifest (if configured)
     # Wrapped in try/except so manifest failures don't block builtin jobs
     try:

@@ -89,6 +89,9 @@ class AgentSession(AgentsBase):
     # Embedding tracking (1 = needs embedding, 0 = done; SQLite has no bool)
     needs_embedding = Column(Integer, server_default=text("1"))
 
+    # Reflection tracking — stamped when session has been analyzed by reflection service
+    reflected_at = Column(DateTime(timezone=True), nullable=True)
+
     # Relationships
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")
 

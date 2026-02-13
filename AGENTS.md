@@ -47,10 +47,12 @@ make dev-docker       # Legacy: Docker + Postgres (CI/testing only)
 ## Testing
 
 ```bash
-make test          # Unit tests (~80s, 16 parallel workers)
+make test          # Unit tests (tests_lite/, ~5s, SQLite in-memory)
 make test-e2e      # Core E2E + a11y
 make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 ```
+
+**`tests_lite/` convention:** No shared conftest. Each test file creates its own DB via `_make_db(tmp_path)` using `make_engine("sqlite:///...")` + `AgentsBase.metadata.create_all()`. HTTP-level tests use `TestClient` with `dependency_overrides` on `api_app` (not `app`). See `test_job_preflight.py` for a clean example of both ORM-only and HTTP-level patterns.
 
 ## Architecture
 
@@ -58,7 +60,9 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 
 **API sub-app:** All `/api/*` routes live on `api_app` (mounted on `app` at `/api`). New routers go on `api_app`, not `app`. Test `dependency_overrides` must target `api_app`. Only `/metrics`, `/config.js`, static mounts, and the SPA catch-all stay on `app`.
 
-**LLM model config:** `config/models.json` is the single source of truth — models, tiers, use cases, and routing profiles. Set `MODELS_PROFILE` env var to select per-instance overrides (default `oss`). Each model can declare `apiKeyEnvVar` for its required API key. See `models_config.py:get_llm_client_for_use_case()` for the factory.
+**LLM model config:** `config/models.json` is the single source of truth — models, tiers, use cases, routing profiles, and embedding config. Set `MODELS_PROFILE` env var to select per-instance overrides (default `oss`). Each model can declare `apiKeyEnvVar` for its required API key. See `models_config.py:get_llm_client_for_use_case()` for LLM factory, `get_embedding_config()` for embeddings (gracefully returns None if no API key).
+
+**MCP server:** `zerg/mcp_server/server.py:create_server()` exposes tools to CLI agents (Claude Code, Codex, Gemini). Tools: session search (FTS + semantic), recall, memory read/write, insights, file reservations, notify_oikos. New tools go inside `create_server()`. API client at `mcp_server/api_client.py` (get/post/delete methods).
 
 ## Conventions
 
@@ -66,7 +70,7 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 - **Frontend**: React + React Query, `apps/zerg/frontend-web/`
 - **Package managers**: Bun (JS), uv (Python) — never npm/pip
 - **Generated code** (don't edit): `backend/zerg/generated/`, `backend/zerg/tools/generated/`, `frontend-web/src/generated/`
-- **Tests**: Always use `make test*` targets, never direct pytest/playwright
+- **Tests**: Always use `make test*` targets, never direct pytest/playwright. New backend tests go in `tests_lite/`.
 - **Tool contracts**: Edit `schemas/tools.yml`, then run `scripts/generate_tool_types.py` — never edit generated files directly
 - **Oikos tools**: Registration is centralized in `oikos_tools.py`; `OIKOS_TOOL_NAMES` + `OIKOS_UTILITY_TOOLS` define the tool subset; `get_oikos_allowed_tools()` is the single source of truth
 - **Git policy**: Work only on `main`, no worktrees; confirm `git status -sb` before changes; no stashing unless explicitly requested
@@ -99,6 +103,8 @@ Import from `../components/ui`. **Check here before building custom UI.**
 6. **Master task list:** `TODO.md` — update before/after work.
 7. **Backend README required** — pyproject.toml needs it; don't delete `apps/zerg/backend/README.md`.
 8. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
+9. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `apps/zerg/backend/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
+10. **Deploy requires GHCR build** — Push triggers `runtime-image.yml` (path-filtered). Must wait for build before pulling on zerg. Use `gh run watch <id>` to wait. Marketing + control plane pull the same image via Coolify.
 
 ## Pushing Changes
 
@@ -180,9 +186,12 @@ Source of truth for product surface and priorities: `VISION.md` section **"Produ
 Do not maintain a second feature catalog in this file. Keep AGENTS focused on execution rules and link to canonical docs:
 - Oikos tool contract: `apps/zerg/backend/docs/supervisor_tools.md`
 - Harness simplification plan: `apps/zerg/backend/docs/specs/unified-memory-bridge.md`
+- Agent infra consolidation spec: `docs/specs/agent-infrastructure-consolidation.md`
 - Runner daemon docs: `apps/runner/README.md`
 - Control plane docs: `apps/control-plane/README.md`
 - Shipper internals: `apps/zerg/backend/zerg/services/shipper/`
+- Session processing: `apps/zerg/backend/zerg/services/session_processing/` (summarize, embeddings, content, tokens)
+- Embedding cache: `apps/zerg/backend/zerg/services/embedding_cache.py`
 - Video production: `apps/video/` (Remotion studio — canonical video pipeline)
 - Marketing screenshots: `scripts/capture_marketing.py`, `scripts/screenshots.yaml`
 
@@ -211,7 +220,8 @@ Two separate things exist — don't conflate or rebuild:
 
 <!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, add TODO work and remove it after the fix lands. -->
 - (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves built frontend from `/app/frontend-web/dist`.
-- (2026-02-05) [db] Alembic migrations are deprecated for core app work; `apps/zerg/backend/alembic/versions` is intentionally empty.
+- (2026-02-05) [db] Alembic migrations are deprecated for core app work; `apps/zerg/backend/alembic/versions` is intentionally empty. New models use `AgentsBase.metadata.create_all()` auto-creation.
 - (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
 - (2026-02-06) [arch] App mode contract is `APP_MODE` > `DEMO_MODE` > `AUTH_DISABLED/TESTING`; frontend reads runtime mode from backend-served `/config.js`.
-- (2026-02-12) [arch] `api_app` sub-app owns all `/api/*` routes; new routers go on `api_app` in `main.py`. Test `dependency_overrides` must target `api_app`, not `app`.
+- (2026-02-12) [arch] Agent infra models use `AgentsBase` (not `Base`), live in `models/agents.py` and `models/work.py`. Schema `agents.` gets translate-mapped to `None` for SQLite.
+- (2026-02-12) [frontend] Frontend API errors: `ApiError` class has `status`, `url`, `body` (already-parsed object, not string). FastAPI wraps HTTPException detail in `{detail: ...}`, so structured error data is at `body.detail.field`.

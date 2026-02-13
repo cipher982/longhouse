@@ -17,7 +17,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
   };
 
   const handleHostedBeta = () => {
-    window.location.href = "https://control.longhouse.ai/auth/google";
+    window.location.href = "https://control.longhouse.ai";
   };
 
   return (

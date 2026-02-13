@@ -1,18 +1,14 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../SwarmLogo";
 import { Button } from "../ui";
-import { WaitlistModal } from "./WaitlistModal";
 
 export function FooterCTA() {
-  const [showWaitlist, setShowWaitlist] = useState(false);
-
   const handleSelfHost = () => {
     document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleHostedBeta = () => {
-    setShowWaitlist(true);
+  const handleGetHosted = () => {
+    window.location.href = "https://control.longhouse.ai";
   };
 
   const currentYear = new Date().getFullYear();
@@ -29,8 +25,8 @@ export function FooterCTA() {
             <Button variant="primary" size="lg" onClick={handleSelfHost}>
               Self-host Now
             </Button>
-            <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
-              Join Waitlist
+            <Button variant="secondary" size="lg" onClick={handleGetHosted}>
+              Get Hosted
             </Button>
           </div>
         </div>
@@ -70,7 +66,6 @@ export function FooterCTA() {
         </div>
       </div>
 
-      {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} source="footer_hosted" />}
     </footer>
   );
 }
