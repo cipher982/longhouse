@@ -402,9 +402,8 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
         return _page("Provisioning", body)
 
     if instance.status == "active":
-        # Already ready — redirect to instance
-        instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
-        return RedirectResponse(instance_url, status_code=302)
+        # Already ready — redirect through SSO (auto-authenticates user)
+        return RedirectResponse("/dashboard/open-instance", status_code=302)
 
     if instance.status == "failed":
         body = """
@@ -420,19 +419,20 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
         return _page("Provisioning Failed", body)
 
     # Provisioning in progress — poll server-side health check
-    instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
+    # On success, redirect through /dashboard/open-instance which issues an SSO
+    # token so the user is auto-authenticated on their instance (no re-login).
+    instance_host = f"{instance.subdomain}.{settings.root_domain}"
 
     body = f"""
     <div class="card" style="text-align: center; padding: 3rem;">
       <div class="spinner" id="spinner"></div>
       <h2 style="margin-top: 1.25rem;" id="status-text">Starting your instance</h2>
-      <p><code style="color:#818cf8;font-size:0.9rem;">{instance.subdomain}.{settings.root_domain}</code></p>
+      <p><code style="color:#818cf8;font-size:0.9rem;">{instance_host}</code></p>
       <p id="sub-text" style="color:#94a3b8;font-size:0.85rem;margin-top:0.5rem;">
         Setting up SSL certificate and waiting for services to start...
       </p>
     </div>
     <script>
-      const instanceUrl = "{instance_url}";
       let attempts = 0;
 
       async function checkHealth() {{
@@ -444,7 +444,8 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
             document.getElementById('status-text').textContent = 'Instance is ready! Redirecting...';
             document.getElementById('sub-text').textContent = '';
             document.getElementById('spinner').style.display = 'none';
-            setTimeout(() => window.location.href = instanceUrl, 1500);
+            // Redirect through SSO endpoint — auto-authenticates user on their instance
+            setTimeout(() => window.location.href = '/dashboard/open-instance', 1500);
             return;
           }}
         }} catch (e) {{

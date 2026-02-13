@@ -8,6 +8,7 @@ declare global {
   interface Window {
     __APP_MODE__?: string;
     __SINGLE_TENANT__?: boolean;
+    __GOOGLE_CLIENT_ID__?: string;
   }
 }
 
@@ -231,7 +232,7 @@ function loadConfig(): AppConfig {
     appMode,
 
     // Authentication
-    googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || "658453123272-gt664mlo8q3pra3u1h3oflbmrdi94lld.apps.googleusercontent.com",
+    googleClientId: (typeof window !== 'undefined' && window.__GOOGLE_CLIENT_ID__) || import.meta.env.VITE_GOOGLE_CLIENT_ID || "",
     authEnabled: appMode !== 'dev',
     demoMode,
     singleTenant: typeof window !== 'undefined' && window.__SINGLE_TENANT__ === true,

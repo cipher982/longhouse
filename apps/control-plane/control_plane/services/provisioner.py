@@ -81,11 +81,10 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
     if password:
         env["LONGHOUSE_PASSWORD"] = password
 
-    # Instance Google OAuth (if configured)
-    if settings.instance_google_client_id:
-        env["GOOGLE_CLIENT_ID"] = settings.instance_google_client_id
-    if settings.instance_google_client_secret:
-        env["GOOGLE_CLIENT_SECRET"] = settings.instance_google_client_secret
+    # NOTE: Google OAuth is NOT passed to instances — Google doesn't support
+    # wildcard redirect URIs, so *.longhouse.ai can't use Google OAuth directly.
+    # Instead, users authenticate via the control plane (which owns the OAuth
+    # client) and get SSO'd into their instance via /auth/sso?token=xxx.
 
     return env
 
