@@ -159,7 +159,9 @@ export default function App() {
     },
   ];
 
-  const routes = useRoutes(config.demoMode ? demoRoutes : [
+  // Single-tenant instances (provisioned by control plane) skip marketing pages entirely.
+  // Root "/" goes straight to the authenticated app — timeline is the home page.
+  const marketingRoutes = config.singleTenant ? [] : [
     // Root: landing page for visitors, auto-redirects authenticated users to /timeline
     {
       path: "/",
@@ -215,10 +217,19 @@ export default function App() {
         </ErrorBoundary>
       )
     },
+  ];
+
+  const routes = useRoutes(config.demoMode ? demoRoutes : [
+    ...marketingRoutes,
     // Authenticated routes - nested under a single AuthenticatedApp wrapper
     {
       element: <AuthenticatedApp />,
       children: [
+        // Single-tenant: "/" goes straight to timeline (no landing page)
+        ...(config.singleTenant ? [{
+          path: "/",
+          element: <Navigate to="/timeline" replace />
+        }] : []),
         {
           path: "/chat",
           element: (

@@ -7,6 +7,7 @@ export type AppMode = 'dev' | 'demo' | 'production';
 declare global {
   interface Window {
     __APP_MODE__?: string;
+    __SINGLE_TENANT__?: boolean;
   }
 }
 
@@ -47,6 +48,7 @@ export interface AppConfig {
   googleClientId: string;
   authEnabled: boolean;
   demoMode: boolean;
+  singleTenant: boolean;
 
   // Environment
   isDevelopment: boolean;
@@ -232,6 +234,7 @@ function loadConfig(): AppConfig {
     googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || "658453123272-gt664mlo8q3pra3u1h3oflbmrdi94lld.apps.googleusercontent.com",
     authEnabled: appMode !== 'dev',
     demoMode,
+    singleTenant: typeof window !== 'undefined' && window.__SINGLE_TENANT__ === true,
 
     // Environment
     isDevelopment,
