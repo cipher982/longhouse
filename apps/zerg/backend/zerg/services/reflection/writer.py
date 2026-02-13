@@ -15,6 +15,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from zerg.models.agents import AgentSession
 from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
+from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
 from zerg.services.reflection.collector import ProjectBatch
 
@@ -25,6 +26,7 @@ def execute_actions(
     db: Session,
     actions: list[dict],
     batches: list[ProjectBatch],
+    run_id: str | None = None,
 ) -> tuple[int, int, int]:
     """Execute reflection actions and stamp processed sessions.
 
@@ -32,6 +34,7 @@ def execute_actions(
         db: SQLAlchemy session.
         actions: List of action dicts from the judge.
         batches: The original project batches (for session ID access).
+        run_id: UUID of the ReflectionRun (for linking proposals).
 
     Returns:
         Tuple of (created, merged, skipped) counts.
@@ -44,8 +47,10 @@ def execute_actions(
         action_type = action.get("action")
         try:
             if action_type == "create_insight":
-                if _create_insight(db, action):
+                insight_id = _create_insight(db, action)
+                if insight_id:
                     created += 1
+                    _maybe_create_proposal(db, action, insight_id, run_id)
                 else:
                     merged += 1  # dedup matched — counts as merge
             elif action_type == "merge":
@@ -66,17 +71,17 @@ def execute_actions(
     return created, merged, skipped
 
 
-def _create_insight(db: Session, action: dict) -> bool:
+def _create_insight(db: Session, action: dict) -> str | None:
     """Create a new insight, using dedup logic to prevent duplicates.
 
     Dedup logic mirrors routers/insights.py POST endpoint — if either changes,
     update the other. Consider extracting to shared helper if this diverges.
 
-    Returns True if a new insight was created, False if dedup matched an existing one.
+    Returns the new insight's ID (str) if created, None if dedup matched.
     """
     title = action.get("title", "").strip()
     if not title:
-        return False
+        return None
 
     project = action.get("project")
     insight_type = action.get("insight_type", "learning")
@@ -104,7 +109,7 @@ def _create_insight(db: Session, action: dict) -> bool:
         if confidence is not None:
             existing.confidence = confidence
         db.flush()
-        return False
+        return None
 
     # Cross-project dedup: check for same title in ANY project
     cross_match = (
@@ -126,7 +131,7 @@ def _create_insight(db: Session, action: dict) -> bool:
         if confidence is not None:
             cross_match.confidence = confidence
         db.flush()
-        return False
+        return None
 
     # Create new insight
     insight = Insight(
@@ -141,7 +146,23 @@ def _create_insight(db: Session, action: dict) -> bool:
     )
     db.add(insight)
     db.flush()
-    return True
+    return str(insight.id)
+
+
+def _maybe_create_proposal(db: Session, action: dict, insight_id: str, run_id: str | None) -> None:
+    """Create an ActionProposal if the action has an action_blurb."""
+    blurb = action.get("action_blurb", "").strip() if isinstance(action.get("action_blurb"), str) else ""
+    if not blurb:
+        return
+    proposal = ActionProposal(
+        insight_id=insight_id,
+        reflection_run_id=run_id,
+        project=action.get("project"),
+        title=action.get("title", ""),
+        action_blurb=blurb,
+    )
+    db.add(proposal)
+    db.flush()
 
 
 def _merge_insight(db: Session, action: dict) -> bool:

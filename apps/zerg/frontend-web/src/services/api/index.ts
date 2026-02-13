@@ -13,3 +13,4 @@ export * from "./voice";
 export * from "./agents";
 export * from "./system";
 export * from "./jobSecrets";
+export * from "./proposals";

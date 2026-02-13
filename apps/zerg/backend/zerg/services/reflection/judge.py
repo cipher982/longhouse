@@ -48,6 +48,19 @@ DO NOT create insights for:
 - One-off debugging that won't recur
 - Things already captured in existing insights
 
+## Action Proposals
+
+For high-confidence insights (confidence >= 0.8) that have a clear, actionable fix,
+include an `action_blurb` field — a 1-2 sentence description of what should be done.
+
+Examples of good action blurbs:
+- "Add UFW allow rule for 172.16.0.0/12 to the deploy checklist in AGENTS.md"
+- "Create a pre-commit hook that checks for timezone-naive datetime usage"
+- "Add retry logic to the session ingest endpoint for transient DB failures"
+
+Only include action_blurb when the action is concrete and scoped. Do NOT suggest
+vague actions like "improve error handling" or "refactor the auth module."
+
 ## Output Format
 
 Return a JSON array of actions. Each action is an object:
@@ -61,7 +74,8 @@ Return a JSON array of actions. Each action is an object:
     "description": "What was learned and why it matters",
     "severity": "info|warning|critical",
     "confidence": 0.7,
-    "tags": ["optional", "tags"]
+    "tags": ["optional", "tags"],
+    "action_blurb": "Optional: concrete 1-2 sentence action to take"
   }},
   {{
     "action": "merge",
@@ -191,6 +205,12 @@ def _parse_actions(raw: str, project: str | None) -> list[dict[str, Any]]:
 
         # Tag all actions with source project
         item["project"] = project
+
+        # Validate action_blurb is a string if present
+        if "action_blurb" in item:
+            if not isinstance(item["action_blurb"], str) or not item["action_blurb"].strip():
+                del item["action_blurb"]
+
         actions.append(item)
 
     return actions

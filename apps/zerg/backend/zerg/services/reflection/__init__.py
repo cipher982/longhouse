@@ -107,8 +107,8 @@ async def reflect(
 
         result.actions = all_actions
 
-        # Execute actions (create/merge insights, stamp sessions)
-        created, merged, skipped = execute_actions(db, all_actions, batches)
+        # Execute actions (create/merge insights, stamp sessions, create proposals)
+        created, merged, skipped = execute_actions(db, all_actions, batches, run_id=str(run.id))
         result.insights_created = created
         result.insights_merged = merged
         result.insights_skipped = skipped
