@@ -944,12 +944,14 @@ async def serve_config_js():
     """Serve runtime configuration as JavaScript for the frontend."""
     from fastapi.responses import Response
 
-    ws_scheme = "wss" if (_settings.public_site_url or "").startswith("https") else "ws"
+    # Prefer app_public_url (instance-specific) over public_site_url (marketing site)
+    base_url = _settings.app_public_url or _settings.public_site_url or ""
+    ws_scheme = "wss" if base_url.startswith("https") else "ws"
     ws_host = ""
-    if _settings.public_site_url:
+    if base_url:
         from urllib.parse import urlparse as _urlparse
 
-        parsed = _urlparse(_settings.public_site_url)
+        parsed = _urlparse(base_url)
         ws_host = f"{ws_scheme}://{parsed.netloc}"
 
     js = (
