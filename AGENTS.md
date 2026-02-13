@@ -56,6 +56,8 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 
 **Stack:** FastAPI + SQLAlchemy + SQLite (dev/OSS) or Postgres (prod control-plane). React frontend. See `VISION.md` for details.
 
+**API sub-app:** All `/api/*` routes live on `api_app` (mounted on `app` at `/api`). New routers go on `api_app`, not `app`. Test `dependency_overrides` must target `api_app`. Only `/metrics`, `/config.js`, static mounts, and the SPA catch-all stay on `app`.
+
 **LLM model config:** `config/models.json` is the single source of truth — models, tiers, use cases, and routing profiles. Set `MODELS_PROFILE` env var to select per-instance overrides (default `oss`). Each model can declare `apiKeyEnvVar` for its required API key. See `models_config.py:get_llm_client_for_use_case()` for the factory.
 
 ## Conventions
@@ -211,9 +213,5 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves built frontend from `/app/frontend-web/dist`.
 - (2026-02-05) [db] Alembic migrations are deprecated for core app work; `apps/zerg/backend/alembic/versions` is intentionally empty.
 - (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
-- (2026-02-05) [ops] Instance health endpoints are `/api/health` (readiness) and `/api/livez` (liveness); no root `/health`.
 - (2026-02-06) [arch] App mode contract is `APP_MODE` > `DEMO_MODE` > `AUTH_DISABLED/TESTING`; frontend reads runtime mode from backend-served `/config.js`.
-- (2026-02-09) [arch] Standard mode commis (in-process loop) is deprecated; workspace CLI subprocess mode is the default execution path.
-- (2026-02-10) [arch] Commis sessions are ingested into timeline tables (`agent_sessions`/`agent_events`) with `environment=commis`; timeline source/filter UX is still tracked in TODO.
-- (2026-02-09) [arch] Custom harness infrastructure is legacy; keep builtin tools as a modular toolbox and remove loop/registry/skills infra per `docs/specs/unified-memory-bridge.md`.
-- (2026-02-09) [arch] Three memory systems already exist (Oikos Memory, Memory Files + embeddings, Fiche Memory KV); consolidate rather than rebuild.
+- (2026-02-12) [arch] `api_app` sub-app owns all `/api/*` routes; new routers go on `api_app` in `main.py`. Test `dependency_overrides` must target `api_app`, not `app`.
