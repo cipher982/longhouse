@@ -16,9 +16,12 @@ from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
 from sqlalchemy import Index
 from sqlalchemy import Integer
+from sqlalchemy import LargeBinary
 from sqlalchemy import MetaData
 from sqlalchemy import String
 from sqlalchemy import Text
+from sqlalchemy import UniqueConstraint
+from sqlalchemy import text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -82,6 +85,9 @@ class AgentSession(AgentsBase):
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Embedding tracking (1 = needs embedding, 0 = done; SQLite has no bool)
+    needs_embedding = Column(Integer, server_default=text("1"))
 
     # Relationships
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")
@@ -158,4 +164,42 @@ class AgentEvent(AgentsBase):
         ),
         Index("ix_events_session_timestamp", "session_id", "timestamp"),
         Index("ix_events_role_tool", "role", "tool_name"),
+    )
+
+
+class SessionEmbedding(AgentsBase):
+    """Embedding vectors for session search and recall."""
+
+    __tablename__ = "session_embeddings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(
+        GUID(),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Embedding classification
+    kind = Column(String(20), nullable=False)  # 'session' or 'turn'
+    chunk_index = Column(Integer, default=-1)  # -1 = session-level, >=0 = turn index
+
+    # Event mapping (for recall context window retrieval)
+    event_index_start = Column(Integer, nullable=True)
+    event_index_end = Column(Integer, nullable=True)
+
+    # Model tracking (for re-embedding if model changes)
+    model = Column(String(128), nullable=False)
+    dims = Column(Integer, nullable=False)
+
+    # The vector (numpy float32 serialized to bytes)
+    embedding = Column(LargeBinary, nullable=False)
+
+    # Dedup / versioning
+    content_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "kind", "chunk_index", "model", name="uq_session_emb"),
+        Index("ix_session_emb_session", "session_id"),
+        Index("ix_session_emb_kind", "kind", "chunk_index"),
     )

@@ -36,6 +36,8 @@ from .trigger_config import TriggerConfig
 from .types import GUID
 from .user import User
 from .waitlist import WaitlistEntry
+from .work import FileReservation
+from .work import Insight
 
 __all__ = [
     # Shared types
@@ -73,4 +75,6 @@ __all__ = [
     "UserTask",
     "UserSkill",
     "CommisJob",
+    "FileReservation",
+    "Insight",
 ]

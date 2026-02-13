@@ -123,6 +123,7 @@ Base = declarative_base(metadata=_metadata)
 
 # Import all models at module level to ensure they are registered with Base
 try:
+    from zerg.models.agents import SessionEmbedding  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
@@ -136,6 +137,8 @@ try:
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserSkill  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
+    from zerg.models.work import FileReservation  # noqa: F401
+    from zerg.models.work import Insight  # noqa: F401
 except ImportError:
     # Handle case where models module might not be available during certain imports
     pass
@@ -374,6 +377,7 @@ def initialize_database(engine: Engine = None) -> None:
     """
     # Import all models to ensure they are registered with Base
     from zerg.models.agents import AgentsBase
+    from zerg.models.agents import SessionEmbedding  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
@@ -385,6 +389,8 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
+    from zerg.models.work import FileReservation  # noqa: F401
+    from zerg.models.work import Insight  # noqa: F401
 
     target_engine = engine or default_engine
 
@@ -444,6 +450,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN summary TEXT"))
             if "summary_title" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN summary_title VARCHAR(200)"))
+            if "needs_embedding" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN needs_embedding INTEGER DEFAULT 1"))
+                conn.execute(text("UPDATE sessions SET needs_embedding = 1 WHERE needs_embedding IS NULL"))
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
