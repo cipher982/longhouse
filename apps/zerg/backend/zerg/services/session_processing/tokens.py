@@ -133,11 +133,10 @@ def _truncate_sandwich(
     return combined, len(combined_tokens), True
 
 
-def estimate_tokens_gemini(text: str) -> int:
-    """Conservative token estimate for Gemini models.
+def estimate_tokens_fast(text: str) -> int:
+    """Conservative token estimate (~3 chars/token).
 
-    Uses ~3 chars per token (conservative estimate). This avoids
-    importing tiktoken for Gemini-only workflows.
+    Use when tiktoken is unavailable or for rough budget checks.
     """
     if not text:
         return 0

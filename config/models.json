@@ -116,6 +116,7 @@
       "tool_selection": "TIER_1",
       "commis_task": "TIER_1",
       "summarization": "TIER_2",
+      "reflection": "TIER_2",
       "bulk_classification": "TIER_3",
       "ci_test": "TIER_3"
     },
@@ -154,18 +155,10 @@
 
   "embedding": {
     "default": {
-      "provider": "gemini",
-      "model": "gemini-embedding-001",
+      "provider": "openai",
+      "model": "text-embedding-3-small",
       "dims": 256,
-      "apiKeyEnvVar": "GEMINI_API_KEY"
-    },
-    "alternatives": {
-      "openai": {
-        "provider": "openai",
-        "model": "text-embedding-3-small",
-        "dims": 256,
-        "apiKeyEnvVar": "OPENAI_API_KEY"
-      }
+      "apiKeyEnvVar": "OPENAI_API_KEY"
     }
   }
 }
