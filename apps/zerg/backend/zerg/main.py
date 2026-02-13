@@ -959,6 +959,7 @@ async def serve_config_js():
         f'window.WS_BASE_URL="{ws_host or ""}";\n'
         f'window.__APP_MODE__="{_settings.app_mode.value}";\n'
         f'window.__GOOGLE_CLIENT_ID__="{_settings.google_client_id or ""}";\n'
+        f'window.__SINGLE_TENANT__={"true" if _settings.single_tenant else "false"};\n'
     )
     return Response(
         content=js,
