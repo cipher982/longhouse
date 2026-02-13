@@ -230,6 +230,14 @@ def prepare_turn_chunks(events: list[dict]) -> list[EmbeddingChunk]:
     return chunks
 
 
+@dataclass
+class _PendingEmbedding:
+    """Embedding vector ready to be written to DB."""
+
+    chunk: EmbeddingChunk
+    vec_bytes: bytes
+
+
 async def embed_session(
     session_id: str,
     session: "AgentSession",
@@ -239,10 +247,11 @@ async def embed_session(
 ) -> int:
     """Orchestrate embedding generation for a session.
 
-    Generates session-level and turn-level embeddings, upserts to DB,
-    and sets needs_embedding=0.
+    Phase 1: Generate all embeddings via API (no DB access — slow network I/O).
+    Phase 2: Write all results in one short DB transaction (fast).
 
-    Returns the number of embeddings generated.
+    This separation prevents the DB write lock from being held during API calls,
+    which caused SQLite "database is locked" errors under concurrent backfill.
     """
     from sqlalchemy import text as sa_text
 
@@ -262,90 +271,92 @@ async def embed_session(
         for e in events
     ]
 
-    count = 0
-    session_embedding_ok = False
+    # --- Phase 1: Generate embeddings (network I/O, no DB) ---
+    session_pending: _PendingEmbedding | None = None
+    turn_pending: list[_PendingEmbedding] = []
 
-    # Session-level embedding
     session_chunk = prepare_session_chunk(session, event_dicts)
     if session_chunk:
         try:
             vec = await generate_embedding(session_chunk.text, config)
-            vec_bytes = embedding_to_bytes(vec)
-
-            # Upsert: check existing, then insert or update
-            existing = (
-                db.query(SessionEmbedding)
-                .filter(
-                    SessionEmbedding.session_id == session_id,
-                    SessionEmbedding.kind == "session",
-                    SessionEmbedding.chunk_index == -1,
-                    SessionEmbedding.model == config.model,
-                )
-                .first()
-            )
-
-            if existing:
-                existing.embedding = vec_bytes
-                existing.content_hash = session_chunk.content_hash
-                existing.dims = config.dims
-            else:
-                db.add(
-                    SessionEmbedding(
-                        session_id=session_id,
-                        kind="session",
-                        chunk_index=-1,
-                        model=config.model,
-                        dims=config.dims,
-                        embedding=vec_bytes,
-                        content_hash=session_chunk.content_hash,
-                    )
-                )
-            count += 1
-            session_embedding_ok = True
+            session_pending = _PendingEmbedding(chunk=session_chunk, vec_bytes=embedding_to_bytes(vec))
         except Exception:
             logger.exception("Failed to generate session embedding for %s", session_id)
 
-    # Turn-level embeddings
     turn_chunks = prepare_turn_chunks(event_dicts)
     for chunk in turn_chunks:
         try:
             vec = await generate_embedding(chunk.text, config)
-            vec_bytes = embedding_to_bytes(vec)
-
-            existing = (
-                db.query(SessionEmbedding)
-                .filter(
-                    SessionEmbedding.session_id == session_id,
-                    SessionEmbedding.kind == "turn",
-                    SessionEmbedding.chunk_index == chunk.chunk_index,
-                    SessionEmbedding.model == config.model,
-                )
-                .first()
-            )
-
-            if existing:
-                existing.embedding = vec_bytes
-                existing.content_hash = chunk.content_hash
-                existing.dims = config.dims
-                existing.event_index_start = chunk.event_index_start
-                existing.event_index_end = chunk.event_index_end
-            else:
-                db.add(
-                    SessionEmbedding(
-                        session_id=session_id,
-                        kind="turn",
-                        chunk_index=chunk.chunk_index,
-                        model=config.model,
-                        dims=config.dims,
-                        embedding=vec_bytes,
-                        content_hash=chunk.content_hash,
-                        event_index_start=chunk.event_index_start,
-                        event_index_end=chunk.event_index_end,
-                    )
-                )
-            count += 1
+            turn_pending.append(_PendingEmbedding(chunk=chunk, vec_bytes=embedding_to_bytes(vec)))
         except Exception:
             logger.exception("Failed to generate turn embedding %d for %s", chunk.chunk_index, session_id)
+
+    # --- Phase 2: Write all results in one short DB transaction ---
+    count = 0
+    session_embedding_ok = False
+
+    if session_pending:
+        existing = (
+            db.query(SessionEmbedding)
+            .filter(
+                SessionEmbedding.session_id == session_id,
+                SessionEmbedding.kind == "session",
+                SessionEmbedding.chunk_index == -1,
+                SessionEmbedding.model == config.model,
+            )
+            .first()
+        )
+        if existing:
+            existing.embedding = session_pending.vec_bytes
+            existing.content_hash = session_pending.chunk.content_hash
+            existing.dims = config.dims
+        else:
+            db.add(
+                SessionEmbedding(
+                    session_id=session_id,
+                    kind="session",
+                    chunk_index=-1,
+                    model=config.model,
+                    dims=config.dims,
+                    embedding=session_pending.vec_bytes,
+                    content_hash=session_pending.chunk.content_hash,
+                )
+            )
+        count += 1
+        session_embedding_ok = True
+
+    for pending in turn_pending:
+        existing = (
+            db.query(SessionEmbedding)
+            .filter(
+                SessionEmbedding.session_id == session_id,
+                SessionEmbedding.kind == "turn",
+                SessionEmbedding.chunk_index == pending.chunk.chunk_index,
+                SessionEmbedding.model == config.model,
+            )
+            .first()
+        )
+        if existing:
+            existing.embedding = pending.vec_bytes
+            existing.content_hash = pending.chunk.content_hash
+            existing.dims = config.dims
+            existing.event_index_start = pending.chunk.event_index_start
+            existing.event_index_end = pending.chunk.event_index_end
+        else:
+            db.add(
+                SessionEmbedding(
+                    session_id=session_id,
+                    kind="turn",
+                    chunk_index=pending.chunk.chunk_index,
+                    model=config.model,
+                    dims=config.dims,
+                    embedding=pending.vec_bytes,
+                    content_hash=pending.chunk.content_hash,
+                    event_index_start=pending.chunk.event_index_start,
+                    event_index_end=pending.chunk.event_index_end,
+                )
+            )
+        count += 1
 
     # Only clear the flag when the session-level embedding succeeded so
     # backfill can retry on transient failures.
