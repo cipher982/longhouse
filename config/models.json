@@ -116,6 +116,7 @@
       "tool_selection": "TIER_1",
       "commis_task": "TIER_1",
       "summarization": "TIER_2",
+      "summary_update": "TIER_3",
       "reflection": "TIER_2",
       "bulk_classification": "TIER_3",
       "ci_test": "TIER_3"
@@ -132,10 +133,11 @@
       "$comment": "Default OSS profile: no overrides"
     },
     "david": {
-      "$comment": "David's instance: summarization on gpt-5-mini (fast, large context window)",
+      "$comment": "David's instance: summarization on gpt-5-mini, incremental updates on z.ai (flat-rate)",
       "text": {
         "useCases": {
-          "summarization": "gpt-5-mini"
+          "summarization": "gpt-5-mini",
+          "summary_update": "glm-4.7-flash"
         }
       }
     }

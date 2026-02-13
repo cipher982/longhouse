@@ -111,6 +111,11 @@ function isValidTitle(name: string | null | undefined): name is string {
 }
 
 function getSessionTitle(session: AgentSession): string {
+  // Prefer LLM-generated title when available
+  if (session.summary_title && session.summary_title !== "Untitled Session") {
+    return session.summary_title;
+  }
+
   if (isValidTitle(session.project)) return session.project;
   if (isValidTitle(session.git_branch)) return session.git_branch;
 
@@ -227,11 +232,16 @@ interface SessionCardProps {
 function SessionCard({ session, onClick, highlightQuery }: SessionCardProps) {
   const turnCount = session.user_messages + session.assistant_messages;
   const toolCount = session.tool_calls;
+  const isActive = !session.ended_at;
 
   const title = getSessionTitle(session);
 
+  // Show search snippet during search, otherwise show summary
+  const showSnippet = highlightQuery && session.match_snippet;
+  const showSummary = !showSnippet && session.summary;
+
   return (
-    <Card className="session-card" onClick={onClick}>
+    <Card className={`session-card${isActive ? " session-card--active" : ""}`} onClick={onClick}>
       <div className="session-card-header">
         <div className="session-card-provider">
           <span
@@ -244,21 +254,27 @@ function SessionCard({ session, onClick, highlightQuery }: SessionCardProps) {
               {session.environment}
             </span>
           )}
+          {isActive && (
+            <span className="session-active-indicator">In progress</span>
+          )}
         </div>
         <span className="session-card-time">{formatRelativeTime(session.started_at)}</span>
       </div>
 
       <div className="session-card-body">
         <div className="session-card-title">{title}</div>
-        {session.git_branch && session.project && (
+        {showSummary && (
+          <div className="session-card-summary">{session.summary}</div>
+        )}
+        {showSnippet && (
+          <div className="session-card-snippet">
+            {renderHighlightedText(session.match_snippet!, highlightQuery!)}
+          </div>
+        )}
+        {session.git_branch && (
           <div className="session-card-branch">
             <span className="branch-icon">&#x2387;</span>
             {session.git_branch}
-          </div>
-        )}
-        {highlightQuery && session.match_snippet && (
-          <div className="session-card-snippet">
-            {renderHighlightedText(session.match_snippet, highlightQuery)}
           </div>
         )}
       </div>

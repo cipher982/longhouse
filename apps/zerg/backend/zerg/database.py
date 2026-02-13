@@ -453,6 +453,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if "needs_embedding" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN needs_embedding INTEGER DEFAULT 1"))
                 conn.execute(text("UPDATE sessions SET needs_embedding = 1 WHERE needs_embedding IS NULL"))
+            if "summary_event_count" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN summary_event_count INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE sessions SET summary_event_count = 0 WHERE summary_event_count IS NULL"))
             if "reflected_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN reflected_at DATETIME"))
             conn.commit()

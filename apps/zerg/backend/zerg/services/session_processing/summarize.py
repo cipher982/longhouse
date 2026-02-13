@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 from openai import AsyncOpenAI
 
+from .content import redact_secrets
+from .content import strip_noise
 from .transcript import SessionTranscript
 from .transcript import build_transcript
 
@@ -266,3 +268,111 @@ async def summarize_events(
         quick_summary(transcript, client, model),
         timeout=timeout_seconds,
     )
+
+
+# ---------------------------------------------------------------------------
+# Incremental summary — cheap, fast updates for running sessions
+# ---------------------------------------------------------------------------
+
+_INCREMENTAL_SYSTEM = (
+    "You maintain a running summary of an AI coding session. "
+    "You will receive the current summary (if any) and new messages. "
+    "Return JSON with two keys:\n"
+    '- "title": 3-8 word title describing the session\'s main accomplishment (Title Case)\n'
+    '- "summary": 2-4 sentence summary of what has been worked on and accomplished so far\n'
+    "Focus on outcomes and accomplishments, not requests. "
+    "If the session scope has expanded, update the title to reflect the broader work. "
+    "If new messages are trivial (acknowledgments, minor clarifications), "
+    "keep the existing summary and title unchanged. JSON only, no markdown fences."
+)
+
+
+async def incremental_summary(
+    session_id: str,
+    current_summary: str | None,
+    current_title: str | None,
+    new_events: list[dict],
+    client: AsyncOpenAI,
+    model: str,
+    metadata: dict | None = None,
+    timeout_seconds: float = 30,
+) -> SessionSummary | None:
+    """Generate or update a session summary from new events (incremental).
+
+    Filters to user + assistant messages only, applies noise stripping and
+    secret redaction, caps each message at 500 chars, and calls a nano-tier
+    LLM for fast, cheap updates.
+
+    Args:
+        session_id: Session UUID string.
+        current_summary: Existing summary text (None for first summary).
+        current_title: Existing title (None for first summary).
+        new_events: List of event dicts (role, content_text, tool_name, etc.).
+        client: Async OpenAI-compatible client.
+        model: Model identifier string.
+        metadata: Optional dict with project, provider, git_branch keys.
+        timeout_seconds: Max time for the LLM call.
+
+    Returns:
+        SessionSummary on success, None if no meaningful new messages.
+    """
+    # Filter to user + assistant messages only (no tool calls/results)
+    messages = []
+    for ev in new_events:
+        role = ev.get("role", "")
+        if role not in ("user", "assistant"):
+            continue
+        text = ev.get("content_text") or ""
+        if not text.strip():
+            continue
+        # Clean: strip noise XML, redact secrets, cap length
+        text = strip_noise(text)
+        text = redact_secrets(text)
+        text = text[:500]
+        messages.append({"role": role, "text": text})
+
+    if not messages:
+        return None
+
+    # Build user prompt
+    parts: list[str] = []
+
+    # Context
+    if metadata:
+        ctx = []
+        if metadata.get("project"):
+            ctx.append(f"Project: {metadata['project']}")
+        if metadata.get("provider"):
+            ctx.append(f"Provider: {metadata['provider']}")
+        if metadata.get("git_branch"):
+            ctx.append(f"Branch: {metadata['git_branch']}")
+        if ctx:
+            parts.append("Context: " + ", ".join(ctx))
+
+    # Existing summary
+    if current_summary:
+        parts.append(f"Current title: {current_title or 'Untitled Session'}")
+        parts.append(f"Current summary: {current_summary}")
+
+    # New messages
+    msg_lines = [f"[{m['role']}] {m['text']}" for m in messages]
+    parts.append("New messages:\n" + "\n".join(msg_lines))
+
+    user_prompt = "\n\n".join(parts)
+
+    response = await asyncio.wait_for(
+        client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _INCREMENTAL_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ],
+        ),
+        timeout=timeout_seconds,
+    )
+
+    if not response.choices:
+        return None
+
+    raw = response.choices[0].message.content or ""
+    return _parse_quick_summary_raw(raw, session_id)

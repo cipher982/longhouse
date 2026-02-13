@@ -23,6 +23,7 @@ from .embeddings import prepare_turn_chunks
 from .embeddings import sanitize_for_embedding
 from .summarize import DEFAULT_CONTEXT_BUDGET
 from .summarize import SessionSummary
+from .summarize import incremental_summary
 from .summarize import quick_summary
 from .summarize import safe_parse_json
 from .summarize import summarize_events
@@ -49,6 +50,7 @@ __all__ = [
     "build_transcript",
     "detect_turns",
     # summarize
+    "incremental_summary",
     "summarize_events",
     "DEFAULT_CONTEXT_BUDGET",
     "SessionSummary",
