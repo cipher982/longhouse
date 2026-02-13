@@ -71,6 +71,7 @@ from zerg.routers.fiche_config import router as fiche_config_router
 from zerg.routers.fiche_connectors import router as fiche_connectors_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
+from zerg.routers.insights import router as insights_router
 from zerg.routers.job_settings import router as job_settings_router
 from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
@@ -83,6 +84,7 @@ from zerg.routers.oikos_internal import router as oikos_internal_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.reliability import router as reliability_router
+from zerg.routers.reservations import router as reservations_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
 from zerg.routers.session_chat import router as session_chat_router
@@ -650,19 +652,22 @@ async def lifespan(app: FastAPI):
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"Failed to start commis_job_processor in E2E mode: {e}")
 
-        # Validate summarization pipeline config (fail-fast on misconfiguration)
+        # Validate summarization pipeline config (warn on misconfiguration, don't crash)
         if not _settings.testing and not _settings.llm_disabled and not _settings.demo_mode:
             from zerg.models_config import get_active_models_profile
             from zerg.models_config import validate_use_case_llm_config
 
-            model, provider, key_env = validate_use_case_llm_config("summarization")
-            logger.info(
-                "Summarization configured: profile=%s model=%s provider=%s key_env=%s",
-                get_active_models_profile(),
-                model,
-                provider.value,
-                key_env,
-            )
+            try:
+                model, provider, key_env = validate_use_case_llm_config("summarization")
+                logger.info(
+                    "Summarization configured: profile=%s model=%s provider=%s key_env=%s",
+                    get_active_models_profile(),
+                    model,
+                    provider.value,
+                    key_env,
+                )
+            except ValueError as exc:
+                logger.warning("Summarization unavailable (missing API key): %s", exc)
 
         logger.info("Application startup complete")
     except Exception as e:
@@ -915,6 +920,8 @@ api_app.include_router(skills_router)  # Skills Platform for workspace-scoped to
 api_app.include_router(session_chat_router)  # Forum session chat (drop-in)
 api_app.include_router(agents_router)  # Agents schema for cross-provider session tracking
 api_app.include_router(device_tokens_router)  # Per-device authentication tokens
+api_app.include_router(insights_router)  # Insights tracking for agent infrastructure
+api_app.include_router(reservations_router)  # File reservations for multi-agent workflows
 
 # metrics_router stays on parent app — Prometheus expects /metrics at root
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
