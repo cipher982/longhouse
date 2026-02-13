@@ -5,8 +5,11 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime
+from datetime import timezone
 from typing import Any
 
+import httpx
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import Header
@@ -82,6 +85,38 @@ def my_instance(request: Request, db: Session = Depends(get_db)):
         created_at=inst.created_at,
         last_health_at=inst.last_health_at,
     )
+
+
+@router.get("/me/health")
+def my_instance_health(request: Request, db: Session = Depends(get_db)):
+    """Server-side health check for the current user's instance.
+
+    Makes a real HTTPS request to the instance, verifying both SSL cert
+    and a 200 response from /api/health. Updates instance status to "active"
+    on first successful check.
+    """
+    from control_plane.routers.auth import get_current_user
+
+    user = get_current_user(request, db)
+    inst = db.query(Instance).filter(Instance.user_id == user.id).first()
+    if not inst:
+        raise HTTPException(status_code=404, detail="No instance found")
+
+    if inst.status == "active":
+        return {"status": "active", "ready": True}
+
+    # Server-side health probe — verifies SSL + 200
+    health_url = f"https://{inst.subdomain}.{settings.root_domain}/api/health"
+    try:
+        resp = httpx.get(health_url, timeout=5.0, follow_redirects=True)
+        if resp.status_code == 200:
+            inst.status = "active"
+            inst.last_health_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"status": "active", "ready": True}
+        return {"status": "provisioning", "ready": False, "detail": f"status={resp.status_code}"}
+    except Exception:  # noqa: BLE001
+        return {"status": "provisioning", "ready": False}
 
 
 @router.get("", response_model=InstanceList, dependencies=[Depends(require_admin)])

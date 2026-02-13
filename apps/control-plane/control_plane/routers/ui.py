@@ -419,43 +419,48 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
         """
         return _page("Provisioning Failed", body)
 
-    # Provisioning in progress — poll health
+    # Provisioning in progress — poll server-side health check
     instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
-    health_url = f"{instance_url}/api/health"
 
     body = f"""
     <div class="card" style="text-align: center; padding: 3rem;">
       <div class="spinner" id="spinner"></div>
       <h2 style="margin-top: 1.25rem;" id="status-text">Starting your instance</h2>
       <p><code style="color:#818cf8;font-size:0.9rem;">{instance.subdomain}.{settings.root_domain}</code></p>
+      <p id="sub-text" style="color:#94a3b8;font-size:0.85rem;margin-top:0.5rem;">
+        Setting up SSL certificate and waiting for services to start...
+      </p>
     </div>
     <script>
-      const healthUrl = "{health_url}";
       const instanceUrl = "{instance_url}";
       let attempts = 0;
 
       async function checkHealth() {{
         attempts++;
         try {{
-          const resp = await fetch(healthUrl, {{ mode: 'no-cors' }});
-          // no-cors means we can't read status, but if it doesn't throw, container is up
-          document.getElementById('status-text').textContent = 'Instance is ready! Redirecting...';
-          document.getElementById('spinner').style.display = 'none';
-          setTimeout(() => window.location.href = instanceUrl, 1500);
-          return;
+          const resp = await fetch('/api/instances/me/health', {{ credentials: 'same-origin' }});
+          const data = await resp.json();
+          if (data.ready) {{
+            document.getElementById('status-text').textContent = 'Instance is ready! Redirecting...';
+            document.getElementById('sub-text').textContent = '';
+            document.getElementById('spinner').style.display = 'none';
+            setTimeout(() => window.location.href = instanceUrl, 1500);
+            return;
+          }}
         }} catch (e) {{
-          // Still starting up
+          // Control plane request failed — retry
         }}
 
-        if (attempts < 60) {{
-          setTimeout(checkHealth, 3000);
+        if (attempts < 90) {{
+          setTimeout(checkHealth, 4000);
         }} else {{
           document.getElementById('status-text').textContent = 'Taking longer than expected. Check back in a minute.';
+          document.getElementById('sub-text').textContent = '';
           document.getElementById('spinner').style.display = 'none';
         }}
       }}
 
-      setTimeout(checkHealth, 3000);
+      setTimeout(checkHealth, 5000);
     </script>
     """
     return _page("Provisioning", body)
