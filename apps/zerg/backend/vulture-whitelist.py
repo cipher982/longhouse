@@ -11,8 +11,10 @@ This file whitelists code that vulture flags as unused but is actually:
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # Placeholder for TYPE_CHECKING-only imports when needed.
-    pass
+    from sqlalchemy.orm import Session as DBSession  # noqa: F401
+
+# Used as string type annotations in embedding_cache.py and embeddings.py
+DBSession  # noqa: F811
 
 # SQLAlchemy event handlers require connection_record in signature
 connection_record = None

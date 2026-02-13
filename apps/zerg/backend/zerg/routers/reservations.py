@@ -22,6 +22,7 @@ from fastapi import Query
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
@@ -143,7 +144,14 @@ async def create_reservation(
             expires_at=expires_at,
         )
         db.add(reservation)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"File already reserved (concurrent request): {body.file_path}",
+            )
         db.refresh(reservation)
 
         return _reservation_to_response(reservation)

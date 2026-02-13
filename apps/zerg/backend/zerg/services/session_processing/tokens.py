@@ -131,3 +131,14 @@ def _truncate_sandwich(
         combined_tokens = enc.encode(combined)
 
     return combined, len(combined_tokens), True
+
+
+def estimate_tokens_gemini(text: str) -> int:
+    """Conservative token estimate for Gemini models.
+
+    Uses ~3 chars per token (conservative estimate). This avoids
+    importing tiktoken for Gemini-only workflows.
+    """
+    if not text:
+        return 0
+    return len(text) // 3

@@ -150,5 +150,22 @@
       "production": "TIER_1",
       "test": "TIER_2"
     }
+  },
+
+  "embedding": {
+    "default": {
+      "provider": "gemini",
+      "model": "gemini-embedding-001",
+      "dims": 256,
+      "apiKeyEnvVar": "GEMINI_API_KEY"
+    },
+    "alternatives": {
+      "openai": {
+        "provider": "openai",
+        "model": "text-embedding-3-small",
+        "dims": 256,
+        "apiKeyEnvVar": "OPENAI_API_KEY"
+      }
+    }
   }
 }
