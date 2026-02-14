@@ -194,6 +194,60 @@ class TestUpsertProvider:
             )
             assert resp.status_code == 400
 
+    def test_ssrf_blocked_on_save(self, tmp_path):
+        """PUT rejects private/metadata base_urls."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            # Cloud metadata endpoint
+            resp = client.put(
+                "/llm/providers/text",
+                json={
+                    "provider_name": "custom",
+                    "api_key": "sk-1",
+                    "base_url": "http://169.254.169.254/latest/meta-data",
+                },
+            )
+            assert resp.status_code == 400
+
+            # Loopback (non-Ollama)
+            resp = client.put(
+                "/llm/providers/text",
+                json={
+                    "provider_name": "custom",
+                    "api_key": "sk-1",
+                    "base_url": "http://localhost:8080/v1",
+                },
+            )
+            assert resp.status_code == 400
+
+    def test_ollama_localhost_allowed(self, tmp_path):
+        """PUT allows localhost for Ollama provider."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            resp = client.put(
+                "/llm/providers/text",
+                json={
+                    "provider_name": "ollama",
+                    "api_key": "ollama",
+                    "base_url": "http://localhost:11434/v1",
+                },
+            )
+            assert resp.status_code == 200
+
+    def test_ollama_non_localhost_blocked(self, tmp_path):
+        """PUT blocks non-localhost for Ollama provider."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            resp = client.put(
+                "/llm/providers/text",
+                json={
+                    "provider_name": "ollama",
+                    "api_key": "ollama",
+                    "base_url": "http://10.0.0.5:11434/v1",
+                },
+            )
+            assert resp.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # Tests: DELETE /llm/providers/{capability}

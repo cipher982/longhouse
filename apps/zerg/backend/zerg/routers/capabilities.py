@@ -106,6 +106,53 @@ class LlmProviderTestResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+_LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def _validate_base_url(base_url: str | None, provider_name: str) -> str | None:
+    """Validate a base_url for SSRF risks.
+
+    Returns an error message string if the URL is blocked, or None if it's OK.
+    Ollama is allowed on localhost only; all other providers are blocked from
+    private/loopback/reserved IPs and must use HTTPS for remote endpoints.
+    """
+    if not base_url:
+        return None
+
+    import ipaddress
+    from urllib.parse import urlparse as _urlparse
+
+    parsed = _urlparse(base_url)
+    host = parsed.hostname or ""
+
+    # Ollama: only allow localhost (prevent using "ollama" label to bypass SSRF)
+    if provider_name == "ollama":
+        if host not in _LOCALHOST_HOSTS:
+            return "Ollama provider only allowed on localhost"
+        return None
+
+    # Block well-known cloud metadata endpoints
+    if host in ("169.254.169.254", "metadata.google.internal"):
+        return "Cloud metadata endpoints are blocked"
+
+    # Block loopback
+    if host in _LOCALHOST_HOSTS:
+        return "Loopback addresses only allowed for Ollama provider"
+
+    # Block private/link-local/loopback/reserved IP ranges
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_loopback or ip.is_multicast:
+            return "Private/reserved IP addresses only allowed for Ollama"
+    except ValueError:
+        pass  # hostname, not IP literal — allow
+
+    # Block http:// (require https for remote endpoints)
+    if parsed.scheme == "http":
+        return "HTTPS required for remote endpoints"
+
+    return None
+
 
 def _resolve_capability(capability: str, db: Session, user: User) -> tuple[bool, str | None, str | None]:
     """Check if a capability is available via DB config or env var.
@@ -224,6 +271,11 @@ def upsert_llm_provider(
     if not request.api_key:
         raise HTTPException(status_code=400, detail="API key is required")
 
+    # Validate base_url for SSRF before persisting
+    ssrf_error = _validate_base_url(request.base_url, request.provider_name)
+    if ssrf_error:
+        raise HTTPException(status_code=400, detail=ssrf_error)
+
     encrypted = encrypt(request.api_key)
 
     existing = (
@@ -294,47 +346,10 @@ async def test_llm_provider(
     if not base_url and request.provider_name in _KNOWN_PROVIDERS:
         base_url = _KNOWN_PROVIDERS[request.provider_name]
 
-    # SSRF mitigation: block private/loopback/link-local IPs
-    # Ollama is exempt (runs on localhost by design)
-    if base_url and request.provider_name != "ollama":
-        from urllib.parse import urlparse as _urlparse
-
-        parsed = _urlparse(base_url)
-        host = parsed.hostname or ""
-
-        # Block well-known metadata endpoints (cloud SSRF)
-        if host in ("169.254.169.254", "metadata.google.internal"):
-            return LlmProviderTestResponse(
-                success=False,
-                message="Cloud metadata endpoints are blocked",
-            )
-
-        # Block loopback
-        if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-            return LlmProviderTestResponse(
-                success=False,
-                message="Loopback addresses only allowed for Ollama provider",
-            )
-
-        # Block private/link-local IP ranges
-        import ipaddress
-
-        try:
-            ip = ipaddress.ip_address(host)
-            if ip.is_private or ip.is_link_local or ip.is_reserved:
-                return LlmProviderTestResponse(
-                    success=False,
-                    message="Private/reserved IP addresses only allowed for Ollama",
-                )
-        except ValueError:
-            pass  # hostname, not IP literal — allow
-
-        # Block http:// (require https for remote endpoints)
-        if parsed.scheme == "http" and host not in ("localhost", "127.0.0.1"):
-            return LlmProviderTestResponse(
-                success=False,
-                message="HTTPS required for remote endpoints",
-            )
+    # SSRF mitigation (same validation as upsert)
+    ssrf_error = _validate_base_url(base_url, request.provider_name)
+    if ssrf_error:
+        return LlmProviderTestResponse(success=False, message=ssrf_error)
 
     try:
         import httpx
