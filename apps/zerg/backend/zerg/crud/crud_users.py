@@ -49,10 +49,14 @@ def create_user(
     provider: Optional[str] = None,
     provider_user_id: Optional[str] = None,
     role: str = "USER",
+    skip_notification: bool = False,
 ) -> User:
     """Insert new user row.
 
     Caller is expected to ensure uniqueness beforehand; we do not upsert here.
+
+    Args:
+        skip_notification: If True, skip Discord signup alert (for bootstrap/seeding)
     """
     new_user = User(
         email=email,
@@ -65,6 +69,8 @@ def create_user(
     db.refresh(new_user)
 
     # Send Discord notification for new user signup (background thread, sync httpx)
+    if skip_notification:
+        return new_user
     try:
         total_users = count_users(db)
     except Exception:

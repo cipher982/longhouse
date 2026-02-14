@@ -386,7 +386,7 @@ def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenOut:
     # Get or create dev@local user
     user = crud.get_user_by_email(db, "dev@local")
     if not user:
-        user = crud.create_user(db, email="dev@local", provider="dev", provider_user_id="dev-user-1", role="ADMIN")
+        user = crud.create_user(db, email="dev@local", provider="dev", provider_user_id="dev-user-1", role="ADMIN", skip_notification=True)
 
     # Issue platform JWT
     expires_in = 30 * 60  # 30 minutes
@@ -437,6 +437,7 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
                 provider="service",
                 provider_user_id=provider_user_id,
                 role="USER",
+                skip_notification=True,  # Service account, not a real signup
             )
         except Exception:
             # Race condition - another request created it
@@ -719,6 +720,7 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
                 email=email,
                 provider="control-plane",
                 provider_user_id=f"cp:{email}",
+                skip_notification=True,  # SSO provisioning, not a signup
             )
 
     if user is None:
@@ -832,7 +834,7 @@ def password_login(
     # Get or create default user for password auth
     user = crud.get_user_by_email(db, "local@longhouse")
     if not user:
-        user = crud.create_user(db, email="local@longhouse", provider="password")
+        user = crud.create_user(db, email="local@longhouse", provider="password", skip_notification=True)
 
     # Issue token and set cookie
     expires_in = 30 * 60  # 30 minutes
@@ -892,7 +894,7 @@ def cli_login(
     # Get or create default user for password auth
     user = crud.get_user_by_email(db, "local@longhouse")
     if not user:
-        user = crud.create_user(db, email="local@longhouse", provider="password")
+        user = crud.create_user(db, email="local@longhouse", provider="password", skip_notification=True)
 
     # Issue a short-lived token (5 min) -- only for creating a device token
     access_token = _issue_access_token(

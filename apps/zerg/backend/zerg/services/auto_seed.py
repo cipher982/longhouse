@@ -393,6 +393,7 @@ def run_auto_seed() -> dict:
                             provider="dev",
                             provider_user_id="dev-user-1",
                             role=desired_role,
+                            skip_notification=True,  # Dev user, not a real signup
                         )
             finally:
                 db.close()
