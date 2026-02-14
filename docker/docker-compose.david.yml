@@ -1,6 +1,6 @@
 services:
   longhouse-david:
-    image: ghcr.io/cipher982/longhouse-runtime:latest
+    image: ${LONGHOUSE_IMAGE:-ghcr.io/cipher982/longhouse-runtime:latest}
     container_name: longhouse-david
     restart: unless-stopped
     env_file:

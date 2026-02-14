@@ -28,6 +28,8 @@ fi
 # Configuration - split deployment
 FRONTEND_URL="${FRONTEND_URL:-https://david.longhouse.ai}"
 API_URL="${API_URL:-$FRONTEND_URL}"
+MARKETING_URL="${MARKETING_URL:-https://longhouse.ai}"
+CP_URL="${CP_URL:-https://control.longhouse.ai}"
 WAIT_SECS="${WAIT_SECS:-90}"
 SMOKE_TEST_EMAIL="${SMOKE_TEST_EMAIL:-david010@gmail.com}"
 SMOKE_RUN_ID="${SMOKE_RUN_ID:-}"
@@ -462,6 +464,37 @@ run_frontend_checks() {
     run_test test_config
 }
 
+run_cross_service_checks() {
+    # Marketing site
+    run_test test_http "Marketing site" "$MARKETING_URL" "200"
+
+    # Control plane health
+    run_test test_http "CP health endpoint" "$CP_URL/health" "200"
+    run_test test_json "CP health status" "$CP_URL/health" ".status" "ok"
+
+    # Marketing JS references control plane URL
+    local js_urls
+    js_urls=$(curl -s "$MARKETING_URL" 2>/dev/null | grep -oE 'src="/assets/[^"]+\.js"' | sed 's/src="//;s/"//' || true)
+    if [[ -n "$js_urls" ]]; then
+        local found_cp=0
+        for js_path in $js_urls; do
+            local js_content
+            js_content=$(curl -s "${MARKETING_URL}${js_path}" 2>/dev/null || true)
+            if echo "$js_content" | grep -q "control.longhouse.ai"; then
+                found_cp=1
+                break
+            fi
+        done
+        if [[ $found_cp -eq 1 ]]; then
+            pass "Marketing JS contains CP URL"
+        else
+            warn "Marketing JS does not reference control.longhouse.ai"
+        fi
+    else
+        warn "No JS bundles found on marketing site"
+    fi
+}
+
 run_cors_checks() {
     if [[ "${API_URL%/}" == "${FRONTEND_URL%/}" ]]; then
         info "CORS checks skipped (same-origin deployment)"
@@ -610,8 +643,10 @@ echo ""
 echo "================================================"
 echo "  Longhouse Production Smoke Test"
 echo "================================================"
-echo "  Frontend: $FRONTEND_URL"
-echo "  API:      $API_URL"
+echo "  Frontend:  $FRONTEND_URL"
+echo "  API:       $API_URL"
+echo "  Marketing: $MARKETING_URL"
+echo "  CP:        $CP_URL"
 echo "================================================"
 echo ""
 
@@ -640,6 +675,9 @@ run_health_checks
 section "Frontend"
 run_frontend_checks
 
+section "Cross-Service"
+run_cross_service_checks
+
 section "CORS"
 run_cors_checks
 
@@ -667,6 +705,7 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         run_test test_http_auth "Oikos history (authed)" "$API_URL/api/oikos/history" "200" "$COOKIE_JAR"
         run_test test_http_auth "Oikos runs (authed)" "$API_URL/api/oikos/runs?limit=1" "200" "$COOKIE_JAR"
         run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
+        run_test test_http_auth "Sessions API (authed)" "$API_URL/api/agents/sessions?limit=1" "200" "$COOKIE_JAR"
 
         if [[ $RUN_LLM -eq 1 ]]; then
             llm_available=$(curl -s "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
