@@ -60,6 +60,7 @@ from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
+from zerg.routers.capabilities import router as capabilities_router
 from zerg.routers.channels_webhooks import router as channels_webhooks_router
 from zerg.routers.commis_internal import router as commis_internal_router
 from zerg.routers.connectors import router as connectors_router
@@ -382,6 +383,12 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     logger.error(f"Single-tenant bootstrap failed: {e}")
                     app.state.single_tenant_violation = f"Bootstrap failed: {e}"
+
+        # Prefetch SSO signing keys from control plane (non-fatal)
+        if not _settings.testing:
+            from zerg.services.sso_keys import prefetch_sso_keys
+
+            prefetch_sso_keys()
 
         # Auto-seed user context and credentials (idempotent)
         # Loads from scripts/*.local.json or ~/.config/zerg/*.json
@@ -906,6 +913,7 @@ api_app.include_router(commis_internal_router)  # Internal endpoints for commis 
 api_app.include_router(sync_router)  # Conversation sync — self-prefixed /oikos/sync
 api_app.include_router(stream_router)  # Resumable SSE v1 — self-prefixed /stream
 api_app.include_router(system_router)
+api_app.include_router(capabilities_router)  # LLM provider config + enhanced capabilities
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)  # Public beacon (no auth)
 api_app.include_router(fiche_config_router)
@@ -956,12 +964,18 @@ async def serve_config_js():
         parsed = _urlparse(base_url)
         ws_host = f"{ws_scheme}://{parsed.netloc}"
 
+    # Quick env-var check for LLM availability (no user context at this endpoint)
+    _llm_avail = "true" if _settings.llm_available else "false"
+    _emb_avail = "true" if bool(os.getenv("OPENAI_API_KEY")) else "false"
+
     js = (
         f'window.API_BASE_URL="/api";\n'
         f'window.WS_BASE_URL="{ws_host or ""}";\n'
         f'window.__APP_MODE__="{_settings.app_mode.value}";\n'
         f'window.__GOOGLE_CLIENT_ID__="{_settings.google_client_id or ""}";\n'
         f'window.__SINGLE_TENANT__={"true" if _settings.single_tenant else "false"};\n'
+        f'window.__LLM_AVAILABLE__={_llm_avail};\n'
+        f'window.__EMBEDDINGS_AVAILABLE__={_emb_avail};\n'
     )
     return Response(
         content=js,
@@ -1051,8 +1065,6 @@ async def health_check():
         settings = get_settings()
         env_issues = []
 
-        if not settings.openai_api_key:
-            env_issues.append("OPENAI_API_KEY missing")
         if not settings.database_url:
             env_issues.append("DATABASE_URL missing")
         if not settings.auth_disabled and (not settings.jwt_secret or len(settings.jwt_secret) < 16):
@@ -1067,6 +1079,26 @@ async def health_check():
     except Exception as e:
         checks["environment"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
+
+    # 1b. LLM capability check (warn, not fail)
+    try:
+        from zerg.database import get_session_factory as _gsf
+        from zerg.routers.capabilities import _resolve_capability_no_user
+
+        _sf = _gsf()
+        with _sf() as _db:
+            text_avail, text_src, _ = _resolve_capability_no_user("text", _db)
+            emb_avail, emb_src, _ = _resolve_capability_no_user("embedding", _db)
+
+        checks["llm"] = {
+            "status": "pass" if text_avail else "warn",
+            "text_available": text_avail,
+            "text_source": text_src,
+            "embeddings_available": emb_avail,
+            "embeddings_source": emb_src,
+        }
+    except Exception as e:
+        checks["llm"] = {"status": "warn", "error": str(e)}
 
     # 2. Database connectivity
     try:

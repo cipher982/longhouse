@@ -529,7 +529,7 @@ async def _generate_summary_background(session_id: str) -> None:
     from sqlalchemy import update
 
     from zerg.database import get_session_factory
-    from zerg.models_config import get_llm_client_for_use_case
+    from zerg.models_config import get_llm_client_with_db_fallback
     from zerg.services.session_processing import incremental_summary
 
     settings = get_settings()
@@ -538,15 +538,21 @@ async def _generate_summary_background(session_id: str) -> None:
         logger.debug("LLM disabled or testing mode, skipping summary for %s", session_id)
         return
 
+    # Open a DB session for DB-aware LLM config resolution
+    _config_session_factory = get_session_factory()
+    _config_db = _config_session_factory()
     try:
-        client, model, _provider = get_llm_client_for_use_case("summary_update")
-    except ValueError:
-        # Fall back to summarization use case if summary_update not configured
         try:
-            client, model, _provider = get_llm_client_for_use_case("summarization")
-        except ValueError as e:
-            logger.warning("Summarization misconfigured — session %s will NOT be summarized: %s", session_id, e)
-            return
+            client, model, _provider = get_llm_client_with_db_fallback("summary_update", db=_config_db)
+        except ValueError:
+            # Fall back to summarization use case if summary_update not configured
+            try:
+                client, model, _provider = get_llm_client_with_db_fallback("summarization", db=_config_db)
+            except ValueError as e:
+                logger.warning("Summarization misconfigured — session %s will NOT be summarized: %s", session_id, e)
+                return
+    finally:
+        _config_db.close()
 
     session_factory = get_session_factory()
     db = session_factory()
@@ -660,13 +666,20 @@ async def _generate_embeddings_background(session_id: str) -> None:
     Skips silently if embedding config is unavailable.
     """
     from zerg.database import get_session_factory
-    from zerg.models_config import get_embedding_config
+    from zerg.models_config import get_embedding_config_with_db_fallback
 
-    config = get_embedding_config()
+    session_factory = get_session_factory()
+
+    # Check embedding config with DB fallback
+    _config_db = session_factory()
+    try:
+        config = get_embedding_config_with_db_fallback(db=_config_db)
+    finally:
+        _config_db.close()
+
     if not config:
         return  # No embedding provider configured
 
-    session_factory = get_session_factory()
     db = session_factory()
     try:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()

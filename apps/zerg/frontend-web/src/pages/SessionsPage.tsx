@@ -11,8 +11,9 @@
  */
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
+import { useNavigate, useSearchParams, useLocation, Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import {
   type AgentSession,
@@ -510,6 +511,13 @@ export default function SessionsPage() {
           title="Timeline"
           description="A unified view of your AI coding sessions."
         />
+
+        {!config.llmAvailable && sessions.length > 0 && (
+          <div className="sessions-llm-hint">
+            Session summaries require an LLM provider.{" "}
+            <Link to="/settings">Configure in Settings</Link>
+          </div>
+        )}
 
         {/* Filter Bar */}
         <div className="sessions-filter-bar">
