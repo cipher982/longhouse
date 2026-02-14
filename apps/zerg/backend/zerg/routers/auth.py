@@ -655,11 +655,11 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
         )
 
     # Try to validate the JWT against known secrets.
-    # First try the instance's own JWT_SECRET, then the control plane's secret.
-    settings = get_settings()
+    # First try the instance's own JWT_SECRET, then CP-provided SSO keys.
+    from zerg.services.sso_keys import get_sso_keys
+
     secrets_to_try = [JWT_SECRET]
-    if settings.control_plane_jwt_secret:
-        secrets_to_try.append(settings.control_plane_jwt_secret)
+    secrets_to_try.extend(k for k in get_sso_keys() if k != JWT_SECRET)
 
     payload: dict[str, Any] | None = None
     for secret in secrets_to_try:
@@ -673,6 +673,17 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
+        )
+
+    # Validate instance binding (if claim present — CP-issued tokens)
+    import os
+
+    token_instance = payload.get("instance")
+    instance_id = os.getenv("INSTANCE_ID")
+    if token_instance and instance_id and token_instance != instance_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token not intended for this instance",
         )
 
     # Resolve the user from the token's sub claim.
@@ -706,7 +717,8 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
         user = crud.get_user_by_email(db, email)
         if user is None:
             # Single-tenant mode: enforce owner email binding
-            if settings.single_tenant and not settings.testing:
+            _st = get_settings()
+            if _st.single_tenant and not _st.testing:
                 from zerg.services.single_tenant import is_owner_email
 
                 if not is_owner_email(email):
@@ -788,6 +800,8 @@ def get_auth_methods():
     return {
         "google": bool(settings.google_client_id),
         "password": bool(settings.longhouse_password or settings.longhouse_password_hash),
+        "sso": bool(settings.control_plane_url),
+        "sso_url": settings.control_plane_url if settings.control_plane_url else None,
     }
 
 
