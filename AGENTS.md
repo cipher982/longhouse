@@ -164,6 +164,8 @@ coolify deploy name longhouse-control-plane
 # Redeploy (pull new image + recreate container)
 ssh zerg 'cd /opt/longhouse/david && docker compose pull && docker compose up -d'
 ```
+- the primary dev (david) user instance is at david010.longhouse.ai using gauth from his david010@gmail.com account, this is the primary one to debug and dev prod features on. he will sometimes use david@drose.io to debug the signup flow, this one can be treated as ephemeral and nuked when needed.
+
 
 ### Verify Deploy
 ```bash
@@ -244,3 +246,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-12) [arch] Agent infra models use `AgentsBase` (not `Base`), live in `models/agents.py` and `models/work.py`. Schema `agents.` gets translate-mapped to `None` for SQLite.
 - (2026-02-12) [frontend] Frontend API errors: `ApiError` class has `status`, `url`, `body` (already-parsed object, not string). FastAPI wraps HTTPException detail in `{detail: ...}`, so structured error data is at `body.detail.field`.
 - (2026-02-13) [arch] Reflection produces **action proposals** alongside insights when `action_blurb` is present (high-confidence, concrete actions). Users review at `/proposals`. Approved proposals appear in agent briefings under "Approved actions (pending execution)." Model: `ActionProposal` in `models/work.py`, API: `routers/proposals.py`.
+- (2026-02-14) [ops] **Reprovisioning an instance** = stop+remove container, then re-create with current env vars. Data is safe — SQLite lives on a host bind mount (`/var/lib/docker/data/longhouse/<subdomain>`), not inside the container. Use the admin API: `POST /api/instances/{id}/reprovision`. If secrets change on the control plane, instances must be reprovisioned to pick them up.

@@ -77,7 +77,10 @@ async def generate_embedding(text: str, config: "EmbeddingConfig") -> np.ndarray
     if config.provider != "openai":
         raise ValueError(f"Unsupported embedding provider: {config.provider}. Only 'openai' is supported.")
 
-    client = AsyncOpenAI(api_key=config.api_key)
+    kwargs: dict = {"api_key": config.api_key}
+    if getattr(config, "base_url", None):
+        kwargs["base_url"] = config.base_url
+    client = AsyncOpenAI(**kwargs)
     try:
         response = await client.embeddings.create(
             model=config.model,
