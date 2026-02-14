@@ -12,6 +12,7 @@ Skills-Dir: .agents/skills
 - **SQLite-only core** — SQLite pivot is complete. Don't invest in Postgres-specific infrastructure. See VISION.md.
 - **Progressive disclosure** — AGENTS.md should point to deeper docs/runbooks so agents know what they don't know.
 - Always commit changes as you go (no lingering uncommitted work). In swarm mode, **lead commits after each teammate's verified work** — don't batch everything into one mega-commit at the end.
+- **Execute autonomously** — When given a plan or task, implement → test → commit → deploy → verify without pausing for approval at each step. Only stop to ask if something is ambiguous or blocked. Don't narrate your progress — deliver results.
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees. No keyword routing, no specialized commiss.
 
@@ -123,6 +124,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 8. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
 9. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `apps/zerg/backend/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
 10. **Deploy requires GHCR build** — Push triggers `runtime-image.yml` (path-filtered). Must wait for build before pulling on zerg. Use `gh run watch <id>` to wait. Marketing + control plane pull the same image via Coolify.
+11. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
 
 ## Pushing Changes
 
@@ -183,11 +185,11 @@ coolify app logs longhouse-control-plane               # Control plane
 ### Checklist for Agents
 1. `make test` + `make test-e2e` pass locally
 2. Push to main (triggers GHCR build if code changed)
-3. Deploy marketing site: `coolify deploy name longhouse-demo`
-4. Deploy control plane: `coolify deploy name longhouse-control-plane`
-5. Deploy user instance: `ssh zerg 'cd /opt/longhouse/david && docker compose pull && docker compose up -d'`
-6. Verify: `make verify-prod` + check `longhouse.ai` title
-7. Report result to user
+3. Wait for GHCR build: `gh run watch <id> --exit-status`
+4. Deploy all three in parallel (Coolify + docker compose)
+5. Verify: health checks on all three endpoints
+6. If deploy fails, check logs, fix, and redeploy — don't ask the user
+7. Brief summary only at end (what shipped, what to manually verify if needed)
 
 ## apps/sauron - Scheduler (Folded In)
 
@@ -247,3 +249,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-12) [frontend] Frontend API errors: `ApiError` class has `status`, `url`, `body` (already-parsed object, not string). FastAPI wraps HTTPException detail in `{detail: ...}`, so structured error data is at `body.detail.field`.
 - (2026-02-13) [arch] Reflection produces **action proposals** alongside insights when `action_blurb` is present (high-confidence, concrete actions). Users review at `/proposals`. Approved proposals appear in agent briefings under "Approved actions (pending execution)." Model: `ActionProposal` in `models/work.py`, API: `routers/proposals.py`.
 - (2026-02-14) [ops] **Reprovisioning an instance** = stop+remove container, then re-create with current env vars. Data is safe — SQLite lives on a host bind mount (`/var/lib/docker/data/longhouse/<subdomain>`), not inside the container. Use the admin API: `POST /api/instances/{id}/reprovision`. If secrets change on the control plane, instances must be reprovisioned to pick them up.
+- (2026-02-14) [security] SSO tokens include `instance` claim binding them to a specific subdomain. `accept_token` validates this (soft — only when both claim and `INSTANCE_ID` env var present). CP's own `jwt_secret` is never sent to instances.
