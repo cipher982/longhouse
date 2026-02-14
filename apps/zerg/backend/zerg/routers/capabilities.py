@@ -145,7 +145,17 @@ def _validate_base_url(base_url: str | None, provider_name: str) -> str | None:
         if ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_loopback or ip.is_multicast:
             return "Private/reserved IP addresses only allowed for Ollama"
     except ValueError:
-        pass  # hostname, not IP literal — allow
+        # Hostname — resolve to check for DNS rebinding to private IPs
+        import socket
+
+        try:
+            addrs = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for _family, _type, _proto, _canonname, sockaddr in addrs:
+                resolved_ip = ipaddress.ip_address(sockaddr[0])
+                if resolved_ip.is_private or resolved_ip.is_link_local or resolved_ip.is_reserved or resolved_ip.is_loopback:
+                    return f"Hostname resolves to private/reserved IP ({sockaddr[0]})"
+        except (socket.gaierror, OSError):
+            pass  # DNS resolution failed — allow (will fail at connection time)
 
     # Block http:// (require https for remote endpoints)
     if parsed.scheme == "http":
