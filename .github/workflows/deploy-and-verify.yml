@@ -1,0 +1,163 @@
+name: Deploy and Verify
+
+on:
+  workflow_run:
+    workflows: ["Publish Runtime Image"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-and-verify
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: "Deploy + Smoke + Rollback"
+    runs-on: cube
+    timeout-minutes: 20
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    env:
+      MARKETING_URL: https://longhouse.ai
+      CP_URL: https://control.longhouse.ai
+      FRONTEND_URL: https://david010.longhouse.ai
+      API_URL: https://david010.longhouse.ai
+      ZERG_HOST: 100.120.197.80
+      ZERG_USER: zerg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── SSH Setup ──────────────────────────────────────────────
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ env.ZERG_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H clifford >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat >> ~/.ssh/config <<SSHEOF
+          Host zerg
+            HostName 100.120.197.80
+            User zerg
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+          Host clifford
+            HostName clifford
+            User drose
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+          SSHEOF
+
+      # ── Record current state for rollback ──────────────────────
+      - name: Record previous image SHA
+        id: prev
+        run: |
+          FULL_SHA=$(ssh zerg 'docker inspect longhouse-david --format "{{index .Config.Labels \"org.opencontainers.image.revision\"}}" 2>/dev/null' || echo "")
+          # Image tags use 7-char short SHA (docker/metadata-action type=sha,prefix=)
+          SHORT_SHA="${FULL_SHA:0:7}"
+          echo "sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Previous image revision: ${SHORT_SHA:-unknown} (full: ${FULL_SHA:-unknown})"
+
+      # ── Deploy all 3 targets ───────────────────────────────────
+      - name: Deploy user instance (zerg)
+        run: |
+          ssh zerg 'cd /opt/longhouse/david && docker compose pull && docker compose up -d'
+
+      - name: Deploy Coolify apps (marketing + control plane)
+        run: |
+          ssh clifford "
+            TOKEN=\$(sudo cat /data/coolify/source/.env | grep '^API_TOKEN=' | cut -d= -f2-) && \
+            curl -sf -X POST \
+              -H \"Authorization: Bearer \$TOKEN\" \
+              -H 'Content-Type: application/json' \
+              -d '{\"uuid\":\"${{ secrets.COOLIFY_DEMO_UUID }}\"}' \
+              'http://localhost:8000/api/v1/deploy' && \
+            curl -sf -X POST \
+              -H \"Authorization: Bearer \$TOKEN\" \
+              -H 'Content-Type: application/json' \
+              -d '{\"uuid\":\"${{ secrets.COOLIFY_CP_UUID }}\"}' \
+              'http://localhost:8000/api/v1/deploy'
+          "
+
+      # ── Wait for all services to be healthy ────────────────────
+      - name: Wait for services
+        run: |
+          check_health() {
+            local url="$1"
+            local name="$2"
+            local max=30
+            for i in $(seq 1 $max); do
+              if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
+                echo "✓ $name is up (attempt $i)"
+                return 0
+              fi
+              echo "  $name not ready (attempt $i/$max)..."
+              sleep 5
+            done
+            echo "✗ $name did not become healthy"
+            return 1
+          }
+
+          check_health "$API_URL/api/health" "User instance"
+          check_health "$CP_URL/health" "Control plane"
+          check_health "$MARKETING_URL" "Marketing site"
+
+      # ── Smoke tests ────────────────────────────────────────────
+      - name: Run smoke tests
+        env:
+          SMOKE_TEST_SECRET: ${{ secrets.SMOKE_TEST_SECRET }}
+        run: |
+          chmod +x scripts/smoke-prod.sh
+          MARKETING_URL="${{ env.MARKETING_URL }}" \
+          CP_URL="${{ env.CP_URL }}" \
+          FRONTEND_URL="${{ env.FRONTEND_URL }}" \
+          API_URL="${{ env.API_URL }}" \
+          ./scripts/smoke-prod.sh --no-llm
+
+      # ── Summary (always) ───────────────────────────────────────
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Deploy + Verify Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Instance:** $FRONTEND_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Marketing:** $MARKETING_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Control Plane:** $CP_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Previous SHA:** ${{ steps.prev.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Rollback on failure ────────────────────────────────────
+      # Disabled: auto-rollback can fight rapid iteration. Re-enable when stable.
+      # - name: Rollback user instance
+      #   if: failure()
+      #   run: |
+      #     PREV_SHA="${{ steps.prev.outputs.sha }}"
+      #     if [[ -n "$PREV_SHA" ]]; then
+      #       echo "Rolling back to image revision: $PREV_SHA"
+      #       ssh zerg "cd /opt/longhouse/david && \
+      #         docker pull ghcr.io/cipher982/longhouse-runtime:${PREV_SHA} && \
+      #         LONGHOUSE_IMAGE=ghcr.io/cipher982/longhouse-runtime:${PREV_SHA} docker compose up -d"
+      #     else
+      #       echo "No previous SHA recorded — cannot rollback"
+      #     fi
+
+      - name: Create GitHub issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PREV_SHA="${{ steps.prev.outputs.sha }}"
+          gh issue create \
+            --title "Deploy smoke failed for ${GITHUB_SHA:0:7}" \
+            --body "$(cat <<EOF
+          Smoke tests failed after deploying commit ${{ github.sha }}.
+
+          **Previous image SHA:** \`${PREV_SHA:-unknown}\`
+          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Auto-rollback is disabled. Check the workflow logs for which checks failed.
+          EOF
+          )" \
+            --label "deploy-failure"
