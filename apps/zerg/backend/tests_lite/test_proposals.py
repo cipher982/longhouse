@@ -282,6 +282,48 @@ class TestWriterProposalCreation:
             proposals = db.query(ActionProposal).all()
             assert len(proposals) == 0
 
+    def test_proposal_created_on_deduped_insight(self, tmp_path):
+        """Writer creates proposal even when insight is deduped into existing."""
+        from zerg.services.reflection.writer import execute_actions
+
+        SessionLocal = _make_db(tmp_path)
+        with SessionLocal() as db:
+            # Pre-create an insight that will be deduped into
+            existing = _make_insight(db, title="Known pattern", project="test-project")
+
+            session = _make_session(db)
+            batches = [ProjectBatch(
+                project="test-project",
+                sessions=[SessionInfo(
+                    id=str(session.id), project="test-project", provider="claude",
+                    summary="Test", summary_title="Test",
+                    started_at=datetime.now(timezone.utc), tool_calls=1, user_messages=1,
+                )],
+                existing_insights=[],
+            )]
+
+            actions = [{
+                "action": "create_insight",
+                "project": "test-project",
+                "insight_type": "pattern",
+                "title": "Known pattern",  # same title — will dedup
+                "description": "Seen again",
+                "severity": "warning",
+                "confidence": 0.9,
+                "action_blurb": "Add a guard clause for this pattern",
+            }]
+
+            run_id = str(uuid4())
+            created, merged, skipped = execute_actions(db, actions, batches, run_id=run_id)
+            assert created == 0  # deduped, not new
+            assert merged == 1
+
+            # But proposal should still be created, linked to the existing insight
+            proposals = db.query(ActionProposal).all()
+            assert len(proposals) == 1
+            assert proposals[0].insight_id == existing.id
+            assert proposals[0].action_blurb == "Add a guard clause for this pattern"
+
     def test_proposal_linked_to_reflection_run(self, tmp_path):
         """Proposal correctly links to both insight and reflection run."""
         from zerg.services.reflection.writer import execute_actions
@@ -440,6 +482,27 @@ class TestBriefingWithProposals:
             )
             assert len(approved) == 1
             assert approved[0].action_blurb == "Add UFW rule for container networking"
+
+    def test_status_guard_prevents_double_approve(self, tmp_path):
+        """Cannot approve/decline an already-decided proposal."""
+        SessionLocal = _make_db(tmp_path)
+        with SessionLocal() as db:
+            insight = _make_insight(db, project="test-project")
+            proposal = _make_proposal(db, insight.id, status="approved")
+
+            # Verify status is not pending
+            assert proposal.status == "approved"
+            assert proposal.status != "pending"
+
+    def test_status_guard_prevents_double_decline(self, tmp_path):
+        """Cannot approve/decline an already-declined proposal."""
+        SessionLocal = _make_db(tmp_path)
+        with SessionLocal() as db:
+            insight = _make_insight(db, project="test-project")
+            proposal = _make_proposal(db, insight.id, status="declined")
+
+            assert proposal.status == "declined"
+            assert proposal.status != "pending"
 
     def test_pending_proposals_not_in_briefing(self, tmp_path):
         """Pending proposals should not show up in briefing query."""

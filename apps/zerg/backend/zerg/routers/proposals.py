@@ -25,7 +25,6 @@ from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
 from zerg.routers.agents import require_single_tenant
 from zerg.routers.agents import verify_agents_read_access
-from zerg.routers.agents import verify_agents_token
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +148,7 @@ async def list_proposals(
 async def approve_proposal(
     proposal_id: str,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
 ) -> ProposalActionResponse:
     """Approve a proposal — sets status to approved and generates a task description."""
@@ -157,6 +156,8 @@ async def approve_proposal(
         proposal = db.query(ActionProposal).filter(ActionProposal.id == proposal_id).first()
         if not proposal:
             raise HTTPException(status_code=404, detail="Proposal not found")
+        if proposal.status != "pending":
+            raise HTTPException(status_code=409, detail=f"Proposal already {proposal.status}")
 
         # Fetch parent insight for richer task context
         insight = db.query(Insight).filter(Insight.id == proposal.insight_id).first()
@@ -167,10 +168,10 @@ async def approve_proposal(
         # Build task description from insight context + action blurb
         parts = [proposal.action_blurb]
         if insight and insight.description:
-            parts.append(f"\nContext: {insight.description}")
+            parts.append(f"Context: {insight.description}")
         if proposal.project:
-            parts.append(f"\nProject: {proposal.project}")
-        proposal.task_description = "\n".join(parts)
+            parts.append(f"Project: {proposal.project}")
+        proposal.task_description = "\n\n".join(parts)
 
         db.commit()
         db.refresh(proposal)
@@ -195,7 +196,7 @@ async def approve_proposal(
 async def decline_proposal(
     proposal_id: str,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
 ) -> ProposalActionResponse:
     """Decline a proposal — sets status to declined."""
@@ -203,6 +204,8 @@ async def decline_proposal(
         proposal = db.query(ActionProposal).filter(ActionProposal.id == proposal_id).first()
         if not proposal:
             raise HTTPException(status_code=404, detail="Proposal not found")
+        if proposal.status != "pending":
+            raise HTTPException(status_code=409, detail=f"Proposal already {proposal.status}")
 
         insight = db.query(Insight).filter(Insight.id == proposal.insight_id).first()
 

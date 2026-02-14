@@ -47,12 +47,15 @@ def execute_actions(
         action_type = action.get("action")
         try:
             if action_type == "create_insight":
-                insight_id = _create_insight(db, action)
+                insight_id, is_new = _create_insight(db, action)
                 if insight_id:
-                    created += 1
+                    if is_new:
+                        created += 1
+                    else:
+                        merged += 1  # dedup matched — counts as merge
                     _maybe_create_proposal(db, action, insight_id, run_id)
                 else:
-                    merged += 1  # dedup matched — counts as merge
+                    skipped += 1  # empty title
             elif action_type == "merge":
                 if _merge_insight(db, action):
                     merged += 1
@@ -71,17 +74,18 @@ def execute_actions(
     return created, merged, skipped
 
 
-def _create_insight(db: Session, action: dict) -> str | None:
+def _create_insight(db: Session, action: dict) -> tuple[str | None, bool]:
     """Create a new insight, using dedup logic to prevent duplicates.
 
     Dedup logic mirrors routers/insights.py POST endpoint — if either changes,
     update the other. Consider extracting to shared helper if this diverges.
 
-    Returns the new insight's ID (str) if created, None if dedup matched.
+    Returns (insight_id, is_new) — insight_id is always set when title is valid,
+    is_new is True only when a brand new insight was created (not deduped).
     """
     title = action.get("title", "").strip()
     if not title:
-        return None
+        return None, False
 
     project = action.get("project")
     insight_type = action.get("insight_type", "learning")
@@ -104,12 +108,12 @@ def _create_insight(db: Session, action: dict) -> str | None:
     existing = query.first()
 
     if existing:
-        # Merge into existing
+        # Merge into existing — return its ID so proposals can still be created
         _append_observation(existing, description or title)
         if confidence is not None:
             existing.confidence = confidence
         db.flush()
-        return None
+        return str(existing.id), False
 
     # Cross-project dedup: check for same title in ANY project
     cross_match = (
@@ -122,7 +126,7 @@ def _create_insight(db: Session, action: dict) -> str | None:
     )
 
     if cross_match:
-        # Merge into the cross-project match, add project tag
+        # Merge into the cross-project match, add project tag — return its ID for proposals
         _append_observation(cross_match, f"[{project}] {description or title}")
         existing_tags = cross_match.tags or []
         if project and project not in existing_tags:
@@ -131,7 +135,7 @@ def _create_insight(db: Session, action: dict) -> str | None:
         if confidence is not None:
             cross_match.confidence = confidence
         db.flush()
-        return None
+        return str(cross_match.id), False
 
     # Create new insight
     insight = Insight(
@@ -146,7 +150,7 @@ def _create_insight(db: Session, action: dict) -> str | None:
     )
     db.add(insight)
     db.flush()
-    return str(insight.id)
+    return str(insight.id), True
 
 
 def _maybe_create_proposal(db: Session, action: dict, insight_id: str, run_id: str | None) -> None:
