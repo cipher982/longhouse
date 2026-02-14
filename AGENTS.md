@@ -64,6 +64,24 @@ make test-full     # Full suite (unit + full E2E + evals + visual baselines)
 
 **MCP server:** `zerg/mcp_server/server.py:create_server()` exposes tools to CLI agents (Claude Code, Codex, Gemini). Tools: session search (FTS + semantic), recall, memory read/write, insights, file reservations, notify_oikos. New tools go inside `create_server()`. API client at `mcp_server/api_client.py` (get/post/delete methods).
 
+## Features (What Exists)
+
+| Feature | API | Frontend | MCP | Notes |
+|---------|-----|----------|-----|-------|
+| Session timeline | `GET /api/agents/sessions` | SessionsPage | `search_sessions` | FTS search, filters by project/provider/days |
+| Session detail | `GET /api/agents/sessions/:id` | SessionDetailPage | — | Full event transcript |
+| **Semantic search** | `GET /api/agents/sessions/semantic?query=` | **Not wired up** | `search_sessions` | Requires embeddings (OpenAI text-embedding-3-small, 256d) |
+| **Recall** | `GET /api/agents/recall?query=` | **Not wired up** | `recall` | Turn-level knowledge retrieval with context windows |
+| Embeddings | `POST /api/agents/backfill-embeddings` | — | — | Auto-generated on ingest; backfill for existing sessions |
+| Oikos (chat) | WebSocket `/ws/oikos` | OikosPage | — | Voice/text AI assistant with tool use |
+| Insights | `GET/POST /api/agents/insights` | InsightsPage | `log_insight`, `query_insights` | Patterns, failures, learnings |
+| Reflection | `GET /api/agents/reflection/briefing` | **Not wired up** | `get_briefing` | Daily/weekly session briefings |
+| Jobs/Scheduler | `GET /api/agents/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
+| Memory | `GET/PUT /api/agents/memory` | — | `read_memory`, `write_memory` | Key-value store for agent state |
+| File reservations | `POST /api/agents/reservations` | — | `reserve_file` | Prevent concurrent edits |
+| Action proposals | `GET/POST /api/proposals` | ProposalsPage | — | Review queue for reflection insights with approve/decline; approved proposals show in briefings |
+| Runner daemon | WebSocket from runner binary | — | — | Remote command execution on user infra |
+
 ## Conventions
 
 - **Backend**: FastAPI + Pydantic, `apps/zerg/backend/zerg/`
