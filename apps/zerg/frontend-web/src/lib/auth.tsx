@@ -473,6 +473,7 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
 
   const showGoogle = authMethods?.google ?? false;
   const showPassword = authMethods?.password ?? false;
+  const showSso = authMethods?.sso && authMethods?.sso_url;
 
   return (
     <div
@@ -509,7 +510,26 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
           <div style={{ color: 'rgba(255, 255, 255, 0.5)', padding: '1rem 0' }}>Loading...</div>
         )}
 
-        {showGoogle && (
+        {showSso && (
+          <button
+            onClick={() => { window.location.href = authMethods!.sso_url!; }}
+            style={{
+              width: '100%',
+              padding: '0.75rem',
+              background: 'linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)',
+              color: '#030305',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Sign in with Google
+          </button>
+        )}
+
+        {showGoogle && !showSso && (
           <GoogleSignInButton
             clientId={clientId}
             onSuccess={handleLoginSuccess}
@@ -517,7 +537,7 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
           />
         )}
 
-        {showPassword && showGoogle && (
+        {showPassword && (showGoogle || showSso) && (
           <div style={{ margin: '1rem 0', color: 'rgba(255, 255, 255, 0.3)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
             <span>or</span>
@@ -532,7 +552,7 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
               value={password}
               onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }}
               placeholder="Enter password"
-              autoFocus={!showGoogle}
+              autoFocus={!showGoogle && !showSso}
               style={{
                 width: '100%',
                 padding: '0.75rem 1rem',
