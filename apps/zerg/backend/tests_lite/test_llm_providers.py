@@ -100,7 +100,8 @@ class TestLlmCapabilities:
             resp = client.get("/capabilities/llm")
             data = resp.json()
             assert data["text"]["available"] is True
-            assert data["text"]["source"] == "environment"
+            # Public endpoint does not expose source/provider_name
+            assert data["text"]["source"] is None
             assert data["embedding"]["available"] is True
 
     def test_db_config_makes_available(self, tmp_path):
@@ -125,8 +126,13 @@ class TestLlmCapabilities:
                 resp = client.get("/capabilities/llm")
                 data = resp.json()
                 assert data["text"]["available"] is True
-                assert data["text"]["source"] == "database"
-                assert data["text"]["provider_name"] == "groq"
+                # Public endpoint doesn't expose source/provider — use /llm/providers for that
+                assert data["text"]["source"] is None
+
+            # Verify authenticated endpoint shows provider details
+            providers = client.get("/llm/providers").json()
+            assert len(providers) == 1
+            assert providers[0]["provider_name"] == "groq"
 
 
 # ---------------------------------------------------------------------------

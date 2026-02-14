@@ -47,7 +47,9 @@ function CapabilityRow({
 }) {
   const dbConfig = dbProviders.find((p) => p.capability === capability);
   const isActive = status.available;
-  const sourceLabel = status.source === "database" ? "DB" : status.source === "environment" ? "Env" : null;
+  // Derive source/provider from authenticated provider list (not public endpoint)
+  const sourceLabel = dbConfig ? "DB" : isActive ? "Env" : null;
+  const providerName = dbConfig?.provider_name ?? null;
 
   return (
     <div className="llm-capability-row">
@@ -61,8 +63,8 @@ function CapabilityRow({
             <span className="llm-capability-source">{sourceLabel}</span>
           )}
         </div>
-        {isActive && status.provider_name && (
-          <span className="llm-capability-provider">{status.provider_name}</span>
+        {isActive && providerName && (
+          <span className="llm-capability-provider">{providerName}</span>
         )}
         <span className="llm-capability-features">
           Enables: {status.features.join(", ")}
@@ -101,12 +103,12 @@ export default function LlmProviderCard() {
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
-  const { data: capabilities, isLoading: capLoading } = useQuery({
+  const { data: capabilities, isLoading: capLoading, error: capError } = useQuery({
     queryKey: ["llm-capabilities"],
     queryFn: fetchLlmCapabilities,
   });
 
-  const { data: providers = [], isLoading: provLoading } = useQuery({
+  const { data: providers = [], isLoading: provLoading, error: provError } = useQuery({
     queryKey: ["llm-providers"],
     queryFn: fetchLlmProviders,
   });
@@ -174,7 +176,9 @@ export default function LlmProviderCard() {
     setForm({
       ...form,
       providerName: providerId,
-      baseUrl: known?.baseUrl || form.baseUrl,
+      // Always reset base URL to the known provider's default.
+      // For "custom", keep whatever is already there.
+      baseUrl: providerId === "custom" ? form.baseUrl : (known?.baseUrl ?? ""),
     });
     setTestResult(null);
   }
@@ -216,6 +220,7 @@ export default function LlmProviderCard() {
   }
 
   const isLoading = capLoading || provLoading;
+  const fetchError = capError || provError;
 
   return (
     <Card>
@@ -227,7 +232,11 @@ export default function LlmProviderCard() {
           Configure LLM providers for AI-powered features. Keys are encrypted at rest.
         </p>
 
-        {isLoading ? (
+        {fetchError ? (
+          <div className="llm-test-result llm-test-result--error">
+            Failed to load provider status. {String(fetchError)}
+          </div>
+        ) : isLoading ? (
           <div className="llm-loading">
             <Spinner size="sm" />
           </div>

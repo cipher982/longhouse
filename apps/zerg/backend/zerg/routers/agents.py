@@ -1021,7 +1021,7 @@ async def backfill_summaries(
 
     Returns immediately. Check progress via GET /backfill-summaries.
     """
-    from zerg.models_config import get_llm_client_for_use_case
+    from zerg.models_config import get_llm_client_with_db_fallback
 
     if _backfill_state["running"]:
         return BackfillSummariesResponse(
@@ -1043,7 +1043,7 @@ async def backfill_summaries(
 
     # Validate LLM config before starting
     try:
-        client, model, _provider = get_llm_client_for_use_case("summarization")
+        client, model, _provider = get_llm_client_with_db_fallback("summarization", db=db)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1211,7 +1211,7 @@ async def backfill_embeddings(
     _single: None = Depends(require_single_tenant),
 ) -> BackfillEmbeddingsResponse:
     """Start backfilling embeddings for sessions that need them."""
-    from zerg.models_config import get_embedding_config
+    from zerg.models_config import get_embedding_config_with_db_fallback
 
     if _embedding_backfill_state["running"]:
         return BackfillEmbeddingsResponse(
@@ -1220,11 +1220,11 @@ async def backfill_embeddings(
             message=f"Backfill in progress: {_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done",
         )
 
-    config = get_embedding_config()
+    config = get_embedding_config_with_db_fallback(db=db)
     if not config:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Embedding not configured — set OPENAI_API_KEY",
+            detail="Embedding not configured — configure a provider in Settings or set OPENAI_API_KEY",
         )
 
     # Count sessions needing embeddings
@@ -1404,11 +1404,11 @@ async def semantic_search_sessions(
 
     Falls back to empty results if embeddings are not configured.
     """
-    from zerg.models_config import get_embedding_config
+    from zerg.models_config import get_embedding_config_with_db_fallback
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
 
-    config = get_embedding_config()
+    config = get_embedding_config_with_db_fallback(db=db)
     if not config:
         return SemanticSearchResponse(sessions=[], total=0)
 
@@ -1478,11 +1478,11 @@ async def recall_sessions(
 
     Searches turn-level embeddings and returns context windows around matches.
     """
-    from zerg.models_config import get_embedding_config
+    from zerg.models_config import get_embedding_config_with_db_fallback
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
 
-    config = get_embedding_config()
+    config = get_embedding_config_with_db_fallback(db=db)
     if not config:
         return RecallResponse(matches=[], total=0)
 
@@ -2041,15 +2041,15 @@ async def trigger_reflection(
     within the specified time window. Uses LLM to identify patterns, failures,
     and learnings across sessions.
     """
-    from zerg.models_config import get_llm_client_for_use_case
+    from zerg.models_config import get_llm_client_with_db_fallback
     from zerg.services.reflection import reflect
 
     try:
-        client, model_id, _provider = get_llm_client_for_use_case("reflection")
+        client, model_id, _provider = get_llm_client_with_db_fallback("reflection", db=db)
     except (ValueError, KeyError):
         # Fallback: try summarization use case if reflection not configured
         try:
-            client, model_id, _provider = get_llm_client_for_use_case("summarization")
+            client, model_id, _provider = get_llm_client_with_db_fallback("summarization", db=db)
         except (ValueError, KeyError):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

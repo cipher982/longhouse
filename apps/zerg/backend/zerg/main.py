@@ -964,9 +964,24 @@ async def serve_config_js():
         parsed = _urlparse(base_url)
         ws_host = f"{ws_scheme}://{parsed.netloc}"
 
-    # Quick env-var check for LLM availability (no user context at this endpoint)
-    _llm_avail = "true" if _settings.llm_available else "false"
-    _emb_avail = "true" if bool(os.getenv("OPENAI_API_KEY")) else "false"
+    # Check LLM availability: env var + DB config
+    _llm_avail_bool = _settings.llm_available
+    _emb_avail_bool = bool(os.getenv("OPENAI_API_KEY"))
+    if not _llm_avail_bool or not _emb_avail_bool:
+        try:
+            from zerg.database import get_session_factory
+            from zerg.models.models import LlmProviderConfig
+
+            session_factory = get_session_factory()
+            with session_factory() as _db:
+                if not _llm_avail_bool:
+                    _llm_avail_bool = (_db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "text").first()) is not None
+                if not _emb_avail_bool:
+                    _emb_avail_bool = (_db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "embedding").first()) is not None
+        except Exception:
+            pass  # Fall through with env-only check
+    _llm_avail = "true" if _llm_avail_bool else "false"
+    _emb_avail = "true" if _emb_avail_bool else "false"
 
     js = (
         f'window.API_BASE_URL="/api";\n'

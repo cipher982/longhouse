@@ -13,7 +13,7 @@ from typing import Any
 from zerg.database import db_session
 from zerg.jobs.registry import JobConfig
 from zerg.jobs.registry import job_registry
-from zerg.models_config import get_llm_client_for_use_case
+from zerg.models_config import get_llm_client_with_db_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +22,15 @@ async def run() -> dict[str, Any]:
     """Run reflection over recent unreflected sessions."""
     from zerg.services.reflection import reflect
 
-    try:
-        client, model_id, _provider = get_llm_client_for_use_case("reflection")
-    except (ValueError, KeyError):
-        # Fallback: try summarization use case if reflection not configured
+    with db_session() as config_db:
         try:
-            client, model_id, _provider = get_llm_client_for_use_case("summarization")
+            client, model_id, _provider = get_llm_client_with_db_fallback("reflection", db=config_db)
         except (ValueError, KeyError):
-            logger.error("No LLM configured for reflection or summarization")
-            return {"success": False, "error": "No LLM configured"}
+            try:
+                client, model_id, _provider = get_llm_client_with_db_fallback("summarization", db=config_db)
+            except (ValueError, KeyError):
+                logger.error("No LLM configured for reflection or summarization")
+                return {"success": False, "error": "No LLM configured"}
 
     with db_session() as db:
         result = await reflect(
