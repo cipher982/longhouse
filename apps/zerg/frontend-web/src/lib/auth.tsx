@@ -509,6 +509,22 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
           <div style={{ color: 'rgba(255, 255, 255, 0.5)', padding: '1rem 0' }}>Loading...</div>
         )}
 
+        {showGoogle && (
+          <GoogleSignInButton
+            clientId={clientId}
+            onSuccess={handleLoginSuccess}
+            onError={handleLoginError}
+          />
+        )}
+
+        {showPassword && showGoogle && (
+          <div style={{ margin: '1rem 0', color: 'rgba(255, 255, 255, 0.3)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+            <span>or</span>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+          </div>
+        )}
+
         {showPassword && (
           <form onSubmit={handlePasswordSubmit}>
             <input
@@ -516,7 +532,7 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
               value={password}
               onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }}
               placeholder="Enter password"
-              autoFocus
+              autoFocus={!showGoogle}
               style={{
                 width: '100%',
                 padding: '0.75rem 1rem',
@@ -555,22 +571,6 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
               {isPasswordLoading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
-        )}
-
-        {showPassword && showGoogle && (
-          <div style={{ margin: '1rem 0', color: 'rgba(255, 255, 255, 0.3)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
-            <span>or</span>
-            <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
-          </div>
-        )}
-
-        {showGoogle && (
-          <GoogleSignInButton
-            clientId={clientId}
-            onSuccess={handleLoginSuccess}
-            onError={handleLoginError}
-          />
         )}
 
         {config.isDevelopment && (
