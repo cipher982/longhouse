@@ -66,6 +66,35 @@ def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/sso-keys")
+def get_sso_keys(
+    x_instance_id: str = Header(default=""),
+    x_internal_secret: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Return SSO signing keys for an instance.
+
+    Authenticated via instance ID + internal API secret headers.
+    Instances call this at runtime to stay in sync with the control plane's
+    JWT secrets, eliminating stale-secret drift after rotations.
+    """
+    if not x_instance_id or not x_internal_secret:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing auth headers")
+
+    if not hmac.compare_digest(x_internal_secret, settings.instance_internal_api_secret):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
+
+    # Validate that the requesting instance exists in DB
+    inst = db.query(Instance).filter(Instance.subdomain == x_instance_id).first()
+    if not inst:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unknown instance")
+
+    # Only return the instance SSO signing key — never the CP's own session key
+    keys = [settings.instance_jwt_secret]
+
+    return {"keys": keys, "ttl_seconds": 300}
+
+
 @router.get("/me", response_model=InstanceOut)
 def my_instance(request: Request, db: Session = Depends(get_db)):
     """Get the current user's instance (session auth, not admin)."""
@@ -267,6 +296,7 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     inst, user = row
 
     provisioner = Provisioner()
+    provisioner.deprovision_instance(f"longhouse-{inst.subdomain}")
     result = provisioner.provision_instance(inst.subdomain, owner_email=user.email)
 
     inst.status = "provisioning"

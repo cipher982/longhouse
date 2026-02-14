@@ -311,7 +311,7 @@ def open_instance(request: Request, db: Session = Depends(get_db)):
     from control_plane.routers.instances import _encode_jwt
 
     token = _encode_jwt(
-        {"sub": str(user.id), "email": user.email, "exp": int(time.time()) + 300},
+        {"sub": str(user.id), "email": user.email, "instance": instance.subdomain, "exp": int(time.time()) + 300},
         settings.instance_jwt_secret,
     )
 

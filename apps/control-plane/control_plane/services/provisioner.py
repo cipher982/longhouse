@@ -72,10 +72,11 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
         "PUBLIC_SITE_URL": settings.public_site_url,
         "DATABASE_URL": "sqlite:////data/longhouse.db",
         "JWT_SECRET": settings.instance_jwt_secret,
-        "CONTROL_PLANE_JWT_SECRET": settings.jwt_secret,
+        "CONTROL_PLANE_JWT_SECRET": settings.instance_jwt_secret,
         "INTERNAL_API_SECRET": settings.instance_internal_api_secret,
         "FERNET_SECRET": settings.instance_fernet_secret,
         "TRIGGER_SIGNING_SECRET": settings.instance_trigger_signing_secret,
+        "CONTROL_PLANE_URL": f"https://control.{settings.root_domain}",
     }
 
     if password:

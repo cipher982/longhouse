@@ -328,6 +328,8 @@ export function GoogleSignInButton({ clientId, onSuccess, onError }: GoogleSignI
 export interface AuthMethods {
   google: boolean;
   password: boolean;
+  sso: boolean;
+  sso_url: string | null;
 }
 
 export interface PasswordLoginResult {
@@ -340,12 +342,12 @@ export async function getAuthMethods(): Promise<AuthMethods> {
   try {
     const response = await fetch(`${config.apiBaseUrl}/auth/methods`);
     if (!response.ok) {
-      return { google: true, password: true };
+      return { google: true, password: true, sso: false, sso_url: null };
     }
     return response.json();
   } catch {
     // Default to showing both on network errors
-    return { google: true, password: true };
+    return { google: true, password: true, sso: false, sso_url: null };
   }
 }
 
@@ -404,9 +406,31 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
   const [isPasswordLoading, setIsPasswordLoading] = useState(false);
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
 
+  const [ssoRedirecting, setSsoRedirecting] = useState(false);
+
   useEffect(() => {
     getAuthMethods().then(setAuthMethods);
   }, []);
+
+  // SSO-only: no local Google or password, redirect to control plane
+  useEffect(() => {
+    if (authMethods && authMethods.sso && !authMethods.google && !authMethods.password && authMethods.sso_url) {
+      setSsoRedirecting(true);
+      window.location.href = authMethods.sso_url;
+    }
+  }, [authMethods]);
+
+  if (ssoRedirecting) {
+    return (
+      <div style={{
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        background: '#030305', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'rgba(255, 255, 255, 0.7)', fontSize: '1rem', zIndex: 1000,
+      }}>
+        Redirecting to sign in...
+      </div>
+    );
+  }
 
   const handleLoginSuccess = () => {
     // The AuthProvider will handle updating the authentication state
