@@ -569,19 +569,12 @@ async def _generate_summary_background(session_id: str) -> None:
             logger.debug("No new events for session %s, skipping summary", session_id)
             return
 
-        # Throttle: skip if fewer than 2 new user/assistant messages
+        # Throttle: skip if fewer than 2 new user/assistant messages.
+        # Do NOT advance cursor — let events accumulate until threshold is met.
         new_event_dicts = _events_to_dicts(new_events)
         meaningful_count = sum(1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text"))
         if meaningful_count < 2:
-            # Still update count to prevent reprocessing these events
-            result = db.execute(
-                update(AgentSession)
-                .where(AgentSession.id == session_id)
-                .where(AgentSession.summary_event_count == old_count)
-                .values(summary_event_count=total_count)
-            )
-            if result.rowcount > 0:
-                db.commit()
+            logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
             return
 
         summary = await incremental_summary(
@@ -598,34 +591,56 @@ async def _generate_summary_background(session_id: str) -> None:
             },
         )
 
-        # CAS update: only write if summary_event_count hasn't changed
-        if summary:
+        # CAS update: only write if summary_event_count hasn't changed.
+        # On conflict, retry once with fresh state (handles back-to-back ingests).
+        for _attempt in range(2):
+            values = {"summary_event_count": total_count}
+            if summary:
+                values["summary"] = summary.summary
+                values["summary_title"] = summary.title
+
             result = db.execute(
                 update(AgentSession)
                 .where(AgentSession.id == session_id)
                 .where(AgentSession.summary_event_count == old_count)
-                .values(
-                    summary=summary.summary,
-                    summary_title=summary.title,
-                    summary_event_count=total_count,
-                )
-            )
-            if result.rowcount == 0:
-                logger.debug("CAS conflict for session %s, another task already updated", session_id)
-                return
-            db.commit()
-            logger.info("Updated summary for session %s: %s", session_id, summary.title)
-        else:
-            # No meaningful messages — still advance cursor
-            result = db.execute(
-                update(AgentSession)
-                .where(AgentSession.id == session_id)
-                .where(AgentSession.summary_event_count == old_count)
-                .values(summary_event_count=total_count)
+                .values(**values)
             )
             if result.rowcount > 0:
                 db.commit()
-            logger.debug("No meaningful content for session %s, advanced cursor only", session_id)
+                if summary:
+                    logger.info("Updated summary for session %s: %s", session_id, summary.title)
+                else:
+                    logger.debug("No meaningful content for session %s, advanced cursor only", session_id)
+                break
+
+            # CAS conflict — re-read and retry with current state
+            db.rollback()
+            session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+            if not session:
+                return
+            old_count = session.summary_event_count or 0
+            all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+            total_count = len(all_events)
+            new_events = all_events[old_count:]
+            if not new_events:
+                return
+            new_event_dicts = _events_to_dicts(new_events)
+            # Re-run summarization with fresh data
+            summary = await incremental_summary(
+                session_id=str(session.id),
+                current_summary=session.summary,
+                current_title=session.summary_title,
+                new_events=new_event_dicts,
+                client=client,
+                model=model,
+                metadata={
+                    "project": session.project,
+                    "provider": session.provider,
+                    "git_branch": session.git_branch,
+                },
+            )
+        else:
+            logger.warning("CAS conflict persisted for session %s after retry", session_id)
 
     except Exception:
         db.rollback()

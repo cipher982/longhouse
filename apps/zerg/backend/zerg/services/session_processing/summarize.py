@@ -323,11 +323,11 @@ async def incremental_summary(
         if role not in ("user", "assistant"):
             continue
         text = ev.get("content_text") or ""
-        if not text.strip():
-            continue
-        # Clean: strip noise XML, redact secrets, cap length
+        # Clean first, then check emptiness (content may be only noise tags)
         text = strip_noise(text)
         text = redact_secrets(text)
+        if not text.strip():
+            continue
         text = text[:500]
         messages.append({"role": role, "text": text})
 
@@ -349,10 +349,12 @@ async def incremental_summary(
         if ctx:
             parts.append("Context: " + ", ".join(ctx))
 
-    # Existing summary
+    # Existing summary (redact in case prior pipeline stored secrets)
     if current_summary:
-        parts.append(f"Current title: {current_title or 'Untitled Session'}")
-        parts.append(f"Current summary: {current_summary}")
+        safe_title = redact_secrets(current_title) if current_title else "Untitled Session"
+        safe_summary = redact_secrets(current_summary)
+        parts.append(f"Current title: {safe_title}")
+        parts.append(f"Current summary: {safe_summary}")
 
     # New messages
     msg_lines = [f"[{m['role']}] {m['text']}" for m in messages]
