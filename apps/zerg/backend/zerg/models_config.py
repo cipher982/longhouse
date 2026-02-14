@@ -369,6 +369,77 @@ class EmbeddingConfig:
     api_key: str  # actual key value
 
 
+def get_llm_client_with_db_fallback(use_case: str, db=None) -> tuple:
+    """Get an async LLM client, checking DB-stored provider config first.
+
+    For single-tenant instances, looks up any user's DB config for the "text"
+    capability. If found, creates a client with that key/base_url. Otherwise
+    falls through to the env-var-based ``get_llm_client_for_use_case()``.
+
+    Returns:
+        (client, model_id, provider) tuple. Caller must close the client.
+
+    Raises:
+        ValueError: If neither DB config nor env-var config is available.
+    """
+    if db is not None:
+        try:
+            from zerg.models.models import LlmProviderConfig
+            from zerg.utils.crypto import decrypt as _decrypt
+
+            row = db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "text").first()
+            if row:
+                api_key = _decrypt(row.encrypted_api_key)
+                base_url = row.base_url
+
+                # Resolve the model for the use case from config
+                model_id = get_model_for_use_case(use_case)
+                model_config = MODELS_BY_ID.get(model_id)
+                provider = model_config.provider if model_config else ModelProvider.OPENAI
+
+                from openai import AsyncOpenAI
+
+                kwargs = {"api_key": api_key}
+                if base_url:
+                    kwargs["base_url"] = base_url
+                return AsyncOpenAI(**kwargs), model_id, provider
+        except Exception:
+            pass  # Fall through to env-var resolution
+
+    return get_llm_client_for_use_case(use_case)
+
+
+def get_embedding_config_with_db_fallback(db=None) -> EmbeddingConfig | None:
+    """Load embedding config, checking DB-stored provider config first.
+
+    For single-tenant instances, looks up any user's DB config for the
+    "embedding" capability. If found, uses that key/base_url. Otherwise falls
+    through to the env-var-based ``get_embedding_config()``.
+    """
+    if db is not None:
+        try:
+            from zerg.models.models import LlmProviderConfig
+            from zerg.utils.crypto import decrypt as _decrypt
+
+            row = db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "embedding").first()
+            if row:
+                api_key = _decrypt(row.encrypted_api_key)
+                # Use default embedding config from models.json for model/dims
+                embedding_cfg = _CONFIG.get("embedding", {})
+                default = embedding_cfg.get("default", {})
+                return EmbeddingConfig(
+                    provider=row.provider_name,
+                    model=default.get("model", "text-embedding-3-small"),
+                    dims=default.get("dims", 256),
+                    api_key_env_var="DB_CONFIGURED",
+                    api_key=api_key,
+                )
+        except Exception:
+            pass  # Fall through to env-var resolution
+
+    return get_embedding_config()
+
+
 def get_embedding_config() -> EmbeddingConfig | None:
     """Load embedding config from models.json.
 

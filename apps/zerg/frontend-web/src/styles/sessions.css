@@ -15,6 +15,26 @@
     gap: var(--space-6);
   }
 
+  /* LLM hint banner */
+  .sessions-llm-hint {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    background: color-mix(in srgb, var(--color-intent-warning) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-intent-warning) 20%, transparent);
+    border-radius: var(--radius-sm, 4px);
+    margin-bottom: var(--space-2);
+  }
+
+  .sessions-llm-hint a {
+    color: var(--color-brand-primary);
+    text-decoration: none;
+  }
+
+  .sessions-llm-hint a:hover {
+    text-decoration: underline;
+  }
+
   /* ---------------------------------------------------------------------------
    * Filter Bar
    * ---------------------------------------------------------------------------*/

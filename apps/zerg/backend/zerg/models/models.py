@@ -964,3 +964,40 @@ class SeedRegistry(Base):
         Index("ix_seed_registry_namespace", "namespace"),
         Index("ix_seed_registry_target", "target"),
     )
+
+
+# ---------------------------------------------------------------------------
+# LLM Provider Config – Per-user LLM provider settings (DB > env fallback)
+# ---------------------------------------------------------------------------
+
+
+class LlmProviderConfig(Base):
+    """Per-user LLM provider configuration for text and embedding capabilities.
+
+    Stores API keys (Fernet-encrypted) and base URLs so users can configure
+    any OpenAI-compatible provider via the Settings UI.
+
+    Resolution order: DB config > env var > unavailable.
+    """
+
+    __tablename__ = "llm_provider_configs"
+    __table_args__ = (UniqueConstraint("owner_id", "capability", name="uix_llm_provider_owner_capability"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    owner_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    capability = Column(String(20), nullable=False)  # "text" or "embedding"
+    provider_name = Column(String(100), nullable=False)  # e.g. "openai", "groq", "ollama", "custom"
+    encrypted_api_key = Column(Text, nullable=False)  # Fernet AES-GCM
+    base_url = Column(String(500), nullable=True)  # nullable = use provider default
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    owner = relationship("User", backref="llm_provider_configs")

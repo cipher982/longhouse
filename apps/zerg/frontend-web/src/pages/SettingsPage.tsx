@@ -12,6 +12,7 @@ import {
   Spinner
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
+import LlmProviderCard from "../components/LlmProviderCard";
 
 interface Server {
   name: string;
@@ -207,6 +208,9 @@ export default function SettingsPage() {
 
       <form onSubmit={handleSubmit} className="profile-form">
         <div className="settings-stack settings-stack--lg">
+          {/* LLM Providers */}
+          <LlmProviderCard />
+
           {/* Basic Information */}
           <Card>
             <Card.Header>

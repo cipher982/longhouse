@@ -400,6 +400,150 @@
     justify-content: flex-end;
   }
 
+  /* ---------------------------------------------------------------- */
+  /* LLM Provider Card                                               */
+  /* ---------------------------------------------------------------- */
+
+  .llm-loading {
+    display: flex;
+    justify-content: center;
+    padding: var(--space-4);
+  }
+
+  .llm-capabilities-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .llm-capability-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 14px 16px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-sm, 4px);
+    gap: 16px;
+  }
+
+  .llm-capability-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .llm-capability-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .llm-capability-label {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+  }
+
+  .llm-capability-source {
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: Monaco, Menlo, monospace;
+  }
+
+  .llm-capability-provider {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-family: Monaco, Menlo, monospace;
+  }
+
+  .llm-capability-features {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    line-height: 1.4;
+  }
+
+  .llm-capability-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-shrink: 0;
+    align-items: center;
+  }
+
+  .llm-config-form {
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-sm, 4px);
+  }
+
+  .llm-provider-select {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .llm-provider-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text);
+    padding: 6px 10px;
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-sm, 4px);
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .llm-provider-option:hover {
+    border-color: var(--color-brand-primary);
+    background: color-mix(in srgb, var(--color-brand-primary) 6%, transparent);
+  }
+
+  .llm-provider-option input[type="radio"] {
+    accent-color: var(--color-brand-primary);
+  }
+
+  .llm-config-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .llm-test-result {
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm, 4px);
+    margin-bottom: 12px;
+  }
+
+  .llm-test-result--success {
+    color: var(--color-intent-success);
+    background: color-mix(in srgb, var(--color-intent-success) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-intent-success) 30%, transparent);
+  }
+
+  .llm-test-result--error {
+    color: var(--color-intent-error);
+    background: color-mix(in srgb, var(--color-intent-error) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-intent-error) 30%, transparent);
+  }
+
+  .llm-config-actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
+  }
+
   /* Responsive Design */
   @media (width <= 768px) {
     .section-header {
@@ -418,6 +562,14 @@
 
     .secret-form__fields {
       grid-template-columns: 1fr;
+    }
+
+    .llm-config-fields {
+      grid-template-columns: 1fr;
+    }
+
+    .llm-capability-row {
+      flex-direction: column;
     }
   }
 }
