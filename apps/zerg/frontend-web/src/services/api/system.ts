@@ -10,7 +10,7 @@ export interface SystemCapabilities {
  * Returns which features are available based on server configuration.
  */
 export async function fetchSystemCapabilities(): Promise<SystemCapabilities> {
-  return request<SystemCapabilities>("/api/system/capabilities");
+  return request<SystemCapabilities>("/system/capabilities");
 }
 
 // ---------------------------------------------------------------------------
@@ -46,12 +46,12 @@ export interface LlmProviderTestResult {
 
 /** Fetch detailed LLM capability status (text + embedding). */
 export async function fetchLlmCapabilities(): Promise<LlmCapabilities> {
-  return request<LlmCapabilities>("/api/capabilities/llm");
+  return request<LlmCapabilities>("/capabilities/llm");
 }
 
 /** List configured LLM providers for the current user. */
 export async function fetchLlmProviders(): Promise<LlmProviderInfo[]> {
-  return request<LlmProviderInfo[]>("/api/llm/providers");
+  return request<LlmProviderInfo[]>("/llm/providers");
 }
 
 /** Create or update an LLM provider config. */
@@ -59,7 +59,7 @@ export async function upsertLlmProvider(
   capability: string,
   data: { provider_name: string; api_key: string; base_url: string | null }
 ): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/api/llm/providers/${capability}`, {
+  return request<{ success: boolean }>(`/llm/providers/${capability}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -68,7 +68,7 @@ export async function upsertLlmProvider(
 
 /** Remove an LLM provider config. */
 export async function deleteLlmProvider(capability: string): Promise<void> {
-  await request<void>(`/api/llm/providers/${capability}`, {
+  await request<void>(`/llm/providers/${capability}`, {
     method: "DELETE",
   });
 }
@@ -78,7 +78,7 @@ export async function testLlmProvider(
   capability: string,
   data: { provider_name: string; api_key: string; base_url: string | null }
 ): Promise<LlmProviderTestResult> {
-  return request<LlmProviderTestResult>(`/api/llm/providers/${capability}/test`, {
+  return request<LlmProviderTestResult>(`/llm/providers/${capability}/test`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
