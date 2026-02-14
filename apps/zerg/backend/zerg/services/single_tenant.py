@@ -114,6 +114,7 @@ def bootstrap_owner_user(db: Session) -> None:
             provider=provider,
             provider_user_id=provider_user_id,
             role="ADMIN",  # Owner is always admin
+            skip_notification=True,  # Bootstrap, not a real signup
         )
         logger.info("Created owner user: id=%s, email=%s", user.id, owner_email)
     except Exception as e:
