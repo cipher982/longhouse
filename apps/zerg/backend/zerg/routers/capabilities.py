@@ -94,6 +94,7 @@ class LlmProviderTestRequest(BaseModel):
     provider_name: str
     api_key: str
     base_url: str | None = None
+    model: str | None = None  # optional: override test model for custom providers
 
 
 class LlmProviderTestResponse(BaseModel):
@@ -293,35 +294,47 @@ async def test_llm_provider(
     if not base_url and request.provider_name in _KNOWN_PROVIDERS:
         base_url = _KNOWN_PROVIDERS[request.provider_name]
 
-    # SSRF mitigation: block private/loopback IPs (except localhost for Ollama)
-    if base_url:
+    # SSRF mitigation: block private/loopback/link-local IPs
+    # Ollama is exempt (runs on localhost by design)
+    if base_url and request.provider_name != "ollama":
         from urllib.parse import urlparse as _urlparse
 
         parsed = _urlparse(base_url)
         host = parsed.hostname or ""
-        if request.provider_name != "ollama" and host in (
-            "localhost",
-            "127.0.0.1",
-            "::1",
-            "0.0.0.0",
-        ):
+
+        # Block well-known metadata endpoints (cloud SSRF)
+        if host in ("169.254.169.254", "metadata.google.internal"):
+            return LlmProviderTestResponse(
+                success=False,
+                message="Cloud metadata endpoints are blocked",
+            )
+
+        # Block loopback
+        if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
             return LlmProviderTestResponse(
                 success=False,
                 message="Loopback addresses only allowed for Ollama provider",
             )
-        # Block common private ranges (10.x, 172.16-31.x, 192.168.x)
-        if host and not host.startswith(("api.", "https")):
-            import ipaddress
 
-            try:
-                ip = ipaddress.ip_address(host)
-                if ip.is_private and request.provider_name != "ollama":
-                    return LlmProviderTestResponse(
-                        success=False,
-                        message="Private IP addresses only allowed for Ollama provider",
-                    )
-            except ValueError:
-                pass  # hostname, not IP — OK
+        # Block private/link-local IP ranges
+        import ipaddress
+
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.is_private or ip.is_link_local or ip.is_reserved:
+                return LlmProviderTestResponse(
+                    success=False,
+                    message="Private/reserved IP addresses only allowed for Ollama",
+                )
+        except ValueError:
+            pass  # hostname, not IP literal — allow
+
+        # Block http:// (require https for remote endpoints)
+        if parsed.scheme == "http" and host not in ("localhost", "127.0.0.1"):
+            return LlmProviderTestResponse(
+                success=False,
+                message="HTTPS required for remote endpoints",
+            )
 
     try:
         import httpx
@@ -338,7 +351,7 @@ async def test_llm_provider(
 
         try:
             if capability == "text":
-                test_model = _TEST_MODELS.get(request.provider_name, "gpt-4o-mini")
+                test_model = request.model or _TEST_MODELS.get(request.provider_name, "gpt-4o-mini")
                 resp = await client.chat.completions.create(
                     model=test_model,
                     messages=[{"role": "user", "content": "Say 'ok'"}],
@@ -349,7 +362,7 @@ async def test_llm_provider(
                 return LlmProviderTestResponse(success=False, message="No response from API")
             else:
                 # Embeddings always use OpenAI-compatible API
-                emb_model = _TEST_EMBEDDING_MODELS.get(request.provider_name, "text-embedding-3-small")
+                emb_model = request.model or _TEST_EMBEDDING_MODELS.get(request.provider_name, "text-embedding-3-small")
                 resp = await client.embeddings.create(
                     model=emb_model,
                     input="test",

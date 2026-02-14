@@ -367,6 +367,7 @@ class EmbeddingConfig:
     dims: int  # e.g. 256
     api_key_env_var: str  # e.g. "OPENAI_API_KEY"
     api_key: str  # actual key value
+    base_url: str | None = None  # custom endpoint (e.g. DB-configured)
 
 
 # Default models per provider for DB-configured providers that don't match
@@ -395,7 +396,11 @@ def get_llm_client_with_db_fallback(use_case: str, db=None) -> tuple:
     Raises:
         ValueError: If neither DB config nor env-var config is available.
     """
-    if db is not None:
+    # Only use DB config in single-tenant mode to prevent cross-tenant key leakage
+    from zerg.config import get_settings as _get_settings
+
+    _s = _get_settings()
+    if db is not None and _s.single_tenant:
         try:
             from zerg.models.models import LlmProviderConfig
             from zerg.utils.crypto import decrypt as _decrypt
@@ -444,7 +449,11 @@ def get_embedding_config_with_db_fallback(db=None) -> EmbeddingConfig | None:
     Note: the embedding pipeline only supports OpenAI-compatible endpoints,
     so we always use OpenAI model defaults regardless of provider_name.
     """
-    if db is not None:
+    # Only use DB config in single-tenant mode to prevent cross-tenant key leakage
+    from zerg.config import get_settings as _get_settings
+
+    _s = _get_settings()
+    if db is not None and _s.single_tenant:
         try:
             from zerg.models.models import LlmProviderConfig
             from zerg.utils.crypto import decrypt as _decrypt
@@ -452,6 +461,7 @@ def get_embedding_config_with_db_fallback(db=None) -> EmbeddingConfig | None:
             row = db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "embedding").first()
             if row:
                 api_key = _decrypt(row.encrypted_api_key)
+                base_url = row.base_url
                 # Use default embedding config from models.json for model/dims
                 embedding_cfg = _CONFIG.get("embedding", {})
                 default = embedding_cfg.get("default", {})
@@ -462,6 +472,7 @@ def get_embedding_config_with_db_fallback(db=None) -> EmbeddingConfig | None:
                     dims=default.get("dims", 256),
                     api_key_env_var="DB_CONFIGURED",
                     api_key=api_key,
+                    base_url=base_url,
                 )
         except Exception:
             pass  # Fall through to env-var resolution
