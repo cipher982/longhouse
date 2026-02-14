@@ -369,12 +369,25 @@ class EmbeddingConfig:
     api_key: str  # actual key value
 
 
+# Default models per provider for DB-configured providers that don't match
+# the models.json config (e.g., user configures Groq but models.json has
+# OpenAI models). Maps provider_name -> model_id.
+_DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
+    "openai": "gpt-4o-mini",
+    "groq": "llama-3.3-70b-versatile",
+    "ollama": "llama3.2",
+}
+
+
 def get_llm_client_with_db_fallback(use_case: str, db=None) -> tuple:
     """Get an async LLM client, checking DB-stored provider config first.
 
     For single-tenant instances, looks up any user's DB config for the "text"
     capability. If found, creates a client with that key/base_url. Otherwise
     falls through to the env-var-based ``get_llm_client_for_use_case()``.
+
+    When the DB provider doesn't match the models.json provider, uses a
+    sensible default model for that provider instead of the config model.
 
     Returns:
         (client, model_id, provider) tuple. Caller must close the client.
@@ -391,15 +404,27 @@ def get_llm_client_with_db_fallback(use_case: str, db=None) -> tuple:
             if row:
                 api_key = _decrypt(row.encrypted_api_key)
                 base_url = row.base_url
+                db_provider = row.provider_name  # e.g. "groq", "openai"
 
-                # Resolve the model for the use case from config
-                model_id = get_model_for_use_case(use_case)
-                model_config = MODELS_BY_ID.get(model_id)
-                provider = model_config.provider if model_config else ModelProvider.OPENAI
+                # Try to resolve the model for the use case from config
+                try:
+                    model_id = get_model_for_use_case(use_case)
+                    model_config = MODELS_BY_ID.get(model_id)
+                    config_provider = model_config.provider.value if model_config else "openai"
+                except (ValueError, KeyError):
+                    config_provider = None
+                    model_id = None
+
+                # If DB provider doesn't match config provider (or no config),
+                # use a provider-appropriate default model
+                if not model_id or not config_provider or config_provider != db_provider:
+                    model_id = _DB_PROVIDER_DEFAULT_MODELS.get(db_provider, "gpt-4o-mini")
+
+                provider = ModelProvider.OPENAI  # All DB providers use OpenAI SDK
 
                 from openai import AsyncOpenAI
 
-                kwargs = {"api_key": api_key}
+                kwargs: dict = {"api_key": api_key}
                 if base_url:
                     kwargs["base_url"] = base_url
                 return AsyncOpenAI(**kwargs), model_id, provider
@@ -415,6 +440,9 @@ def get_embedding_config_with_db_fallback(db=None) -> EmbeddingConfig | None:
     For single-tenant instances, looks up any user's DB config for the
     "embedding" capability. If found, uses that key/base_url. Otherwise falls
     through to the env-var-based ``get_embedding_config()``.
+
+    Note: the embedding pipeline only supports OpenAI-compatible endpoints,
+    so we always use OpenAI model defaults regardless of provider_name.
     """
     if db is not None:
         try:
@@ -428,7 +456,8 @@ def get_embedding_config_with_db_fallback(db=None) -> EmbeddingConfig | None:
                 embedding_cfg = _CONFIG.get("embedding", {})
                 default = embedding_cfg.get("default", {})
                 return EmbeddingConfig(
-                    provider=row.provider_name,
+                    # Always "openai" — pipeline uses OpenAI embedding API
+                    provider="openai",
                     model=default.get("model", "text-embedding-3-small"),
                     dims=default.get("dims", 256),
                     api_key_env_var="DB_CONFIGURED",

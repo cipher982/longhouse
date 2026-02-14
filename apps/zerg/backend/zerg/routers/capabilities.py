@@ -45,6 +45,17 @@ _KNOWN_PROVIDERS = {
     "ollama": "http://localhost:11434/v1",
 }
 
+# Per-provider test models (used by /test endpoint only)
+_TEST_MODELS: dict[str, str] = {
+    "openai": "gpt-4o-mini",
+    "groq": "llama-3.3-70b-versatile",
+    "ollama": "llama3.2",
+}
+
+_TEST_EMBEDDING_MODELS: dict[str, str] = {
+    "openai": "text-embedding-3-small",
+}
+
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -155,17 +166,18 @@ def llm_capabilities(
     text_avail, text_src, text_provider = _resolve_capability_no_user("text", db)
     emb_avail, emb_src, emb_provider = _resolve_capability_no_user("embedding", db)
 
+    # Public endpoint: expose availability + features but not provider details
     return CapabilitiesResponse(
         text=CapabilityStatus(
             available=text_avail,
-            source=text_src,
-            provider_name=text_provider,
+            source=None,  # Don't leak source in public endpoint
+            provider_name=None,
             features=["summaries", "reflection", "daily digest", "oikos chat"],
         ),
         embedding=CapabilityStatus(
             available=emb_avail,
-            source=emb_src,
-            provider_name=emb_provider,
+            source=None,
+            provider_name=None,
             features=["semantic search", "recall", "similar sessions"],
         ),
     )
@@ -281,10 +293,44 @@ async def test_llm_provider(
     if not base_url and request.provider_name in _KNOWN_PROVIDERS:
         base_url = _KNOWN_PROVIDERS[request.provider_name]
 
+    # SSRF mitigation: block private/loopback IPs (except localhost for Ollama)
+    if base_url:
+        from urllib.parse import urlparse as _urlparse
+
+        parsed = _urlparse(base_url)
+        host = parsed.hostname or ""
+        if request.provider_name != "ollama" and host in (
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+        ):
+            return LlmProviderTestResponse(
+                success=False,
+                message="Loopback addresses only allowed for Ollama provider",
+            )
+        # Block common private ranges (10.x, 172.16-31.x, 192.168.x)
+        if host and not host.startswith(("api.", "https")):
+            import ipaddress
+
+            try:
+                ip = ipaddress.ip_address(host)
+                if ip.is_private and request.provider_name != "ollama":
+                    return LlmProviderTestResponse(
+                        success=False,
+                        message="Private IP addresses only allowed for Ollama provider",
+                    )
+            except ValueError:
+                pass  # hostname, not IP — OK
+
     try:
+        import httpx
         from openai import AsyncOpenAI
 
-        kwargs: dict[str, Any] = {"api_key": request.api_key}
+        kwargs: dict[str, Any] = {
+            "api_key": request.api_key,
+            "timeout": httpx.Timeout(10.0, connect=5.0),
+        }
         if base_url:
             kwargs["base_url"] = base_url
 
@@ -292,10 +338,7 @@ async def test_llm_provider(
 
         try:
             if capability == "text":
-                test_model = {
-                    "openai": "gpt-4o-mini",
-                    "groq": "llama-3.3-70b-versatile",
-                }.get(request.provider_name, "gpt-4o-mini")
+                test_model = _TEST_MODELS.get(request.provider_name, "gpt-4o-mini")
                 resp = await client.chat.completions.create(
                     model=test_model,
                     messages=[{"role": "user", "content": "Say 'ok'"}],
@@ -305,8 +348,10 @@ async def test_llm_provider(
                     return LlmProviderTestResponse(success=True, message="Connection successful")
                 return LlmProviderTestResponse(success=False, message="No response from API")
             else:
+                # Embeddings always use OpenAI-compatible API
+                emb_model = _TEST_EMBEDDING_MODELS.get(request.provider_name, "text-embedding-3-small")
                 resp = await client.embeddings.create(
-                    model="text-embedding-3-small",
+                    model=emb_model,
                     input="test",
                     dimensions=256,
                 )
@@ -318,7 +363,6 @@ async def test_llm_provider(
 
     except Exception as e:
         error_msg = str(e)
-        # Truncate long error messages
         if len(error_msg) > 200:
             error_msg = error_msg[:200] + "..."
         return LlmProviderTestResponse(success=False, message=f"Connection failed: {error_msg}")
