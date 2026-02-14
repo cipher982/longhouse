@@ -133,8 +133,14 @@ Import from `../components/ui`. **Check here before building custom UI.**
 | What | URL | How |
 |------|-----|-----|
 | Marketing site | https://longhouse.ai | Coolify app `longhouse-demo` |
-| User instance | https://david.longhouse.ai | Docker Compose at `zerg:/opt/longhouse/david/` |
 | Control plane | https://control.longhouse.ai | Coolify app `longhouse-control-plane` |
+| User instances | https://david010.longhouse.ai | Control plane reprovision (pulls latest image) |
+
+**User instances** are provisioned and managed by the control plane. There is no docker-compose path — all instances are containers created by the provisioner. To update an instance to the latest image, reprovision it via the admin API.
+
+**Dev instances:**
+- **david010.longhouse.ai** — primary dev instance (david010@gmail.com, persistent data). Use for feature dev and prod debugging.
+- **david@drose.io** — ephemeral instance for testing signup flow. Can be nuked/reprovisioned freely.
 
 ### Before Push
 ```bash
@@ -143,7 +149,7 @@ make test-e2e          # Core E2E + a11y — must pass 100%
 ```
 
 ### After Push
-Push to main triggers `runtime-image.yml` **if backend/frontend/dockerfile changed** (has path filters — docs-only pushes skip it). Builds `ghcr.io/cipher982/longhouse-runtime:latest`. **Does NOT auto-deploy.** Update all three:
+Push to main triggers `runtime-image.yml` **if backend/frontend/dockerfile changed** (has path filters — docs-only pushes skip it). Builds `ghcr.io/cipher982/longhouse-runtime:latest`. **Does NOT auto-deploy.** Deploy steps:
 
 **1. Marketing site (Coolify):**
 ```bash
@@ -156,28 +162,29 @@ coolify deploy name longhouse-demo
 coolify deploy name longhouse-control-plane
 ```
 
-**3. User instance (Docker Compose on zerg:/opt/longhouse/david/):**
+**3. User instances (reprovision via control plane):**
 ```bash
-# Config lives at /opt/longhouse/david/ on zerg server:
-#   docker-compose.yml  — compose stack definition
-#   david.env           — secrets (chmod 600, NOT in git)
-# Template for new secrets: docker/david.env.template in this repo.
+# Get admin token
+ssh zerg 'docker exec <control-plane-container> env | grep ADMIN_TOKEN'
 
-# Redeploy (pull new image + recreate container)
-ssh zerg 'cd /opt/longhouse/david && docker compose pull && docker compose up -d'
+# List instances
+curl -s -H "X-Admin-Token: $TOKEN" https://control.longhouse.ai/api/instances
+
+# Reprovision (stops old container, creates new one with latest image + current secrets)
+curl -s -X POST -H "X-Admin-Token: $TOKEN" https://control.longhouse.ai/api/instances/<id>/reprovision
 ```
-- the primary dev (david) user instance is at david010.longhouse.ai using gauth from his david010@gmail.com account, this is the primary one to debug and dev prod features on. he will sometimes use david@drose.io to debug the signup flow, this one can be treated as ephemeral and nuked when needed.
-
+Note: reprovisioning generates a new password. Data is safe — SQLite lives on a host bind mount, not inside the container.
 
 ### Verify Deploy
 ```bash
 make verify-prod                                       # API + browser validation
 curl -s https://longhouse.ai | grep '<title>'          # Marketing site content
+curl -s https://david010.longhouse.ai/api/health       # User instance health
 ```
 
 ### If Something Breaks
 ```bash
-ssh zerg 'docker logs longhouse-david --tail 50'       # User instance
+ssh zerg 'docker logs longhouse-david010 --tail 50'    # User instance
 coolify app logs longhouse-demo                        # Marketing site
 coolify app logs longhouse-control-plane               # Control plane
 ```
@@ -186,10 +193,11 @@ coolify app logs longhouse-control-plane               # Control plane
 1. `make test` + `make test-e2e` pass locally
 2. Push to main (triggers GHCR build if code changed)
 3. Wait for GHCR build: `gh run watch <id> --exit-status`
-4. Deploy all three in parallel (Coolify + docker compose)
-5. Verify: health checks on all three endpoints
-6. If deploy fails, check logs, fix, and redeploy — don't ask the user
-7. Brief summary only at end (what shipped, what to manually verify if needed)
+4. Deploy marketing + control plane (Coolify)
+5. Reprovision user instances via control plane admin API
+6. Verify: health checks on all endpoints
+7. If deploy fails, check logs, fix, and redeploy — don't ask the user
+8. Brief summary only at end (what shipped, what to manually verify if needed)
 
 ## apps/sauron - Scheduler (Folded In)
 
