@@ -158,14 +158,17 @@ class ShipperState:
         provider_session_id: str,
         provider: str = "claude",
     ) -> None:
-        """Update both queued and acked offsets (for successful ship)."""
+        """Update both queued and acked offsets (for successful ship).
+
+        Monotonic: on conflict, only advances offsets forward (never regresses).
+        """
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """INSERT INTO file_state (path, provider, queued_offset, acked_offset, session_id, provider_session_id, last_updated)
                VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET
-                   queued_offset = excluded.queued_offset,
-                   acked_offset = excluded.acked_offset,
+                   queued_offset = MAX(file_state.queued_offset, excluded.queued_offset),
+                   acked_offset = MAX(file_state.acked_offset, excluded.acked_offset),
                    session_id = excluded.session_id,
                    provider_session_id = excluded.provider_session_id,
                    last_updated = excluded.last_updated""",
@@ -196,11 +199,23 @@ class ShipperState:
         self._conn.commit()
 
     def set_acked_offset(self, file_path: str, offset: int) -> None:
-        """Advance only the acked offset (server confirmed receipt)."""
+        """Advance only the acked offset (server confirmed receipt).
+
+        Monotonic: only updates if the new value is greater than the current value.
+        """
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
-            "UPDATE file_state SET acked_offset = ?, last_updated = ? WHERE path = ?",
-            (offset, now, file_path),
+            "UPDATE file_state SET acked_offset = ?, last_updated = ? WHERE path = ? AND acked_offset < ?",
+            (offset, now, file_path, offset),
+        )
+        self._conn.commit()
+
+    def reset_offsets(self, file_path: str) -> None:
+        """Reset both queued and acked offsets to 0 (e.g., after file truncation)."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "UPDATE file_state SET queued_offset = 0, acked_offset = 0, last_updated = ? WHERE path = ?",
+            (now, file_path),
         )
         self._conn.commit()
 
@@ -224,13 +239,15 @@ class ShipperState:
             provider_session_id=row[3] or "",
         )
 
-    def get_unacked_files(self) -> list[tuple[str, int, int]]:
+    def get_unacked_files(self) -> list[tuple[str, int, int, str, str | None]]:
         """Get files where queued_offset > acked_offset (need recovery).
 
-        Returns list of (path, acked_offset, queued_offset).
+        Returns list of (path, acked_offset, queued_offset, provider, session_id).
         """
-        cursor = self._conn.execute("SELECT path, acked_offset, queued_offset FROM file_state WHERE queued_offset > acked_offset")
-        return [(row[0], row[1], row[2]) for row in cursor.fetchall()]
+        cursor = self._conn.execute(
+            "SELECT path, acked_offset, queued_offset, provider, session_id FROM file_state WHERE queued_offset > acked_offset"
+        )
+        return [(row[0], row[1], row[2], row[3], row[4]) for row in cursor.fetchall()]
 
     def list_sessions(self) -> list[ShippedSession]:
         """List all tracked sessions."""

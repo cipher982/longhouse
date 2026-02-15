@@ -247,7 +247,6 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
 
     try:
         with open(path, "rb") as f:
-            # Seek to offset
             f.seek(offset)
 
             while True:
@@ -257,7 +256,6 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
                 if not line:
                     break
 
-                # Skip empty lines
                 line_text = line.decode("utf-8", errors="replace").strip()
                 if not line_text:
                     continue
@@ -270,12 +268,10 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
 
                 event_type = obj.get("type", "")
 
-                # Skip metadata-only types
                 if event_type in ("summary", "file-history-snapshot", "progress"):
                     continue
 
                 if event_type == "user":
-                    # Check if this is a tool result response
                     message = obj.get("message", {})
                     content = message.get("content", [])
 
@@ -287,10 +283,8 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
                                 break
 
                     if has_tool_result:
-                        # Extract tool results
                         yield from _extract_tool_results(obj, session_id, line_offset, raw_line=line_text)
                     else:
-                        # Regular user message
                         text = _extract_user_content(message)
                         if text and text.strip():
                             timestamp = _parse_timestamp(obj.get("timestamp"))
@@ -313,6 +307,96 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
 
     except Exception as e:
         logger.exception(f"Error parsing session file {path}: {e}")
+
+
+def parse_session_file_with_offset(path: Path, offset: int = 0) -> tuple[list[ParsedEvent], int]:
+    """Parse session file and return events with last good byte offset.
+
+    Returns:
+        Tuple of (events, last_good_offset) where last_good_offset is the byte
+        position after the last successfully parsed line.  A half-written line
+        at EOF is excluded.
+    """
+    return _parse_with_offset_tracking(path, offset)
+
+
+def _parse_with_offset_tracking(path: Path, offset: int = 0) -> tuple[list[ParsedEvent], int]:
+    """Parse session file tracking the last good byte offset."""
+    session_id = path.stem
+    last_good_offset = offset
+    events: list[ParsedEvent] = []
+
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+
+            while True:
+                line_offset = f.tell()
+                line = f.readline()
+
+                if not line:
+                    break
+
+                after_line = f.tell()
+
+                line_text = line.decode("utf-8", errors="replace").strip()
+                if not line_text:
+                    last_good_offset = after_line
+                    continue
+
+                try:
+                    obj = json.loads(line_text)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse JSON at offset {line_offset}: {e}")
+                    continue
+
+                last_good_offset = after_line
+
+                event_type = obj.get("type", "")
+
+                if event_type in ("summary", "file-history-snapshot", "progress"):
+                    continue
+
+                if event_type == "user":
+                    message = obj.get("message", {})
+                    content = message.get("content", [])
+
+                    has_tool_result = False
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "tool_result":
+                                has_tool_result = True
+                                break
+
+                    if has_tool_result:
+                        events.extend(_extract_tool_results(obj, session_id, line_offset, raw_line=line_text))
+                    else:
+                        text = _extract_user_content(message)
+                        if text and text.strip():
+                            timestamp = _parse_timestamp(obj.get("timestamp"))
+                            if not timestamp:
+                                timestamp = datetime.now(timezone.utc)
+
+                            events.append(
+                                ParsedEvent(
+                                    uuid=obj.get("uuid", str(uuid.uuid4())),
+                                    session_id=session_id,
+                                    timestamp=timestamp,
+                                    role="user",
+                                    content_text=text,
+                                    source_offset=line_offset,
+                                    raw_type="user",
+                                    raw_line=line_text,
+                                )
+                            )
+
+                elif event_type == "assistant":
+                    events.extend(_extract_assistant_events(obj, session_id, line_offset, raw_line=line_text))
+
+    except Exception as e:
+        logger.exception(f"Error parsing session file {path}: {e}")
+
+    return events, last_good_offset
 
 
 def extract_session_metadata(path: Path) -> ParsedSession:

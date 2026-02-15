@@ -227,16 +227,20 @@ class OfflineSpool:
         return cursor.fetchone()[0]
 
     def cleanup(self) -> int:
-        """Remove dead entries older than 7 days and stale pending entries older than 7 days."""
+        """Remove dead entries older than 7 days.
+
+        Pending entries are NOT deleted — they should be retained until
+        shipped or manually cleared, even during extended API outages.
+        """
         cutoff = (datetime.now(timezone.utc) - timedelta(days=DEAD_AGE_DAYS)).isoformat()
         cursor = self._conn.execute(
-            "DELETE FROM spool_queue WHERE (status = 'dead' AND created_at < ?) OR (status = 'pending' AND created_at < ?)",
-            (cutoff, cutoff),
+            "DELETE FROM spool_queue WHERE status = 'dead' AND created_at < ?",
+            (cutoff,),
         )
         count = cursor.rowcount
         self._conn.commit()
         if count > 0:
-            logger.info(f"Cleaned up {count} old spool entries")
+            logger.info(f"Cleaned up {count} old dead spool entries")
         return count
 
     def clear(self) -> None:

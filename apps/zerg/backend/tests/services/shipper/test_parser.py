@@ -5,6 +5,7 @@ from pathlib import Path
 
 from zerg.services.shipper.parser import extract_session_metadata
 from zerg.services.shipper.parser import parse_session_file
+from zerg.services.shipper.parser import parse_session_file_with_offset
 
 
 class TestParseSessionFile:
@@ -454,3 +455,68 @@ class TestExtractSessionMetadata:
         assert metadata.session_id == "empty"
         assert metadata.cwd is None
         assert metadata.started_at is None
+
+
+class TestParseSessionFileWithOffset:
+    """Tests for parse_session_file_with_offset."""
+
+    def test_partial_line_at_eof_excluded(self, tmp_path: Path):
+        """Bug 3: Partial line at EOF should not be included in last_good_offset."""
+        session_file = tmp_path / "test-session.jsonl"
+        complete_line = json.dumps({
+            "type": "user",
+            "uuid": "msg-1",
+            "timestamp": "2026-02-15T10:00:00Z",
+            "message": {"content": "Complete message"},
+        })
+        partial_line = '{"type": "user", "uuid": "msg-partial"'
+
+        session_file.write_text(complete_line + "\n" + partial_line)
+
+        events, last_good_offset = parse_session_file_with_offset(session_file)
+
+        assert len(events) == 1
+        assert events[0].content_text == "Complete message"
+        # last_good_offset should be at end of complete line, NOT at file size
+        assert last_good_offset == len(complete_line.encode("utf-8")) + 1  # +1 for newline
+        assert last_good_offset < session_file.stat().st_size
+
+    def test_all_complete_lines(self, tmp_path: Path):
+        """When all lines are complete, last_good_offset equals file size."""
+        session_file = tmp_path / "test-session.jsonl"
+        line = json.dumps({
+            "type": "user",
+            "uuid": "msg-1",
+            "timestamp": "2026-02-15T10:00:00Z",
+            "message": {"content": "Hello"},
+        })
+        session_file.write_text(line + "\n")
+
+        events, last_good_offset = parse_session_file_with_offset(session_file)
+
+        assert len(events) == 1
+        assert last_good_offset == session_file.stat().st_size
+
+    def test_with_offset(self, tmp_path: Path):
+        """parse_session_file_with_offset respects start offset."""
+        session_file = tmp_path / "test-session.jsonl"
+        line1 = json.dumps({
+            "type": "user",
+            "uuid": "msg-1",
+            "timestamp": "2026-02-15T10:00:00Z",
+            "message": {"content": "First"},
+        })
+        line2 = json.dumps({
+            "type": "user",
+            "uuid": "msg-2",
+            "timestamp": "2026-02-15T10:01:00Z",
+            "message": {"content": "Second"},
+        })
+        session_file.write_text(line1 + "\n" + line2 + "\n")
+
+        offset = len(line1.encode("utf-8")) + 1
+        events, last_good_offset = parse_session_file_with_offset(session_file, offset=offset)
+
+        assert len(events) == 1
+        assert events[0].content_text == "Second"
+        assert last_good_offset == session_file.stat().st_size
