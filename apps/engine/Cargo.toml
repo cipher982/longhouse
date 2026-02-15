@@ -1,0 +1,67 @@
+[package]
+name = "longhouse-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Longhouse session shipper — high-performance Rust engine"
+license = "MIT"
+
+[[bin]]
+name = "longhouse-engine"
+path = "src/main.rs"
+
+[dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Compression
+flate2 = "1"
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "gzip", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["full"] }
+
+# SQLite
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Parallelism
+rayon = "1"
+crossbeam-channel = "0.5"
+
+# Filesystem watching
+notify = "7"
+
+# Memory-mapped I/O
+memmap2 = "0.9"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# Signal handling
+signal-hook = "0.3"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# File traversal
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
