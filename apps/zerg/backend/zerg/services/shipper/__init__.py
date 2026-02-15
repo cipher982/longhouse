@@ -5,7 +5,7 @@ This module provides tools to:
 2. Track shipped offsets for incremental sync
 3. Ship sessions to Zerg's /api/agents/ingest endpoint
 4. Watch for real-time file changes (sub-second sync)
-5. Spool payloads locally when API unreachable
+5. Spool byte-range pointers locally when API unreachable
 6. Install/manage shipper as a system service
 
 Usage:

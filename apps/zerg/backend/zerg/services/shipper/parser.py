@@ -133,6 +133,7 @@ def _extract_assistant_events(
     if not isinstance(content, list):
         return
 
+    first = True
     for idx, item in enumerate(content):
         if not isinstance(item, dict):
             continue
@@ -150,8 +151,9 @@ def _extract_assistant_events(
                     content_text=text,
                     source_offset=offset,
                     raw_type="assistant",
-                    raw_line=raw_line,
+                    raw_line=raw_line if first else "",
                 )
+                first = False
 
         elif item_type == "tool_use":
             tool_name = item.get("name", "")
@@ -167,8 +169,9 @@ def _extract_assistant_events(
                 tool_input_json=tool_input if isinstance(tool_input, dict) else None,
                 source_offset=offset,
                 raw_type="assistant",
-                raw_line=raw_line,
+                raw_line=raw_line if first else "",
             )
+            first = False
 
 
 def _extract_tool_results(
@@ -193,6 +196,7 @@ def _extract_tool_results(
     if not isinstance(content, list):
         return
 
+    first = True
     for idx, item in enumerate(content):
         if not isinstance(item, dict):
             continue
@@ -222,8 +226,9 @@ def _extract_tool_results(
                     tool_output_text=result_text,
                     source_offset=offset,
                     raw_type="tool_result",
-                    raw_line=raw_line,
+                    raw_line=raw_line if first else "",
                 )
+                first = False
 
 
 def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:

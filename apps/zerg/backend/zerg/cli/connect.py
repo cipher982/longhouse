@@ -959,13 +959,16 @@ async def _watch_loop(config: ShipperConfig, debounce_ms: int = 500) -> None:
 
 
 async def _spool_replay_loop(shipper: SessionShipper, stop_event: asyncio.Event) -> None:
-    """Background task to periodically replay spooled events."""
+    """Background task to periodically replay spooled events and clean up."""
     while not stop_event.is_set():
         try:
             await asyncio.sleep(30)  # Check every 30 seconds
 
             if stop_event.is_set():
                 break
+
+            # Always run cleanup (removes stale dead/pending entries)
+            shipper.spool.cleanup()
 
             pending = shipper.spool.pending_count()
             if pending > 0:
