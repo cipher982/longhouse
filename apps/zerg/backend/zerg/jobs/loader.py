@@ -10,6 +10,7 @@ jobs are registered by executing manifest.py from the cloned repo.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import runpy
 import sys
@@ -84,6 +85,16 @@ async def load_jobs_manifest(clear_existing: bool = False, builtin_job_ids: set[
         # IMPORTANT: clear_existing must be inside the lock to prevent race conditions
         # where registry is cleared but then blocks waiting for background sync
         async with git_service.read_lock() as git_sha:
+            # Install job pack dependencies (non-fatal)
+            try:
+                from zerg.services.jobs_repo import install_jobs_deps
+
+                deps_result = await asyncio.to_thread(install_jobs_deps, repo_root)
+                if deps_result.get("error"):
+                    logger.warning("Job deps install failed (non-fatal): %s", deps_result["error"])
+            except Exception as e:
+                logger.warning("Job deps install failed (non-fatal): %s", e)
+
             # Clear manifest jobs before reload if requested
             if clear_existing:
                 preserved = builtin_job_ids or set()
@@ -103,6 +114,16 @@ async def load_jobs_manifest(clear_existing: bool = False, builtin_job_ids: set[
         if not manifest_path.exists():
             logger.info("No jobs manifest found at %s (local-only mode)", manifest_path)
             return False
+
+        # Install job pack dependencies (non-fatal)
+        try:
+            from zerg.services.jobs_repo import install_jobs_deps
+
+            deps_result = await asyncio.to_thread(install_jobs_deps, repo_root)
+            if deps_result.get("error"):
+                logger.warning("Job deps install failed (non-fatal): %s", deps_result["error"])
+        except Exception as e:
+            logger.warning("Job deps install failed (non-fatal): %s", e)
 
         # Clear manifest jobs before reload if requested
         if clear_existing:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import UTC
@@ -26,6 +27,34 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger(__name__)
+
+_legacy_env_lock = asyncio.Lock()
+
+
+async def _run_legacy_job_with_env(func: Callable[[], Awaitable[dict[str, Any]]], secrets: dict[str, str]):
+    """Run legacy job with secrets injected into os.environ (safely)."""
+    if not secrets:
+        result = func()
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    async with _legacy_env_lock:
+        old_env: dict[str, str | None] = {}
+        for key, value in secrets.items():
+            old_env[key] = os.environ.get(key)
+            os.environ[key] = value
+        try:
+            result = func()
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        finally:
+            for key, old_value in old_env.items():
+                if old_value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old_value
 
 
 class SecretField(TypedDict, total=False):
@@ -97,7 +126,15 @@ def _invoke_job_func(config: JobConfig) -> Awaitable[dict[str, Any]]:
         return config.func(ctx)
     else:
         # Legacy: zero-arg, uses os.environ directly
-        return config.func()
+        from zerg.database import db_session
+        from zerg.jobs.secret_resolver import resolve_secrets
+
+        secrets: dict[str, str] = {}
+        if config.secrets:
+            with db_session() as db:
+                secrets = resolve_secrets(owner_id=1, declared_keys=_extract_secret_keys(config.secrets), db=db)
+
+        return _run_legacy_job_with_env(config.func, secrets)
 
 
 @dataclass
