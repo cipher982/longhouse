@@ -201,13 +201,13 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         // Collect metadata
         collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
 
-        // Extract events
-        let line_str = std::str::from_utf8(trimmed).unwrap_or("").to_string();
+        // Extract events — pass raw bytes, convert to string only when needed
+        let line_str = std::str::from_utf8(trimmed).unwrap_or("");
         extract_events(
             &obj,
             session_id,
             line_offset,
-            &line_str,
+            line_str,
             &mut events,
         );
     }
