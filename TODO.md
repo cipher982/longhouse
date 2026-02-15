@@ -52,7 +52,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Section | Status | Notes |
 |---------|--------|-------|
 | Session Processing (3.5) | 100% | Core module + summarize + briefing + hook + integration tests + consumer migration all done |
-| Full Signup Flow | ~90% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs done; needs deploy + smoke test |
+| Full Signup Flow | ~90% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs done; email injection in provisioner done; needs Google OAuth creds + Stripe product setup + smoke test |
+| Email Infrastructure | DONE | Platform-provided SES email via control plane injection + per-user override via Settings UI + `resolve_email_config()` chain (DB → env fallback). 3 commits: `a6c09f59`, `867b57ac`, `bb36e815` |
 
 ### Not Started
 | Section | Status | Notes |
@@ -223,16 +224,17 @@ Evaluate newer integration paths for tighter commis control vs. current hatch su
 
 ## [Infra] ⚠️ Architecture Reality Check (Read First)
 
-**VISION.md describes per-user isolated instances. That doesn't exist YET.**
+**VISION.md describes per-user isolated instances. This is NOW REAL for david010.**
 
-Current reality (as of 2026-02-05):
-- **ONE backend container** (API served via same-host `/api` proxy; `api-*` subdomains are legacy/optional)
-- **ONE frontend container** serves both `longhouse.ai` and `david.longhouse.ai`
-- **ONE SQLite database** at `/data/longhouse.db` (reset 2026-02-05; no users yet)
-- **No production control plane** — repo scaffold exists but not wired to signup/billing
-- **"david.longhouse.ai" is cosmetic** — just DNS routing to shared infra
+Current reality (as of 2026-02-15):
+- **Control plane deployed** at `control.longhouse.ai` (Coolify app `longhouse-control-plane`)
+- **david010 instance** is a real isolated container provisioned by the control plane with its own SQLite DB
+- **Marketing site** at `longhouse.ai` (Coolify app `longhouse-demo`)
+- **Platform-provided email** — Control plane injects SES credentials into instances during provisioning; instances can send email out of the box
+- **SSO login** — Control plane issues JWT tokens for cross-subdomain auth
+- **Remaining gaps:** Google OAuth credentials not configured on control plane (manual provisioning only), Stripe integration not wired
 
-**Target state:** Control plane provisions isolated containers per user (Docker API + Caddy labels; Traefik optional). See VISION.md for architecture.
+**Target state:** Full signup flow: Google OAuth → Stripe checkout → auto-provision. See VISION.md for architecture.
 
 See this file for the current launch analysis.
 
@@ -381,7 +383,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Architecture:** Tiny FastAPI control plane handles signup/billing/provisioning. Uses Docker API directly (not Coolify). Runtime image bundles frontend + backend per user.
 
-**Current state (2026-02-12):** OAuth, Stripe, webhooks, provisioning trigger, dashboard, provisioning status page, and landing page CTAs all implemented. Needs deploy to zerg + Google OAuth credentials + Stripe product setup + smoke test.
+**Current state (2026-02-15):** OAuth, Stripe, webhooks, provisioning trigger, dashboard, provisioning status page, landing page CTAs, and **platform-provided email injection** all implemented. Control plane injects SES env vars into instances during provisioning (`provisioner.py:_env_for()`). Needs Google OAuth credentials + Stripe product setup + smoke test.
 
 **Decisions / Notes (2026-02-04):**
 - Control plane + user instances will live on **zerg** (single host for now).
@@ -490,7 +492,8 @@ Update screenshots to show Timeline, not old dashboard.
 **Goal:** Settings page where users manage job secrets with rich form fields powered by SecretField metadata. Backend API is complete (`GET /api/jobs/secrets`, `PUT /api/jobs/secrets/{key}`, `DELETE /api/jobs/secrets/{key}`, `GET /api/jobs/{job_id}/secrets/status`). Needs React UI.
 
 **Existing patterns (follow these):**
-- **SettingsPage** (`apps/zerg/frontend/src/pages/SettingsPage.tsx`) — card-based sections, closest layout pattern
+- **EmailConfigCard** (`apps/zerg/frontend-web/src/components/EmailConfigCard.tsx`) — newest card pattern for Settings page with status display, inline form, test button, save/delete. Follow this for secrets UI.
+- **SettingsPage** (`apps/zerg/frontend-web/src/pages/SettingsPage.tsx`) — card-based sections, closest layout pattern
 - **SwarmOpsPage** (`SwarmOpsPage.tsx`) — master-detail with list panel + detail panel (use for per-job secret status view)
 - **UI components:** `Card`, `Input`, `Button`, `Badge`, `SectionHeader` — custom components, no external UI library
 - **API client:** `services/api/` with domain modules (e.g., `services/api/sessions.ts`), uses react-query for cache/fetch

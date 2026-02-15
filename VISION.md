@@ -1148,8 +1148,8 @@ This is David's personal integration. OSS users don't need Life Hub at all.
 4. How should Oikos conversations map into sessions (provider="oikos")?
 5. Artifact storage: should file diffs, screenshots, patches be stored alongside events or separate?
 6. ~~Runner daemon packaging: separate install or bundle with `longhouse` CLI?~~ → Separate install (Bun binary). Shipper is bundled with CLI; runner is separate per-machine daemon.
-7. Secrets for jobs: job-scoped encrypted bundles (age) vs sops vs external secrets manager?
-8. Jobs pack UX: local template by default vs required private repo from day one?
+7. ~~Secrets for jobs: job-scoped encrypted bundles (age) vs sops vs external secrets manager?~~ → **Resolved.** JobSecret table with Fernet encryption (per-user, per-key). Platform provides defaults (control plane injects SES creds as env vars during provisioning); users can override via Settings UI (`EmailConfigCard`). Resolution chain: DB first → env var fallback.
+8. ~~Jobs pack UX: local template by default vs required private repo from day one?~~ → **Partially resolved.** Builtin jobs work without a private repo. Platform-provided email means jobs can send notifications out of the box. Sauron-jobs repo remains the power-user path for custom jobs.
 9. ~~Session discovery: semantic search (embeddings) priority vs FTS5-only for MVP?~~ → FTS5 for MVP (done), embeddings as Phase 4 enhancement. Memory system already has OpenAI embeddings infra.
 
 ---
