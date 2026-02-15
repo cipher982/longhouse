@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
 
 use crate::config::ShipperConfig;
+use crate::pipeline::compressor::{CompressionAlgo, content_encoding};
 
 /// Result of a shipping attempt.
 #[derive(Debug)]
@@ -32,14 +33,23 @@ pub struct ShipperClient {
     api_token: Option<String>,
     max_retries_429: u32,
     base_backoff: f64,
+    compression: CompressionAlgo,
 }
 
 impl ShipperClient {
     /// Create a new client from config.
     pub fn new(config: &ShipperConfig) -> Result<Self> {
+        Self::with_compression(config, CompressionAlgo::Gzip)
+    }
+
+    /// Create a new client with specific compression algorithm.
+    pub fn with_compression(config: &ShipperConfig, compression: CompressionAlgo) -> Result<Self> {
         let mut default_headers = HeaderMap::new();
         default_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        default_headers.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        default_headers.insert(
+            CONTENT_ENCODING,
+            HeaderValue::from_static(content_encoding(compression)),
+        );
 
         if let Some(ref token) = config.api_token {
             default_headers.insert(
@@ -66,7 +76,13 @@ impl ShipperClient {
             api_token: config.api_token.clone(),
             max_retries_429: config.max_retries_429,
             base_backoff: config.base_backoff_seconds,
+            compression,
         })
+    }
+
+    /// Get the compression algorithm being used.
+    pub fn compression(&self) -> CompressionAlgo {
+        self.compression
     }
 
     /// Ship a gzip-compressed payload. Handles 429 retries internally.

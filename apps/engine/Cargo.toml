@@ -16,6 +16,7 @@ serde_json = "1"
 
 # Compression (zlib-rs backend is fastest per flate2 docs; default miniz_oxide is pure Rust but slower)
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+zstd = "0.13"
 
 # HTTP
 reqwest = { version = "0.12", features = ["json", "gzip", "rustls-tls"], default-features = false }
