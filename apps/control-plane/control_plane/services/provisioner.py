@@ -87,6 +87,17 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
     # Instead, users authenticate via the control plane (which owns the OAuth
     # client) and get SSO'd into their instance via /auth/sso?token=xxx.
 
+    # Email (SES) — platform-provided so jobs can send email out of the box
+    if settings.instance_aws_ses_access_key_id and settings.instance_aws_ses_secret_access_key:
+        env["AWS_SES_ACCESS_KEY_ID"] = settings.instance_aws_ses_access_key_id
+        env["AWS_SES_SECRET_ACCESS_KEY"] = settings.instance_aws_ses_secret_access_key
+        if settings.instance_aws_ses_region:
+            env["AWS_SES_REGION"] = settings.instance_aws_ses_region
+        if settings.instance_from_email:
+            env["FROM_EMAIL"] = settings.instance_from_email
+        # NOTIFY_EMAIL = the instance owner's email (they get their own notifications)
+        env["NOTIFY_EMAIL"] = owner_email
+
     return env
 
 

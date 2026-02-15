@@ -12,6 +12,7 @@ import {
   Spinner
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
+import EmailConfigCard from "../components/EmailConfigCard";
 import LlmProviderCard from "../components/LlmProviderCard";
 
 interface Server {
@@ -210,6 +211,9 @@ export default function SettingsPage() {
         <div className="settings-stack settings-stack--lg">
           {/* LLM Providers */}
           <LlmProviderCard />
+
+          {/* Email Configuration */}
+          <EmailConfigCard />
 
           {/* Basic Information */}
           <Card>

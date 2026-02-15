@@ -16,6 +16,51 @@ from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
+# Well-known JobSecret keys for email configuration
+_EMAIL_SECRET_KEYS = [
+    "AWS_SES_ACCESS_KEY_ID",
+    "AWS_SES_SECRET_ACCESS_KEY",
+    "AWS_SES_REGION",
+    "FROM_EMAIL",
+    "NOTIFY_EMAIL",
+    "DIGEST_EMAIL",
+    "ALERT_EMAIL",
+]
+
+
+def resolve_email_config() -> dict[str, str]:
+    """Resolve email config: DB (JobSecret) first, env var fallback.
+
+    Checks the JobSecret table for owner_id=1 (single-tenant) first,
+    then falls back to environment variables. This lets the control plane
+    inject SES creds as env vars while allowing users to override via Settings UI.
+
+    Returns:
+        Dict mapping config key -> value for all resolved email keys.
+    """
+    resolved: dict[str, str] = {}
+
+    # Try DB first (graceful — may fail if DB not ready or no secrets table)
+    try:
+        from zerg.database import get_session_factory
+        from zerg.jobs.secret_resolver import resolve_secrets
+
+        session_factory = get_session_factory()
+        with session_factory() as db:
+            resolved = resolve_secrets(owner_id=1, declared_keys=_EMAIL_SECRET_KEYS, db=db)
+    except Exception:
+        # DB not available (e.g. during startup or tests) — fall through to env
+        pass
+
+    # Env var fallback for any keys not resolved from DB
+    for key in _EMAIL_SECRET_KEYS:
+        if key not in resolved:
+            val = os.environ.get(key)
+            if val:
+                resolved[key] = val
+
+    return resolved
+
 
 def _get_ses_client(*, region: str, access_key_id: str, secret_access_key: str):
     """Get boto3 SES client."""
@@ -53,11 +98,12 @@ def send_email(
         SES Message-ID if sent successfully, None otherwise.
         Format: "01000..." (raw SES ID, not the full header format)
     """
-    aws_access_key_id = os.getenv("AWS_SES_ACCESS_KEY_ID")
-    aws_secret_access_key = os.getenv("AWS_SES_SECRET_ACCESS_KEY")
-    aws_region = os.getenv("AWS_SES_REGION", "us-east-1")
-    from_email = os.getenv("FROM_EMAIL")
-    notify_email = os.getenv("NOTIFY_EMAIL")
+    config = resolve_email_config()
+    aws_access_key_id = config.get("AWS_SES_ACCESS_KEY_ID")
+    aws_secret_access_key = config.get("AWS_SES_SECRET_ACCESS_KEY")
+    aws_region = config.get("AWS_SES_REGION", "us-east-1")
+    from_email = config.get("FROM_EMAIL")
+    notify_email = config.get("NOTIFY_EMAIL")
 
     if not aws_access_key_id or not aws_secret_access_key:
         logger.error("AWS SES credentials not configured")
@@ -111,7 +157,8 @@ def send_digest_email(
     metadata: dict[str, Any] | None = None,
 ) -> str | None:
     """Send a routine digest email."""
-    digest_email = os.getenv("DIGEST_EMAIL")
+    config = resolve_email_config()
+    digest_email = config.get("DIGEST_EMAIL")
     return send_email(
         f"LONGHOUSE DIGEST: {subject}",
         body,
@@ -139,7 +186,8 @@ def send_alert_email(
         SES Message-ID if sent successfully, None otherwise.
     """
     level = (level or "WARNING").upper()
-    alert_email = os.getenv("ALERT_EMAIL")
+    config = resolve_email_config()
+    alert_email = config.get("ALERT_EMAIL")
     return send_email(
         f"{level} (LONGHOUSE): {subject}",
         body,
@@ -195,10 +243,11 @@ def send_reply_email(
     Returns:
         SES Message-ID if sent successfully, None otherwise.
     """
-    aws_access_key_id = os.getenv("AWS_SES_ACCESS_KEY_ID")
-    aws_secret_access_key = os.getenv("AWS_SES_SECRET_ACCESS_KEY")
-    aws_region = os.getenv("AWS_SES_REGION", "us-east-1")
-    from_email = os.getenv("FROM_EMAIL")
+    config = resolve_email_config()
+    aws_access_key_id = config.get("AWS_SES_ACCESS_KEY_ID")
+    aws_secret_access_key = config.get("AWS_SES_SECRET_ACCESS_KEY")
+    aws_region = config.get("AWS_SES_REGION", "us-east-1")
+    from_email = config.get("FROM_EMAIL")
 
     if not aws_access_key_id or not aws_secret_access_key:
         logger.error("AWS SES credentials not configured")

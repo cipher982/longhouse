@@ -66,6 +66,7 @@ from zerg.routers.commis_internal import router as commis_internal_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
 from zerg.routers.device_tokens import router as device_tokens_router
+from zerg.routers.email_config import router as email_config_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.fiche_config import router as fiche_config_router
@@ -601,6 +602,9 @@ async def lifespan(app: FastAPI):
 
                     repo_config = _resolve_repo_config()
 
+                    if not repo_config:
+                        logger.info("No jobs repo configured — builtin jobs only")
+
                     # Initialize git sync service if configured
                     if repo_config:
                         git_service = GitSyncService(
@@ -629,7 +633,29 @@ async def lifespan(app: FastAPI):
 
                     # Register and schedule job modules (use_queue=True enqueues to durable queue)
                     scheduled_count = await register_all_jobs(scheduler=job_scheduler, use_queue=True)
-                    logger.info("Scheduled %d jobs with APScheduler", scheduled_count)
+
+                    # Count builtin vs manifest jobs for startup clarity
+                    from zerg.jobs.registry import job_registry as _jr
+
+                    all_jobs = _jr.list_jobs()
+                    builtin_count = sum(1 for j in all_jobs if "builtin" in (j.tags or []))
+                    manifest_count = len(all_jobs) - builtin_count
+                    logger.info(
+                        "Scheduled %d jobs (%d builtin, %d from manifest)",
+                        scheduled_count,
+                        builtin_count,
+                        manifest_count,
+                    )
+
+                    # Store job system status for health endpoint
+                    app.state.job_system_status = {
+                        "started": True,
+                        "git_sync": repo_config is not None,
+                        "scheduled_count": scheduled_count,
+                        "builtin_count": builtin_count,
+                        "manifest_count": manifest_count,
+                        "error": None,
+                    }
 
                     await enqueue_missed_runs()  # Backfill missed runs
                     job_scheduler.start()  # Start cron triggers
@@ -639,6 +665,12 @@ async def lifespan(app: FastAPI):
                 except Exception as e:  # noqa: BLE001
                     failed.append(f"job_queue_commis ({e})")
                     logger.exception("Failed to start job_queue_commis")
+                    app.state.job_system_status = {
+                        "started": False,
+                        "git_sync": False,
+                        "scheduled_count": 0,
+                        "error": str(e),
+                    }
 
             if failed:
                 logger.warning(
@@ -659,6 +691,19 @@ async def lifespan(app: FastAPI):
                 logger.info("Commis job processor started (E2E test mode)")
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"Failed to start commis_job_processor in E2E mode: {e}")
+
+        # Log email config status
+        if not _settings.testing:
+            try:
+                from zerg.shared.email import resolve_email_config
+
+                email_cfg = resolve_email_config()
+                if email_cfg.get("AWS_SES_ACCESS_KEY_ID") and email_cfg.get("FROM_EMAIL"):
+                    logger.info("Email configured (from=%s)", email_cfg.get("FROM_EMAIL"))
+                else:
+                    logger.warning("Email not configured — job notifications disabled")
+            except Exception:
+                logger.warning("Email not configured — job notifications disabled")
 
         # Validate summarization pipeline config (warn on misconfiguration, don't crash)
         if not _settings.testing and not _settings.llm_disabled and not _settings.demo_mode:
@@ -913,6 +958,7 @@ api_app.include_router(commis_internal_router)  # Internal endpoints for commis 
 api_app.include_router(sync_router)  # Conversation sync — self-prefixed /oikos/sync
 api_app.include_router(stream_router)  # Resumable SSE v1 — self-prefixed /stream
 api_app.include_router(system_router)
+api_app.include_router(email_config_router)  # Email config CRUD + test
 api_app.include_router(capabilities_router)  # LLM provider config + enhanced capabilities
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)  # Public beacon (no auth)
@@ -1150,7 +1196,35 @@ async def health_check():
         checks["fts5"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
 
-    # 4. Migration status
+    # 4. Job system status (warn, not fail)
+    job_status = getattr(app.state, "job_system_status", None)
+    if job_status:
+        checks["jobs"] = {
+            "status": "pass" if job_status.get("started") else "warn",
+            "scheduled_count": job_status.get("scheduled_count", 0),
+            "git_sync": job_status.get("git_sync", False),
+            "error": job_status.get("error"),
+        }
+    else:
+        checks["jobs"] = {"status": "warn", "error": "Job system not initialized"}
+
+    # 5. Email config status (warn, not fail)
+    try:
+        from zerg.shared.email import resolve_email_config
+
+        email_cfg = resolve_email_config()
+        email_configured = bool(
+            email_cfg.get("AWS_SES_ACCESS_KEY_ID") and email_cfg.get("AWS_SES_SECRET_ACCESS_KEY") and email_cfg.get("FROM_EMAIL")
+        )
+        checks["email"] = {
+            "status": "pass" if email_configured else "warn",
+            "configured": email_configured,
+            "from_email": email_cfg.get("FROM_EMAIL") if email_configured else None,
+        }
+    except Exception as e:
+        checks["email"] = {"status": "warn", "error": str(e)}
+
+    # 6. Migration status
     migration_log_file = Path("/app/static/migration.log")
     migration_status = {"log_exists": migration_log_file.exists(), "log_content": None}
 
