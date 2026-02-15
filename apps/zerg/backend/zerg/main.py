@@ -698,7 +698,7 @@ async def lifespan(app: FastAPI):
                 from zerg.shared.email import resolve_email_config
 
                 email_cfg = resolve_email_config()
-                if email_cfg.get("AWS_SES_ACCESS_KEY_ID") and email_cfg.get("FROM_EMAIL"):
+                if email_cfg.get("AWS_SES_ACCESS_KEY_ID") and email_cfg.get("AWS_SES_SECRET_ACCESS_KEY") and email_cfg.get("FROM_EMAIL"):
                     logger.info("Email configured (from=%s)", email_cfg.get("FROM_EMAIL"))
                 else:
                     logger.warning("Email not configured — job notifications disabled")

@@ -28,10 +28,31 @@ _EMAIL_SECRET_KEYS = [
 ]
 
 
+def get_single_tenant_owner_id() -> int:
+    """Get the owner ID for single-tenant mode.
+
+    Queries the DB for the first user, falling back to 1 if no users exist
+    or the DB is unavailable. This avoids hardcoding owner_id=1 which breaks
+    when the API router saves secrets under current_user.id (which may not be 1).
+    """
+    try:
+        from zerg.database import get_session_factory
+        from zerg.models.user import User
+
+        session_factory = get_session_factory()
+        with session_factory() as db:
+            user = db.query(User).order_by(User.id).first()
+            if user:
+                return user.id
+    except Exception:
+        pass
+    return 1
+
+
 def resolve_email_config() -> dict[str, str]:
     """Resolve email config: DB (JobSecret) first, env var fallback.
 
-    Checks the JobSecret table for owner_id=1 (single-tenant) first,
+    Checks the JobSecret table for the single-tenant owner first,
     then falls back to environment variables. This lets the control plane
     inject SES creds as env vars while allowing users to override via Settings UI.
 
@@ -45,12 +66,13 @@ def resolve_email_config() -> dict[str, str]:
         from zerg.database import get_session_factory
         from zerg.jobs.secret_resolver import resolve_secrets
 
+        owner_id = get_single_tenant_owner_id()
         session_factory = get_session_factory()
         with session_factory() as db:
-            resolved = resolve_secrets(owner_id=1, declared_keys=_EMAIL_SECRET_KEYS, db=db)
-    except Exception:
+            resolved = resolve_secrets(owner_id=owner_id, declared_keys=_EMAIL_SECRET_KEYS, db=db)
+    except Exception as e:
         # DB not available (e.g. during startup or tests) — fall through to env
-        pass
+        logger.debug("DB lookup failed for email config: %s", e)
 
     # Env var fallback for any keys not resolved from DB
     for key in _EMAIL_SECRET_KEYS:
