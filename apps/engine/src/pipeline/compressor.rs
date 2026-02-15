@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use flate2::write::GzEncoder;
 use flate2::Compression as GzCompression;
 use serde::Serialize;
+use serde_json::value::RawValue;
 
 use super::parser::{ParsedEvent, SessionMetadata};
 
@@ -68,7 +69,7 @@ pub struct EventIngest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_input_json: Option<&'a serde_json::Value>,
+    pub tool_input_json: Option<&'a RawValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_output_text: Option<&'a str>,
     pub timestamp: String,
@@ -127,7 +128,7 @@ pub fn build_payload<'a>(
                 role,
                 content_text: e.content_text.as_deref(),
                 tool_name: e.tool_name.as_deref(),
-                tool_input_json: e.tool_input_json.as_ref(),
+                tool_input_json: e.tool_input_json.as_deref(),
                 tool_output_text: e.tool_output_text.as_deref(),
                 timestamp: e.timestamp.to_rfc3339(),
                 source_path,

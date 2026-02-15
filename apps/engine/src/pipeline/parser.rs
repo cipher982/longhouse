@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use uuid::Uuid;
 
 /// Threshold for switching from buffered read to mmap (1 MB).
@@ -39,7 +40,7 @@ pub struct ParsedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_input_json: Option<serde_json::Value>,
+    pub tool_input_json: Option<Box<RawValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_output_text: Option<String>,
     pub source_offset: u64,
@@ -84,7 +85,29 @@ struct RawLine {
 
 #[derive(Deserialize)]
 struct RawMessage {
-    content: serde_json::Value,
+    /// Kept as raw JSON — avoids building a full serde_json::Value DOM tree.
+    /// Parsed on-demand in extraction functions via ContentItem.
+    content: Box<RawValue>,
+}
+
+/// Targeted deserialization of a single content array item.
+/// Only the fields we actually use are extracted; everything else is skipped.
+#[derive(Deserialize)]
+struct ContentItem {
+    r#type: Option<String>,
+    /// Text content (for "text" items)
+    text: Option<String>,
+    /// Tool name (for "tool_use" items)
+    name: Option<String>,
+    /// Tool call ID (for "tool_use" items)
+    id: Option<String>,
+    /// Tool input — kept as raw JSON, never parsed into a Value tree.
+    input: Option<Box<RawValue>>,
+    /// Tool use ID (for "tool_result" items)
+    tool_use_id: Option<String>,
+    /// Tool result content — kept as raw JSON, parsed lazily for text extraction.
+    #[serde(rename = "content")]
+    result_content: Option<Box<RawValue>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -377,14 +400,21 @@ fn extract_events(
         msg_uuid
     };
 
+    let content_raw = match &obj.message {
+        Some(m) => &m.content,
+        None => return,
+    };
+
+    // Parse content items from raw JSON on-demand.
+    // This is where the RawValue optimization pays off: the initial RawLine
+    // parse skipped building a Value tree for content entirely. Now we parse
+    // only the fields we need via ContentItem.
+    let content_str = content_raw.get();
+
     match event_type {
         "user" => {
-            let message = match &obj.message {
-                Some(m) => m,
-                None => return,
-            };
             extract_user_events(
-                &message.content,
+                content_str,
                 session_id,
                 &msg_uuid,
                 timestamp,
@@ -394,12 +424,8 @@ fn extract_events(
             );
         }
         "assistant" => {
-            let message = match &obj.message {
-                Some(m) => m,
-                None => return,
-            };
             extract_assistant_events(
-                &message.content,
+                content_str,
                 session_id,
                 &msg_uuid,
                 timestamp,
@@ -415,7 +441,7 @@ fn extract_events(
 }
 
 fn extract_user_events(
-    content: &serde_json::Value,
+    content_str: &str,
     session_id: &str,
     msg_uuid: &str,
     timestamp: DateTime<Utc>,
@@ -423,52 +449,66 @@ fn extract_user_events(
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
 ) {
-    // Check if content contains tool_result items
-    let has_tool_result = if let Some(arr) = content.as_array() {
-        arr.iter().any(|item| {
-            item.get("type")
-                .and_then(|t| t.as_str())
-                .map_or(false, |t| t == "tool_result")
-        })
-    } else {
-        false
-    };
+    // Try parsing as array of ContentItems
+    if let Ok(items) = serde_json::from_str::<Vec<ContentItem>>(content_str) {
+        // Check if any items are tool_results
+        let has_tool_result = items.iter().any(|item| {
+            item.r#type.as_deref() == Some("tool_result")
+        });
 
-    if has_tool_result {
-        extract_tool_results(
-            content,
-            session_id,
-            msg_uuid,
-            timestamp,
-            line_offset,
-            raw_line,
-            events,
-        );
-    } else {
-        // Regular user message — extract text
-        let text = extract_user_content(content);
-        if let Some(text) = text {
-            if !text.trim().is_empty() {
-                events.push(ParsedEvent {
-                    uuid: msg_uuid.to_string(),
-                    session_id: session_id.to_string(),
-                    timestamp,
-                    role: Role::User,
-                    content_text: Some(text),
-                    tool_name: None,
-                    tool_input_json: None,
-                    tool_output_text: None,
-                    source_offset: line_offset,
-                    raw_type: "user".to_string(),
-                    raw_line: Some(raw_line.to_string()),
-                });
+        if has_tool_result {
+            extract_tool_results_from_items(
+                &items,
+                session_id,
+                msg_uuid,
+                timestamp,
+                line_offset,
+                raw_line,
+                events,
+            );
+        } else {
+            // Regular user message — extract text from items
+            let text = extract_user_content_from_items(&items);
+            if let Some(text) = text {
+                if !text.trim().is_empty() {
+                    events.push(ParsedEvent {
+                        uuid: msg_uuid.to_string(),
+                        session_id: session_id.to_string(),
+                        timestamp,
+                        role: Role::User,
+                        content_text: Some(text),
+                        tool_name: None,
+                        tool_input_json: None,
+                        tool_output_text: None,
+                        source_offset: line_offset,
+                        raw_type: "user".to_string(),
+                        raw_line: Some(raw_line.to_string()),
+                    });
+                }
             }
+        }
+    } else if let Ok(text) = serde_json::from_str::<String>(content_str) {
+        // Plain string content
+        if !text.trim().is_empty() {
+            events.push(ParsedEvent {
+                uuid: msg_uuid.to_string(),
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::User,
+                content_text: Some(text),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                source_offset: line_offset,
+                raw_type: "user".to_string(),
+                raw_line: Some(raw_line.to_string()),
+            });
         }
     }
 }
 
 fn extract_assistant_events(
-    content: &serde_json::Value,
+    content_str: &str,
     session_id: &str,
     msg_uuid: &str,
     timestamp: DateTime<Utc>,
@@ -476,24 +516,18 @@ fn extract_assistant_events(
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
 ) {
-    let items = match content.as_array() {
-        Some(arr) => arr,
-        None => return,
+    let items: Vec<ContentItem> = match serde_json::from_str(content_str) {
+        Ok(v) => v,
+        Err(_) => return,
     };
 
     let mut first = true;
     for (idx, item) in items.iter().enumerate() {
-        let item_type = item
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
+        let item_type = item.r#type.as_deref().unwrap_or("");
 
         match item_type {
             "text" => {
-                let text = item
-                    .get("text")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
+                let text = item.text.as_deref().unwrap_or("");
                 if !text.trim().is_empty() {
                     events.push(ParsedEvent {
                         uuid: format!("{}-text-{}", msg_uuid, idx),
@@ -516,21 +550,25 @@ fn extract_assistant_events(
                 }
             }
             "tool_use" => {
-                let tool_name = item
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let tool_input = item.get("input").cloned();
-                let tool_id = item
-                    .get("id")
-                    .and_then(|id| id.as_str())
-                    .unwrap_or("");
+                let tool_name = item.name.as_deref().unwrap_or("").to_string();
+                let tool_id = item.id.as_deref().unwrap_or("");
                 let uuid_suffix = if tool_id.is_empty() {
                     format!("{}", idx)
                 } else {
                     tool_id.to_string()
                 };
+
+                // tool_input stays as Box<RawValue> — zero-copy pass-through
+                let tool_input = item.input.as_ref().and_then(|raw| {
+                    // Only keep if it's a JSON object (starts with '{')
+                    let s = raw.get().trim();
+                    if s.starts_with('{') {
+                        // Clone the RawValue box (just copies the string, not a DOM tree)
+                        Some(raw.clone())
+                    } else {
+                        None
+                    }
+                });
 
                 events.push(ParsedEvent {
                     uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
@@ -539,7 +577,7 @@ fn extract_assistant_events(
                     role: Role::Assistant,
                     content_text: None,
                     tool_name: Some(tool_name),
-                    tool_input_json: tool_input.and_then(|v| if v.is_object() { Some(v) } else { None }),
+                    tool_input_json: tool_input,
                     tool_output_text: None,
                     source_offset: line_offset,
                     raw_type: "assistant".to_string(),
@@ -558,8 +596,8 @@ fn extract_assistant_events(
     }
 }
 
-fn extract_tool_results(
-    content: &serde_json::Value,
+fn extract_tool_results_from_items(
+    items: &[ContentItem],
     session_id: &str,
     msg_uuid: &str,
     timestamp: DateTime<Utc>,
@@ -567,33 +605,22 @@ fn extract_tool_results(
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
 ) {
-    let items = match content.as_array() {
-        Some(arr) => arr,
-        None => return,
-    };
-
     let mut first = true;
     for (idx, item) in items.iter().enumerate() {
-        let item_type = item
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-
-        if item_type != "tool_result" {
+        if item.r#type.as_deref() != Some("tool_result") {
             continue;
         }
 
-        let tool_use_id = item
-            .get("tool_use_id")
-            .and_then(|id| id.as_str())
-            .unwrap_or("");
+        let tool_use_id = item.tool_use_id.as_deref().unwrap_or("");
         let uuid_suffix = if tool_use_id.is_empty() {
             format!("{}", idx)
         } else {
             tool_use_id.to_string()
         };
 
-        let result_text = extract_tool_result_content(item.get("content"));
+        let result_text = item.result_content.as_ref().and_then(|raw| {
+            extract_text_from_raw_content(raw.get())
+        });
 
         if let Some(text) = result_text {
             if !text.is_empty() {
@@ -624,71 +651,70 @@ fn extract_tool_results(
 // Content extraction helpers
 // ---------------------------------------------------------------------------
 
-fn extract_user_content(content: &serde_json::Value) -> Option<String> {
-    if let Some(s) = content.as_str() {
-        return Some(s.to_string());
-    }
-
-    if let Some(arr) = content.as_array() {
-        let mut parts = Vec::new();
-        for item in arr {
-            if let Some(obj) = item.as_object() {
-                match obj.get("type").and_then(|t| t.as_str()) {
-                    Some("text") => {
-                        if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
-                            parts.push(text.to_string());
-                        }
-                    }
-                    Some("tool_result") => {
-                        let result = obj.get("content");
-                        if let Some(text) = extract_tool_result_content(result) {
-                            parts.push(text);
-                        }
-                    }
-                    _ => {}
+fn extract_user_content_from_items(items: &[ContentItem]) -> Option<String> {
+    let mut parts = Vec::new();
+    for item in items {
+        match item.r#type.as_deref() {
+            Some("text") => {
+                if let Some(ref text) = item.text {
+                    parts.push(text.clone());
                 }
-            } else if let Some(s) = item.as_str() {
-                parts.push(s.to_string());
             }
+            Some("tool_result") => {
+                if let Some(ref raw) = item.result_content {
+                    if let Some(text) = extract_text_from_raw_content(raw.get()) {
+                        parts.push(text);
+                    }
+                }
+            }
+            _ => {}
         }
-        if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join("\n"))
-        }
-    } else {
+    }
+    if parts.is_empty() {
         None
+    } else {
+        Some(parts.join("\n"))
     }
 }
 
-fn extract_tool_result_content(content: Option<&serde_json::Value>) -> Option<String> {
-    let content = content?;
+/// Extract text from a raw JSON content field (tool_result content).
+/// Handles: plain string, array of {type: "text", text: "..."}, or fallback to raw JSON.
+fn extract_text_from_raw_content(raw_json: &str) -> Option<String> {
+    let trimmed = raw_json.trim();
 
-    if let Some(s) = content.as_str() {
-        return Some(s.to_string());
+    // Plain string: "some text"
+    if trimmed.starts_with('"') {
+        if let Ok(s) = serde_json::from_str::<String>(trimmed) {
+            return Some(s);
+        }
     }
 
-    if let Some(arr) = content.as_array() {
-        let mut parts = Vec::new();
-        for part in arr {
-            if let Some(obj) = part.as_object() {
-                if obj.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
-                        parts.push(text.to_string());
+    // Array of content parts
+    if trimmed.starts_with('[') {
+        #[derive(Deserialize)]
+        struct TextPart {
+            r#type: Option<String>,
+            text: Option<String>,
+        }
+
+        if let Ok(parts) = serde_json::from_str::<Vec<TextPart>>(trimmed) {
+            let mut texts = Vec::new();
+            for part in &parts {
+                if part.r#type.as_deref() == Some("text") {
+                    if let Some(ref text) = part.text {
+                        texts.push(text.clone());
                     }
                 }
-            } else if let Some(s) = part.as_str() {
-                parts.push(s.to_string());
             }
+            if texts.is_empty() {
+                return None;
+            }
+            return Some(texts.join("\n"));
         }
-        if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join("\n"))
-        }
-    } else {
-        Some(content.to_string())
     }
+
+    // Fallback: raw JSON as string
+    Some(trimmed.to_string())
 }
 
 // ---------------------------------------------------------------------------
