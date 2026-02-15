@@ -29,7 +29,7 @@ async def test_legacy_env_injection_restores(tmp_path, monkeypatch):
 
     monkeypatch.setattr("zerg.database.get_session_factory", lambda: SessionLocal)
 
-    os.environ["SECRET_A"] = "old"
+    monkeypatch.setenv("SECRET_A", "old")
 
     def run():
         return {"seen": os.environ.get("SECRET_A")}
