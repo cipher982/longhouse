@@ -42,6 +42,14 @@ enum Commands {
         /// Include gzip compression in benchmark
         #[arg(long)]
         compress: bool,
+
+        /// Use rayon parallel file processing
+        #[arg(long)]
+        parallel: bool,
+
+        /// Number of worker threads (default: num_cpus)
+        #[arg(long, default_value = "0")]
+        workers: usize,
     },
 }
 
@@ -64,8 +72,13 @@ fn main() -> anyhow::Result<()> {
         } => {
             cmd_parse(&path, offset, dump_events, compress)?;
         }
-        Commands::Bench { level, compress } => {
-            cmd_bench(&level, compress)?;
+        Commands::Bench {
+            level,
+            compress,
+            parallel,
+            workers,
+        } => {
+            cmd_bench(&level, compress, parallel, workers)?;
         }
     }
 
@@ -176,7 +189,7 @@ fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> 
     Ok(())
 }
 
-fn cmd_bench(level: &str, compress: bool) -> anyhow::Result<()> {
+fn cmd_bench(level: &str, compress: bool, parallel: bool, workers: usize) -> anyhow::Result<()> {
     eprintln!("Discovering session files...");
     let all_files = bench::discover_session_files();
     eprintln!("Found {} non-empty JSONL files", all_files.len());
@@ -194,7 +207,7 @@ fn cmd_bench(level: &str, compress: bool) -> anyhow::Result<()> {
             all_files.into_iter().take(1).collect()
         }
         "L2" => {
-            // 10% sample (every 10th file, keeps size distribution)
+            // 10% sample (top files by size)
             let count = (all_files.len() + 9) / 10;
             all_files.into_iter().take(count).collect()
         }
@@ -212,15 +225,34 @@ fn cmd_bench(level: &str, compress: bool) -> anyhow::Result<()> {
         .filter_map(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .sum();
+
+    let num_workers = if workers == 0 {
+        num_cpus::get()
+    } else {
+        workers
+    };
+
     eprintln!(
         "\n--- {} benchmark: {} files, {:.2} GB ---",
         level.to_uppercase(),
         files.len(),
         sample_bytes as f64 / 1_073_741_824.0
     );
-    eprintln!("Compress: {}", if compress { "yes" } else { "parse-only" });
+    eprintln!(
+        "Mode: {}, Compress: {}",
+        if parallel {
+            format!("parallel ({} workers)", num_workers)
+        } else {
+            "sequential".to_string()
+        },
+        if compress { "yes" } else { "parse-only" }
+    );
 
-    let result = bench::run_benchmark(&files, compress);
+    let result = if parallel {
+        bench::run_benchmark_parallel(&files, compress, num_workers)
+    } else {
+        bench::run_benchmark(&files, compress)
+    };
     result.print_summary();
 
     Ok(())
