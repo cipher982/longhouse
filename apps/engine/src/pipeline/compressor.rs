@@ -4,11 +4,26 @@
 //! `GzEncoder`, so the full JSON is never materialized in memory.
 //! This eliminates the 79% gzip bottleneck from the Python version.
 
+use std::sync::OnceLock;
+
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::Serialize;
 
 use super::parser::{ParsedEvent, SessionMetadata};
+
+/// Cached hostname — called once, reused for all payloads.
+fn cached_hostname() -> &'static str {
+    static HOSTNAME: OnceLock<String> = OnceLock::new();
+    HOSTNAME.get_or_init(|| {
+        std::process::Command::new("hostname")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Payload types (match Python ingest API exactly)
@@ -65,12 +80,7 @@ pub fn build_payload<'a>(
     source_path: &'a str,
     provider: &'a str,
 ) -> IngestPayload<'a> {
-    let hostname = std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    let hostname = cached_hostname();
 
     let started_at = metadata
         .started_at
