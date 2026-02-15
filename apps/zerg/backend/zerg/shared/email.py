@@ -31,21 +31,27 @@ _EMAIL_SECRET_KEYS = [
 def get_single_tenant_owner_id() -> int:
     """Get the owner ID for single-tenant mode.
 
-    Queries the DB for the first user, falling back to 1 if no users exist
-    or the DB is unavailable. This avoids hardcoding owner_id=1 which breaks
-    when the API router saves secrets under current_user.id (which may not be 1).
+    Looks for the user who actually owns email secrets first (handles the case
+    where secrets were saved by a non-first user). Falls back to the first user
+    by ID, then to 1 if the DB is unavailable.
     """
     try:
         from zerg.database import get_session_factory
+        from zerg.models.models import JobSecret
         from zerg.models.user import User
 
         session_factory = get_session_factory()
         with session_factory() as db:
+            # Prefer the user who actually has email secrets
+            secret_owner = db.query(JobSecret.owner_id).filter(JobSecret.key == "AWS_SES_ACCESS_KEY_ID").first()
+            if secret_owner:
+                return secret_owner[0]
+            # Fall back to first user
             user = db.query(User).order_by(User.id).first()
             if user:
                 return user.id
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Could not determine tenant owner ID: %s", e)
     return 1
 
 
