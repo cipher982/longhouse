@@ -39,7 +39,7 @@ from zerg.services.shipper.shipper import SessionShipper
 from zerg.services.shipper.shipper import ShipperConfig
 from zerg.services.shipper.shipper import ShipResult
 from zerg.services.shipper.spool import OfflineSpool
-from zerg.services.shipper.spool import SpooledPayload
+from zerg.services.shipper.spool import SpoolEntry
 from zerg.services.shipper.state import ShippedSession
 from zerg.services.shipper.state import ShipperState
 from zerg.services.shipper.token import clear_token
@@ -74,7 +74,7 @@ __all__ = [
     "ShipResult",
     "ShippedSession",
     "ShipperState",
-    "SpooledPayload",
+    "SpoolEntry",
     "uninstall_service",
     "upsert_codex_mcp_toml",
 ]

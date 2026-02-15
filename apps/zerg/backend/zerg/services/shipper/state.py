@@ -1,12 +1,10 @@
-"""State tracking for the session shipper.
+"""SQLite-backed state tracking for the session shipper.
 
-Tracks what has been shipped to enable incremental sync:
-- file_path: Path to the session file
-- last_offset: Byte offset of last shipped position
-- last_shipped_at: When we last shipped
-- session_id: Zerg session UUID (for resumption)
+Tracks per-file shipping progress with dual offsets:
+- queued_offset: highest byte position queued/shipped
+- acked_offset: highest byte position confirmed by server
 
-State is stored in a JSON file at ~/.claude/zerg-shipper-state.json
+State lives in the same SQLite DB as the spool queue.
 """
 
 from __future__ import annotations
@@ -18,6 +16,10 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 
+from zerg.services.shipper.spool import _get_db_path
+from zerg.services.shipper.spool import get_shared_connection
+from zerg.services.shipper.spool import init_schema
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,13 +28,12 @@ class ShippedSession:
     """Tracking info for a shipped session file."""
 
     file_path: str
-    last_offset: int
+    last_offset: int  # Maps to acked_offset for backward compat
     last_shipped_at: datetime
-    session_id: str  # Zerg session UUID
-    provider_session_id: str  # Claude Code session ID (filename)
+    session_id: str
+    provider_session_id: str
 
     def to_dict(self) -> dict:
-        """Convert to JSON-serializable dict."""
         return {
             "file_path": self.file_path,
             "last_offset": self.last_offset,
@@ -43,7 +44,6 @@ class ShippedSession:
 
     @classmethod
     def from_dict(cls, data: dict) -> ShippedSession:
-        """Create from dict."""
         last_shipped = data.get("last_shipped_at", "")
         if isinstance(last_shipped, str):
             if last_shipped.endswith("Z"):
@@ -54,7 +54,6 @@ class ShippedSession:
                 last_shipped_dt = datetime.now(timezone.utc)
         else:
             last_shipped_dt = datetime.now(timezone.utc)
-
         return cls(
             file_path=data.get("file_path", ""),
             last_offset=data.get("last_offset", 0),
@@ -65,75 +64,91 @@ class ShippedSession:
 
 
 class ShipperState:
-    """Tracks what sessions have been shipped (for incremental sync).
+    """SQLite-backed state tracking for incremental session shipping."""
 
-    State is persisted to a JSON file to survive restarts.
-    """
+    def __init__(
+        self,
+        state_path: Path | None = None,  # Kept for backward compat signature
+        claude_config_dir: Path | None = None,
+        db_path: Path | None = None,
+        conn=None,  # sqlite3.Connection - shared with spool
+    ):
+        # Resolve DB path
+        if db_path is not None:
+            self.db_path = db_path
+        elif state_path is not None:
+            # Backward compat: caller passed old JSON state_path
+            # Use same directory but new DB name
+            self.db_path = state_path.parent / "longhouse-shipper.db"
+        else:
+            self.db_path = _get_db_path(claude_config_dir=claude_config_dir)
 
-    def __init__(self, state_path: Path | None = None, claude_config_dir: Path | None = None):
-        """Initialize state tracker.
+        # For backward compatibility: expose state_path pointing to the DB
+        self.state_path = self.db_path
 
-        Args:
-            state_path: Path to state file. Defaults to {claude_config_dir}/zerg-shipper-state.json
-            claude_config_dir: Base config directory. Defaults to ~/.claude or CLAUDE_CONFIG_DIR
-        """
-        if state_path is None:
-            if claude_config_dir is None:
-                import os
+        if conn is not None:
+            self._conn = conn
+        else:
+            self._conn = get_shared_connection(self.db_path)
+            init_schema(self._conn)
 
-                config_dir = os.getenv("CLAUDE_CONFIG_DIR")
-                claude_config_dir = Path(config_dir) if config_dir else Path.home() / ".claude"
-            state_path = claude_config_dir / "zerg-shipper-state.json"
+        # Migrate legacy JSON state if it exists
+        self._migrate_json_state()
 
-        self.state_path = state_path
-        self._sessions: dict[str, ShippedSession] = {}
-        self._load()
-
-    def _load(self) -> None:
-        """Load state from disk."""
-        if not self.state_path.exists():
+    def _migrate_json_state(self) -> None:
+        """Import legacy zerg-shipper-state.json if it exists."""
+        legacy_path = self.db_path.parent / "zerg-shipper-state.json"
+        if not legacy_path.exists():
             return
 
         try:
-            with open(self.state_path, "r") as f:
+            with open(legacy_path) as f:
                 data = json.load(f)
 
-            for file_path, session_data in data.get("sessions", {}).items():
-                self._sessions[file_path] = ShippedSession.from_dict(session_data)
+            sessions = data.get("sessions", {})
+            if not sessions:
+                legacy_path.rename(legacy_path.with_suffix(".json.bak"))
+                return
 
-            logger.debug(f"Loaded shipper state with {len(self._sessions)} sessions")
-
+            now = datetime.now(timezone.utc).isoformat()
+            for file_path, session_data in sessions.items():
+                offset = session_data.get("last_offset", 0)
+                self._conn.execute(
+                    """INSERT OR IGNORE INTO file_state (path, provider, queued_offset, acked_offset, session_id, provider_session_id, last_updated)
+                       VALUES (?, 'claude', ?, ?, ?, ?, ?)""",
+                    (
+                        file_path,
+                        offset,
+                        offset,
+                        session_data.get("session_id", ""),
+                        session_data.get("provider_session_id", ""),
+                        now,
+                    ),
+                )
+            self._conn.commit()
+            legacy_path.rename(legacy_path.with_suffix(".json.bak"))
+            logger.info(f"Migrated {len(sessions)} entries from legacy JSON state")
         except Exception as e:
-            logger.warning(f"Failed to load shipper state: {e}")
+            logger.warning(f"Failed to migrate legacy state: {e}")
 
-    def _save(self) -> None:
-        """Save state to disk."""
-        try:
-            # Ensure parent directory exists
-            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+    @property
+    def conn(self):
+        return self._conn
 
-            data = {
-                "sessions": {path: session.to_dict() for path, session in self._sessions.items()},
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            with open(self.state_path, "w") as f:
-                json.dump(data, f, indent=2)
-
-        except Exception as e:
-            logger.warning(f"Failed to save shipper state: {e}")
+    def close(self) -> None:
+        self._conn.close()
 
     def get_offset(self, file_path: str) -> int:
-        """Get the last shipped offset for a file.
+        """Get the acked offset for a file. Returns 0 if not tracked."""
+        cursor = self._conn.execute("SELECT acked_offset FROM file_state WHERE path = ?", (file_path,))
+        row = cursor.fetchone()
+        return row[0] if row else 0
 
-        Returns 0 if file hasn't been shipped before.
-        """
-        session = self._sessions.get(file_path)
-        return session.last_offset if session else 0
-
-    def get_session(self, file_path: str) -> ShippedSession | None:
-        """Get shipped session info for a file."""
-        return self._sessions.get(file_path)
+    def get_queued_offset(self, file_path: str) -> int:
+        """Get the queued offset for a file. Returns 0 if not tracked."""
+        cursor = self._conn.execute("SELECT queued_offset FROM file_state WHERE path = ?", (file_path,))
+        row = cursor.fetchone()
+        return row[0] if row else 0
 
     def set_offset(
         self,
@@ -141,40 +156,108 @@ class ShipperState:
         offset: int,
         session_id: str,
         provider_session_id: str,
+        provider: str = "claude",
     ) -> None:
-        """Update the shipped offset for a file.
-
-        Args:
-            file_path: Path to the session file
-            offset: New byte offset
-            session_id: Zerg session UUID
-            provider_session_id: Claude Code session ID
-        """
-        self._sessions[file_path] = ShippedSession(
-            file_path=file_path,
-            last_offset=offset,
-            last_shipped_at=datetime.now(timezone.utc),
-            session_id=session_id,
-            provider_session_id=provider_session_id,
+        """Update both queued and acked offsets (for successful ship)."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT INTO file_state (path, provider, queued_offset, acked_offset, session_id, provider_session_id, last_updated)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(path) DO UPDATE SET
+                   queued_offset = excluded.queued_offset,
+                   acked_offset = excluded.acked_offset,
+                   session_id = excluded.session_id,
+                   provider_session_id = excluded.provider_session_id,
+                   last_updated = excluded.last_updated""",
+            (file_path, provider, offset, offset, session_id, provider_session_id, now),
         )
-        self._save()
+        self._conn.commit()
+
+    def set_queued_offset(
+        self,
+        file_path: str,
+        offset: int,
+        provider: str = "claude",
+        session_id: str = "",
+        provider_session_id: str = "",
+    ) -> None:
+        """Advance only the queued offset (data enqueued to spool but not yet acked)."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT INTO file_state (path, provider, queued_offset, acked_offset, session_id, provider_session_id, last_updated)
+               VALUES (?, ?, ?, 0, ?, ?, ?)
+               ON CONFLICT(path) DO UPDATE SET
+                   queued_offset = excluded.queued_offset,
+                   session_id = CASE WHEN excluded.session_id != '' THEN excluded.session_id ELSE file_state.session_id END,
+                   provider_session_id = CASE WHEN excluded.provider_session_id != '' THEN excluded.provider_session_id ELSE file_state.provider_session_id END,
+                   last_updated = excluded.last_updated""",
+            (file_path, provider, offset, session_id, provider_session_id, now),
+        )
+        self._conn.commit()
+
+    def set_acked_offset(self, file_path: str, offset: int) -> None:
+        """Advance only the acked offset (server confirmed receipt)."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "UPDATE file_state SET acked_offset = ?, last_updated = ? WHERE path = ?",
+            (offset, now, file_path),
+        )
+        self._conn.commit()
+
+    def get_session(self, file_path: str) -> ShippedSession | None:
+        """Get shipped session info for a file."""
+        cursor = self._conn.execute(
+            "SELECT path, acked_offset, session_id, provider_session_id, last_updated FROM file_state WHERE path = ?",
+            (file_path,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        last_updated = row[4]
+        if last_updated.endswith("Z"):
+            last_updated = last_updated[:-1] + "+00:00"
+        return ShippedSession(
+            file_path=row[0],
+            last_offset=row[1],
+            last_shipped_at=datetime.fromisoformat(last_updated),
+            session_id=row[2] or "",
+            provider_session_id=row[3] or "",
+        )
+
+    def get_unacked_files(self) -> list[tuple[str, int, int]]:
+        """Get files where queued_offset > acked_offset (need recovery).
+
+        Returns list of (path, acked_offset, queued_offset).
+        """
+        cursor = self._conn.execute("SELECT path, acked_offset, queued_offset FROM file_state WHERE queued_offset > acked_offset")
+        return [(row[0], row[1], row[2]) for row in cursor.fetchall()]
 
     def list_sessions(self) -> list[ShippedSession]:
         """List all tracked sessions."""
-        return list(self._sessions.values())
+        cursor = self._conn.execute("SELECT path, acked_offset, session_id, provider_session_id, last_updated FROM file_state")
+        results = []
+        for row in cursor.fetchall():
+            last_updated = row[4]
+            if last_updated.endswith("Z"):
+                last_updated = last_updated[:-1] + "+00:00"
+            results.append(
+                ShippedSession(
+                    file_path=row[0],
+                    last_offset=row[1],
+                    last_shipped_at=datetime.fromisoformat(last_updated),
+                    session_id=row[2] or "",
+                    provider_session_id=row[3] or "",
+                )
+            )
+        return results
 
     def remove_session(self, file_path: str) -> bool:
-        """Remove a session from tracking.
-
-        Returns True if session was removed, False if not found.
-        """
-        if file_path in self._sessions:
-            del self._sessions[file_path]
-            self._save()
-            return True
-        return False
+        """Remove a session from tracking."""
+        cursor = self._conn.execute("DELETE FROM file_state WHERE path = ?", (file_path,))
+        self._conn.commit()
+        return cursor.rowcount > 0
 
     def clear(self) -> None:
         """Clear all tracked sessions."""
-        self._sessions.clear()
-        self._save()
+        self._conn.execute("DELETE FROM file_state")
+        self._conn.commit()

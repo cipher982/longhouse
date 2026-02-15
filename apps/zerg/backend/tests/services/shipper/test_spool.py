@@ -1,577 +1,278 @@
-"""Tests for the offline spool."""
+"""Tests for the pointer-based offline spool."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
-import tempfile
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
-from zerg.services.shipper.shipper import SessionShipper
-from zerg.services.shipper.shipper import ShipperConfig
-from zerg.services.shipper.spool import OfflineSpool
-from zerg.services.shipper.spool import SpooledPayload
+from zerg.services.shipper.spool import (
+    MAX_QUEUE_SIZE,
+    OfflineSpool,
+    SpoolEntry,
+    init_schema,
+)
 
 
 class TestOfflineSpool:
-    """Tests for the OfflineSpool class."""
+    """Tests for the pointer-based OfflineSpool."""
 
     @pytest.fixture
-    def temp_spool(self):
+    def spool(self, tmp_path: Path) -> OfflineSpool:
         """Create a spool with a temporary database."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "test-spool.db"
-            yield OfflineSpool(db_path=db_path)
+        db_path = tmp_path / "test-spool.db"
+        return OfflineSpool(db_path=db_path)
 
-    def test_spool_init_creates_database(self, temp_spool):
-        """Spool should create database and tables on init."""
-        assert temp_spool.db_path.exists()
+    def test_init_creates_database_with_both_tables(self, spool: OfflineSpool):
+        """Spool should create database with both spool_queue and file_state tables."""
+        assert spool.db_path.exists()
 
-        # Verify table structure
-        conn = sqlite3.connect(str(temp_spool.db_path))
+        conn = sqlite3.connect(str(spool.db_path))
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='spool'")
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='spool_queue'")
         assert cursor.fetchone() is not None
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='file_state'")
+        assert cursor.fetchone() is not None
+
         conn.close()
 
-    def test_enqueue_stores_payload(self, temp_spool):
-        """enqueue should store payload in database."""
-        payload = {"id": "test-session", "events": [{"role": "user"}]}
+    def test_enqueue_stores_pointer(self, spool: OfflineSpool):
+        """enqueue should store a byte-range pointer, not a payload."""
+        result = spool.enqueue("claude", "/tmp/session.jsonl", 0, 1024, "sess-1")
 
-        spool_id = temp_spool.enqueue(payload)
+        assert result is True
 
-        assert spool_id is not None
-        assert len(spool_id) == 36  # UUID length
-
-        # Verify it's in the database
-        conn = sqlite3.connect(str(temp_spool.db_path))
-        cursor = conn.cursor()
-        cursor.execute("SELECT payload_json FROM spool WHERE id = ?", (spool_id,))
+        # Verify pointer is stored in DB
+        cursor = spool.conn.execute(
+            "SELECT provider, file_path, start_offset, end_offset, session_id FROM spool_queue"
+        )
         row = cursor.fetchone()
-        conn.close()
-
         assert row is not None
-        assert json.loads(row[0]) == payload
+        assert row == ("claude", "/tmp/session.jsonl", 0, 1024, "sess-1")
 
-    def test_dequeue_batch_returns_pending(self, temp_spool):
-        """dequeue_batch should return pending items in order."""
-        # Enqueue several payloads
-        payloads = [{"id": f"session-{i}", "events": []} for i in range(5)]
-        spool_ids = [temp_spool.enqueue(p) for p in payloads]
+    def test_enqueue_returns_false_at_capacity(self, tmp_path: Path):
+        """enqueue should return False when queue is at MAX_QUEUE_SIZE."""
+        db_path = tmp_path / "cap-test.db"
+        spool = OfflineSpool(db_path=db_path)
 
-        # Dequeue batch
-        items = temp_spool.dequeue_batch(limit=3)
-
-        assert len(items) == 3
-        assert all(isinstance(item, SpooledPayload) for item in items)
-
-        # Should be in order (oldest first)
-        for i, item in enumerate(items):
-            assert item.payload["id"] == f"session-{i}"
-            assert item.retry_count == 0
-            assert item.last_error is None
-
-    def test_dequeue_batch_respects_limit(self, temp_spool):
-        """dequeue_batch should respect the limit parameter."""
-        for i in range(10):
-            temp_spool.enqueue({"id": f"session-{i}"})
-
-        items = temp_spool.dequeue_batch(limit=3)
-        assert len(items) == 3
-
-        items = temp_spool.dequeue_batch(limit=100)
-        # Should return remaining 10 (all are still pending)
-        assert len(items) == 10
-
-    def test_mark_shipped_removes_from_pending(self, temp_spool):
-        """mark_shipped should change status so item is not dequeued again."""
-        spool_id = temp_spool.enqueue({"id": "test"})
-
-        # Verify it's pending
-        items = temp_spool.dequeue_batch()
-        assert len(items) == 1
-
-        # Mark as shipped
-        temp_spool.mark_shipped(spool_id)
-
-        # Should not appear in pending anymore
-        items = temp_spool.dequeue_batch()
-        assert len(items) == 0
-
-    def test_mark_failed_increments_retry_count(self, temp_spool):
-        """mark_failed should increment retry count and store error."""
-        spool_id = temp_spool.enqueue({"id": "test"})
-
-        # Mark as failed multiple times
-        temp_spool.mark_failed(spool_id, "Connection refused")
-        temp_spool.mark_failed(spool_id, "Timeout")
-
-        # Should still be pending but with retry count
-        items = temp_spool.dequeue_batch()
-        assert len(items) == 1
-        assert items[0].retry_count == 2
-        assert items[0].last_error == "Timeout"
-
-    def test_pending_count(self, temp_spool):
-        """pending_count should return number of pending items."""
-        assert temp_spool.pending_count() == 0
-
-        temp_spool.enqueue({"id": "1"})
-        temp_spool.enqueue({"id": "2"})
-        temp_spool.enqueue({"id": "3"})
-
-        assert temp_spool.pending_count() == 3
-
-        # Mark one as shipped
-        items = temp_spool.dequeue_batch(limit=1)
-        temp_spool.mark_shipped(items[0].id)
-
-        assert temp_spool.pending_count() == 2
-
-    def test_cleanup_old_removes_shipped_entries(self, temp_spool):
-        """cleanup_old should remove old shipped entries."""
-        # Enqueue and ship
-        spool_id = temp_spool.enqueue({"id": "old"})
-        temp_spool.mark_shipped(spool_id)
-
-        # Manually backdate the entry
-        conn = sqlite3.connect(str(temp_spool.db_path))
-        cursor = conn.cursor()
-        old_time = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat()
-        cursor.execute(
-            "UPDATE spool SET created_at = ? WHERE id = ?",
-            (old_time, spool_id),
+        # Insert MAX_QUEUE_SIZE rows directly to simulate full queue
+        now = datetime.now(timezone.utc).isoformat()
+        spool.conn.executemany(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, session_id, created_at, next_retry_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+            [("claude", f"/tmp/f{i}.jsonl", 0, 100, None, now, now) for i in range(MAX_QUEUE_SIZE)],
         )
-        conn.commit()
-        conn.close()
+        spool.conn.commit()
 
-        # Cleanup should remove it
-        removed = temp_spool.cleanup_old(max_age_hours=72)
-        assert removed == 1
+        assert spool.total_size() == MAX_QUEUE_SIZE
 
-    def test_cleanup_old_preserves_pending(self, temp_spool):
-        """cleanup_old should not remove pending entries."""
-        spool_id = temp_spool.enqueue({"id": "pending"})
+        # Next enqueue should fail
+        result = spool.enqueue("claude", "/tmp/overflow.jsonl", 0, 100)
+        assert result is False
 
-        # Backdate it
-        conn = sqlite3.connect(str(temp_spool.db_path))
-        cursor = conn.cursor()
-        old_time = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat()
-        cursor.execute(
-            "UPDATE spool SET created_at = ? WHERE id = ?",
-            (old_time, spool_id),
+    def test_dequeue_batch_returns_ready_entries(self, spool: OfflineSpool):
+        """dequeue_batch should return entries whose next_retry_at <= now."""
+        spool.enqueue("claude", "/tmp/f1.jsonl", 0, 100, "s1")
+        spool.enqueue("claude", "/tmp/f2.jsonl", 100, 200, "s2")
+        spool.enqueue("claude", "/tmp/f3.jsonl", 200, 300, "s3")
+
+        entries = spool.dequeue_batch(limit=2)
+
+        assert len(entries) == 2
+        assert all(isinstance(e, SpoolEntry) for e in entries)
+        assert entries[0].file_path == "/tmp/f1.jsonl"
+        assert entries[0].start_offset == 0
+        assert entries[0].end_offset == 100
+        assert entries[1].file_path == "/tmp/f2.jsonl"
+
+    def test_dequeue_batch_respects_next_retry_at(self, spool: OfflineSpool):
+        """dequeue_batch should not return entries with future next_retry_at."""
+        spool.enqueue("claude", "/tmp/ready.jsonl", 0, 100)
+
+        # Insert an entry with future next_retry_at
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        spool.conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+            ("claude", "/tmp/future.jsonl", 0, 100, datetime.now(timezone.utc).isoformat(), future),
         )
-        conn.commit()
-        conn.close()
+        spool.conn.commit()
 
-        # Cleanup should not remove pending items
-        removed = temp_spool.cleanup_old(max_age_hours=72)
-        assert removed == 0
-        assert temp_spool.pending_count() == 1
+        entries = spool.dequeue_batch()
+        assert len(entries) == 1
+        assert entries[0].file_path == "/tmp/ready.jsonl"
 
-    def test_clear_removes_everything(self, temp_spool):
-        """clear should remove all entries."""
-        for i in range(5):
-            temp_spool.enqueue({"id": f"session-{i}"})
+    def test_mark_shipped_deletes_row(self, spool: OfflineSpool):
+        """mark_shipped should delete the entry from the DB."""
+        spool.enqueue("claude", "/tmp/f.jsonl", 0, 100)
+        entries = spool.dequeue_batch()
+        assert len(entries) == 1
 
-        temp_spool.clear()
+        spool.mark_shipped(entries[0].id)
 
-        assert temp_spool.pending_count() == 0
+        # Entry should be gone
+        entries = spool.dequeue_batch()
+        assert len(entries) == 0
+        assert spool.pending_count() == 0
 
-    def test_mark_failed_transitions_to_failed_status(self, temp_spool):
-        """mark_failed should set status='failed' after max_retries."""
-        spool_id = temp_spool.enqueue({"id": "will-fail"})
+        # Verify row is actually deleted
+        cursor = spool.conn.execute("SELECT COUNT(*) FROM spool_queue")
+        assert cursor.fetchone()[0] == 0
 
-        # First 4 failures should keep status='pending'
+    def test_mark_failed_increments_retry_with_backoff(self, spool: OfflineSpool):
+        """mark_failed should increment retry count and set future next_retry_at."""
+        spool.enqueue("claude", "/tmp/f.jsonl", 0, 100)
+        entries = spool.dequeue_batch()
+        entry_id = entries[0].id
+
+        is_dead = spool.mark_failed(entry_id, "Connection refused")
+        assert is_dead is False
+
+        # Check retry count incremented
+        cursor = spool.conn.execute(
+            "SELECT retry_count, last_error, next_retry_at FROM spool_queue WHERE id = ?", (entry_id,)
+        )
+        row = cursor.fetchone()
+        assert row[0] == 1
+        assert row[1] == "Connection refused"
+        # next_retry_at should be in the future
+        next_retry = datetime.fromisoformat(row[2])
+        assert next_retry > datetime.now(timezone.utc)
+
+    def test_mark_failed_transitions_to_dead(self, spool: OfflineSpool):
+        """mark_failed should set status='dead' after max retries."""
+        spool.enqueue("claude", "/tmp/f.jsonl", 0, 100)
+        entries = spool.dequeue_batch()
+        entry_id = entries[0].id
+
+        # Fail 4 times with max_retries=5
         for i in range(4):
-            result = temp_spool.mark_failed(spool_id, f"error {i}", max_retries=5)
-            assert result is False  # Not permanently failed yet
-            assert temp_spool.pending_count() == 1
+            is_dead = spool.mark_failed(entry_id, f"error {i}", max_retries=5)
+            assert is_dead is False
 
-        # 5th failure should transition to 'failed'
-        result = temp_spool.mark_failed(spool_id, "final error", max_retries=5)
-        assert result is True  # Now permanently failed
-        assert temp_spool.pending_count() == 0  # No longer pending
+        # 5th failure should mark as dead
+        is_dead = spool.mark_failed(entry_id, "final error", max_retries=5)
+        assert is_dead is True
 
-        # Item should not appear in dequeue_batch
-        items = temp_spool.dequeue_batch()
-        assert len(items) == 0
+        # Should not appear in pending
+        assert spool.pending_count() == 0
+        entries = spool.dequeue_batch()
+        assert len(entries) == 0
 
-    def test_claude_config_dir_parameter(self):
-        """Spool uses claude_config_dir when provided."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_dir = Path(tmpdir) / "custom-claude"
-            config_dir.mkdir()
+        # But should still exist as dead
+        cursor = spool.conn.execute("SELECT status FROM spool_queue WHERE id = ?", (entry_id,))
+        row = cursor.fetchone()
+        assert row[0] == "dead"
 
-            spool = OfflineSpool(claude_config_dir=config_dir)
+    def test_pending_count(self, spool: OfflineSpool):
+        """pending_count should return number of pending entries."""
+        assert spool.pending_count() == 0
 
-            # DB should be in custom config dir
-            assert spool.db_path == config_dir / "zerg-shipper-spool.db"
+        spool.enqueue("claude", "/tmp/f1.jsonl", 0, 100)
+        spool.enqueue("claude", "/tmp/f2.jsonl", 100, 200)
+        spool.enqueue("claude", "/tmp/f3.jsonl", 200, 300)
 
-    def test_claude_config_dir_env_var(self, monkeypatch):
-        """Spool uses CLAUDE_CONFIG_DIR env var when set."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_dir = Path(tmpdir) / "env-claude"
-            config_dir.mkdir()
+        assert spool.pending_count() == 3
 
-            monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+        # Ship one
+        entries = spool.dequeue_batch(limit=1)
+        spool.mark_shipped(entries[0].id)
 
-            spool = OfflineSpool()
+        assert spool.pending_count() == 2
 
-            assert spool.db_path == config_dir / "zerg-shipper-spool.db"
+    def test_total_size_includes_dead(self, spool: OfflineSpool):
+        """total_size should count both pending and dead entries."""
+        spool.enqueue("claude", "/tmp/f1.jsonl", 0, 100)
+        spool.enqueue("claude", "/tmp/f2.jsonl", 100, 200)
 
+        # Kill one
+        entries = spool.dequeue_batch(limit=1)
+        spool.mark_failed(entries[0].id, "dead", max_retries=1)
 
-class TestShipperSpoolIntegration:
-    """Tests for shipper + spool integration."""
+        assert spool.pending_count() == 1
+        assert spool.total_size() == 2  # 1 pending + 1 dead
 
-    @pytest.fixture
-    def temp_env(self):
-        """Create temporary environment for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+    def test_cleanup_removes_old_dead_and_pending(self, spool: OfflineSpool):
+        """cleanup should remove dead and pending entries older than DEAD_AGE_DAYS."""
+        # Insert old entries directly
+        old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
-            # Create projects directory with a test session
-            projects_dir = tmpdir / "projects" / "test-project"
-            projects_dir.mkdir(parents=True)
-
-            session_file = projects_dir / "test-session.jsonl"
-            event_data = {
-                "type": "user",
-                "uuid": "user-1",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "message": {"role": "user", "content": "Hello"},
-            }
-            session_file.write_text(json.dumps(event_data) + "\n")
-
-            config = ShipperConfig(
-                api_url="http://localhost:47300",
-                claude_config_dir=tmpdir,
-            )
-
-            spool = OfflineSpool(db_path=tmpdir / "spool.db")
-
-            yield {
-                "tmpdir": tmpdir,
-                "session_file": session_file,
-                "config": config,
-                "spool": spool,
-            }
-
-    @pytest.mark.asyncio
-    async def test_ship_spools_on_connection_error(self, temp_env):
-        """ship_session should spool when API is unreachable."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
+        spool.conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status) VALUES (?, ?, ?, ?, ?, ?, 'dead')",
+            ("claude", "/tmp/old-dead.jsonl", 0, 100, old_time, now),
         )
-
-        # Mock _post_ingest to raise connection error
-        async def mock_post_ingest(payload):
-            raise httpx.ConnectError("Connection refused")
-
-        shipper._post_ingest = mock_post_ingest
-
-        # Ship should not raise but should spool
-        result = await shipper.ship_session(temp_env["session_file"])
-
-        assert result["events_inserted"] == 0
-        assert result["events_spooled"] == 1
-
-        # Verify item is in spool
-        assert temp_env["spool"].pending_count() == 1
-
-    @pytest.mark.asyncio
-    async def test_ship_spools_on_timeout(self, temp_env):
-        """ship_session should spool on timeout."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
+        spool.conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+            ("claude", "/tmp/old-pending.jsonl", 0, 100, old_time, now),
         )
+        # Recent pending should survive
+        spool.enqueue("claude", "/tmp/recent.jsonl", 0, 100)
+        spool.conn.commit()
 
-        async def mock_post_ingest(payload):
-            raise httpx.TimeoutException("Request timed out")
+        removed = spool.cleanup()
+        assert removed == 2
 
-        shipper._post_ingest = mock_post_ingest
+        # Recent entry should remain
+        assert spool.pending_count() == 1
 
-        result = await shipper.ship_session(temp_env["session_file"])
+    def test_cleanup_preserves_recent_entries(self, spool: OfflineSpool):
+        """cleanup should not remove recent entries."""
+        spool.enqueue("claude", "/tmp/recent.jsonl", 0, 100)
 
-        assert result["events_spooled"] == 1
-        assert temp_env["spool"].pending_count() == 1
+        removed = spool.cleanup()
+        assert removed == 0
+        assert spool.pending_count() == 1
 
-    @pytest.mark.asyncio
-    async def test_ship_raises_on_auth_error(self, temp_env):
-        """ship_session should raise on 401/403 auth errors, not spool."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
-
-        async def mock_post_ingest(payload):
-            response = MagicMock()
-            response.status_code = 401
-            raise httpx.HTTPStatusError(
-                "Unauthorized",
-                request=MagicMock(),
-                response=response,
-            )
-
-        shipper._post_ingest = mock_post_ingest
-
-        # Should raise, not spool
-        with pytest.raises(httpx.HTTPStatusError):
-            await shipper.ship_session(temp_env["session_file"])
-
-        # Nothing should be spooled
-        assert temp_env["spool"].pending_count() == 0
-
-    @pytest.mark.asyncio
-    async def test_ship_spools_on_server_error(self, temp_env):
-        """ship_session should spool on 5xx server errors."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
-
-        async def mock_post_ingest(payload):
-            response = MagicMock()
-            response.status_code = 503
-            raise httpx.HTTPStatusError(
-                "Service unavailable",
-                request=MagicMock(),
-                response=response,
-            )
-
-        shipper._post_ingest = mock_post_ingest
-
-        result = await shipper.ship_session(temp_env["session_file"])
-
-        assert result["events_spooled"] == 1
-        assert temp_env["spool"].pending_count() == 1
-
-    @pytest.mark.asyncio
-    async def test_ship_skips_on_4xx_client_error(self, temp_env):
-        """ship_session should skip (not spool) on 4xx client errors."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
-
-        async def mock_post_ingest(payload):
-            response = MagicMock()
-            response.status_code = 400
-            raise httpx.HTTPStatusError(
-                "Bad request",
-                request=MagicMock(),
-                response=response,
-            )
-
-        shipper._post_ingest = mock_post_ingest
-
-        result = await shipper.ship_session(temp_env["session_file"])
-
-        # Should skip the events, not spool them
-        assert result["events_skipped"] == 1
-        assert result["events_spooled"] == 0
-        assert temp_env["spool"].pending_count() == 0
-
-    @pytest.mark.asyncio
-    async def test_replay_spool_ships_pending(self, temp_env):
-        """replay_spool should ship pending items."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
-
-        # Add items to spool directly
-        temp_env["spool"].enqueue({"id": "session-1", "events": []})
-        temp_env["spool"].enqueue({"id": "session-2", "events": []})
-
-        # Mock _post_ingest to succeed
-        post_calls = []
-
-        async def mock_post_ingest(payload):
-            post_calls.append(payload)
-            return {"session_id": payload["id"], "events_inserted": 0, "events_skipped": 0}
-
-        shipper._post_ingest = mock_post_ingest
-
-        # Replay should ship both
-        result = await shipper.replay_spool()
-
-        assert result["replayed"] == 2
-        assert result["failed"] == 0
-        assert result["remaining"] == 0
-        assert len(post_calls) == 2
-
-    @pytest.mark.asyncio
-    async def test_replay_spool_stops_on_connection_error(self, temp_env):
-        """replay_spool should stop early if API is still unreachable."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
-
-        # Add items to spool
-        temp_env["spool"].enqueue({"id": "session-1", "events": []})
-        temp_env["spool"].enqueue({"id": "session-2", "events": []})
-
-        async def mock_post_ingest(payload):
-            raise httpx.ConnectError("Still unreachable")
-
-        shipper._post_ingest = mock_post_ingest
-
-        result = await shipper.replay_spool()
-
-        # Should stop early, both items still pending
-        assert result["replayed"] == 0
-        assert result["remaining"] == 2
-
-    @pytest.mark.asyncio
-    async def test_replay_spool_marks_5xx_errors_failed_with_retry(self, temp_env):
-        """replay_spool should mark 5xx server errors as failed with retry."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
-
-        temp_env["spool"].enqueue({"id": "server-error", "events": []})
-
-        async def mock_post_ingest(payload):
-            response = MagicMock()
-            response.status_code = 500
-            response.text = "Server error"
-            raise httpx.HTTPStatusError(
-                "Server error",
-                request=MagicMock(),
-                response=response,
-            )
-
-        shipper._post_ingest = mock_post_ingest
-
-        # First replay should mark it as failed (retry_count = 1)
-        result = await shipper.replay_spool()
-
-        assert result["failed"] == 1
-        assert result["remaining"] == 1  # Still in spool, will retry
-
-        # Verify retry count was incremented
-        items = temp_env["spool"].dequeue_batch()
-        assert len(items) == 1
-        assert items[0].retry_count == 1
-
-    @pytest.mark.asyncio
-    async def test_replay_spool_permanently_fails_after_max_retries(self, temp_env):
-        """replay_spool should permanently fail items after max retries for 5xx errors."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
-
-        # Enqueue an item
-        temp_env["spool"].enqueue({"id": "will-fail-permanently", "events": []})
-
-        call_count = 0
-
-        async def mock_post_ingest(payload):
-            nonlocal call_count
-            call_count += 1
-            response = MagicMock()
-            response.status_code = 500
-            raise httpx.HTTPStatusError(
-                "Server error",
-                request=MagicMock(),
-                response=response,
-            )
-
-        shipper._post_ingest = mock_post_ingest
-
-        # Replay multiple times until item is permanently failed
+    def test_clear_removes_everything(self, spool: OfflineSpool):
+        """clear should remove all spool entries."""
         for i in range(5):
-            result = await shipper.replay_spool(max_retries=5)
-            assert result["failed"] == 1
+            spool.enqueue("claude", f"/tmp/f{i}.jsonl", 0, 100)
 
-        # After 5 failures, item should be permanently failed (status='failed')
-        # and no longer appear in dequeue_batch
-        assert temp_env["spool"].pending_count() == 0
+        spool.clear()
 
-        # One more replay should find nothing to process
-        result = await shipper.replay_spool(max_retries=5)
-        assert result["replayed"] == 0
-        assert result["failed"] == 0
-        assert result["remaining"] == 0
+        assert spool.pending_count() == 0
+        assert spool.total_size() == 0
 
-        # API was called 5 times (once per retry)
-        assert call_count == 5
+    def test_enqueue_without_session_id(self, spool: OfflineSpool):
+        """enqueue should work without session_id."""
+        result = spool.enqueue("claude", "/tmp/f.jsonl", 0, 100)
+        assert result is True
 
-    @pytest.mark.asyncio
-    async def test_replay_spool_auth_error_immediately_fails(self, temp_env):
-        """replay_spool should immediately fail items on 401/403 auth errors."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
+        entries = spool.dequeue_batch()
+        assert len(entries) == 1
+        assert entries[0].session_id is None
 
-        temp_env["spool"].enqueue({"id": "auth-fail", "events": []})
+    def test_claude_config_dir_parameter(self, tmp_path: Path):
+        """Spool uses claude_config_dir when provided."""
+        config_dir = tmp_path / "custom-claude"
+        config_dir.mkdir()
 
-        call_count = 0
+        spool = OfflineSpool(claude_config_dir=config_dir)
+        assert spool.db_path == config_dir / "longhouse-shipper.db"
 
-        async def mock_post_ingest(payload):
-            nonlocal call_count
-            call_count += 1
-            response = MagicMock()
-            response.status_code = 401
-            raise httpx.HTTPStatusError(
-                "Unauthorized",
-                request=MagicMock(),
-                response=response,
-            )
+    def test_claude_config_dir_env_var(self, tmp_path: Path, monkeypatch):
+        """Spool uses CLAUDE_CONFIG_DIR env var when set."""
+        config_dir = tmp_path / "env-claude"
+        config_dir.mkdir()
 
-        shipper._post_ingest = mock_post_ingest
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
 
-        # Single replay should permanently fail the item
-        result = await shipper.replay_spool(max_retries=5)
-        assert result["failed"] == 1
-        assert temp_env["spool"].pending_count() == 0  # Immediately removed from pending
+        spool = OfflineSpool()
+        assert spool.db_path == config_dir / "longhouse-shipper.db"
 
-        # API was called only once
-        assert call_count == 1
+    def test_shared_connection(self, tmp_path: Path):
+        """Spool accepts an external connection."""
+        from zerg.services.shipper.spool import get_shared_connection
 
-    @pytest.mark.asyncio
-    async def test_replay_spool_4xx_error_immediately_fails(self, temp_env):
-        """replay_spool should immediately fail items on other 4xx errors."""
-        shipper = SessionShipper(
-            config=temp_env["config"],
-            spool=temp_env["spool"],
-        )
+        db_path = tmp_path / "shared.db"
+        conn = get_shared_connection(db_path)
+        init_schema(conn)
 
-        temp_env["spool"].enqueue({"id": "bad-payload", "events": []})
+        spool = OfflineSpool(db_path=db_path, conn=conn)
+        spool.enqueue("claude", "/tmp/f.jsonl", 0, 100)
+        assert spool.pending_count() == 1
 
-        call_count = 0
-
-        async def mock_post_ingest(payload):
-            nonlocal call_count
-            call_count += 1
-            response = MagicMock()
-            response.status_code = 400
-            raise httpx.HTTPStatusError(
-                "Bad request",
-                request=MagicMock(),
-                response=response,
-            )
-
-        shipper._post_ingest = mock_post_ingest
-
-        # Single replay should permanently fail the item
-        result = await shipper.replay_spool(max_retries=5)
-        assert result["failed"] == 1
-        assert temp_env["spool"].pending_count() == 0  # Immediately removed from pending
-
-        # API was called only once
-        assert call_count == 1
+        conn.close()
