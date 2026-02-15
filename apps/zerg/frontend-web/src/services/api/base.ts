@@ -23,14 +23,19 @@ export class ApiError extends Error {
 }
 
 export function buildUrl(path: string): string {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  let normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const base = config.apiBaseUrl.replace(/\/+$/, "");
+  const prefix = base || "/api";
+
+  // Guard against double prefix (e.g. passing "/api/foo" when prefix is "/api")
+  if (prefix && normalizedPath.startsWith(`${prefix}/`)) {
+    normalizedPath = normalizedPath.slice(prefix.length);
+  }
 
   if (base.startsWith("http")) {
     return `${base}${normalizedPath}`;
   }
 
-  const prefix = base || "/api";
   return `${prefix}${normalizedPath}`;
 }
 
