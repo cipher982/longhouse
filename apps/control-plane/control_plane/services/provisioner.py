@@ -139,6 +139,9 @@ class Provisioner:
         if settings.publish_ports:
             ports = {settings.instance_port: settings.instance_port}
 
+        # Always pull latest image before provisioning to avoid stale cache
+        self.client.images.pull(settings.image)
+
         container = self.client.containers.run(
             image=settings.image,
             name=container_name,
