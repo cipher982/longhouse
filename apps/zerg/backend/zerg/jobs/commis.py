@@ -61,25 +61,11 @@ def _retry_delay(attempt: int) -> int:
 def _invoke_job(job_def) -> asyncio.coroutines:
     """Invoke a job function with or without JobContext based on signature.
 
-    Uses the same signature detection as registry._invoke_job_func but
-    for the queue execution path.
+    Delegates to registry._invoke_job_func for consistent behavior.
     """
-    import inspect
+    from zerg.jobs.registry import _invoke_job_func
 
-    sig = inspect.signature(job_def.func)
-    if sig.parameters:
-        from zerg.database import db_session
-        from zerg.jobs.context import JobContext
-        from zerg.jobs.registry import _extract_secret_keys
-        from zerg.jobs.secret_resolver import resolve_secrets
-
-        with db_session() as db:
-            secrets = resolve_secrets(owner_id=1, declared_keys=_extract_secret_keys(job_def.secrets), db=db)
-
-        ctx = JobContext(job_id=job_def.id, secrets=secrets)
-        return job_def.func(ctx)
-    else:
-        return job_def.func()
+    return _invoke_job_func(job_def)
 
 
 async def enqueue_missed_runs(now: datetime | None = None) -> None:

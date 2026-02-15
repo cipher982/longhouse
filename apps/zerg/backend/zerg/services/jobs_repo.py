@@ -12,6 +12,7 @@ Remote sync (e.g., GitHub) is optional and configured via UI.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import subprocess
 import sys
@@ -177,8 +178,8 @@ __pycache__/
     return result
 
 
-def install_jobs_deps(data_dir: str | Path) -> dict[str, Any]:
-    """Install job dependencies from /data/jobs/requirements.txt if present.
+def install_jobs_deps(data_dir: str | Path, *, hash_path: Path | None = None) -> dict[str, Any]:
+    """Install job dependencies from requirements.txt if present.
 
     Jobs packs can ship a requirements.txt with their own deps (asyncpg, pymongo, etc.).
     This runs pip install into the current venv at startup, before the manifest loads.
@@ -194,12 +195,23 @@ def install_jobs_deps(data_dir: str | Path) -> dict[str, Any]:
         - error: str | None - Error message if failed
     """
     data_path = Path(data_dir)
-    requirements_path = data_path / "jobs" / "requirements.txt"
+    requirements_path = data_path / "requirements.txt"
+    if not requirements_path.exists():
+        requirements_path = data_path / "jobs" / "requirements.txt"
 
     if not requirements_path.exists():
         return {"installed": False, "skipped": True, "error": None}
 
     try:
+        content = requirements_path.read_text().strip()
+        if not content:
+            return {"installed": False, "skipped": True, "error": None}
+
+        deps_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        deps_hash_path = hash_path or Path("/tmp/longhouse-job-deps.sha")
+        if deps_hash_path.exists() and deps_hash_path.read_text().strip() == deps_hash:
+            return {"installed": False, "skipped": True, "error": None}
+
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "-r", str(requirements_path)],
             capture_output=True,
@@ -207,6 +219,8 @@ def install_jobs_deps(data_dir: str | Path) -> dict[str, Any]:
             timeout=120,
         )
         if result.returncode == 0:
+            deps_hash_path.parent.mkdir(parents=True, exist_ok=True)
+            deps_hash_path.write_text(deps_hash)
             logger.info("Installed job dependencies from %s", requirements_path)
             return {"installed": True, "skipped": False, "error": None}
         else:
