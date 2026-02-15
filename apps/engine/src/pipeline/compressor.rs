@@ -148,7 +148,7 @@ pub fn build_and_compress(
     let payload = build_payload(session_id, events, metadata, source_path, provider);
 
     // Stream serialize directly into gzip compressor
-    let mut gz = GzEncoder::new(Vec::with_capacity(64 * 1024), Compression::default());
+    let mut gz = GzEncoder::new(Vec::with_capacity(64 * 1024), Compression::fast());
     serde_json::to_writer(&mut gz, &payload)?;
     let compressed = gz.finish()?;
 
@@ -157,7 +157,7 @@ pub fn build_and_compress(
 
 /// Compress an already-built payload to gzip bytes (for benchmarking).
 pub fn compress_payload(payload: &IngestPayload<'_>) -> anyhow::Result<Vec<u8>> {
-    let mut gz = GzEncoder::new(Vec::with_capacity(64 * 1024), Compression::default());
+    let mut gz = GzEncoder::new(Vec::with_capacity(64 * 1024), Compression::fast());
     serde_json::to_writer(&mut gz, payload)?;
     let compressed = gz.finish()?;
     Ok(compressed)
