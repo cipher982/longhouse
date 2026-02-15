@@ -34,6 +34,7 @@ import zerg.services.shipper.providers.gemini  # noqa: F401
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import extract_session_metadata
 from zerg.services.shipper.parser import parse_session_file
+from zerg.services.shipper.parser import parse_session_file_with_offset
 from zerg.services.shipper.providers import SessionProvider
 from zerg.services.shipper.providers import registry as provider_registry
 from zerg.services.shipper.providers.claude import ClaudeProvider
@@ -208,8 +209,17 @@ class SessionShipper:
         # JSONL-based providers — use byte offset comparison
         try:
             file_size = path.stat().st_size
-            last_offset = self.state.get_offset(str(path))
-            return file_size > last_offset
+            file_path_str = str(path)
+            stored_offset = max(
+                self.state.get_offset(file_path_str),
+                self.state.get_queued_offset(file_path_str),
+            )
+            # Detect file truncation/rotation: file shrank below stored offset
+            if file_size < stored_offset:
+                logger.warning(f"File truncated or rotated: {path} (size={file_size}, stored_offset={stored_offset}). Resetting offsets.")
+                self.state.reset_offsets(file_path_str)
+                return file_size > 0
+            return file_size > stored_offset
         except (OSError, IOError):
             return False
 
@@ -221,14 +231,13 @@ class SessionShipper:
         """
         unacked = self.state.get_unacked_files()
         count = 0
-        for file_path, acked_offset, queued_offset in unacked:
-            # Determine provider from state (default to claude)
+        for file_path, acked_offset, queued_offset, provider, session_id in unacked:
             self.spool.enqueue(
-                provider="claude",
+                provider=provider or "claude",
                 file_path=file_path,
                 start_offset=acked_offset,
                 end_offset=queued_offset,
-                session_id=None,
+                session_id=session_id,
             )
             count += 1
             logger.info(f"Recovery: re-enqueued {file_path} bytes [{acked_offset}:{queued_offset}]")
@@ -258,6 +267,9 @@ class SessionShipper:
         for path, provider_name in files_to_ship:
             try:
                 ship_result = await self.ship_session(path, provider_name=provider_name)
+                # Collect errors from backpressure (Bug 1)
+                if ship_result.get("errors"):
+                    result.errors.extend(ship_result["errors"])
                 if ship_result["events_inserted"] > 0 or ship_result["events_skipped"] > 0 or ship_result["events_spooled"] > 0:
                     result.sessions_shipped += 1
                     result.events_shipped += ship_result["events_inserted"]
@@ -281,18 +293,30 @@ class SessionShipper:
             Dict with events_inserted, events_skipped, events_spooled, new_offset
         """
         file_path_str = str(session_file)
-        last_offset = self.state.get_offset(file_path_str)
+        acked_offset = self.state.get_offset(file_path_str)
+        queued_offset = self.state.get_queued_offset(file_path_str)
+        # Bug 2 fix: use max of acked and queued to avoid re-reading spooled range
+        read_offset = max(acked_offset, queued_offset)
 
         # Use provider if available, otherwise fall back to direct parser calls
+        # Bug 3 fix: use parse_session_file_with_offset to track last good byte offset
         provider = provider_registry.get(provider_name)
-        if provider:
-            events = list(provider.parse_file(session_file, offset=last_offset))
+        if session_file.suffix == ".json":
+            # JSON files are non-appendable — no partial line concern
+            if provider:
+                events = list(provider.parse_file(session_file, offset=read_offset))
+            else:
+                events = list(parse_session_file(session_file, offset=read_offset))
+            new_offset = self._new_offset_for(session_file)
         else:
-            events = list(parse_session_file(session_file, offset=last_offset))
+            # JSONL files — track last good offset to avoid losing partial lines
+            # Always use parse_session_file_with_offset for offset tracking,
+            # even when a provider is available (providers delegate to the same parser)
+            events, last_good_offset = parse_session_file_with_offset(session_file, offset=read_offset)
+            new_offset = last_good_offset
 
         if not events:
-            # No new events, but update offset to current file size
-            new_offset = self._new_offset_for(session_file)
+            # No new events, but update offset
             existing = self.state.get_session(file_path_str)
             if existing:
                 self.state.set_offset(
@@ -331,7 +355,6 @@ class SessionShipper:
         )
 
         # Try to ship to Zerg
-        new_offset = self._new_offset_for(session_file)
         try:
             api_result = await self._post_ingest(payload)
 
@@ -353,75 +376,17 @@ class SessionShipper:
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             # Connection/timeout issues - spool pointer for later retry
             logger.warning(f"API unreachable, spooling pointer for {len(events)} events: {e}")
-            self.spool.enqueue(
+            # Bug 1 fix: check enqueue return value before advancing offset
+            enqueued = self.spool.enqueue(
                 provider=provider_name,
                 file_path=file_path_str,
-                start_offset=last_offset,
+                start_offset=read_offset,
                 end_offset=new_offset,
                 session_id=session_id,
             )
 
-            # Advance queued_offset but not acked_offset
-            self.state.set_queued_offset(
-                file_path_str,
-                new_offset,
-                provider=provider_name,
-                session_id=session_id,
-                provider_session_id=metadata.session_id,
-            )
-
-            return {
-                "events_inserted": 0,
-                "events_skipped": 0,
-                "events_spooled": len(events),
-                "new_offset": new_offset,
-            }
-
-        except RateLimitExhaustedError as e:
-            # Rate limit exhausted after max retries - spool for later retry
-            logger.warning(f"Rate limit exhausted, spooling pointer for {len(events)} events: {e}")
-            self.spool.enqueue(
-                provider=provider_name,
-                file_path=file_path_str,
-                start_offset=last_offset,
-                end_offset=new_offset,
-                session_id=session_id,
-            )
-
-            self.state.set_queued_offset(
-                file_path_str,
-                new_offset,
-                provider=provider_name,
-                session_id=session_id,
-                provider_session_id=metadata.session_id,
-            )
-
-            return {
-                "events_inserted": 0,
-                "events_skipped": 0,
-                "events_spooled": len(events),
-                "new_offset": new_offset,
-            }
-
-        except httpx.HTTPStatusError as e:
-            status_code = e.response.status_code
-
-            # Auth errors (401/403) - hard fail, don't spool (will never succeed)
-            if status_code in (401, 403):
-                logger.error(f"Auth error ({status_code}), not spooling: {e}")
-                raise
-
-            # Server errors (5xx) - spool for retry
-            if status_code >= 500:
-                logger.warning(f"Server error ({status_code}), spooling pointer for {len(events)} events: {e}")
-                self.spool.enqueue(
-                    provider=provider_name,
-                    file_path=file_path_str,
-                    start_offset=last_offset,
-                    end_offset=new_offset,
-                    session_id=session_id,
-                )
-
+            if enqueued:
+                # Advance queued_offset but not acked_offset
                 self.state.set_queued_offset(
                     file_path_str,
                     new_offset,
@@ -436,10 +401,79 @@ class SessionShipper:
                     "events_spooled": len(events),
                     "new_offset": new_offset,
                 }
+            else:
+                return {
+                    "events_inserted": 0,
+                    "events_skipped": 0,
+                    "events_spooled": 0,
+                    "new_offset": read_offset,
+                    "errors": ["Spool at capacity, data not enqueued"],
+                }
+
+        except RateLimitExhaustedError as e:
+            # Rate limit exhausted after max retries - spool for later retry
+            logger.warning(f"Rate limit exhausted, spooling pointer for {len(events)} events: {e}")
+            enqueued = self.spool.enqueue(
+                provider=provider_name,
+                file_path=file_path_str,
+                start_offset=read_offset,
+                end_offset=new_offset,
+                session_id=session_id,
+            )
+
+            if enqueued:
+                self.state.set_queued_offset(
+                    file_path_str,
+                    new_offset,
+                    provider=provider_name,
+                    session_id=session_id,
+                    provider_session_id=metadata.session_id,
+                )
+
+            return {
+                "events_inserted": 0,
+                "events_skipped": 0,
+                "events_spooled": len(events) if enqueued else 0,
+                "new_offset": new_offset if enqueued else read_offset,
+            }
+
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code
+
+            # Auth errors (401/403) - hard fail, don't spool (will never succeed)
+            if status_code in (401, 403):
+                logger.error(f"Auth error ({status_code}), not spooling: {e}")
+                raise
+
+            # Server errors (5xx) - spool for retry
+            if status_code >= 500:
+                logger.warning(f"Server error ({status_code}), spooling pointer for {len(events)} events: {e}")
+                enqueued = self.spool.enqueue(
+                    provider=provider_name,
+                    file_path=file_path_str,
+                    start_offset=read_offset,
+                    end_offset=new_offset,
+                    session_id=session_id,
+                )
+
+                if enqueued:
+                    self.state.set_queued_offset(
+                        file_path_str,
+                        new_offset,
+                        provider=provider_name,
+                        session_id=session_id,
+                        provider_session_id=metadata.session_id,
+                    )
+
+                return {
+                    "events_inserted": 0,
+                    "events_skipped": 0,
+                    "events_spooled": len(events) if enqueued else 0,
+                    "new_offset": new_offset if enqueued else read_offset,
+                }
 
             # Other 4xx errors - log and skip (bad payload, won't retry)
             logger.warning(f"Client error ({status_code}), skipping {len(events)} events: {e}")
-            new_offset = self._new_offset_for(session_file)
             self.state.set_offset(
                 file_path_str,
                 new_offset,
@@ -592,8 +626,10 @@ class SessionShipper:
                 events = [e for e in events if e.source_offset < entry.end_offset]
 
                 if not events:
-                    # No events in this range — mark as shipped (nothing to do)
+                    # No events in this range — mark as shipped and advance acked_offset
+                    # to close the gap (Bug 7: prevents startup_recovery re-enqueuing forever)
                     self.spool.mark_shipped(entry.id)
+                    self.state.set_acked_offset(entry.file_path, entry.end_offset)
                     replayed += 1
                     continue
 

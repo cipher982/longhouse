@@ -99,11 +99,11 @@ class TestShipperState:
         assert state.get_queued_offset("/test/file.jsonl") == 500
 
     def test_get_unacked_files(self, tmp_path: Path):
-        """get_unacked_files returns files where queued > acked."""
+        """get_unacked_files returns files where queued > acked with provider and session_id."""
         state = ShipperState(db_path=tmp_path / "shipper.db")
 
         # File with gap
-        state.set_queued_offset("/test/gap.jsonl", 500)
+        state.set_queued_offset("/test/gap.jsonl", 500, provider="gemini", session_id="sess-42")
         # File fully acked
         state.set_offset("/test/acked.jsonl", 300, "s", "p")
 
@@ -112,6 +112,8 @@ class TestShipperState:
         assert unacked[0][0] == "/test/gap.jsonl"
         assert unacked[0][1] == 0   # acked_offset
         assert unacked[0][2] == 500  # queued_offset
+        assert unacked[0][3] == "gemini"  # provider
+        assert unacked[0][4] == "sess-42"  # session_id
 
     def test_list_sessions(self, tmp_path: Path):
         """list_sessions returns all tracked sessions."""
@@ -254,6 +256,50 @@ class TestShipperState:
 
         assert state.get_offset("/test/file.jsonl") == 1000
         assert state.get_queued_offset("/test/file.jsonl") == 1000
+        state.close()
+
+    def test_set_acked_offset_is_monotonic(self, tmp_path: Path):
+        """Bug 6: set_acked_offset must never regress — only move forward."""
+        state = ShipperState(db_path=tmp_path / "shipper.db")
+
+        state.set_queued_offset("/test/file.jsonl", 1000, session_id="s1")
+
+        # Advance acked to 500
+        state.set_acked_offset("/test/file.jsonl", 500)
+        assert state.get_offset("/test/file.jsonl") == 500
+
+        # Try to regress acked to 200 — should be ignored
+        state.set_acked_offset("/test/file.jsonl", 200)
+        assert state.get_offset("/test/file.jsonl") == 500
+
+        # Advance further to 800 — should work
+        state.set_acked_offset("/test/file.jsonl", 800)
+        assert state.get_offset("/test/file.jsonl") == 800
+        state.close()
+
+    def test_set_offset_is_monotonic(self, tmp_path: Path):
+        """Bug 6: set_offset must never regress offsets."""
+        state = ShipperState(db_path=tmp_path / "shipper.db")
+
+        state.set_offset("/test/file.jsonl", 1000, "s1", "p1")
+        assert state.get_offset("/test/file.jsonl") == 1000
+        assert state.get_queued_offset("/test/file.jsonl") == 1000
+
+        # Try to set a lower offset — should be clamped to current
+        state.set_offset("/test/file.jsonl", 500, "s2", "p2")
+        assert state.get_offset("/test/file.jsonl") == 1000
+        assert state.get_queued_offset("/test/file.jsonl") == 1000
+        state.close()
+
+    def test_reset_offsets(self, tmp_path: Path):
+        """reset_offsets should set both queued and acked to 0."""
+        state = ShipperState(db_path=tmp_path / "shipper.db")
+
+        state.set_offset("/test/file.jsonl", 1000, "s1", "p1")
+        state.reset_offsets("/test/file.jsonl")
+
+        assert state.get_offset("/test/file.jsonl") == 0
+        assert state.get_queued_offset("/test/file.jsonl") == 0
         state.close()
 
     def test_set_queued_offset_preserves_existing_session_ids(self, tmp_path: Path):

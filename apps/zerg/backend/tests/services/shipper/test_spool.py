@@ -194,8 +194,8 @@ class TestOfflineSpool:
         assert spool.pending_count() == 1
         assert spool.total_size() == 2  # 1 pending + 1 dead
 
-    def test_cleanup_removes_old_dead_and_pending(self, spool: OfflineSpool):
-        """cleanup should remove dead and pending entries older than DEAD_AGE_DAYS."""
+    def test_cleanup_removes_old_dead_only(self, spool: OfflineSpool):
+        """cleanup should remove only dead entries older than DEAD_AGE_DAYS, not pending."""
         # Insert old entries directly
         old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
         now = datetime.now(timezone.utc).isoformat()
@@ -213,10 +213,10 @@ class TestOfflineSpool:
         spool.conn.commit()
 
         removed = spool.cleanup()
-        assert removed == 2
+        assert removed == 1  # Only the old dead entry
 
-        # Recent entry should remain
-        assert spool.pending_count() == 1
+        # Both pending entries should remain (old + recent)
+        assert spool.pending_count() == 2
 
     def test_cleanup_preserves_recent_entries(self, spool: OfflineSpool):
         """cleanup should not remove recent entries."""
@@ -262,6 +262,24 @@ class TestOfflineSpool:
 
         spool = OfflineSpool()
         assert spool.db_path == config_dir / "longhouse-shipper.db"
+
+    def test_cleanup_preserves_old_pending_entries(self, spool: OfflineSpool):
+        """Bug 5: cleanup must NOT delete pending entries, even after 7+ days."""
+        old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Insert old pending entry
+        spool.conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+            ("claude", "/tmp/old-pending.jsonl", 0, 100, old_time, now),
+        )
+        spool.conn.commit()
+
+        removed = spool.cleanup()
+        assert removed == 0  # Nothing should be removed
+
+        # Old pending entry should survive
+        assert spool.pending_count() == 1
 
     def test_shared_connection(self, tmp_path: Path):
         """Spool accepts an external connection."""

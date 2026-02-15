@@ -779,3 +779,182 @@ class TestShipperSpoolIntegration:
         entries = temp_env["spool"].dequeue_batch()
         assert entries[0].start_offset == 0
         assert entries[0].end_offset == 500
+
+    @pytest.mark.asyncio
+    async def test_backpressure_does_not_advance_offset(self, temp_env):
+        """Bug 1: When spool is full, queued_offset must NOT advance."""
+        import httpx
+
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        # Fill the spool to capacity
+        from zerg.services.shipper.spool import MAX_QUEUE_SIZE
+
+        now_iso = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        temp_env["spool"].conn.executemany(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, session_id, created_at, next_retry_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+            [("claude", f"/tmp/f{i}.jsonl", 0, 100, None, now_iso, now_iso) for i in range(MAX_QUEUE_SIZE)],
+        )
+        temp_env["spool"].conn.commit()
+
+        async def mock_post_ingest(payload):
+            raise httpx.ConnectError("Connection refused")
+
+        shipper._post_ingest = mock_post_ingest
+
+        file_path = str(temp_env["session_file"])
+        result = await shipper.ship_session(temp_env["session_file"])
+
+        # Offset should NOT have advanced
+        assert temp_env["state"].get_queued_offset(file_path) == 0
+        assert result["events_spooled"] == 0
+        assert result.get("errors")  # Should contain backpressure error
+
+    @pytest.mark.asyncio
+    async def test_rescan_does_not_respool_same_range(self, temp_env):
+        """Bug 2: After failed ship+spool, next scan must NOT re-spool same range."""
+        import httpx
+
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            raise httpx.ConnectError("Connection refused")
+
+        shipper._post_ingest = mock_post_ingest
+
+        # First ship — spools the data
+        result1 = await shipper.ship_session(temp_env["session_file"])
+        assert result1["events_spooled"] == 1
+        assert temp_env["spool"].pending_count() == 1
+
+        # Second scan — should NOT find new content (queued_offset advanced)
+        assert shipper._has_new_content(temp_env["session_file"]) is False
+
+        # If we do force a ship_session, it should find no events
+        result2 = await shipper.ship_session(temp_env["session_file"])
+        assert result2["events_spooled"] == 0
+        assert result2["events_inserted"] == 0
+
+        # Spool should still have just 1 entry, not 2
+        assert temp_env["spool"].pending_count() == 1
+
+    @pytest.mark.asyncio
+    async def test_partial_line_at_eof_not_lost(self, temp_env):
+        """Bug 3: Partial last line at EOF must not be skipped."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        # Write a complete line + a partial (incomplete JSON) line at end
+        complete_line = json.dumps({
+            "type": "user",
+            "uuid": "msg-complete",
+            "timestamp": "2026-02-15T10:00:00Z",
+            "message": {"content": "Complete message"},
+        })
+        partial_line = '{"type": "user", "uuid": "msg-partial", "timestamp": "2026-02-15T10:01:00Z"'
+
+        temp_env["session_file"].write_text(complete_line + "\n" + partial_line)
+
+        mock_response = {
+            "session_id": "zerg-session-abc",
+            "events_inserted": 1,
+            "events_skipped": 0,
+        }
+
+        with patch.object(shipper, "_post_ingest", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            result = await shipper.ship_session(temp_env["session_file"])
+
+        # Should have shipped the complete line
+        assert result["events_inserted"] == 1
+
+        # new_offset should be at the end of the complete line, NOT at file size
+        file_size = temp_env["session_file"].stat().st_size
+        assert result["new_offset"] < file_size
+        assert result["new_offset"] == len(complete_line.encode("utf-8")) + 1  # +1 for newline
+
+    @pytest.mark.asyncio
+    async def test_file_truncation_resets_offsets(self, temp_env):
+        """Bug 4: File truncation/rotation should reset offsets and re-read."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        file_path = str(temp_env["session_file"])
+
+        # Simulate previously shipped to offset 1000
+        temp_env["state"].set_offset(file_path, 1000, "sess-1", "p-1")
+
+        # But file is smaller than 1000 bytes (truncated)
+        assert temp_env["session_file"].stat().st_size < 1000
+
+        # _has_new_content should detect truncation and reset
+        assert shipper._has_new_content(temp_env["session_file"]) is True
+
+        # Offsets should have been reset
+        assert temp_env["state"].get_offset(file_path) == 0
+        assert temp_env["state"].get_queued_offset(file_path) == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_replay_advances_acked_offset(self, temp_env):
+        """Bug 7: Replay with no parseable events should still advance acked_offset."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        file_path = str(temp_env["session_file"])
+
+        # Create a file that has only metadata lines (no parseable events)
+        content = json.dumps({"type": "summary", "summary": "Test"}) + "\n"
+        temp_env["session_file"].write_text(content)
+        file_size = temp_env["session_file"].stat().st_size
+
+        # Manually set up a spool entry for this file range (use actual file size)
+        temp_env["state"].set_queued_offset(file_path, file_size, session_id="sess-1")
+        temp_env["spool"].enqueue("claude", file_path, 0, file_size, "sess-1")
+
+        result = await shipper.replay_spool()
+        assert result["replayed"] == 1
+
+        # acked_offset should have advanced to close the gap
+        assert temp_env["state"].get_offset(file_path) == file_size
+
+        # No more unacked files
+        assert len(temp_env["state"].get_unacked_files()) == 0
+
+    @pytest.mark.asyncio
+    async def test_startup_recovery_uses_provider_and_session_id(self, temp_env):
+        """Bug 8: startup_recovery should use provider/session_id from state, not hardcode claude."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        file_path = str(temp_env["session_file"])
+        temp_env["state"].set_queued_offset(
+            file_path, 500, provider="gemini", session_id="gemini-sess-1", provider_session_id="p1"
+        )
+
+        count = shipper.startup_recovery()
+        assert count == 1
+
+        entries = temp_env["spool"].dequeue_batch()
+        assert len(entries) == 1
+        assert entries[0].provider == "gemini"
+        assert entries[0].session_id == "gemini-sess-1"
