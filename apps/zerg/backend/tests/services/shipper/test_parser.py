@@ -160,6 +160,96 @@ class TestParseSessionFile:
         assert events[1].role == "assistant"
         assert events[1].tool_name == "Read"
 
+        # Only the first event should carry raw_line (fan-out dedup)
+        assert events[0].raw_line != ""
+        assert events[1].raw_line == ""
+
+    def test_raw_line_fanout_assistant(self, tmp_path: Path):
+        """Multi-content assistant line: only first event carries raw_json."""
+        session_file = tmp_path / "test-session.jsonl"
+        original_line = json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "msg-fanout",
+                "timestamp": "2026-01-28T10:04:00Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "I will read and edit."},
+                        {
+                            "type": "tool_use",
+                            "id": "tool-1",
+                            "name": "Read",
+                            "input": {"file_path": "/a.py"},
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "tool-2",
+                            "name": "Edit",
+                            "input": {"file_path": "/b.py"},
+                        },
+                    ],
+                },
+            }
+        )
+        session_file.write_text(original_line + "\n")
+
+        events = list(parse_session_file(session_file))
+
+        assert len(events) == 3
+        # First event carries the raw line
+        assert events[0].raw_line == original_line
+        ingest_0 = events[0].to_event_ingest("/f.jsonl")
+        assert ingest_0["raw_json"] == original_line
+        # Subsequent events have empty raw_line
+        for ev in events[1:]:
+            assert ev.raw_line == ""
+            assert ev.to_event_ingest("/f.jsonl")["raw_json"] is None
+
+    def test_raw_line_fanout_tool_results(self, tmp_path: Path):
+        """Multi-tool-result user line: only first event carries raw_json."""
+        session_file = tmp_path / "test-session.jsonl"
+        original_line = json.dumps(
+            {
+                "type": "user",
+                "uuid": "msg-multi-result",
+                "timestamp": "2026-01-28T10:05:00Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-1",
+                            "content": "Result one",
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-2",
+                            "content": "Result two",
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-3",
+                            "content": "Result three",
+                        },
+                    ],
+                },
+            }
+        )
+        session_file.write_text(original_line + "\n")
+
+        events = list(parse_session_file(session_file))
+
+        assert len(events) == 3
+        # First event carries the raw line
+        assert events[0].raw_line == original_line
+        ingest_0 = events[0].to_event_ingest("/f.jsonl")
+        assert ingest_0["raw_json"] == original_line
+        # Subsequent events have empty raw_line
+        for ev in events[1:]:
+            assert ev.raw_line == ""
+            assert ev.to_event_ingest("/f.jsonl")["raw_json"] is None
+
     def test_skip_metadata_types(self, tmp_path: Path):
         """Skip summary, file-history-snapshot, and progress types."""
         session_file = tmp_path / "test-session.jsonl"

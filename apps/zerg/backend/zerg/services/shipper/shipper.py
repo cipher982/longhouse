@@ -5,7 +5,7 @@ The SessionShipper:
 2. Parses new events (incremental via byte offset tracking)
 3. Ships batches to Zerg's /api/agents/ingest endpoint
 4. Updates state to enable future incremental sync
-5. Spools payloads locally when API unreachable (offline resilience)
+5. Spools byte-range pointers locally when API unreachable (offline resilience)
 6. Gzip compresses payloads for efficient network transfer
 7. Handles HTTP 429 rate limiting with exponential backoff
 """
@@ -62,6 +62,7 @@ class ShipperConfig:
     enable_gzip: bool = True  # Gzip compress payloads (reduces bandwidth)
     max_retries_429: int = 3  # Max retries on HTTP 429
     base_backoff_seconds: float = 1.0  # Base backoff for 429 retries
+    max_batch_bytes: int = 5 * 1024 * 1024  # 5MB max source data per batch
 
     def __post_init__(self):
         if self.claude_config_dir is None:
@@ -212,6 +213,27 @@ class SessionShipper:
         except (OSError, IOError):
             return False
 
+    def startup_recovery(self) -> int:
+        """Re-enqueue any gaps between queued_offset and acked_offset.
+
+        Called on startup to recover from incomplete shipments.
+        Returns number of recovery entries enqueued.
+        """
+        unacked = self.state.get_unacked_files()
+        count = 0
+        for file_path, acked_offset, queued_offset in unacked:
+            # Determine provider from state (default to claude)
+            self.spool.enqueue(
+                provider="claude",
+                file_path=file_path,
+                start_offset=acked_offset,
+                end_offset=queued_offset,
+                session_id=None,
+            )
+            count += 1
+            logger.info(f"Recovery: re-enqueued {file_path} bytes [{acked_offset}:{queued_offset}]")
+        return count
+
     async def scan_and_ship(self) -> ShipResult:
         """One-shot scan of all projects, ship new events.
 
@@ -309,12 +331,11 @@ class SessionShipper:
         )
 
         # Try to ship to Zerg
+        new_offset = self._new_offset_for(session_file)
         try:
             api_result = await self._post_ingest(payload)
 
-            # Update state with new offset (use file size to ensure we don't reparse)
-            new_offset = self._new_offset_for(session_file)
-
+            # Success: advance both queued and acked offsets
             self.state.set_offset(
                 file_path_str,
                 new_offset,
@@ -330,17 +351,23 @@ class SessionShipper:
             }
 
         except (httpx.ConnectError, httpx.TimeoutException) as e:
-            # Connection/timeout issues - spool for later retry
-            logger.warning(f"API unreachable, spooling {len(events)} events: {e}")
-            self.spool.enqueue(payload)
+            # Connection/timeout issues - spool pointer for later retry
+            logger.warning(f"API unreachable, spooling pointer for {len(events)} events: {e}")
+            self.spool.enqueue(
+                provider=provider_name,
+                file_path=file_path_str,
+                start_offset=last_offset,
+                end_offset=new_offset,
+                session_id=session_id,
+            )
 
-            # Still update offset so we don't re-parse these events
-            new_offset = self._new_offset_for(session_file)
-            self.state.set_offset(
+            # Advance queued_offset but not acked_offset
+            self.state.set_queued_offset(
                 file_path_str,
                 new_offset,
-                session_id,
-                metadata.session_id,
+                provider=provider_name,
+                session_id=session_id,
+                provider_session_id=metadata.session_id,
             )
 
             return {
@@ -352,16 +379,21 @@ class SessionShipper:
 
         except RateLimitExhaustedError as e:
             # Rate limit exhausted after max retries - spool for later retry
-            logger.warning(f"Rate limit exhausted, spooling {len(events)} events: {e}")
-            self.spool.enqueue(payload)
+            logger.warning(f"Rate limit exhausted, spooling pointer for {len(events)} events: {e}")
+            self.spool.enqueue(
+                provider=provider_name,
+                file_path=file_path_str,
+                start_offset=last_offset,
+                end_offset=new_offset,
+                session_id=session_id,
+            )
 
-            # Still update offset so we don't re-parse these events
-            new_offset = self._new_offset_for(session_file)
-            self.state.set_offset(
+            self.state.set_queued_offset(
                 file_path_str,
                 new_offset,
-                session_id,
-                metadata.session_id,
+                provider=provider_name,
+                session_id=session_id,
+                provider_session_id=metadata.session_id,
             )
 
             return {
@@ -381,15 +413,21 @@ class SessionShipper:
 
             # Server errors (5xx) - spool for retry
             if status_code >= 500:
-                logger.warning(f"Server error ({status_code}), spooling {len(events)} events: {e}")
-                self.spool.enqueue(payload)
+                logger.warning(f"Server error ({status_code}), spooling pointer for {len(events)} events: {e}")
+                self.spool.enqueue(
+                    provider=provider_name,
+                    file_path=file_path_str,
+                    start_offset=last_offset,
+                    end_offset=new_offset,
+                    session_id=session_id,
+                )
 
-                new_offset = self._new_offset_for(session_file)
-                self.state.set_offset(
+                self.state.set_queued_offset(
                     file_path_str,
                     new_offset,
-                    session_id,
-                    metadata.session_id,
+                    provider=provider_name,
+                    session_id=session_id,
+                    provider_session_id=metadata.session_id,
                 )
 
                 return {
@@ -503,86 +541,123 @@ class SessionShipper:
                 return response.json()
 
     async def replay_spool(self, batch_size: int = 100, max_retries: int = 5) -> dict:
-        """Replay spooled payloads that failed to ship.
+        """Replay spooled pointers that failed to ship.
 
-        Attempts to ship all pending payloads from the spool.
-        Items that fail max_retries times are permanently marked as failed.
+        Re-reads source files at stored byte ranges, re-parses events,
+        builds payload, and ships. Items that fail max_retries times are
+        permanently marked as dead.
 
         Args:
-            batch_size: Number of payloads to process per batch
-            max_retries: Mark items as permanently failed after this many attempts
+            batch_size: Number of entries to process per batch
+            max_retries: Mark items as permanently dead after this many attempts
 
         Returns:
             Dict with replayed, failed, remaining counts
         """
         replayed = 0
         failed = 0
-        processed_ids = set()  # Track what we've processed this run
 
-        while True:
-            batch = self.spool.dequeue_batch(limit=batch_size)
-            if not batch:
-                break
+        batch = self.spool.dequeue_batch(limit=batch_size)
+        if not batch:
+            return {"replayed": 0, "failed": 0, "remaining": self.spool.pending_count()}
 
-            # Filter out items we've already processed this run
-            batch = [item for item in batch if item.id not in processed_ids]
-            if not batch:
-                break
+        for entry in batch:
+            try:
+                # Re-read source file at stored byte range
+                source_path = Path(entry.file_path)
+                if not source_path.exists():
+                    logger.warning(f"Source file missing for spool entry {entry.id}: {entry.file_path}")
+                    self.spool.mark_failed(entry.id, "Source file missing", max_retries=1)
+                    failed += 1
+                    continue
 
-            for item in batch:
-                processed_ids.add(item.id)
+                # Check file is large enough for our byte range
+                file_size = source_path.stat().st_size
+                if file_size < entry.end_offset:
+                    logger.warning(
+                        f"Source file truncated for spool entry {entry.id}: {entry.file_path} (size={file_size}, need={entry.end_offset})"
+                    )
+                    self.spool.mark_failed(entry.id, "Source file truncated", max_retries=1)
+                    failed += 1
+                    continue
 
-                try:
-                    await self._post_ingest(item.payload)
-                    self.spool.mark_shipped(item.id)
+                # Re-parse events from the byte range
+                provider = provider_registry.get(entry.provider)
+                if provider:
+                    events = list(provider.parse_file(source_path, offset=entry.start_offset))
+                else:
+                    events = list(parse_session_file(source_path, offset=entry.start_offset))
+
+                # Filter to events within our byte range
+                events = [e for e in events if e.source_offset < entry.end_offset]
+
+                if not events:
+                    # No events in this range — mark as shipped (nothing to do)
+                    self.spool.mark_shipped(entry.id)
                     replayed += 1
-                    logger.debug(f"Replayed spooled payload {item.id}")
+                    continue
 
-                except (httpx.ConnectError, httpx.TimeoutException) as e:
-                    # Still can't connect - stop trying this batch
-                    logger.warning(f"Spool replay failed, API still unreachable: {e}")
-                    return {
-                        "replayed": replayed,
-                        "failed": failed,
-                        "remaining": self.spool.pending_count(),
-                    }
+                # Build and ship payload
+                if provider:
+                    metadata = provider.extract_metadata(source_path)
+                else:
+                    metadata = extract_session_metadata(source_path)
 
-                except httpx.HTTPStatusError as e:
-                    status_code = e.response.status_code
+                session_id = entry.session_id or str(uuid4())
+                payload = self._build_ingest_payload(
+                    session_id=session_id,
+                    events=events,
+                    metadata=metadata,
+                    source_path=entry.file_path,
+                    provider_name=entry.provider,
+                )
 
-                    # Auth errors (401/403) - immediately mark as permanently failed
-                    if status_code in (401, 403):
-                        # Force immediate permanent failure by setting retry_count to max
-                        for _ in range(max_retries):
-                            self.spool.mark_failed(item.id, f"Auth error ({status_code})", max_retries=max_retries)
-                        failed += 1
-                        logger.error(f"Spooled payload {item.id} auth error ({status_code}), permanently failed")
-                        continue
+                await self._post_ingest(payload)
+                self.spool.mark_shipped(entry.id)
 
-                    # Server errors (5xx) - mark as failed, will retry
-                    if status_code >= 500:
-                        permanently_failed = self.spool.mark_failed(item.id, str(e), max_retries=max_retries)
-                        failed += 1
-                        if permanently_failed:
-                            logger.warning(f"Spooled payload {item.id} permanently failed after max retries")
-                        else:
-                            logger.debug(f"Spooled payload {item.id} server error, will retry")
-                        continue
+                # Advance acked_offset
+                self.state.set_acked_offset(entry.file_path, entry.end_offset)
 
-                    # Other 4xx errors - immediately mark as permanently failed (bad payload)
-                    for _ in range(max_retries):
-                        self.spool.mark_failed(item.id, f"Client error ({status_code})", max_retries=max_retries)
+                replayed += 1
+                logger.debug(f"Replayed spool entry {entry.id}")
+
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                # Still can't connect - stop trying this batch
+                logger.warning(f"Spool replay failed, API still unreachable: {e}")
+                return {
+                    "replayed": replayed,
+                    "failed": failed,
+                    "remaining": self.spool.pending_count(),
+                }
+
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code
+
+                # Auth errors (401/403) - immediately mark as dead
+                if status_code in (401, 403):
+                    self.spool.mark_failed(entry.id, f"Auth error ({status_code})", max_retries=1)
                     failed += 1
-                    logger.warning(f"Spooled payload {item.id} client error ({status_code}), permanently failed")
+                    logger.error(f"Spool entry {entry.id} auth error ({status_code}), marked dead")
+                    continue
 
-                except Exception as e:
-                    # Unexpected error - mark as failed
-                    permanently_failed = self.spool.mark_failed(item.id, str(e), max_retries=max_retries)
+                # Server errors (5xx) - mark as failed, will retry later
+                if status_code >= 500:
+                    permanently_failed = self.spool.mark_failed(entry.id, str(e), max_retries=max_retries)
                     failed += 1
-                    logger.error(f"Unexpected error replaying {item.id}: {e}")
+                    if permanently_failed:
+                        logger.warning(f"Spool entry {entry.id} permanently dead after max retries")
+                    continue
 
-        # Clean up old entries after successful replay
-        self.spool.cleanup_old()
+                # Other 4xx errors - mark as dead (bad payload)
+                self.spool.mark_failed(entry.id, f"Client error ({status_code})", max_retries=1)
+                failed += 1
+                logger.warning(f"Spool entry {entry.id} client error ({status_code}), marked dead")
+
+            except Exception as e:
+                # Unexpected error - mark as failed
+                self.spool.mark_failed(entry.id, str(e), max_retries=max_retries)
+                failed += 1
+                logger.error(f"Unexpected error replaying {entry.id}: {e}")
 
         return {
             "replayed": replayed,

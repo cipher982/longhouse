@@ -6,17 +6,28 @@ Verifies the critical shipper path end-to-end without a running server:
   3. Build an ingest payload via SessionShipper
   4. Ship it (mocked HTTP) and verify the full round-trip
 
+Updated for shipper v2:
+  - Only first event per JSONL line carries raw_json
+  - Spool stores pointers (file_path + byte range), not payloads
+  - Failed ship + replay cycle works with pointer spool
+  - State persists in SQLite (not JSON)
+
 This is the "shipper smoke test passes" gate for the launch checklist.
 """
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import patch
 
+import httpx
 import pytest
 
-from zerg.services.shipper import SessionShipper, ShipperConfig
-from zerg.services.shipper.parser import extract_session_metadata, parse_session_file
+from zerg.services.shipper import SessionShipper
+from zerg.services.shipper import ShipperConfig
+from zerg.services.shipper.parser import extract_session_metadata
+from zerg.services.shipper.parser import parse_session_file
+from zerg.services.shipper.spool import OfflineSpool
 from zerg.services.shipper.state import ShipperState
 
 
@@ -97,7 +108,7 @@ class TestShipperSmoke:
     """Smoke test: parse -> build payload -> ship (mocked) in one pass."""
 
     def test_parse_realistic_session(self, tmp_path: Path):
-        """Parser extracts all 4 meaningful events from a realistic session."""
+        """Parser extracts all 5 meaningful events from a realistic session."""
         session_file = _write_realistic_session(tmp_path)
         events = list(parse_session_file(session_file))
 
@@ -123,9 +134,30 @@ class TestShipperSmoke:
         # Fifth event: assistant final response
         assert "sample project" in events[4].content_text
 
-        # All events carry raw_line for lossless archiving
-        for event in events:
-            assert event.raw_line, f"Event {event.uuid} missing raw_line"
+    def test_raw_json_dedup_across_events(self, tmp_path: Path):
+        """Only first event per JSONL line carries raw_json (v2 fix)."""
+        session_file = _write_realistic_session(tmp_path)
+        events = list(parse_session_file(session_file))
+
+        # Line 1 (user msg) → 1 event → should have raw_line
+        assert events[0].raw_line != ""
+        ingest_0 = events[0].to_event_ingest(str(session_file))
+        assert ingest_0["raw_json"] is not None
+
+        # Line 2 (assistant with text + tool_use) → 2 events
+        # Only the first should have raw_line
+        assert events[1].raw_line != ""  # first event from line 2
+        assert events[2].raw_line == ""  # second event from line 2
+        ingest_1 = events[1].to_event_ingest(str(session_file))
+        ingest_2 = events[2].to_event_ingest(str(session_file))
+        assert ingest_1["raw_json"] is not None
+        assert ingest_2["raw_json"] is None
+
+        # Line 3 (tool result) → 1 event → should have raw_line
+        assert events[3].raw_line != ""
+
+        # Line 4 (assistant text) → 1 event → should have raw_line
+        assert events[4].raw_line != ""
 
     def test_metadata_extraction(self, tmp_path: Path):
         """Metadata extraction captures cwd, branch, project, and timestamps."""
@@ -151,8 +183,9 @@ class TestShipperSmoke:
             api_url="http://localhost:47300",
             claude_config_dir=claude_dir,
         )
-        state = ShipperState(state_path=tmp_path / "shipper-state.json")
-        shipper = SessionShipper(config=config, state=state)
+        state = ShipperState(db_path=tmp_path / "shipper-state.db")
+        spool = OfflineSpool(db_path=tmp_path / "shipper-spool.db")
+        shipper = SessionShipper(config=config, state=state, spool=spool)
 
         # Capture the payload sent to the API
         captured_payload = None
@@ -184,12 +217,12 @@ class TestShipperSmoke:
         assert captured_payload["provider_session_id"] == "smoke-test-session-abc123"
         assert len(captured_payload["events"]) == 5
 
-        # Events carry required fields
-        for event in captured_payload["events"]:
-            assert "role" in event
-            assert "timestamp" in event
-            assert "raw_json" in event
-            assert event["raw_json"] is not None
+        # Verify raw_json dedup: not all events should have raw_json
+        events_with_raw = [e for e in captured_payload["events"] if e.get("raw_json")]
+        events_without_raw = [e for e in captured_payload["events"] if not e.get("raw_json")]
+        # 4 JSONL lines, but line 2 produces 2 events. Only 4 should have raw_json.
+        assert len(events_with_raw) == 4
+        assert len(events_without_raw) == 1
 
         # Verify role distribution in payload
         event_roles = [e["role"] for e in captured_payload["events"]]
@@ -204,3 +237,74 @@ class TestShipperSmoke:
         assert result2.sessions_shipped == 0
         assert result2.events_shipped == 0
         mock2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_state_persists_in_sqlite(self, tmp_path: Path):
+        """State persists across ShipperState instances (SQLite, not JSON)."""
+        session_file = _write_realistic_session(tmp_path)
+        db_path = tmp_path / "shipper-state.db"
+
+        # Create state, set offset
+        state1 = ShipperState(db_path=db_path)
+        state1.set_offset(str(session_file), 1000, "session-abc", "provider-xyz")
+
+        # Create new instance pointing to same DB — should see the data
+        state2 = ShipperState(db_path=db_path)
+        assert state2.get_offset(str(session_file)) == 1000
+        session = state2.get_session(str(session_file))
+        assert session is not None
+        assert session.session_id == "session-abc"
+
+    @pytest.mark.asyncio
+    async def test_failed_ship_replay_cycle(self, tmp_path: Path):
+        """Failed ship → pointer spool → replay cycle works."""
+        session_file = _write_realistic_session(tmp_path)
+        claude_dir = tmp_path / ".claude"
+
+        config = ShipperConfig(
+            api_url="http://localhost:47300",
+            claude_config_dir=claude_dir,
+        )
+        state = ShipperState(db_path=tmp_path / "state.db")
+        spool = OfflineSpool(db_path=tmp_path / "spool.db")
+        shipper = SessionShipper(config=config, state=state, spool=spool)
+
+        # Phase 1: Ship fails → pointer spooled
+        async def fail_post(payload):
+            raise httpx.ConnectError("Connection refused")
+
+        shipper._post_ingest = fail_post
+        result1 = await shipper.scan_and_ship()
+
+        assert result1.events_spooled == 5
+        assert spool.pending_count() == 1
+
+        # Verify spool stores pointer, not payload
+        entries = spool.dequeue_batch()
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.file_path == str(session_file)
+        assert entry.start_offset == 0
+        assert entry.end_offset > 0
+
+        # Phase 2: Replay succeeds
+        replay_payload = None
+
+        async def succeed_post(payload):
+            nonlocal replay_payload
+            replay_payload = payload
+            return {
+                "session_id": payload["id"],
+                "events_inserted": len(payload["events"]),
+                "events_skipped": 0,
+            }
+
+        shipper._post_ingest = succeed_post
+        result2 = await shipper.replay_spool()
+
+        assert result2["replayed"] == 1
+        assert result2["remaining"] == 0
+
+        # Verify the replayed payload has the right events
+        assert replay_payload is not None
+        assert len(replay_payload["events"]) == 5

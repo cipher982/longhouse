@@ -10,6 +10,7 @@ import pytest
 
 from zerg.services.shipper import SessionShipper
 from zerg.services.shipper import ShipperConfig
+from zerg.services.shipper.spool import OfflineSpool
 from zerg.services.shipper.state import ShipperState
 
 
@@ -63,8 +64,14 @@ def shipper_config(mock_projects_dir: Path) -> ShipperConfig:
 
 @pytest.fixture
 def shipper_state(tmp_path: Path) -> ShipperState:
-    """Create shipper state with temp file."""
-    return ShipperState(state_path=tmp_path / "shipper-state.json")
+    """Create shipper state with temp DB."""
+    return ShipperState(db_path=tmp_path / "test-shipper.db")
+
+
+@pytest.fixture
+def shipper_spool(tmp_path: Path) -> OfflineSpool:
+    """Create spool with temp DB."""
+    return OfflineSpool(db_path=tmp_path / "test-spool.db")
 
 
 class TestShipperConfig:
@@ -82,19 +89,6 @@ class TestShipperConfig:
         config = ShipperConfig(claude_config_dir=mock_projects_dir)
         assert config.projects_dir == mock_projects_dir / "projects"
 
-    def test_config_propagates_to_state_and_spool(self, tmp_path: Path):
-        """ShipperConfig's claude_config_dir propagates to state and spool."""
-        config_dir = tmp_path / "custom-claude"
-        config_dir.mkdir()
-        (config_dir / "projects").mkdir()
-
-        config = ShipperConfig(claude_config_dir=config_dir)
-        shipper = SessionShipper(config=config)
-
-        # State and spool should use the custom config dir
-        assert shipper.state.state_path == config_dir / "zerg-shipper-state.json"
-        assert shipper.spool.db_path == config_dir / "zerg-shipper-spool.db"
-
 
 class TestSessionShipper:
     """Tests for SessionShipper."""
@@ -104,9 +98,10 @@ class TestSessionShipper:
         mock_projects_dir: Path,
         shipper_config: ShipperConfig,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Find session files in projects directory."""
-        shipper = SessionShipper(config=shipper_config, state=shipper_state)
+        shipper = SessionShipper(config=shipper_config, state=shipper_state, spool=shipper_spool)
         files = shipper._find_session_files()
 
         assert len(files) == 1
@@ -117,9 +112,10 @@ class TestSessionShipper:
         mock_projects_dir: Path,
         shipper_config: ShipperConfig,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Check if file has new content."""
-        shipper = SessionShipper(config=shipper_config, state=shipper_state)
+        shipper = SessionShipper(config=shipper_config, state=shipper_state, spool=shipper_spool)
         files = shipper._find_session_files()
 
         # New file should have new content
@@ -140,9 +136,10 @@ class TestSessionShipper:
         mock_projects_dir: Path,
         shipper_config: ShipperConfig,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Ship a session to Zerg API."""
-        shipper = SessionShipper(config=shipper_config, state=shipper_state)
+        shipper = SessionShipper(config=shipper_config, state=shipper_state, spool=shipper_spool)
         files = shipper._find_session_files()
 
         # Mock the API call
@@ -166,17 +163,7 @@ class TestSessionShipper:
         assert call_args["cwd"] == "/Users/test/project"
         assert call_args["git_branch"] == "main"
         assert len(call_args["events"]) == 2
-        # Verify provider_session_id is included (from filename)
         assert call_args["provider_session_id"] == "test-session-123"
-        # Verify raw_json is included in events
-        for event in call_args["events"]:
-            assert "raw_json" in event
-            assert event["raw_json"] is not None
-            # Verify it's valid JSON
-            import json
-
-            parsed = json.loads(event["raw_json"])
-            assert "type" in parsed
 
     @pytest.mark.asyncio
     async def test_scan_and_ship(
@@ -184,9 +171,10 @@ class TestSessionShipper:
         mock_projects_dir: Path,
         shipper_config: ShipperConfig,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Scan and ship all sessions."""
-        shipper = SessionShipper(config=shipper_config, state=shipper_state)
+        shipper = SessionShipper(config=shipper_config, state=shipper_state, spool=shipper_spool)
 
         mock_response = {
             "session_id": "zerg-session-abc",
@@ -210,9 +198,10 @@ class TestSessionShipper:
         mock_projects_dir: Path,
         shipper_config: ShipperConfig,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Second ship only sends new events."""
-        shipper = SessionShipper(config=shipper_config, state=shipper_state)
+        shipper = SessionShipper(config=shipper_config, state=shipper_state, spool=shipper_spool)
         files = shipper._find_session_files()
 
         mock_response = {
@@ -264,9 +253,10 @@ class TestSessionShipper:
         mock_projects_dir: Path,
         shipper_config: ShipperConfig,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Handle API errors gracefully."""
-        shipper = SessionShipper(config=shipper_config, state=shipper_state)
+        shipper = SessionShipper(config=shipper_config, state=shipper_state, spool=shipper_spool)
 
         with patch.object(shipper, "_post_ingest", new_callable=AsyncMock) as mock_post:
             mock_post.side_effect = Exception("Connection refused")
@@ -282,6 +272,7 @@ class TestSessionShipper:
         self,
         mock_projects_dir: Path,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """API token is included in request headers when configured."""
         config = ShipperConfig(
@@ -289,7 +280,7 @@ class TestSessionShipper:
             claude_config_dir=mock_projects_dir,
             api_token="test-secret-token",
         )
-        shipper = SessionShipper(config=config, state=shipper_state)
+        shipper = SessionShipper(config=config, state=shipper_state, spool=shipper_spool)
 
         # Mock httpx.AsyncClient to capture headers
         captured_headers = {}
@@ -321,16 +312,16 @@ class TestSessionShipper:
         self,
         mock_projects_dir: Path,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """No auth header when api_token is not configured."""
         config = ShipperConfig(
             api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
-            api_token=None,  # Explicitly no token
+            api_token=None,
         )
-        shipper = SessionShipper(config=config, state=shipper_state)
+        shipper = SessionShipper(config=config, state=shipper_state, spool=shipper_spool)
 
-        # Mock httpx.AsyncClient to capture headers
         captured_headers = {}
 
         async def mock_post(url, content, headers):
@@ -350,16 +341,14 @@ class TestSessionShipper:
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
         with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
-            with patch.dict("os.environ", {}, clear=False):
-                # Ensure AGENTS_API_TOKEN is not set in env for this test
-                import os
+            import os
 
-                orig_token = os.environ.pop("AGENTS_API_TOKEN", None)
-                try:
-                    await shipper.scan_and_ship()
-                finally:
-                    if orig_token is not None:
-                        os.environ["AGENTS_API_TOKEN"] = orig_token
+            orig_token = os.environ.pop("AGENTS_API_TOKEN", None)
+            try:
+                await shipper.scan_and_ship()
+            finally:
+                if orig_token is not None:
+                    os.environ["AGENTS_API_TOKEN"] = orig_token
 
         assert "X-Agents-Token" not in captured_headers
 
@@ -372,6 +361,7 @@ class TestGzipCompression:
         self,
         mock_projects_dir: Path,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Payloads are gzip compressed when enable_gzip is True."""
         import gzip as gzip_module
@@ -381,7 +371,7 @@ class TestGzipCompression:
             claude_config_dir=mock_projects_dir,
             enable_gzip=True,
         )
-        shipper = SessionShipper(config=config, state=shipper_state)
+        shipper = SessionShipper(config=config, state=shipper_state, spool=shipper_spool)
 
         captured_content = None
         captured_headers = {}
@@ -407,10 +397,7 @@ class TestGzipCompression:
         with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
             await shipper.scan_and_ship()
 
-        # Verify Content-Encoding header is set
         assert captured_headers.get("Content-Encoding") == "gzip"
-
-        # Verify content is gzip compressed (can be decompressed)
         assert captured_content is not None
         decompressed = gzip_module.decompress(captured_content)
         payload = json.loads(decompressed)
@@ -421,6 +408,7 @@ class TestGzipCompression:
         self,
         mock_projects_dir: Path,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Payloads are not compressed when enable_gzip is False."""
         config = ShipperConfig(
@@ -428,7 +416,7 @@ class TestGzipCompression:
             claude_config_dir=mock_projects_dir,
             enable_gzip=False,
         )
-        shipper = SessionShipper(config=config, state=shipper_state)
+        shipper = SessionShipper(config=config, state=shipper_state, spool=shipper_spool)
 
         captured_content = None
         captured_headers = {}
@@ -454,10 +442,7 @@ class TestGzipCompression:
         with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
             await shipper.scan_and_ship()
 
-        # Verify no Content-Encoding header
         assert "Content-Encoding" not in captured_headers
-
-        # Verify content is plain JSON
         assert captured_content is not None
         payload = json.loads(captured_content.decode("utf-8"))
         assert "events" in payload
@@ -471,15 +456,16 @@ class TestHttp429Handling:
         self,
         mock_projects_dir: Path,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Shipper respects Retry-After header on 429 response."""
         config = ShipperConfig(
             api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             max_retries_429=2,
-            base_backoff_seconds=0.01,  # Fast backoff for testing
+            base_backoff_seconds=0.01,
         )
-        shipper = SessionShipper(config=config, state=shipper_state)
+        shipper = SessionShipper(config=config, state=shipper_state, spool=shipper_spool)
 
         call_count = 0
 
@@ -490,12 +476,10 @@ class TestHttp429Handling:
             mock_resp = MagicMock()
 
             if call_count == 1:
-                # First call returns 429
                 mock_resp.status_code = 429
                 mock_resp.headers = {"Retry-After": "0.01"}
                 return mock_resp
             else:
-                # Second call succeeds
                 mock_resp.status_code = 200
                 mock_resp.json.return_value = {
                     "session_id": "zerg-session-abc",
@@ -512,7 +496,6 @@ class TestHttp429Handling:
         with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
             result = await shipper.scan_and_ship()
 
-        # Should have retried and succeeded
         assert call_count == 2
         assert result.events_shipped == 2
 
@@ -521,15 +504,16 @@ class TestHttp429Handling:
         self,
         mock_projects_dir: Path,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Shipper uses exponential backoff on repeated 429 without Retry-After."""
         config = ShipperConfig(
             api_url="http://test:47300",
             claude_config_dir=mock_projects_dir,
             max_retries_429=2,
-            base_backoff_seconds=0.01,  # Fast backoff for testing
+            base_backoff_seconds=0.01,
         )
-        shipper = SessionShipper(config=config, state=shipper_state)
+        shipper = SessionShipper(config=config, state=shipper_state, spool=shipper_spool)
 
         call_count = 0
 
@@ -540,12 +524,10 @@ class TestHttp429Handling:
             mock_resp = MagicMock()
 
             if call_count <= 2:
-                # First two calls return 429 without Retry-After
                 mock_resp.status_code = 429
                 mock_resp.headers = {}
                 return mock_resp
             else:
-                # Third call succeeds
                 mock_resp.status_code = 200
                 mock_resp.json.return_value = {
                     "session_id": "zerg-session-abc",
@@ -562,7 +544,6 @@ class TestHttp429Handling:
         with patch("zerg.services.shipper.shipper.httpx.AsyncClient", return_value=mock_client):
             result = await shipper.scan_and_ship()
 
-        # Should have retried twice and succeeded
         assert call_count == 3
         assert result.events_shipped == 2
 
@@ -571,6 +552,7 @@ class TestHttp429Handling:
         self,
         mock_projects_dir: Path,
         shipper_state: ShipperState,
+        shipper_spool: OfflineSpool,
     ):
         """Shipper spools events after max retries on persistent 429."""
         config = ShipperConfig(
@@ -579,7 +561,7 @@ class TestHttp429Handling:
             max_retries_429=2,
             base_backoff_seconds=0.01,
         )
-        shipper = SessionShipper(config=config, state=shipper_state)
+        shipper = SessionShipper(config=config, state=shipper_state, spool=shipper_spool)
 
         call_count = 0
 
@@ -602,8 +584,198 @@ class TestHttp429Handling:
 
         # Should have retried max_retries_429 times (2) + 1 initial = 3 total
         assert call_count == 3
-        # After max retries, events are spooled for later retry (rate limits are temporary)
+        # After max retries, events are spooled for later retry
         assert result.events_spooled > 0
         assert result.events_skipped == 0
-        # Verify events are in the spool
-        assert shipper.spool.pending_count() > 0
+        # Verify pointer is in the spool
+        assert shipper_spool.pending_count() > 0
+
+
+class TestShipperSpoolIntegration:
+    """Tests for shipper + spool integration with pointer-based spool."""
+
+    @pytest.fixture
+    def temp_env(self, tmp_path: Path):
+        """Create temporary environment for testing."""
+        # Create projects directory with a test session
+        projects_dir = tmp_path / ".claude" / "projects" / "test-project"
+        projects_dir.mkdir(parents=True)
+
+        session_file = projects_dir / "test-session.jsonl"
+        event_data = {
+            "type": "user",
+            "uuid": "user-1",
+            "timestamp": "2026-02-15T10:00:00Z",
+            "message": {"role": "user", "content": "Hello"},
+        }
+        session_file.write_text(json.dumps(event_data) + "\n")
+
+        config = ShipperConfig(
+            api_url="http://localhost:47300",
+            claude_config_dir=tmp_path / ".claude",
+        )
+
+        state = ShipperState(db_path=tmp_path / "state.db")
+        spool = OfflineSpool(db_path=tmp_path / "spool.db")
+
+        yield {
+            "tmpdir": tmp_path,
+            "session_file": session_file,
+            "config": config,
+            "state": state,
+            "spool": spool,
+        }
+
+    @pytest.mark.asyncio
+    async def test_ship_spools_pointer_on_connection_error(self, temp_env):
+        """ship_session should spool a pointer when API is unreachable."""
+        import httpx
+
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            raise httpx.ConnectError("Connection refused")
+
+        shipper._post_ingest = mock_post_ingest
+
+        result = await shipper.ship_session(temp_env["session_file"])
+
+        assert result["events_inserted"] == 0
+        assert result["events_spooled"] == 1
+
+        # Verify pointer is in spool (not payload)
+        assert temp_env["spool"].pending_count() == 1
+        entries = temp_env["spool"].dequeue_batch()
+        assert len(entries) == 1
+        assert entries[0].file_path == str(temp_env["session_file"])
+        assert entries[0].start_offset == 0
+        assert entries[0].end_offset > 0
+
+    @pytest.mark.asyncio
+    async def test_ship_spools_pointer_on_timeout(self, temp_env):
+        """ship_session should spool pointer on timeout."""
+        import httpx
+
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            raise httpx.TimeoutException("Request timed out")
+
+        shipper._post_ingest = mock_post_ingest
+
+        result = await shipper.ship_session(temp_env["session_file"])
+
+        assert result["events_spooled"] == 1
+        assert temp_env["spool"].pending_count() == 1
+
+    @pytest.mark.asyncio
+    async def test_ship_raises_on_auth_error(self, temp_env):
+        """ship_session should raise on 401/403 auth errors, not spool."""
+        import httpx
+
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            response = MagicMock()
+            response.status_code = 401
+            raise httpx.HTTPStatusError(
+                "Unauthorized",
+                request=MagicMock(),
+                response=response,
+            )
+
+        shipper._post_ingest = mock_post_ingest
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await shipper.ship_session(temp_env["session_file"])
+
+        assert temp_env["spool"].pending_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_ship_spools_pointer_on_server_error(self, temp_env):
+        """ship_session should spool pointer on 5xx server errors."""
+        import httpx
+
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            response = MagicMock()
+            response.status_code = 503
+            raise httpx.HTTPStatusError(
+                "Service unavailable",
+                request=MagicMock(),
+                response=response,
+            )
+
+        shipper._post_ingest = mock_post_ingest
+
+        result = await shipper.ship_session(temp_env["session_file"])
+
+        assert result["events_spooled"] == 1
+        assert temp_env["spool"].pending_count() == 1
+
+    @pytest.mark.asyncio
+    async def test_ship_skips_on_4xx_client_error(self, temp_env):
+        """ship_session should skip (not spool) on 4xx client errors."""
+        import httpx
+
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        async def mock_post_ingest(payload):
+            response = MagicMock()
+            response.status_code = 400
+            raise httpx.HTTPStatusError(
+                "Bad request",
+                request=MagicMock(),
+                response=response,
+            )
+
+        shipper._post_ingest = mock_post_ingest
+
+        result = await shipper.ship_session(temp_env["session_file"])
+
+        assert result["events_skipped"] == 1
+        assert result["events_spooled"] == 0
+        assert temp_env["spool"].pending_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_startup_recovery_enqueues_gaps(self, temp_env):
+        """startup_recovery should enqueue gaps between queued and acked offsets."""
+        shipper = SessionShipper(
+            config=temp_env["config"],
+            state=temp_env["state"],
+            spool=temp_env["spool"],
+        )
+
+        # Simulate a gap: queued_offset > acked_offset
+        file_path = str(temp_env["session_file"])
+        temp_env["state"].set_queued_offset(file_path, 500, session_id="sess-1")
+        # acked_offset stays at 0 (default)
+
+        count = shipper.startup_recovery()
+        assert count == 1
+        assert temp_env["spool"].pending_count() == 1
+
+        entries = temp_env["spool"].dequeue_batch()
+        assert entries[0].start_offset == 0
+        assert entries[0].end_offset == 500
