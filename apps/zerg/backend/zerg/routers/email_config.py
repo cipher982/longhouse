@@ -25,6 +25,7 @@ from zerg.dependencies.auth import get_current_user
 from zerg.models.models import JobSecret
 from zerg.models.models import User
 from zerg.shared.email import _EMAIL_SECRET_KEYS
+from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
 logger = logging.getLogger(__name__)
@@ -80,12 +81,17 @@ class EmailTestResponse(BaseModel):
 
 
 def _resolve_key_status(key: str, db: Session, owner_id: int) -> EmailKeyStatus:
-    """Check a single email key: DB first, then env."""
+    """Check a single email key: DB first, then env. Validates value is non-empty."""
     row = db.query(JobSecret).filter(JobSecret.owner_id == owner_id, JobSecret.key == key).first()
     if row:
-        return EmailKeyStatus(key=key, configured=True, source="db")
+        try:
+            value = decrypt(row.encrypted_value)
+            if value and value.strip():
+                return EmailKeyStatus(key=key, configured=True, source="db")
+        except Exception:
+            pass  # corrupt row — treat as not configured
     env_val = os.environ.get(key)
-    if env_val:
+    if env_val and env_val.strip():
         return EmailKeyStatus(key=key, configured=True, source="env")
     return EmailKeyStatus(key=key, configured=False, source=None)
 

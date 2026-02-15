@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.models.models import JobSecret, User
+from zerg.shared.email import _EMAIL_SECRET_KEYS
 from zerg.utils.crypto import encrypt
 
 
@@ -260,6 +261,32 @@ class TestEmailConfigAPI:
 class TestNonDefaultOwnerID:
     """Verify resolve_email_config finds secrets saved under a non-1 user ID."""
 
+    def test_multi_user_finds_secret_owner(self, tmp_path):
+        """With users 1 and 5, secrets under user 5 are found (not first-by-id)."""
+        SessionLocal = _make_db(tmp_path)
+
+        with SessionLocal() as db:
+            _seed_user(db, user_id=1, email="first@test.com")
+            _seed_user(db, user_id=5, email="user5@test.com")
+            # Secrets belong to user 5, not user 1
+            _seed_email_secret(db, "AWS_SES_ACCESS_KEY_ID", "AKIA_U5", owner_id=5)
+            _seed_email_secret(db, "AWS_SES_SECRET_ACCESS_KEY", "secret_u5", owner_id=5)
+            _seed_email_secret(db, "FROM_EMAIL", "from@u5.com", owner_id=5)
+
+        clean_env = {k: "" for k in _EMAIL_SECRET_KEYS}
+        with patch.dict(os.environ, clean_env, clear=False):
+            with patch(
+                "zerg.database.get_session_factory",
+                return_value=SessionLocal,
+            ):
+                from zerg.shared.email import resolve_email_config
+
+                result = resolve_email_config()
+
+        assert result["AWS_SES_ACCESS_KEY_ID"] == "AKIA_U5"
+        assert result["AWS_SES_SECRET_ACCESS_KEY"] == "secret_u5"
+        assert result["FROM_EMAIL"] == "from@u5.com"
+
     def test_resolve_finds_non_1_owner(self, tmp_path):
         """Secrets saved as user 2 are resolved when user 2 is the only user."""
         SessionLocal = _make_db(tmp_path)
@@ -376,3 +403,69 @@ class TestMixedSourceResolution:
         assert result["AWS_SES_SECRET_ACCESS_KEY"] == "secret_env"
         assert result["FROM_EMAIL"] == "from@env.com"
         assert result["NOTIFY_EMAIL"] == "notify@env.com"
+
+
+# ---------------------------------------------------------------------------
+# Tests: status endpoint validates values, not just row presence
+# ---------------------------------------------------------------------------
+
+
+class TestStatusValidatesValues:
+    """Verify status checks decrypted value, not just DB row existence."""
+
+    @pytest.fixture()
+    def client(self, tmp_path):
+        SessionLocal = _make_db(tmp_path)
+
+        with SessionLocal() as db:
+            _seed_user(db, user_id=1, email="admin@test.com")
+            # Seed an empty-string secret (simulating a corrupt/legacy row)
+            db.add(
+                JobSecret(
+                    owner_id=1,
+                    key="AWS_SES_ACCESS_KEY_ID",
+                    encrypted_value=encrypt(""),
+                    description="empty value",
+                )
+            )
+            db.add(
+                JobSecret(
+                    owner_id=1,
+                    key="AWS_SES_SECRET_ACCESS_KEY",
+                    encrypted_value=encrypt("   "),
+                    description="whitespace value",
+                )
+            )
+            db.commit()
+
+        from zerg.main import api_app
+
+        def override_db():
+            with SessionLocal() as db:
+                yield db
+
+        def override_user():
+            return User(id=1, email="admin@test.com", role="ADMIN")
+
+        from zerg.dependencies.auth import get_current_user
+
+        api_app.dependency_overrides[get_db] = override_db
+        api_app.dependency_overrides[get_current_user] = override_user
+
+        yield TestClient(api_app)
+
+        api_app.dependency_overrides.clear()
+
+    def test_empty_db_rows_not_configured(self, client):
+        """DB rows with empty/whitespace values show as not configured."""
+        clean_env = {k: "" for k in _EMAIL_SECRET_KEYS}
+        with patch.dict(os.environ, clean_env, clear=False):
+            resp = client.get("/system/email/status")
+            assert resp.status_code == 200
+            data = resp.json()
+            # Overall should NOT be configured (empty values)
+            assert data["configured"] is False
+            # Individual keys with empty values should show not configured
+            key_map = {k["key"]: k for k in data["keys"]}
+            assert key_map["AWS_SES_ACCESS_KEY_ID"]["configured"] is False
+            assert key_map["AWS_SES_SECRET_ACCESS_KEY"]["configured"] is False
