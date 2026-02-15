@@ -6,12 +6,14 @@ import {
   deleteJobSecret,
   getJobSecretsStatus,
   listJobs,
+  getJobsRepoStatus,
   enableJob,
   disableJob,
   type JobSecretListItem,
   type JobSecretUpsertRequest,
   type JobSecretsStatusResponse,
   type JobInfo,
+  type JobsRepoStatusResponse,
 } from "../services/api/jobSecrets";
 
 // List all secrets (keys only, no values)
@@ -53,6 +55,14 @@ export function useJobs() {
   return useQuery<JobInfo[]>({
     queryKey: ["jobs"],
     queryFn: listJobs,
+  });
+}
+
+// Jobs repo status
+export function useJobsRepoStatus() {
+  return useQuery<JobsRepoStatusResponse>({
+    queryKey: ["jobs-repo-status"],
+    queryFn: getJobsRepoStatus,
   });
 }
 
