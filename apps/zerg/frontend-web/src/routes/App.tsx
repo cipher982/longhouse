@@ -8,6 +8,7 @@ import ChangelogPage from "../pages/ChangelogPage";
 import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
 import DashboardPage from "../pages/DashboardPage";
+import JobsPage from "../pages/JobsPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
@@ -246,6 +247,14 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <DashboardPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/jobs",
+          element: (
+            <ErrorBoundary>
+              <JobsPage />
             </ErrorBoundary>
           )
         },

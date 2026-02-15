@@ -57,6 +57,16 @@ export interface JobListResponse {
   total: number;
 }
 
+export interface JobsRepoStatusResponse {
+  initialized: boolean;
+  has_remote: boolean;
+  remote_url: string | null;
+  last_commit_time: string | null;
+  last_commit_message: string | null;
+  jobs_dir: string;
+  job_count: number;
+}
+
 export interface EnableJobError {
   detail: string;
   missing?: string[];
@@ -93,6 +103,10 @@ export async function getJobSecretsStatus(jobId: string): Promise<JobSecretsStat
 export async function listJobs(): Promise<JobInfo[]> {
   const response = await request<JobListResponse>(`/jobs/`);
   return response.jobs;
+}
+
+export async function getJobsRepoStatus(): Promise<JobsRepoStatusResponse> {
+  return request<JobsRepoStatusResponse>(`/jobs/repo`);
 }
 
 export async function enableJob(jobId: string, force = false): Promise<JobInfo> {
