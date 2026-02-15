@@ -31,6 +31,7 @@ from zerg.services.shipper.hooks import install_mcp_server
 from zerg.services.shipper.hooks import upsert_codex_mcp_toml
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import parse_session_file
+from zerg.services.shipper.parser import parse_session_file_full
 from zerg.services.shipper.service import get_service_info
 from zerg.services.shipper.service import get_service_status
 from zerg.services.shipper.service import install_service
@@ -66,6 +67,7 @@ __all__ = [
     "OfflineSpool",
     "ParsedEvent",
     "parse_session_file",
+    "parse_session_file_full",
     "save_token",
     "save_zerg_url",
     "SessionShipper",
