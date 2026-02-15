@@ -141,6 +141,9 @@ def save_email_config(
         value = getattr(request, field_name)
         if value is None:
             continue
+        value = value.strip()
+        if not value:
+            continue
 
         encrypted = encrypt(value)
         existing = db.query(JobSecret).filter(JobSecret.owner_id == current_user.id, JobSecret.key == secret_key).first()

@@ -55,7 +55,6 @@ class Settings(BaseSettings):
     instance_aws_ses_secret_access_key: str | None = None
     instance_aws_ses_region: str | None = None
     instance_from_email: str | None = None
-    instance_notify_email_domain: str | None = None  # e.g. "drose.io" for sauron@drose.io
 
     class Config:
         env_prefix = "CONTROL_PLANE_"

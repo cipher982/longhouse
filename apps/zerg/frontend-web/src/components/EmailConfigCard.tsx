@@ -103,8 +103,14 @@ export default function EmailConfigCard() {
         payload[key] = value.trim();
       }
     }
-    if (!payload.aws_ses_access_key_id && !payload.from_email) {
-      toast.error("Provide at least SES Access Key ID or From Email");
+    if (
+      !payload.aws_ses_access_key_id ||
+      !payload.aws_ses_secret_access_key ||
+      !payload.from_email
+    ) {
+      toast.error(
+        "Access Key ID, Secret Access Key, and From Email are all required"
+      );
       return;
     }
     saveMutation.mutate(payload);
@@ -119,6 +125,12 @@ export default function EmailConfigCard() {
       deleteMutation.mutate();
     }
   }
+
+  // Can save only when the three required fields are filled
+  const canSave =
+    form.aws_ses_access_key_id.trim() !== "" &&
+    form.aws_ses_secret_access_key.trim() !== "" &&
+    form.from_email.trim() !== "";
 
   // Derive display state
   const hasDbOverrides = status?.keys.some((k) => k.source === "db") ?? false;
@@ -292,7 +304,7 @@ export default function EmailConfigCard() {
                     variant="primary"
                     size="sm"
                     onClick={handleSave}
-                    disabled={saveMutation.isPending}
+                    disabled={saveMutation.isPending || !canSave}
                   >
                     {saveMutation.isPending ? "Saving..." : "Save"}
                   </Button>

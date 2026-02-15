@@ -227,3 +227,152 @@ class TestEmailConfigAPI:
             resp = client.get("/system/email/status")
             data = resp.json()
             assert data["configured"] is False
+
+    def test_empty_strings_not_saved(self, client):
+        """Empty/whitespace-only values are not persisted as configured."""
+        clean_env = {k: "" for k in [
+            "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
+            "FROM_EMAIL", "AWS_SES_REGION", "NOTIFY_EMAIL",
+            "DIGEST_EMAIL", "ALERT_EMAIL",
+        ]}
+        with patch.dict(os.environ, clean_env, clear=False):
+            resp = client.put(
+                "/system/email/config",
+                json={
+                    "aws_ses_access_key_id": "  ",
+                    "aws_ses_secret_access_key": "",
+                    "from_email": "  \t  ",
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.json()["keys_saved"] == 0
+
+            # Status should still be unconfigured
+            resp = client.get("/system/email/status")
+            assert resp.json()["configured"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: non-default user ID (owner_id != 1)
+# ---------------------------------------------------------------------------
+
+
+class TestNonDefaultOwnerID:
+    """Verify resolve_email_config finds secrets saved under a non-1 user ID."""
+
+    def test_resolve_finds_non_1_owner(self, tmp_path):
+        """Secrets saved as user 2 are resolved when user 2 is the only user."""
+        SessionLocal = _make_db(tmp_path)
+
+        with SessionLocal() as db:
+            _seed_user(db, user_id=2, email="user2@test.com")
+            _seed_email_secret(db, "AWS_SES_ACCESS_KEY_ID", "AKIA_USER2", owner_id=2)
+            _seed_email_secret(db, "AWS_SES_SECRET_ACCESS_KEY", "secret_user2", owner_id=2)
+            _seed_email_secret(db, "FROM_EMAIL", "from@user2.com", owner_id=2)
+
+        clean_env = {k: "" for k in [
+            "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
+            "FROM_EMAIL", "AWS_SES_REGION", "NOTIFY_EMAIL",
+            "DIGEST_EMAIL", "ALERT_EMAIL",
+        ]}
+        with patch.dict(os.environ, clean_env, clear=False):
+            with patch(
+                "zerg.database.get_session_factory",
+                return_value=SessionLocal,
+            ):
+                from zerg.shared.email import resolve_email_config
+
+                result = resolve_email_config()
+
+        assert result["AWS_SES_ACCESS_KEY_ID"] == "AKIA_USER2"
+        assert result["AWS_SES_SECRET_ACCESS_KEY"] == "secret_user2"
+        assert result["FROM_EMAIL"] == "from@user2.com"
+
+    def test_api_saves_under_current_user_id(self, tmp_path):
+        """API saves secrets under user 5, status endpoint finds them."""
+        SessionLocal = _make_db(tmp_path)
+
+        with SessionLocal() as db:
+            _seed_user(db, user_id=5, email="user5@test.com")
+
+        from zerg.main import api_app
+
+        def override_db():
+            with SessionLocal() as db:
+                yield db
+
+        def override_user():
+            return User(id=5, email="user5@test.com", role="ADMIN")
+
+        from zerg.dependencies.auth import get_current_user
+
+        api_app.dependency_overrides[get_db] = override_db
+        api_app.dependency_overrides[get_current_user] = override_user
+
+        client = TestClient(api_app)
+        clean_env = {k: "" for k in [
+            "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
+            "FROM_EMAIL", "AWS_SES_REGION", "NOTIFY_EMAIL",
+            "DIGEST_EMAIL", "ALERT_EMAIL",
+        ]}
+        try:
+            with patch.dict(os.environ, clean_env, clear=False):
+                # Save as user 5
+                resp = client.put(
+                    "/system/email/config",
+                    json={
+                        "aws_ses_access_key_id": "AKIA_U5",
+                        "aws_ses_secret_access_key": "secret_u5",
+                        "from_email": "from@u5.com",
+                    },
+                )
+                assert resp.status_code == 200
+                assert resp.json()["keys_saved"] == 3
+
+                # Status should show configured (secrets are under user 5)
+                resp = client.get("/system/email/status")
+                data = resp.json()
+                assert data["configured"] is True
+                assert data["source"] == "db"
+        finally:
+            api_app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Tests: mixed env + DB source resolution
+# ---------------------------------------------------------------------------
+
+
+class TestMixedSourceResolution:
+    """Verify resolve_email_config combines DB and env sources correctly."""
+
+    def test_mixed_db_and_env(self, tmp_path):
+        """Some keys from DB, others from env — both contribute."""
+        SessionLocal = _make_db(tmp_path)
+
+        with SessionLocal() as db:
+            _seed_user(db, user_id=1, email="test@local")
+            # Only access key in DB
+            _seed_email_secret(db, "AWS_SES_ACCESS_KEY_ID", "AKIA_DB")
+
+        env = {
+            "AWS_SES_SECRET_ACCESS_KEY": "secret_env",
+            "FROM_EMAIL": "from@env.com",
+            "NOTIFY_EMAIL": "notify@env.com",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            with patch(
+                "zerg.database.get_session_factory",
+                return_value=SessionLocal,
+            ):
+                from zerg.shared.email import resolve_email_config
+
+                result = resolve_email_config()
+
+        # DB source
+        assert result["AWS_SES_ACCESS_KEY_ID"] == "AKIA_DB"
+        # Env sources
+        assert result["AWS_SES_SECRET_ACCESS_KEY"] == "secret_env"
+        assert result["FROM_EMAIL"] == "from@env.com"
+        assert result["NOTIFY_EMAIL"] == "notify@env.com"
