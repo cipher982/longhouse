@@ -14,9 +14,22 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import json
 import logging
 import os
+
+try:
+    import orjson
+
+    def _dumps_bytes(obj: dict) -> bytes:
+        return orjson.dumps(obj)
+
+except ImportError:
+    import json
+
+    def _dumps_bytes(obj: dict) -> bytes:  # type: ignore[misc]
+        return json.dumps(obj).encode("utf-8")
+
+
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
@@ -34,7 +47,7 @@ import zerg.services.shipper.providers.gemini  # noqa: F401
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import extract_session_metadata
 from zerg.services.shipper.parser import parse_session_file
-from zerg.services.shipper.parser import parse_session_file_with_offset
+from zerg.services.shipper.parser import parse_session_file_full
 from zerg.services.shipper.providers import SessionProvider
 from zerg.services.shipper.providers import registry as provider_registry
 from zerg.services.shipper.providers.claude import ClaudeProvider
@@ -301,6 +314,7 @@ class SessionShipper:
         # Use provider if available, otherwise fall back to direct parser calls
         # Bug 3 fix: use parse_session_file_with_offset to track last good byte offset
         provider = provider_registry.get(provider_name)
+        metadata = None
         if session_file.suffix == ".json":
             # JSON files are non-appendable — no partial line concern
             if provider:
@@ -309,10 +323,9 @@ class SessionShipper:
                 events = list(parse_session_file(session_file, offset=read_offset))
             new_offset = self._new_offset_for(session_file)
         else:
-            # JSONL files — track last good offset to avoid losing partial lines
-            # Always use parse_session_file_with_offset for offset tracking,
-            # even when a provider is available (providers delegate to the same parser)
-            events, last_good_offset = parse_session_file_with_offset(session_file, offset=read_offset)
+            # JSONL files — single-pass parse + metadata extraction
+            # Eliminates the redundant file re-read from extract_session_metadata()
+            events, last_good_offset, metadata = parse_session_file_full(session_file, offset=read_offset)
             new_offset = last_good_offset
 
         if not events:
@@ -332,11 +345,12 @@ class SessionShipper:
                 "new_offset": new_offset,
             }
 
-        # Extract session metadata
-        if provider:
-            metadata = provider.extract_metadata(session_file)
-        else:
-            metadata = extract_session_metadata(session_file)
+        # Extract session metadata (only needed for JSON files — JSONL already extracted inline)
+        if metadata is None:
+            if provider:
+                metadata = provider.extract_metadata(session_file)
+            else:
+                metadata = extract_session_metadata(session_file)
 
         # Get or create session ID
         existing = self.state.get_session(file_path_str)
@@ -535,11 +549,11 @@ class SessionShipper:
 
         # Gzip compress the payload if enabled
         if self.config.enable_gzip:
-            json_bytes = json.dumps(payload).encode("utf-8")
+            json_bytes = _dumps_bytes(payload)
             content = gzip.compress(json_bytes)
             headers["Content-Encoding"] = "gzip"
         else:
-            content = json.dumps(payload).encode("utf-8")
+            content = _dumps_bytes(payload)
 
         # Retry loop for 429 handling
         retries = 0

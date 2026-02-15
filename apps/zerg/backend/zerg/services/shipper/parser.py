@@ -15,7 +15,6 @@ tool calls) and converts them to a normalized format for the agents schema.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -24,6 +23,22 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Iterator
+
+try:
+    import orjson as _json_mod
+
+    def _loads(s: str | bytes) -> dict:
+        return _json_mod.loads(s)
+
+    _JSONDecodeError: type[Exception] = _json_mod.JSONDecodeError
+
+except ImportError:
+    import json as _json_mod_std
+
+    def _loads(s: str | bytes) -> dict:  # type: ignore[misc]
+        return _json_mod_std.loads(s)
+
+    _JSONDecodeError = _json_mod_std.JSONDecodeError  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -261,8 +276,8 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
                     continue
 
                 try:
-                    obj = json.loads(line_text)
-                except json.JSONDecodeError as e:
+                    obj = _loads(line_text)
+                except _JSONDecodeError as e:
                     logger.warning(f"Failed to parse JSON at offset {line_offset}: {e}")
                     continue
 
@@ -317,14 +332,45 @@ def parse_session_file_with_offset(path: Path, offset: int = 0) -> tuple[list[Pa
         position after the last successfully parsed line.  A half-written line
         at EOF is excluded.
     """
-    return _parse_with_offset_tracking(path, offset)
+    events, last_good_offset, _ = _parse_with_offset_tracking(path, offset)
+    return events, last_good_offset
 
 
-def _parse_with_offset_tracking(path: Path, offset: int = 0) -> tuple[list[ParsedEvent], int]:
-    """Parse session file tracking the last good byte offset."""
+def parse_session_file_full(path: Path, offset: int = 0) -> tuple[list[ParsedEvent], int, ParsedSession]:
+    """Parse session file, returning events + metadata in a single pass.
+
+    Eliminates the redundant file re-read that extract_session_metadata()
+    would perform. Use this instead of calling parse_session_file_with_offset()
+    followed by extract_session_metadata().
+
+    Returns:
+        Tuple of (events, last_good_offset, metadata)
+    """
+    events, last_good_offset, meta = _parse_with_offset_tracking(path, offset, collect_metadata=True)
+    # meta is always set when collect_metadata=True
+    assert meta is not None
+    return events, last_good_offset, meta
+
+
+def _parse_with_offset_tracking(
+    path: Path, offset: int = 0, *, collect_metadata: bool = False
+) -> tuple[list[ParsedEvent], int, ParsedSession | None]:
+    """Parse session file tracking the last good byte offset.
+
+    When collect_metadata=True, extracts session metadata (cwd, branch,
+    timestamps) during the same parse pass — eliminating the redundant
+    file re-read that extract_session_metadata() would perform.
+    """
     session_id = path.stem
     last_good_offset = offset
     events: list[ParsedEvent] = []
+
+    # Metadata collection (only when requested)
+    meta: ParsedSession | None = None
+    if collect_metadata:
+        meta = ParsedSession(session_id=session_id)
+        _min_ts: datetime | None = None
+        _max_ts: datetime | None = None
 
     try:
         with open(path, "rb") as f:
@@ -345,12 +391,27 @@ def _parse_with_offset_tracking(path: Path, offset: int = 0) -> tuple[list[Parse
                     continue
 
                 try:
-                    obj = json.loads(line_text)
-                except json.JSONDecodeError as e:
+                    obj = _loads(line_text)
+                except _JSONDecodeError as e:
                     logger.warning(f"Failed to parse JSON at offset {line_offset}: {e}")
                     continue
 
                 last_good_offset = after_line
+
+                # Collect metadata from every parsed line (cheap field lookups)
+                if meta is not None:
+                    if "cwd" in obj and not meta.cwd:
+                        meta.cwd = obj["cwd"]
+                    if "gitBranch" in obj and not meta.git_branch:
+                        meta.git_branch = obj["gitBranch"]
+                    if "version" in obj and not meta.version:
+                        meta.version = obj["version"]
+                    ts = _parse_timestamp(obj.get("timestamp"))
+                    if ts:
+                        if _min_ts is None or ts < _min_ts:
+                            _min_ts = ts
+                        if _max_ts is None or ts > _max_ts:
+                            _max_ts = ts
 
                 event_type = obj.get("type", "")
 
@@ -396,7 +457,14 @@ def _parse_with_offset_tracking(path: Path, offset: int = 0) -> tuple[list[Parse
     except Exception as e:
         logger.exception(f"Error parsing session file {path}: {e}")
 
-    return events, last_good_offset
+    # Finalize metadata
+    if meta is not None:
+        if meta.cwd:
+            meta.project = Path(meta.cwd).name
+        meta.started_at = _min_ts
+        meta.ended_at = _max_ts
+
+    return events, last_good_offset, meta
 
 
 def extract_session_metadata(path: Path) -> ParsedSession:
@@ -423,8 +491,8 @@ def extract_session_metadata(path: Path) -> ParsedSession:
                     continue
 
                 try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
+                    obj = _loads(line)
+                except _JSONDecodeError:
                     continue
 
                 # Extract metadata from any message type that has it
