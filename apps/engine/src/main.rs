@@ -292,6 +292,7 @@ async fn cmd_ship(
         new_offset: u64,
         event_count: usize,
         session_id: String,
+        /// Compressed payload for live HTTP shipping. Empty for dry-run (saves memory).
         compressed: Vec<u8>,
     }
 
@@ -319,6 +320,8 @@ async fn cmd_ship(
             let event_count = parse_result.events.len();
             let new_offset = file_size;
 
+            // Always compress (this is the real work we're benchmarking).
+            // For dry-run, drop the result immediately to save memory.
             let compressed = match pipeline::compressor::build_and_compress(
                 &parse_result.metadata.session_id,
                 &parse_result.events,
@@ -326,7 +329,9 @@ async fn cmd_ship(
                 &path_str,
                 "claude",
             ) {
-                Ok(c) => c,
+                Ok(c) => {
+                    if dry_run { Vec::new() } else { c }
+                }
                 Err(e) => {
                     tracing::warn!("Compress failed {}: {}", path_str, e);
                     return None;
@@ -376,6 +381,33 @@ async fn cmd_ship(
     let mut files_failed = 0usize;
     let mut files_skipped = 0usize;
 
+    if dry_run {
+        // Batch all state writes in a single transaction (8000+ writes → ~10ms)
+        conn.execute_batch("BEGIN")?;
+        for item in &ship_items {
+            match item {
+                Some(item) => {
+                    file_state.set_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.session_id,
+                        &item.session_id,
+                        "claude",
+                    )?;
+                    files_shipped += 1;
+                    events_shipped += item.event_count;
+                    bytes_shipped += item.new_offset - item.offset;
+                }
+                None => {
+                    files_skipped += 1;
+                }
+            }
+        }
+        conn.execute_batch("COMMIT")?;
+    }
+
+    // Live HTTP shipping (skip if dry run — already handled above)
+    if !dry_run {
     for item in ship_items {
         let item = match item {
             Some(item) => item,
@@ -384,20 +416,6 @@ async fn cmd_ship(
                 continue;
             }
         };
-
-        if dry_run {
-            file_state.set_offset(
-                &item.path_str,
-                item.new_offset,
-                &item.session_id,
-                &item.session_id,
-                "claude",
-            )?;
-            files_shipped += 1;
-            events_shipped += item.event_count;
-            bytes_shipped += item.new_offset - item.offset;
-            continue;
-        }
 
         // Ship via HTTP
         let client = client.as_ref().unwrap();
@@ -460,6 +478,7 @@ async fn cmd_ship(
             }
         }
     }
+    } // end if !dry_run
 
     // Replay spool (if not dry run)
     let mut spool_replayed = 0usize;
