@@ -1,16 +1,26 @@
-//! Streaming payload builder + gzip compressor.
+//! Streaming payload builder + compressor (gzip or zstd).
 //!
 //! The key optimization: `serde_json::to_writer` writes directly into
-//! `GzEncoder`, so the full JSON is never materialized in memory.
-//! This eliminates the 79% gzip bottleneck from the Python version.
+//! the compressor's Write impl, so the full JSON is never materialized
+//! in memory. Supports gzip (default, universal) and zstd (12x faster).
 
+use std::io::Write;
 use std::sync::OnceLock;
 
 use flate2::write::GzEncoder;
-use flate2::Compression;
+use flate2::Compression as GzCompression;
 use serde::Serialize;
 
 use super::parser::{ParsedEvent, SessionMetadata};
+
+/// Compression algorithm for payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionAlgo {
+    /// Standard gzip — universally supported, slower.
+    Gzip,
+    /// Zstandard level 1 — ~12x faster than gzip for JSON, needs server support.
+    Zstd,
+}
 
 /// Cached hostname — called once, reused for all payloads.
 fn cached_hostname() -> &'static str {
@@ -143,10 +153,10 @@ pub fn build_payload<'a>(
     }
 }
 
-/// Build an IngestPayload and stream-compress it to gzip bytes.
+/// Build an IngestPayload and stream-compress it (gzip by default).
 ///
 /// This is THE key optimization: `serde_json::to_writer` writes JSON tokens
-/// directly into the `GzEncoder`'s write buffer. At no point is the full
+/// directly into the compressor's write buffer. At no point is the full
 /// JSON string materialized in memory.
 pub fn build_and_compress(
     session_id: &str,
@@ -155,22 +165,50 @@ pub fn build_and_compress(
     source_path: &str,
     provider: &str,
 ) -> anyhow::Result<Vec<u8>> {
-    let payload = build_payload(session_id, events, metadata, source_path, provider);
-
-    // Stream serialize directly into gzip compressor
-    let mut gz = GzEncoder::new(Vec::with_capacity(64 * 1024), Compression::fast());
-    serde_json::to_writer(&mut gz, &payload)?;
-    let compressed = gz.finish()?;
-
-    Ok(compressed)
+    build_and_compress_with(session_id, events, metadata, source_path, provider, CompressionAlgo::Gzip)
 }
 
-/// Compress an already-built payload to gzip bytes (for benchmarking).
+/// Build an IngestPayload and stream-compress it with the specified algorithm.
+pub fn build_and_compress_with(
+    session_id: &str,
+    events: &[ParsedEvent],
+    metadata: &SessionMetadata,
+    source_path: &str,
+    provider: &str,
+    algo: CompressionAlgo,
+) -> anyhow::Result<Vec<u8>> {
+    let payload = build_payload(session_id, events, metadata, source_path, provider);
+    compress_payload_with(&payload, algo)
+}
+
+/// Compress an already-built payload (for benchmarking).
 pub fn compress_payload(payload: &IngestPayload<'_>) -> anyhow::Result<Vec<u8>> {
-    let mut gz = GzEncoder::new(Vec::with_capacity(64 * 1024), Compression::fast());
-    serde_json::to_writer(&mut gz, payload)?;
-    let compressed = gz.finish()?;
-    Ok(compressed)
+    compress_payload_with(payload, CompressionAlgo::Gzip)
+}
+
+/// Compress payload with specified algorithm.
+pub fn compress_payload_with(payload: &IngestPayload<'_>, algo: CompressionAlgo) -> anyhow::Result<Vec<u8>> {
+    let buf = Vec::with_capacity(64 * 1024);
+    match algo {
+        CompressionAlgo::Gzip => {
+            let mut gz = GzEncoder::new(buf, GzCompression::fast());
+            serde_json::to_writer(&mut gz, payload)?;
+            Ok(gz.finish()?)
+        }
+        CompressionAlgo::Zstd => {
+            let mut zw = zstd::Encoder::new(buf, 1)?; // level 1 = fast
+            serde_json::to_writer(&mut zw, payload)?;
+            Ok(zw.finish()?)
+        }
+    }
+}
+
+/// Get the Content-Encoding header value for the algorithm.
+pub fn content_encoding(algo: CompressionAlgo) -> &'static str {
+    match algo {
+        CompressionAlgo::Gzip => "gzip",
+        CompressionAlgo::Zstd => "zstd",
+    }
 }
 
 // ---------------------------------------------------------------------------

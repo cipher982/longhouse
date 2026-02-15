@@ -7,6 +7,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 use crate::pipeline;
+use crate::pipeline::compressor::CompressionAlgo;
 
 pub struct BenchResult {
     pub files_processed: usize,
@@ -62,6 +63,11 @@ struct FileResult {
 
 /// Run benchmark sequentially (for baseline comparison).
 pub fn run_benchmark(files: &[PathBuf], compress: bool) -> BenchResult {
+    run_benchmark_with(files, compress, CompressionAlgo::Gzip)
+}
+
+/// Run benchmark sequentially with specified compression.
+pub fn run_benchmark_with(files: &[PathBuf], compress: bool, algo: CompressionAlgo) -> BenchResult {
     let overall_start = Instant::now();
     let mut total_bytes: u64 = 0;
     let mut total_events: usize = 0;
@@ -88,12 +94,13 @@ pub fn run_benchmark(files: &[PathBuf], compress: bool) -> BenchResult {
         if compress && !result.events.is_empty() {
             let compress_start = Instant::now();
             let source_path = path.to_string_lossy();
-            let _ = pipeline::compressor::build_and_compress(
+            let _ = pipeline::compressor::build_and_compress_with(
                 &result.metadata.session_id,
                 &result.events,
                 &result.metadata,
                 &source_path,
                 "claude",
+                algo,
             );
             compress_time += compress_start.elapsed().as_secs_f64();
         }
@@ -133,6 +140,11 @@ pub fn run_benchmark(files: &[PathBuf], compress: bool) -> BenchResult {
 
 /// Run benchmark with rayon parallel file processing.
 pub fn run_benchmark_parallel(files: &[PathBuf], compress: bool, workers: usize) -> BenchResult {
+    run_benchmark_parallel_with(files, compress, workers, CompressionAlgo::Gzip)
+}
+
+/// Run benchmark with rayon parallel file processing and specified compression.
+pub fn run_benchmark_parallel_with(files: &[PathBuf], compress: bool, workers: usize, algo: CompressionAlgo) -> BenchResult {
     // Configure rayon thread pool
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -166,12 +178,13 @@ pub fn run_benchmark_parallel(files: &[PathBuf], compress: bool, workers: usize)
             let compress_secs = if compress && !result.events.is_empty() {
                 let compress_start = Instant::now();
                 let source_path = path.to_string_lossy();
-                let _ = pipeline::compressor::build_and_compress(
+                let _ = pipeline::compressor::build_and_compress_with(
                     &result.metadata.session_id,
                     &result.events,
                     &result.metadata,
                     &source_path,
                     "claude",
+                    algo,
                 );
                 compress_start.elapsed().as_secs_f64()
             } else {

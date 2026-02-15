@@ -12,10 +12,19 @@ use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
 use config::ShipperConfig;
+use pipeline::compressor::CompressionAlgo;
 use shipping::client::{ShipResult, ShipperClient};
 use state::db::open_db;
 use state::file_state::FileState;
 use state::spool::Spool;
+
+fn parse_compression_algo(s: &str) -> anyhow::Result<CompressionAlgo> {
+    match s.to_lowercase().as_str() {
+        "gzip" | "gz" => Ok(CompressionAlgo::Gzip),
+        "zstd" | "zstandard" => Ok(CompressionAlgo::Zstd),
+        _ => anyhow::bail!("Unknown compression: {}. Use 'gzip' or 'zstd'", s),
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "longhouse-engine", version, about = "Longhouse session shipper (Rust engine)")]
@@ -50,7 +59,7 @@ enum Commands {
         #[arg(long, default_value = "L1")]
         level: String,
 
-        /// Include gzip compression in benchmark
+        /// Include compression in benchmark
         #[arg(long)]
         compress: bool,
 
@@ -61,6 +70,10 @@ enum Commands {
         /// Number of worker threads (default: num_cpus)
         #[arg(long, default_value = "0")]
         workers: usize,
+
+        /// Compression algorithm: gzip (default) or zstd
+        #[arg(long, default_value = "gzip")]
+        compression: String,
     },
 
     /// One-shot: scan all provider sessions and ship new events
@@ -88,6 +101,10 @@ enum Commands {
         /// JSON output (machine readable)
         #[arg(long)]
         json: bool,
+
+        /// Compression algorithm: gzip (default) or zstd
+        #[arg(long, default_value = "gzip")]
+        compression: String,
     },
 }
 
@@ -115,8 +132,10 @@ fn main() -> anyhow::Result<()> {
             compress,
             parallel,
             workers,
+            compression,
         } => {
-            cmd_bench(&level, compress, parallel, workers)?;
+            let algo = parse_compression_algo(&compression)?;
+            cmd_bench(&level, compress, parallel, workers, algo)?;
         }
         Commands::Ship {
             url,
@@ -125,7 +144,9 @@ fn main() -> anyhow::Result<()> {
             workers,
             dry_run,
             json,
+            compression,
         } => {
+            let algo = parse_compression_algo(&compression)?;
             // Build tokio runtime for async HTTP
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(cmd_ship(
@@ -135,6 +156,7 @@ fn main() -> anyhow::Result<()> {
                 workers,
                 dry_run,
                 json,
+                algo,
             ))?;
         }
     }
@@ -153,6 +175,7 @@ async fn cmd_ship(
     workers: usize,
     dry_run: bool,
     json_output: bool,
+    algo: CompressionAlgo,
 ) -> anyhow::Result<()> {
     let start = Instant::now();
 
@@ -259,7 +282,7 @@ async fn cmd_ship(
 
     // Create HTTP client (unless dry run)
     let client = if !dry_run {
-        Some(ShipperClient::new(&config)?)
+        Some(ShipperClient::with_compression(&config, algo)?)
     } else {
         None
     };
@@ -322,12 +345,13 @@ async fn cmd_ship(
 
             // Always compress (this is the real work we're benchmarking).
             // For dry-run, drop the result immediately to save memory.
-            let compressed = match pipeline::compressor::build_and_compress(
+            let compressed = match pipeline::compressor::build_and_compress_with(
                 &parse_result.metadata.session_id,
                 &parse_result.events,
                 &parse_result.metadata,
                 &path_str,
                 "claude",
+                algo,
             ) {
                 Ok(c) => {
                     if dry_run { Vec::new() } else { c }
@@ -511,12 +535,13 @@ async fn cmd_ship(
                 continue;
             }
 
-            let compressed = pipeline::compressor::build_and_compress(
+            let compressed = pipeline::compressor::build_and_compress_with(
                 &parse_result.metadata.session_id,
                 &parse_result.events,
                 &parse_result.metadata,
                 &entry.file_path,
                 &entry.provider,
+                algo,
             )?;
 
             match client.ship(compressed).await {
@@ -699,7 +724,7 @@ fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> 
 // bench subcommand
 // ---------------------------------------------------------------------------
 
-fn cmd_bench(level: &str, compress: bool, parallel: bool, workers: usize) -> anyhow::Result<()> {
+fn cmd_bench(level: &str, compress: bool, parallel: bool, workers: usize, algo: CompressionAlgo) -> anyhow::Result<()> {
     eprintln!("Discovering session files...");
     let all_files = bench::discover_session_files();
     eprintln!("Found {} non-empty JSONL files", all_files.len());
@@ -759,9 +784,9 @@ fn cmd_bench(level: &str, compress: bool, parallel: bool, workers: usize) -> any
     );
 
     let result = if parallel {
-        bench::run_benchmark_parallel(&files, compress, num_workers)
+        bench::run_benchmark_parallel_with(&files, compress, num_workers, algo)
     } else {
-        bench::run_benchmark(&files, compress)
+        bench::run_benchmark_with(&files, compress, algo)
     };
     result.print_summary();
 

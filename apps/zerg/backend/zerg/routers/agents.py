@@ -36,6 +36,7 @@ from typing import List
 from typing import Optional
 from uuid import UUID
 
+import zstandard
 from fastapi import APIRouter
 from fastapi import BackgroundTasks
 from fastapi import Depends
@@ -730,6 +731,14 @@ async def decompress_if_gzipped(request: Request) -> bytes:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid gzip content: {e}",
+            )
+    elif content_encoding == "zstd":
+        try:
+            body = zstandard.decompress(body)
+        except zstandard.ZstdError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid zstd content: {e}",
             )
 
     return body
