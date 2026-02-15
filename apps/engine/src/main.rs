@@ -1,11 +1,19 @@
 mod bench;
+mod config;
 mod pipeline;
+mod shipping;
 mod state;
 
 use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
+
+use config::ShipperConfig;
+use shipping::client::{ShipResult, ShipperClient};
+use state::db::open_db;
+use state::file_state::FileState;
+use state::spool::Spool;
 
 #[derive(Parser)]
 #[command(name = "longhouse-engine", version, about = "Longhouse session shipper (Rust engine)")]
@@ -52,6 +60,33 @@ enum Commands {
         #[arg(long, default_value = "0")]
         workers: usize,
     },
+
+    /// One-shot: scan all provider sessions and ship new events
+    Ship {
+        /// API URL override (default: from ~/.claude/longhouse-url)
+        #[arg(long)]
+        url: Option<String>,
+
+        /// API token override (default: from ~/.claude/longhouse-device-token)
+        #[arg(long)]
+        token: Option<String>,
+
+        /// SQLite DB path override
+        #[arg(long)]
+        db: Option<PathBuf>,
+
+        /// Number of parallel workers (default: num_cpus)
+        #[arg(long, default_value = "0")]
+        workers: usize,
+
+        /// Dry run: parse and compress but don't POST
+        #[arg(long)]
+        dry_run: bool,
+
+        /// JSON output (machine readable)
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -81,10 +116,407 @@ fn main() -> anyhow::Result<()> {
         } => {
             cmd_bench(&level, compress, parallel, workers)?;
         }
+        Commands::Ship {
+            url,
+            token,
+            db,
+            workers,
+            dry_run,
+            json,
+        } => {
+            // Build tokio runtime for async HTTP
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(cmd_ship(
+                url.as_deref(),
+                token.as_deref(),
+                db.as_deref(),
+                workers,
+                dry_run,
+                json,
+            ))?;
+        }
     }
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// ship subcommand
+// ---------------------------------------------------------------------------
+
+async fn cmd_ship(
+    url: Option<&str>,
+    token: Option<&str>,
+    db_path: Option<&std::path::Path>,
+    workers: usize,
+    dry_run: bool,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let start = Instant::now();
+
+    // Load config
+    let config = ShipperConfig::from_env()?.with_overrides(
+        url,
+        token,
+        db_path,
+        if workers > 0 { Some(workers) } else { None },
+    );
+
+    if !json_output {
+        eprintln!("Shipping to: {}", config.api_url);
+        if dry_run {
+            eprintln!("DRY RUN — will parse and compress but not POST");
+        }
+    }
+
+    // Open state DB
+    let conn = open_db(config.db_path.as_deref())?;
+
+    // Startup recovery: re-enqueue gaps (queued > acked)
+    {
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let unacked = file_state.get_unacked_files()?;
+        for f in &unacked {
+            tracing::info!(
+                "Recovering gap for {}: acked={}, queued={}",
+                f.path,
+                f.acked_offset,
+                f.queued_offset
+            );
+            spool.enqueue(
+                &f.provider,
+                &f.path,
+                f.acked_offset,
+                f.queued_offset,
+                f.session_id.as_deref(),
+            )?;
+        }
+        if !unacked.is_empty() && !json_output {
+            eprintln!("Recovered {} unacked file gaps into spool", unacked.len());
+        }
+    }
+
+    // Discover files
+    let all_files = bench::discover_session_files();
+    if !json_output {
+        eprintln!("Found {} session files", all_files.len());
+    }
+
+    // Filter to files with new content
+    let file_state = FileState::new(&conn);
+    let mut files_to_ship: Vec<(PathBuf, u64)> = Vec::new(); // (path, offset_to_start_from)
+
+    for path in &all_files {
+        let path_str = path.to_string_lossy();
+        let current_offset = file_state.get_offset(&path_str)?;
+        let file_size = match std::fs::metadata(path) {
+            Ok(m) => m.len(),
+            Err(_) => continue,
+        };
+
+        if file_size <= current_offset {
+            continue; // No new content
+        }
+
+        // Check for truncation (file got smaller than our offset)
+        if file_size < current_offset {
+            tracing::warn!(
+                "File truncated: {} (was {}, now {}), resetting",
+                path_str,
+                current_offset,
+                file_size
+            );
+            file_state.reset_offsets(&path_str)?;
+            files_to_ship.push((path.clone(), 0));
+        } else {
+            files_to_ship.push((path.clone(), current_offset));
+        }
+    }
+
+    if !json_output {
+        eprintln!(
+            "{} files with new content to ship",
+            files_to_ship.len()
+        );
+    }
+
+    if files_to_ship.is_empty() {
+        if json_output {
+            let summary = serde_json::json!({
+                "status": "ok",
+                "files_scanned": all_files.len(),
+                "files_shipped": 0,
+                "events_shipped": 0,
+                "total_seconds": start.elapsed().as_secs_f64(),
+            });
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        } else {
+            eprintln!("Nothing to ship — all files up to date.");
+        }
+        return Ok(());
+    }
+
+    // Create HTTP client (unless dry run)
+    let client = if !dry_run {
+        Some(ShipperClient::new(&config)?)
+    } else {
+        None
+    };
+
+    // Process files sequentially for now (parallel HTTP shipping needs careful state management)
+    // The compression is still fast thanks to zlib-rs + fast level.
+    let mut files_shipped = 0usize;
+    let mut events_shipped = 0usize;
+    let mut bytes_shipped = 0u64;
+    let mut files_failed = 0usize;
+    let mut files_skipped = 0usize;
+
+    for (i, (path, offset)) in files_to_ship.iter().enumerate() {
+        let path_str = path.to_string_lossy().to_string();
+        let file_size = std::fs::metadata(path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        // Parse
+        let parse_result = match pipeline::parser::parse_session_file(path, *offset) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Skip {}: {}", path_str, e);
+                files_skipped += 1;
+                continue;
+            }
+        };
+
+        if parse_result.events.is_empty() {
+            files_skipped += 1;
+            continue;
+        }
+
+        let event_count = parse_result.events.len();
+        let new_offset = file_size; // We consumed up to EOF
+
+        // Compress
+        let compressed = pipeline::compressor::build_and_compress(
+            &parse_result.metadata.session_id,
+            &parse_result.events,
+            &parse_result.metadata,
+            &path_str,
+            "claude",
+        )?;
+
+        if dry_run {
+            // Just update state to simulate successful ship
+            file_state.set_offset(
+                &path_str,
+                new_offset,
+                &parse_result.metadata.session_id,
+                &parse_result.metadata.session_id,
+                "claude",
+            )?;
+            files_shipped += 1;
+            events_shipped += event_count;
+            bytes_shipped += new_offset - offset;
+
+            if !json_output && (i + 1) % 500 == 0 {
+                eprintln!(
+                    "  [{}/{}] {} events, {:.1} MB",
+                    i + 1,
+                    files_to_ship.len(),
+                    events_shipped,
+                    bytes_shipped as f64 / 1_048_576.0,
+                );
+            }
+            continue;
+        }
+
+        // Ship via HTTP
+        let client = client.as_ref().unwrap();
+        let result = client.ship(compressed).await;
+
+        match result {
+            ShipResult::Ok(_) => {
+                // Success — advance both offsets
+                file_state.set_offset(
+                    &path_str,
+                    new_offset,
+                    &parse_result.metadata.session_id,
+                    &parse_result.metadata.session_id,
+                    "claude",
+                )?;
+                files_shipped += 1;
+                events_shipped += event_count;
+                bytes_shipped += new_offset - offset;
+            }
+            ShipResult::RateLimited | ShipResult::ServerError(_, _) | ShipResult::ConnectError(_) => {
+                // Spool for retry — advance queued, not acked
+                let spool = Spool::new(&conn);
+                file_state.set_queued_offset(
+                    &path_str,
+                    new_offset,
+                    "claude",
+                    &parse_result.metadata.session_id,
+                    &parse_result.metadata.session_id,
+                )?;
+                spool.enqueue(
+                    "claude",
+                    &path_str,
+                    *offset,
+                    new_offset,
+                    Some(&parse_result.metadata.session_id),
+                )?;
+                files_failed += 1;
+
+                let err_msg = match &result {
+                    ShipResult::RateLimited => "rate limited".to_string(),
+                    ShipResult::ServerError(code, body) => format!("{}:{}", code, &body[..body.len().min(200)]),
+                    ShipResult::ConnectError(e) => e.clone(),
+                    _ => unreachable!(),
+                };
+                tracing::warn!("Failed to ship {}: {}", path_str, err_msg);
+            }
+            ShipResult::ClientError(code, body) => {
+                // Bad payload — skip, advance offset to avoid re-trying bad data
+                tracing::error!(
+                    "Client error shipping {}: {} {}",
+                    path_str,
+                    code,
+                    &body[..body.len().min(200)]
+                );
+                file_state.set_offset(
+                    &path_str,
+                    new_offset,
+                    &parse_result.metadata.session_id,
+                    &parse_result.metadata.session_id,
+                    "claude",
+                )?;
+                files_skipped += 1;
+            }
+        }
+
+        if !json_output && (i + 1) % 500 == 0 {
+            let elapsed = start.elapsed().as_secs_f64();
+            eprintln!(
+                "  [{}/{}] {} events, {:.1} MB, {:.1} MB/s",
+                i + 1,
+                files_to_ship.len(),
+                events_shipped,
+                bytes_shipped as f64 / 1_048_576.0,
+                bytes_shipped as f64 / 1_048_576.0 / elapsed,
+            );
+        }
+    }
+
+    // Replay spool (if not dry run)
+    let mut spool_replayed = 0usize;
+    if !dry_run {
+        let spool = Spool::new(&conn);
+        let pending = spool.dequeue_batch(100)?;
+        if !pending.is_empty() && !json_output {
+            eprintln!("Replaying {} spool entries...", pending.len());
+        }
+        let client = client.as_ref().unwrap();
+        for entry in &pending {
+            // Re-read and re-parse the source file range
+            let path = PathBuf::from(&entry.file_path);
+            if !path.exists() {
+                tracing::warn!("Spool file missing: {}", entry.file_path);
+                spool.mark_failed_with_max(entry.id, "file missing", 0)?;
+                continue;
+            }
+
+            let parse_result = match pipeline::parser::parse_session_file(&path, entry.start_offset) {
+                Ok(r) => r,
+                Err(e) => {
+                    spool.mark_failed(entry.id, &e.to_string())?;
+                    continue;
+                }
+            };
+
+            if parse_result.events.is_empty() {
+                spool.mark_shipped(entry.id)?;
+                continue;
+            }
+
+            let compressed = pipeline::compressor::build_and_compress(
+                &parse_result.metadata.session_id,
+                &parse_result.events,
+                &parse_result.metadata,
+                &entry.file_path,
+                &entry.provider,
+            )?;
+
+            match client.ship(compressed).await {
+                ShipResult::Ok(_) => {
+                    spool.mark_shipped(entry.id)?;
+                    file_state.set_acked_offset(&entry.file_path, entry.end_offset)?;
+                    spool_replayed += 1;
+                }
+                ShipResult::ConnectError(_) => {
+                    // Don't mark failed on connect error — will retry next cycle
+                    break;
+                }
+                ShipResult::RateLimited | ShipResult::ServerError(_, _) => {
+                    spool.mark_failed(entry.id, "server error during replay")?;
+                }
+                ShipResult::ClientError(code, _) => {
+                    spool.mark_failed_with_max(entry.id, &format!("client error {}", code), 0)?;
+                }
+            }
+        }
+
+        // Cleanup old dead entries
+        let cleaned = spool.cleanup()?;
+        if cleaned > 0 {
+            tracing::info!("Cleaned {} old spool entries", cleaned);
+        }
+    }
+
+    let total_elapsed = start.elapsed();
+
+    if json_output {
+        let spool = Spool::new(&conn);
+        let summary = serde_json::json!({
+            "status": "ok",
+            "files_scanned": all_files.len(),
+            "files_shipped": files_shipped,
+            "files_failed": files_failed,
+            "files_skipped": files_skipped,
+            "events_shipped": events_shipped,
+            "bytes_shipped": bytes_shipped,
+            "spool_replayed": spool_replayed,
+            "spool_pending": spool.pending_count()?,
+            "total_seconds": total_elapsed.as_secs_f64(),
+            "throughput_mb_s": bytes_shipped as f64 / 1_048_576.0 / total_elapsed.as_secs_f64(),
+            "dry_run": dry_run,
+        });
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        eprintln!("\n=== Ship Results ===");
+        eprintln!("Files shipped: {}", files_shipped);
+        eprintln!("Events shipped: {}", events_shipped);
+        eprintln!("Bytes shipped: {:.2} MB", bytes_shipped as f64 / 1_048_576.0);
+        if files_failed > 0 {
+            eprintln!("Files failed (spooled): {}", files_failed);
+        }
+        if spool_replayed > 0 {
+            eprintln!("Spool replayed: {}", spool_replayed);
+        }
+        eprintln!("Total: {:.3}s", total_elapsed.as_secs_f64());
+        if bytes_shipped > 0 {
+            eprintln!(
+                "Throughput: {:.1} MB/s",
+                bytes_shipped as f64 / 1_048_576.0 / total_elapsed.as_secs_f64()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// parse subcommand
+// ---------------------------------------------------------------------------
 
 fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> anyhow::Result<()> {
     let start = Instant::now();
@@ -189,6 +621,10 @@ fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> 
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// bench subcommand
+// ---------------------------------------------------------------------------
 
 fn cmd_bench(level: &str, compress: bool, parallel: bool, workers: usize) -> anyhow::Result<()> {
     eprintln!("Discovering session files...");
