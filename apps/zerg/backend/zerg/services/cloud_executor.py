@@ -57,6 +57,9 @@ MODEL_MAPPING = {
     "glm-4.7": "zai/glm-4.7",
     # Gemini models
     "gemini-pro": "gemini/gemini-pro",
+    # Test-only models (used in E2E)
+    "gpt-scripted": "zai/gpt-scripted",
+    "gpt-mock": "zai/gpt-mock",
 }
 
 
