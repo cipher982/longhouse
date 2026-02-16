@@ -219,7 +219,8 @@ Do not maintain a second feature catalog in this file. Keep AGENTS focused on ex
 - Agent infra consolidation spec: `docs/specs/agent-infrastructure-consolidation.md`
 - Runner daemon docs: `apps/runner/README.md`
 - Control plane docs: `apps/control-plane/README.md`
-- Shipper internals: `apps/zerg/backend/zerg/services/shipper/`
+- Shipper internals: `apps/zerg/backend/zerg/services/shipper/` (Python — hooks, install, auth)
+- Rust engine (high-perf shipper daemon): `apps/engine/` — `longhouse-engine connect` replaces Python watcher daemon; 27 MB RSS idle vs 835 MB Python
 - Session processing: `apps/zerg/backend/zerg/services/session_processing/` (summarize, embeddings, content, tokens)
 - Embedding cache: `apps/zerg/backend/zerg/services/embedding_cache.py`
 - Video production: `apps/video/` (Remotion studio — canonical video pipeline)

@@ -623,14 +623,13 @@ The shipper daemon for providers without hook support (Codex, Gemini, Cursor):
 - Falls back to periodic scan to catch missed events/rotations
 - Spools locally when offline, syncs on reconnect
 
-**Current State (as of 2026-02-10):**
-- `longhouse connect` runs in foreground (watch mode by default; polling with `--poll` or custom `--interval`).
-- `longhouse connect --install` installs/starts the background service + Claude Code hooks + MCP server.
-- `longhouse auth` handles device-token setup; `connect` then uses the stored token.
-- Hook-based push implemented: Stop hook ships session on Claude Code response completion; SessionStart hook shows recent sessions.
-- Watcher daemon watches Claude, Codex, and Gemini session directories for real-time sync.
+**Current State (as of 2026-02-15):**
+- **Rust engine daemon** (`apps/engine/`) replaces the Python watcher daemon for always-on background shipping. Resource profile: 27 MB RSS idle (vs 835 MB Python), 0% CPU idle, 3 threads, <1s wake-to-ship latency. Uses FSEvents (macOS) / inotify (Linux) via `notify` crate, tokio single-threaded runtime, zstd compression (12x faster than gzip).
+- `longhouse-engine connect --url URL --compression zstd` is the new daemon command. Watches Claude, Codex, and Gemini directories. SQLite state tracking with dual-offset model (queued vs acked) and pointer-based spool for offline resilience.
+- **Python `longhouse connect`** remains for `--install` (hooks, MCP server registration, launchd/systemd setup) and `longhouse auth` (device-token flow). The Python watcher is superseded by the Rust daemon.
+- Hook-based push still works: Stop hook ships session on Claude Code response completion; SessionStart hook shows recent sessions.
 
-**Testing:** Shipper smoke test (`make test-shipper-smoke`) validates the end-to-end ingest path: file parse → API post → session appears in timeline. Added 2026-02-11.
+**Testing:** Shipper smoke test (`make test-shipper-smoke`) validates the end-to-end ingest path: file parse → API post → session appears in timeline. Rust engine: 26 unit tests covering parser, compressor, state, spool, discovery.
 
 **Magic moment:** user types in Claude Code -> hook fires on stop -> session appears in Longhouse before they switch tabs.
 
@@ -645,8 +644,8 @@ The shipper-to-Longhouse ingest must be robust:
 - Gzip compress payload
 - Single HTTP POST per batch
 
-**Current State (as of 2026-02-10):**
-- Shipper posts per parsed file chunk (with gzip support) rather than a strict 1s/100-events window.
+**Current State (as of 2026-02-15):**
+- Rust engine streams JSON directly into compressor (gzip or zstd) — full JSON never materialized in memory. Posts per parsed file chunk.
 - Offline spool replay relies on DB dedupe (`source_path`, `source_offset`, `event_hash`) rather than explicit idempotency headers.
 
 **Offline resilience target:**
