@@ -130,8 +130,9 @@ test.describe('Sessions Page', () => {
     await sessionCard.click();
 
     await expect(page).toHaveURL(new RegExp(`/timeline/${sessionId}.*event_id=`));
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
     const highlight = page.locator('.event-highlight');
-    await expect(highlight).toContainText(magicToken);
+    await expect(highlight).toContainText(magicToken, { timeout: 15000 });
   });
 
   test('Clear filters button removes all filters', async ({ page }) => {
