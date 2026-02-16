@@ -88,22 +88,24 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Update sauron-jobs: `requirements.txt` + manifest import guards + secret declarations
 - [x] Verify: `make test` + `make test-e2e`
 
-## [Infra] ⏳ Control Plane OpenAI Proxy Injection (1)
+## [Infra] ✅ Control Plane OpenAI Proxy Injection (1)
 
 **Goal:** Inject LiteLLM proxy creds into instances and reprovision david010 so jobs can use OPENAI-compatible APIs.
 
 - [x] Add instance OpenAI settings + provisioner env injection + docs
-- [ ] Set `CONTROL_PLANE_INSTANCE_OPENAI_API_KEY` + `CONTROL_PLANE_INSTANCE_OPENAI_BASE_URL` in Coolify
-- [ ] Deploy control plane and reprovision david010
+- [x] Set `CONTROL_PLANE_INSTANCE_OPENAI_API_KEY` + `CONTROL_PLANE_INSTANCE_OPENAI_BASE_URL` in Coolify
+- [x] Deploy control plane and reprovision david010
 - [ ] Seed david010 job secrets via API (LLM_BENCH_MONGODB_URI, LIFE_HUB_DB_URL, LIFE_HUB_API_KEY, GITHUB_TOKEN)
 
-## [Infra] ⏳ Runtime Image Dependency Fix (1)
+**Notes (2026-02-16):** Instances route through LiteLLM proxy at `llm.drose.io`. All API calls must include `extra_body={"metadata": {"source": "longhouse:component"}}`. gpt-5-nano + text-embedding-3-small added to proxy allowlist. DB-stored LlmProviderConfig rows can silently override env var keys — deleted stale row on david010 to fix 401s.
+
+## [Infra] ✅ Runtime Image Dependency Fix (1)
 
 **Goal:** Instance boots cleanly (zstandard missing in runtime image).
 
 - [x] Add `zstandard` to backend deps
-- [ ] Push + wait for GHCR runtime build
-- [ ] Reprovision david010 and verify `/api/health`
+- [x] Push + wait for GHCR runtime build
+- [x] Reprovision david010 and verify `/api/health`
 
 ---
 
