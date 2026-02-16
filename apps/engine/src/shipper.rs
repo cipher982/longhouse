@@ -237,6 +237,7 @@ pub async fn replay_spool_batch(
 
         if parse_result.events.is_empty() {
             spool.mark_shipped(entry.id)?;
+            file_state.set_acked_offset(&entry.file_path, entry.end_offset)?;
             shipped += 1;
             continue;
         }
