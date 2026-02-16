@@ -27,6 +27,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     - checkout.session.completed  -> set subscription active, trigger provisioning
     - customer.subscription.updated -> update subscription status
     - customer.subscription.deleted -> mark canceled, schedule deprovision
+    - invoice.paid           -> recover from past_due
     - invoice.payment_failed -> mark past_due
     """
     if not settings.stripe_secret_key or not settings.stripe_webhook_secret:
@@ -62,6 +63,8 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         _handle_subscription_updated(data, db)
     elif event_type == "customer.subscription.deleted":
         _handle_subscription_deleted(data, db)
+    elif event_type == "invoice.paid":
+        _handle_invoice_paid(data, db)
     elif event_type == "invoice.payment_failed":
         _handle_payment_failed(data, db)
     else:
@@ -201,6 +204,25 @@ def _handle_subscription_deleted(data: dict, db: Session) -> None:
     logger.info(f"Subscription canceled for {user.email} -- instance preserved for grace period")
     # NOTE: Don't immediately deprovision. A background job should handle
     # grace period + data preservation + notification before actual deprovision.
+
+
+def _handle_invoice_paid(data: dict, db: Session) -> None:
+    """Handle successful invoice payment: recover from past_due if needed."""
+    customer_id = data.get("customer")
+    if not customer_id:
+        return
+
+    user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+    if not user:
+        logger.warning(f"invoice.paid: unknown customer {customer_id}")
+        return
+
+    if user.subscription_status in ("past_due", "unpaid"):
+        user.subscription_status = "active"
+        db.commit()
+        logger.info(f"Payment recovered for {user.email} -- restored to active")
+    else:
+        logger.debug(f"invoice.paid for {user.email} (status={user.subscription_status}), no action needed")
 
 
 def _handle_payment_failed(data: dict, db: Session) -> None:
