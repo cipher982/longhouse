@@ -410,6 +410,21 @@ class BriefingResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Background processing concurrency limits
+# ---------------------------------------------------------------------------
+# During bulk ingest (offset resets, new instances), thousands of sessions
+# arrive in minutes. Without a cap, we'd spawn thousands of concurrent
+# LLM summary + embedding tasks, overwhelming the LLM proxy and OpenAI API.
+# Simple atomic counters limit in-flight tasks; excess requests are silently
+# dropped (the backfill endpoints catch up later).
+
+_summary_inflight = 0
+_embedding_inflight = 0
+_MAX_SUMMARY_INFLIGHT = 3
+_MAX_EMBEDDING_INFLIGHT = 5
+
+
+# ---------------------------------------------------------------------------
 # Background summary generation
 # ---------------------------------------------------------------------------
 
@@ -476,7 +491,20 @@ async def _generate_summary_background(session_id: str) -> None:
     Uses incremental_summary() with a nano-tier model for cheap, fast updates.
     Compare-and-swap (CAS) guard prevents stale overwrites from concurrent tasks.
     Throttles: skips if fewer than 2 new user/assistant messages since last summary.
+    Concurrency-limited to avoid overwhelming LLM during bulk ingest.
     """
+    global _summary_inflight
+    if _summary_inflight >= _MAX_SUMMARY_INFLIGHT:
+        logger.debug("Summary concurrency limit reached, skipping session %s", session_id)
+        return
+    _summary_inflight += 1
+    try:
+        await _generate_summary_impl(session_id)
+    finally:
+        _summary_inflight -= 1
+
+
+async def _generate_summary_impl(session_id: str) -> None:
     from sqlalchemy import update
 
     from zerg.database import get_session_factory
@@ -615,7 +643,20 @@ async def _generate_embeddings_background(session_id: str) -> None:
 
     Independent of summary success — checks needs_embedding flag.
     Skips silently if embedding config is unavailable.
+    Concurrency-limited to avoid overwhelming embedding API during bulk ingest.
     """
+    global _embedding_inflight
+    if _embedding_inflight >= _MAX_EMBEDDING_INFLIGHT:
+        logger.debug("Embedding concurrency limit reached, skipping session %s", session_id)
+        return
+    _embedding_inflight += 1
+    try:
+        await _generate_embeddings_impl(session_id)
+    finally:
+        _embedding_inflight -= 1
+
+
+async def _generate_embeddings_impl(session_id: str) -> None:
     from zerg.database import get_session_factory
     from zerg.models_config import get_embedding_config_with_db_fallback
 
