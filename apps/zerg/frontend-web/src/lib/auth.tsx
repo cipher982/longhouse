@@ -474,6 +474,18 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
   const showGoogle = authMethods?.google ?? false;
   const showPassword = authMethods?.password ?? false;
   const showSso = authMethods?.sso && authMethods?.sso_url;
+  const ssoBase = authMethods?.sso_url ? authMethods.sso_url.replace(/\/+$/, '') : null;
+  const ssoHost = (() => {
+    if (!ssoBase) return null;
+    try {
+      return new URL(ssoBase).host;
+    } catch {
+      return null;
+    }
+  })();
+  const switchAccountUrl = ssoBase
+    ? `${ssoBase}/auth/logout?return_to=${encodeURIComponent(`${ssoBase}/?switch=1`)}`
+    : null;
 
   return (
     <div
@@ -511,22 +523,44 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
         )}
 
         {showSso && (
-          <button
-            onClick={() => { window.location.href = authMethods!.sso_url!; }}
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              background: 'linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)',
-              color: '#030305',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Sign in with Google
-          </button>
+          <>
+            <button
+              onClick={() => { window.location.href = authMethods!.sso_url!; }}
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                background: 'linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)',
+                color: '#030305',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Continue to your Longhouse account
+            </button>
+            <div style={{ marginTop: '0.6rem', color: 'rgba(255, 255, 255, 0.55)', fontSize: '12px' }}>
+              Redirects to {ssoHost ?? 'control.longhouse.ai'} to sign in
+            </div>
+            {switchAccountUrl && (
+              <button
+                type="button"
+                onClick={() => { window.location.href = switchAccountUrl; }}
+                style={{
+                  marginTop: '0.5rem',
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'rgba(255, 255, 255, 0.7)',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                Switch account
+              </button>
+            )}
+          </>
         )}
 
         {showGoogle && !showSso && (

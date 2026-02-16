@@ -392,3 +392,22 @@ def logout(response: Response):
     """Clear session cookie."""
     response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", httponly=True, secure=True, samesite="lax")
     return {"ok": True}
+
+
+@router.get("/logout")
+def logout_redirect(return_to: str | None = None):
+    """Clear session cookie and redirect (safe allowlist)."""
+    target = "/"
+    if return_to:
+        parsed = urllib.parse.urlparse(return_to)
+        if not parsed.scheme and not parsed.netloc and return_to.startswith("/"):
+            target = return_to
+        elif parsed.scheme in ("http", "https") and parsed.netloc:
+            host = parsed.netloc.split(":")[0].lower()
+            root = settings.root_domain.lower()
+            if host == root or host.endswith(f".{root}"):
+                target = return_to
+
+    response = RedirectResponse(target, status_code=302)
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", httponly=True, secure=True, samesite="lax")
+    return response
