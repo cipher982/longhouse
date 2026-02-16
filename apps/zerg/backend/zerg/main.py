@@ -193,7 +193,13 @@ class StructuredFormatter(logging.Formatter):
         if extra_fields:
             parts.append(" ".join(extra_fields))
 
-        return " ".join(parts)
+        output = " ".join(parts)
+
+        # Append traceback if present (logger.exception() etc.)
+        if record.exc_info and record.exc_info[1] is not None:
+            output += "\n" + self.formatException(record.exc_info)
+
+        return output
 
 
 # Configure logging with structured formatter
