@@ -103,8 +103,8 @@ impl SessionWatcher {
     /// interval, even if writes are still happening. This prevents starvation
     /// on continuously-appended JSONL files.
     ///
-    /// Returns an empty vec if no events arrived and the interval elapsed.
-    /// Returns None if the watcher was stopped.
+    /// Blocks until at least one event arrives, then collects for flush_interval.
+    /// Returns None if the watcher channel was closed.
     pub async fn next_batch(&mut self, flush_interval: Duration) -> Option<Vec<PathBuf>> {
         let mut batch = HashSet::new();
 
@@ -116,19 +116,21 @@ impl SessionWatcher {
             None => return None, // Channel closed
         }
 
-        // Collect additional events for flush_interval
+        // Collect additional events until flush_interval expires.
+        // biased toward the deadline so we always flush on time,
+        // even under sustained writes (throttle, not debounce).
         let deadline = tokio::time::Instant::now() + flush_interval;
         loop {
             tokio::select! {
                 biased;
+                _ = tokio::time::sleep_until(deadline) => {
+                    break;
+                }
                 result = self.rx.recv() => {
                     match result {
                         Some(path) => { batch.insert(path); }
                         None => break,
                     }
-                }
-                _ = tokio::time::sleep_until(deadline) => {
-                    break;
                 }
             }
         }

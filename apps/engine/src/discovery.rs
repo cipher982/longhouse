@@ -83,11 +83,12 @@ pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'stati
 }
 
 /// Determine the provider name for a file path based on registered providers.
+///
+/// Uses `Path::starts_with` for correct component-level matching
+/// (avoids false positives like `projects2/` matching `projects/`).
 pub fn provider_for_path(path: &std::path::Path, providers: &[ProviderConfig]) -> Option<&'static str> {
-    let path_str = path.to_string_lossy();
     for provider in providers {
-        let root_str = provider.root.to_string_lossy();
-        if path_str.starts_with(root_str.as_ref()) {
+        if path.starts_with(&provider.root) {
             return Some(provider.name);
         }
     }

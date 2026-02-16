@@ -76,8 +76,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     tracing::info!("Daemon ready — watching for file changes (flush interval: {:?})", config.flush_interval);
 
     // 8. Main event loop
-    let fallback_interval = Duration::from_secs(config.fallback_scan_secs);
-    let spool_interval = Duration::from_secs(config.spool_replay_secs);
+    let fallback_interval = Duration::from_secs(config.fallback_scan_secs.max(10));
+    let spool_interval = Duration::from_secs(config.spool_replay_secs.max(5));
 
     let mut fallback_timer = tokio::time::interval(fallback_interval);
     fallback_timer.tick().await; // consume first immediate tick
@@ -153,8 +153,13 @@ async fn ship_batch(
     let mut events = 0usize;
 
     for path in paths {
-        let provider = discovery::provider_for_path(path, providers)
-            .unwrap_or("unknown");
+        let provider = match discovery::provider_for_path(path, providers) {
+            Some(p) => p,
+            None => {
+                tracing::debug!("Skipping file outside known providers: {}", path.display());
+                continue;
+            }
+        };
 
         match shipper::prepare_file(path, provider, algo, conn) {
             Ok(Some(item)) => {
