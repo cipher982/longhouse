@@ -98,6 +98,11 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
         # NOTIFY_EMAIL = the instance owner's email (they get their own notifications)
         env["NOTIFY_EMAIL"] = owner_email
 
+    if settings.instance_openai_api_key:
+        env["OPENAI_API_KEY"] = settings.instance_openai_api_key
+    if settings.instance_openai_base_url:
+        env["OPENAI_BASE_URL"] = settings.instance_openai_base_url
+
     return env
 
 

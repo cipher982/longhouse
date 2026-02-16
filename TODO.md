@@ -88,6 +88,15 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Update sauron-jobs: `requirements.txt` + manifest import guards + secret declarations
 - [x] Verify: `make test` + `make test-e2e`
 
+## [Infra] ⏳ Control Plane OpenAI Proxy Injection (1)
+
+**Goal:** Inject LiteLLM proxy creds into instances and reprovision david010 so jobs can use OPENAI-compatible APIs.
+
+- [x] Add instance OpenAI settings + provisioner env injection + docs
+- [ ] Set `CONTROL_PLANE_INSTANCE_OPENAI_API_KEY` + `CONTROL_PLANE_INSTANCE_OPENAI_BASE_URL` in Coolify
+- [ ] Deploy control plane and reprovision david010
+- [ ] Seed david010 job secrets via API (LLM_BENCH_MONGODB_URI, LIFE_HUB_DB_URL, LIFE_HUB_API_KEY, GITHUB_TOKEN)
+
 ---
 
 ## [Product] 🧠 Harness Simplification & Commis-to-Timeline (8)
