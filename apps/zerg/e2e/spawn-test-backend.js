@@ -82,6 +82,7 @@ const workerId = process.argv[2];
 const BACKEND_PORT = getBackendPort();
 
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
+const backendBaseUrl = `http://127.0.0.1:${port}`;
 
 // E2E tests now use SQLite per-backend-instance for isolation
 // No need for multiple uvicorn workers since SQLite is single-writer
@@ -115,6 +116,7 @@ const backend = spawn('uv', [
         NODE_ENV: 'test',
         TESTING: '1',  // Enable testing mode for database reset
         AUTH_DISABLED: '1',  // Disable auth for E2E tests
+        SINGLE_TENANT: '0',  // E2E expects marketing + landing page routes
         DEV_ADMIN: process.env.DEV_ADMIN || '1',
         ADMIN_EMAILS: process.env.ADMIN_EMAILS || 'dev@local',
         // SQLite database for this E2E backend instance
@@ -122,7 +124,8 @@ const backend = spawn('uv', [
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
         // Force deterministic model for E2E chat flows (UI uses default model id)
         E2E_DEFAULT_MODEL: process.env.E2E_DEFAULT_MODEL || 'gpt-scripted',
-        // LIFE_HUB_URL and LIFE_HUB_API_KEY inherited from environment (for session continuity tests)
+        // LONGHOUSE_API_URL inherited from environment (for session continuity tests)
+        LONGHOUSE_API_URL: process.env.LONGHOUSE_API_URL || backendBaseUrl,
         // Workspace path for workspace agents (use temp dir in E2E, not /var/oikos)
         OIKOS_WORKSPACE_PATH: process.env.OIKOS_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
         // Claude config dir for session files (use temp dir in E2E)
