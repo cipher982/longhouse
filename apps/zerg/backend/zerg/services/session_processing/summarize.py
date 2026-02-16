@@ -201,6 +201,7 @@ async def quick_summary(
             {"role": "system", "content": _QUICK_SYSTEM},
             {"role": "user", "content": user_prompt},
         ],
+        extra_body={"metadata": {"source": "longhouse:summarize"}},
     )
 
     if not response.choices:
@@ -369,6 +370,7 @@ async def incremental_summary(
                 {"role": "system", "content": _INCREMENTAL_SYSTEM},
                 {"role": "user", "content": user_prompt},
             ],
+            extra_body={"metadata": {"source": "longhouse:summarize"}},
         ),
         timeout=timeout_seconds,
     )
