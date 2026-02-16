@@ -319,3 +319,279 @@ pub async fn full_scan(
 
     Ok((files_shipped, events_shipped))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::db::open_db;
+    use std::io::Write;
+
+    fn make_db() -> (tempfile::NamedTempFile, Connection) {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(tmp.path())).unwrap();
+        (tmp, conn)
+    }
+
+    fn claude_session_lines() -> &'static str {
+        concat!(
+            r#"{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#, "\n",
+            r#"{"type":"assistant","uuid":"22222222-2222-2222-2222-222222222222","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi there"}]}}"#, "\n",
+        )
+    }
+
+    fn codex_session_lines() -> &'static str {
+        concat!(
+            r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#, "\n",
+            r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"}]}}"#, "\n",
+            r#"{"type":"response_item","timestamp":"2026-02-15T10:00:02Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi from codex"}]}}"#, "\n",
+        )
+    }
+
+    /// Write content to a temp file with a UUID-based name.
+    fn write_session_file(content: &str, name: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, content).unwrap();
+        dir
+    }
+
+    // ---------------------------------------------------------------
+    // Regression: stale offsets skip files (the Python-era bug)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_stale_offset_skips_file() {
+        let (_tmp, conn) = make_db();
+        let dir = write_session_file(
+            claude_session_lines(),
+            "aaaa1111-2222-3333-4444-555566667777.jsonl",
+        );
+        let path = dir.path().join("aaaa1111-2222-3333-4444-555566667777.jsonl");
+        let file_size = std::fs::metadata(&path).unwrap().len();
+
+        // Simulate Python shipper having set the offset to file_size
+        let fs = FileState::new(&conn);
+        fs.set_offset(
+            &path.to_string_lossy(),
+            file_size,
+            "aaaa1111-2222-3333-4444-555566667777",
+            "aaaa1111-2222-3333-4444-555566667777",
+            "claude",
+        )
+        .unwrap();
+
+        // prepare_file should return None (no new content)
+        let result = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+        assert!(result.is_none(), "Stale offset should cause file to be skipped");
+    }
+
+    // ---------------------------------------------------------------
+    // Regression: after offset reset, files ship correctly
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_reset_offset_enables_shipping() {
+        let (_tmp, conn) = make_db();
+        let dir = write_session_file(
+            claude_session_lines(),
+            "aaaa1111-2222-3333-4444-555566667777.jsonl",
+        );
+        let path = dir.path().join("aaaa1111-2222-3333-4444-555566667777.jsonl");
+        let file_size = std::fs::metadata(&path).unwrap().len();
+
+        // Set stale offset
+        let fs = FileState::new(&conn);
+        fs.set_offset(
+            &path.to_string_lossy(),
+            file_size,
+            "aaaa1111-2222-3333-4444-555566667777",
+            "aaaa1111-2222-3333-4444-555566667777",
+            "claude",
+        )
+        .unwrap();
+
+        // Reset offset to 0
+        fs.reset_offsets(&path.to_string_lossy()).unwrap();
+
+        // Now prepare_file should return Some with events
+        let result = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+        assert!(result.is_some(), "After reset, file should be prepared");
+        let item = result.unwrap();
+        assert_eq!(item.event_count, 2);
+        assert_eq!(item.session_id, "aaaa1111-2222-3333-4444-555566667777");
+    }
+
+    // ---------------------------------------------------------------
+    // Regression: Codex files parse and prepare correctly
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_prepare_codex_file() {
+        let (_tmp, conn) = make_db();
+        let dir = write_session_file(
+            codex_session_lines(),
+            "rollout-2026-02-15T10-00-00-cccc1111-2222-3333-4444-555566667777.jsonl",
+        );
+        let path = dir.path().join(
+            "rollout-2026-02-15T10-00-00-cccc1111-2222-3333-4444-555566667777.jsonl",
+        );
+
+        let result = prepare_file(&path, "codex", CompressionAlgo::Gzip, &conn).unwrap();
+        assert!(result.is_some(), "Codex file should be prepared");
+        let item = result.unwrap();
+        // session_meta provides session_id override
+        assert_eq!(item.session_id, "cccccccc-1111-2222-3333-444455556666");
+        assert_eq!(item.event_count, 2); // user + assistant messages
+        assert_eq!(item.provider, "codex");
+    }
+
+    // ---------------------------------------------------------------
+    // Regression: subagent files get deterministic UUID v5
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_subagent_file_gets_uuid() {
+        let (_tmp, conn) = make_db();
+        let dir = write_session_file(
+            claude_session_lines(),
+            "agent-a51c878.jsonl",
+        );
+        let path = dir.path().join("agent-a51c878.jsonl");
+
+        let result = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+        assert!(result.is_some(), "Subagent file should be prepared");
+        let item = result.unwrap();
+        // Should be a valid UUID (v5), not "agent-a51c878"
+        assert!(
+            uuid::Uuid::parse_str(&item.session_id).is_ok(),
+            "Session ID should be a valid UUID, got: {}",
+            item.session_id
+        );
+        assert_ne!(item.session_id, "agent-a51c878");
+    }
+
+    // ---------------------------------------------------------------
+    // Regression: subagent UUID is deterministic (same path = same UUID)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_subagent_uuid_is_deterministic() {
+        let (_tmp, conn) = make_db();
+        let dir = write_session_file(
+            claude_session_lines(),
+            "agent-a51c878.jsonl",
+        );
+        let path = dir.path().join("agent-a51c878.jsonl");
+
+        let result1 = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+        // Reset offset so we can prepare again
+        let fs = FileState::new(&conn);
+        fs.reset_offsets(&path.to_string_lossy()).unwrap();
+        let result2 = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+
+        assert_eq!(
+            result1.unwrap().session_id,
+            result2.unwrap().session_id,
+            "Same file path should produce same UUID"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Regression: truncated files reset offset and re-ship
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_truncated_file_resets_and_ships() {
+        let (_tmp, conn) = make_db();
+        let dir = write_session_file(
+            claude_session_lines(),
+            "bbbb1111-2222-3333-4444-555566667777.jsonl",
+        );
+        let path = dir.path().join("bbbb1111-2222-3333-4444-555566667777.jsonl");
+
+        // Set offset way beyond actual file size (simulates truncation)
+        let fs = FileState::new(&conn);
+        fs.set_offset(
+            &path.to_string_lossy(),
+            999999,
+            "bbbb1111-2222-3333-4444-555566667777",
+            "bbbb1111-2222-3333-4444-555566667777",
+            "claude",
+        )
+        .unwrap();
+
+        // prepare_file should detect truncation, reset, and parse from 0
+        let result = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+        assert!(result.is_some(), "Truncated file should be re-processed");
+        let item = result.unwrap();
+        assert_eq!(item.offset, 0, "Should start from offset 0 after truncation");
+        assert_eq!(item.event_count, 2);
+    }
+
+    // ---------------------------------------------------------------
+    // Regression: incremental append ships only new events
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_incremental_append_ships_new_events_only() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dddd1111-2222-3333-4444-555566667777.jsonl");
+
+        // Write initial content
+        let line1 = r#"{"type":"user","uuid":"inc-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"first"}}"#;
+        std::fs::write(&path, format!("{}\n", line1)).unwrap();
+
+        // First prepare ships 1 event
+        let result1 = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+        let item1 = result1.unwrap();
+        assert_eq!(item1.event_count, 1);
+
+        // Record the offset (simulating ship_and_record success)
+        let fs = FileState::new(&conn);
+        fs.set_offset(
+            &path.to_string_lossy(),
+            item1.new_offset,
+            "dddd1111-2222-3333-4444-555566667777",
+            "dddd1111-2222-3333-4444-555566667777",
+            "claude",
+        )
+        .unwrap();
+
+        // Append more content
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, r#"{{"type":"assistant","uuid":"inc-2","timestamp":"2026-02-15T10:00:01Z","message":{{"content":[{{"type":"text","text":"second"}}]}}}}"#).unwrap();
+
+        // Second prepare ships only the new event
+        let result2 = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+        let item2 = result2.unwrap();
+        assert_eq!(item2.event_count, 1, "Should only ship the appended event");
+        assert_eq!(item2.offset, item1.new_offset, "Should start from previous offset");
+    }
+
+    // ---------------------------------------------------------------
+    // Startup recovery enqueues gaps correctly
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_startup_recovery_enqueues_unacked() {
+        let (_tmp, conn) = make_db();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+
+        // Simulate a file that was queued but not acked (daemon crashed mid-ship)
+        fs.set_offset("/tmp/test.jsonl", 100, "sess-1", "sess-1", "claude").unwrap();
+        fs.set_queued_offset("/tmp/test.jsonl", 500, "claude", "sess-1", "sess-1").unwrap();
+
+        // Run recovery
+        let count = run_startup_recovery(&conn).unwrap();
+        assert_eq!(count, 1, "Should find 1 unacked file");
+
+        // Check spool has the entry
+        let pending = spool.dequeue_batch(10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].file_path, "/tmp/test.jsonl");
+        assert_eq!(pending[0].start_offset, 100);
+        assert_eq!(pending[0].end_offset, 500);
+    }
+}
