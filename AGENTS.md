@@ -201,7 +201,7 @@ coolify app logs longhouse-control-plane               # Control plane
 
 ## apps/sauron - Scheduler (Folded In)
 
-Sauron is not a separate service; scheduled jobs run inside the standard Longhouse instance service (per-user). The `sauron-jobs` repo pattern remains a power-user path (optional jobs pack), but OSS onboarding should not depend on it.
+Sauron is not a separate service; scheduled jobs run inside the standard Longhouse instance service (per-user). The `sauron-jobs` repo pattern remains a power-user path (optional jobs pack), but OSS onboarding should not depend on it. If the user is asking about his jobs or sauron, take a look at ~/git/sauron-jobs and they should be running 24/7 on the instance and sending him emails.
 
 ## apps/runner - Native Runner Daemon
 

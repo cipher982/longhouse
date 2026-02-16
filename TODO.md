@@ -77,6 +77,18 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
+## [Product] ✅ Jobs Pack Reliability + Legacy Secrets Bridge (5)
+
+**Goal:** Make external jobs packs load reliably (deps + manifest resilience) and ensure legacy `os.getenv()` jobs see DB-stored secrets safely.
+
+- [x] Install job pack deps at manifest load (single code path, no `--no-deps`)
+- [x] Add safe legacy env injection with concurrency guard (registry + queue)
+- [x] Add deps/install + env-injection tests in `apps/zerg/backend/tests_lite/`
+- [x] Update sauron-jobs: `requirements.txt` + manifest import guards + secret declarations
+- [x] Verify: `make test` + `make test-e2e`
+
+---
+
 ## [Product] 🧠 Harness Simplification & Commis-to-Timeline (8)
 
 **Goal:** Stop building our own agent harness. Lean on CLI agents (Claude Code, Codex, Gemini CLI). Make commis output visible in the timeline. Remove ~25K LOC of dead code.
