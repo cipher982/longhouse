@@ -3,6 +3,10 @@
 //! Mirrors the Python parser at `zerg/services/shipper/parser.py`.
 //! Extracts meaningful events (user messages, assistant text, tool calls,
 //! tool results) from JSONL files and converts them to a normalized format.
+//!
+//! Supports two JSONL formats:
+//! - **Claude**: `{type: "user"|"assistant", message: {content: ...}}`
+//! - **Codex**: `{type: "response_item", payload: {type: "message"|"function_call"|..., role: ..., content: [...]}}`
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -80,7 +84,10 @@ struct RawLine {
     #[serde(rename = "gitBranch")]
     git_branch: Option<String>,
     version: Option<String>,
+    /// Claude format: `{message: {content: ...}}`
     message: Option<RawMessage>,
+    /// Codex format: `{payload: {type: ..., role: ..., content: [...]}}`
+    payload: Option<CodexPayload>,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +95,38 @@ struct RawMessage {
     /// Kept as raw JSON — avoids building a full serde_json::Value DOM tree.
     /// Parsed on-demand in extraction functions via ContentItem.
     content: Box<RawValue>,
+}
+
+// ---------------------------------------------------------------------------
+// Codex-specific types
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CodexPayload {
+    r#type: Option<String>,
+    role: Option<String>,
+    /// For message types: array of content items
+    content: Option<Vec<CodexContentItem>>,
+    /// session_meta: session UUID
+    id: Option<String>,
+    /// session_meta: working directory
+    cwd: Option<String>,
+    /// session_meta: CLI version
+    cli_version: Option<String>,
+    /// function_call: tool name
+    name: Option<String>,
+    /// function_call: JSON-encoded arguments
+    arguments: Option<String>,
+    /// function_call / function_call_output: call correlation ID
+    call_id: Option<String>,
+    /// function_call_output: result text
+    output: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CodexContentItem {
+    r#type: Option<String>,
+    text: Option<String>,
 }
 
 /// Targeted deserialization of a single content array item.
@@ -119,11 +158,19 @@ struct ContentItem {
 /// Returns events, the last good byte offset (excluding partial lines),
 /// and session metadata — all in a single pass.
 pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
-    let session_id = path
+    let raw_stem = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown")
         .to_string();
+
+    // Ensure session_id is a valid UUID. Non-UUID stems (e.g. "agent-a51c878")
+    // get a deterministic UUID v5 derived from the full file path.
+    let session_id = if Uuid::parse_str(&raw_stem).is_ok() {
+        raw_stem
+    } else {
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, path.to_string_lossy().as_bytes()).to_string()
+    };
 
     let file_size = std::fs::metadata(path)
         .with_context(|| format!("Failed to stat {}", path.display()))?
@@ -339,6 +386,7 @@ fn collect_metadata(
     min_ts: &mut Option<DateTime<Utc>>,
     max_ts: &mut Option<DateTime<Utc>>,
 ) {
+    // Claude metadata fields
     if meta.cwd.is_none() {
         if let Some(ref cwd) = obj.cwd {
             meta.cwd = Some(cwd.clone());
@@ -354,6 +402,29 @@ fn collect_metadata(
             meta.version = Some(ver.clone());
         }
     }
+
+    // Codex session_meta: extract cwd, version, and session_id from payload
+    if obj.r#type.as_deref() == Some("session_meta") {
+        if let Some(ref payload) = obj.payload {
+            if meta.cwd.is_none() {
+                if let Some(ref cwd) = payload.cwd {
+                    meta.cwd = Some(cwd.clone());
+                }
+            }
+            if meta.version.is_none() {
+                if let Some(ref ver) = payload.cli_version {
+                    meta.version = Some(ver.clone());
+                }
+            }
+            // Override session_id with the canonical one from session_meta
+            if let Some(ref id) = payload.id {
+                if Uuid::parse_str(id).is_ok() {
+                    meta.session_id = id.clone();
+                }
+            }
+        }
+    }
+
     if let Some(ts) = obj.timestamp.as_deref().and_then(parse_timestamp) {
         match min_ts {
             Some(ref existing) if ts < *existing => *min_ts = Some(ts),
@@ -377,9 +448,10 @@ fn extract_events(
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
 
-    // Skip metadata-only types
+    // Skip metadata-only types (Claude + Codex)
     match event_type {
-        "summary" | "file-history-snapshot" | "progress" => return,
+        "summary" | "file-history-snapshot" | "progress"
+        | "session_meta" | "turn_context" | "event_msg" => return,
         _ => {}
     }
 
@@ -400,15 +472,20 @@ fn extract_events(
         msg_uuid
     };
 
+    // Codex format: {type: "response_item", payload: {...}}
+    if event_type == "response_item" {
+        if let Some(ref payload) = obj.payload {
+            extract_codex_events(payload, session_id, &msg_uuid, timestamp, line_offset, raw_line, events);
+        }
+        return;
+    }
+
+    // Claude format: {type: "user"|"assistant", message: {content: ...}}
     let content_raw = match &obj.message {
         Some(m) => &m.content,
         None => return,
     };
 
-    // Parse content items from raw JSON on-demand.
-    // This is where the RawValue optimization pays off: the initial RawLine
-    // parse skipped building a Value tree for content entirely. Now we parse
-    // only the fields we need via ContentItem.
     let content_str = content_raw.get();
 
     match event_type {
@@ -439,6 +516,138 @@ fn extract_events(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Codex extraction
+// ---------------------------------------------------------------------------
+
+fn extract_codex_events(
+    payload: &CodexPayload,
+    session_id: &str,
+    msg_uuid: &str,
+    timestamp: DateTime<Utc>,
+    line_offset: u64,
+    raw_line: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let payload_type = payload.r#type.as_deref().unwrap_or("");
+
+    match payload_type {
+        "message" => {
+            let role_str = payload.role.as_deref().unwrap_or("");
+            // developer messages are system context — skip
+            if role_str == "developer" {
+                return;
+            }
+
+            let role = match role_str {
+                "user" => Role::User,
+                "assistant" => Role::Assistant,
+                _ => return,
+            };
+
+            // Extract text from content items
+            let text = payload
+                .content
+                .as_ref()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            let t = item.r#type.as_deref().unwrap_or("");
+                            if t == "input_text" || t == "output_text" {
+                                item.text.as_deref()
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+
+            if text.trim().is_empty() {
+                return;
+            }
+
+            events.push(ParsedEvent {
+                uuid: msg_uuid.to_string(),
+                session_id: session_id.to_string(),
+                timestamp,
+                role,
+                content_text: Some(text),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                source_offset: line_offset,
+                raw_type: format!("codex_{}", role_str),
+                raw_line: Some(raw_line.to_string()),
+            });
+        }
+        "function_call" => {
+            let tool_name = payload.name.as_deref().unwrap_or("").to_string();
+            let call_id = payload.call_id.as_deref().unwrap_or("");
+            let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
+
+            // Parse arguments string as raw JSON
+            let tool_input = payload.arguments.as_ref().and_then(|args| {
+                let trimmed = args.trim();
+                if trimmed.starts_with('{') {
+                    RawValue::from_string(trimmed.to_string()).ok()
+                } else {
+                    None
+                }
+            });
+
+            events.push(ParsedEvent {
+                uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::Assistant,
+                content_text: None,
+                tool_name: Some(tool_name),
+                tool_input_json: tool_input,
+                tool_output_text: None,
+                source_offset: line_offset,
+                raw_type: "codex_function_call".to_string(),
+                raw_line: Some(raw_line.to_string()),
+            });
+        }
+        "function_call_output" => {
+            let call_id = payload.call_id.as_deref().unwrap_or("");
+            let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
+
+            let output = payload.output.as_deref().unwrap_or("");
+            if output.is_empty() {
+                return;
+            }
+
+            events.push(ParsedEvent {
+                uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::Tool,
+                content_text: None,
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: Some(output.to_string()),
+                source_offset: line_offset,
+                raw_type: "codex_function_call_output".to_string(),
+                raw_line: Some(raw_line.to_string()),
+            });
+        }
+        "reasoning" => {
+            // Skip reasoning blocks (internal model thinking)
+        }
+        _ => {
+            // Unknown Codex payload type — skip
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Claude extraction
+// ---------------------------------------------------------------------------
 
 fn extract_user_events(
     content_str: &str,
@@ -898,6 +1107,152 @@ mod tests {
         // The partial line has no \n so it's treated as incomplete
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].content_text.as_deref(), Some("complete"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex format tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_codex_user_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-ea04-7983-a845-d0b68a77fa62.jsonl",
+            &[
+                r#"{"type":"session_meta","timestamp":"2026-02-15T17:06:10Z","payload":{"type":"session_meta","id":"019c638d-ea04-7983-a845-d0b68a77fa62","cwd":"/Users/test/project","cli_version":"0.1.2"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:11Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello from Codex"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("Hello from Codex"));
+        assert_eq!(result.events[0].raw_type, "codex_user");
+        // Metadata from session_meta
+        assert_eq!(result.metadata.cwd.as_deref(), Some("/Users/test/project"));
+        assert_eq!(result.metadata.version.as_deref(), Some("0.1.2"));
+        assert_eq!(result.metadata.session_id, "019c638d-ea04-7983-a845-d0b68a77fa62");
+    }
+
+    #[test]
+    fn test_codex_assistant_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000001.jsonl",
+            &[r#"{"type":"response_item","timestamp":"2026-02-15T17:06:12Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Here is the answer"}]}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::Assistant);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("Here is the answer"));
+        assert_eq!(result.events[0].raw_type, "codex_assistant");
+    }
+
+    #[test]
+    fn test_codex_function_call_and_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000002.jsonl",
+            &[
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:13Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"ls -la\"}","call_id":"call_123"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:14Z","payload":{"type":"function_call_output","call_id":"call_123","output":"file1.txt\nfile2.txt"}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+
+        // Tool call
+        assert_eq!(result.events[0].role, Role::Assistant);
+        assert_eq!(result.events[0].tool_name.as_deref(), Some("shell"));
+        assert_eq!(result.events[0].raw_type, "codex_function_call");
+        assert!(result.events[0].tool_input_json.is_some());
+
+        // Tool output
+        assert_eq!(result.events[1].role, Role::Tool);
+        assert_eq!(result.events[1].tool_output_text.as_deref(), Some("file1.txt\nfile2.txt"));
+        assert_eq!(result.events[1].raw_type, "codex_function_call_output");
+    }
+
+    #[test]
+    fn test_codex_skip_developer_and_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000003.jsonl",
+            &[
+                r#"{"type":"session_meta","timestamp":"2026-02-15T17:06:10Z","payload":{"type":"session_meta","id":"019c638d-0000-0000-0000-000000000003"}}"#,
+                r#"{"type":"event_msg","timestamp":"2026-02-15T17:06:10Z","payload":{"type":"token_count","count":42}}"#,
+                r#"{"type":"turn_context","timestamp":"2026-02-15T17:06:10Z","payload":{}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:11Z","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"system prompt"}]}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:11Z","payload":{"type":"reasoning","content":"thinking..."}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:12Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"real user message"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        // Only the user message should produce an event
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("real user message"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Subagent UUID generation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_non_uuid_filename_gets_deterministic_uuid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "agent-a51c878.jsonl",
+            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hello"}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        // Should be a valid UUID (v5 derived from path)
+        assert!(Uuid::parse_str(&result.metadata.session_id).is_ok(),
+            "Non-UUID filename should get a deterministic UUID, got: {}", result.metadata.session_id);
+
+        // Parse again — should get the same UUID (deterministic)
+        let result2 = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.metadata.session_id, result2.metadata.session_id);
+    }
+
+    #[test]
+    fn test_uuid_filename_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "3334cc69-974a-46a5-84e3-64459521135c.jsonl",
+            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hello"}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.metadata.session_id, "3334cc69-974a-46a5-84e3-64459521135c");
+    }
+
+    #[test]
+    fn test_codex_session_meta_overrides_filename_uuid() {
+        let dir = tempfile::tempdir().unwrap();
+        // Filename UUID differs from session_meta id
+        let path = make_jsonl_file(
+            dir.path(),
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl",
+            &[
+                r#"{"type":"session_meta","timestamp":"2026-02-15T17:06:10Z","payload":{"type":"session_meta","id":"019c638d-ea04-7983-a845-d0b68a77fa62","cwd":"/test"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:11Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        // session_meta id should take precedence
+        assert_eq!(result.metadata.session_id, "019c638d-ea04-7983-a845-d0b68a77fa62");
     }
 
     #[test]
