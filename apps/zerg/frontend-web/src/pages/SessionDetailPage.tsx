@@ -271,7 +271,7 @@ export default function SessionDetailPage() {
 
   // Expanded state for tool calls
   const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
-  const [highlightedEventId, setHighlightedEventId] = useState<number | null>(null);
+  const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null);
 
   // Toggle individual tool
   const toggleTool = (eventId: number) => {
@@ -345,10 +345,11 @@ export default function SessionDetailPage() {
   // Scroll to matched event when arriving from search results
   useEffect(() => {
     if (!highlightEventId || events.length === 0) return;
-    const target = document.getElementById(`event-${highlightEventId}`);
+    const targetId = `event-${highlightEventId}`;
+    const target = document.getElementById(targetId);
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "center" });
-      setHighlightedEventId(highlightEventId);
+      setHighlightedEventId(targetId);
     }
   }, [highlightEventId, events]);
 
@@ -598,7 +599,7 @@ export default function SessionDetailPage() {
           ) : (
             <div className="timeline-events">
               {filteredEvents.map((event) => {
-                const isHighlighted = highlightedEventId === event.id;
+                const isHighlighted = highlightedEventId === `event-${event.id}`;
                 if (event.role === "user") {
                   return <UserMessage key={event.id} event={event} isHighlighted={isHighlighted} />;
                 }
