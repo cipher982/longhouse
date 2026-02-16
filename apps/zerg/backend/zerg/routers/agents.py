@@ -734,7 +734,8 @@ async def decompress_if_gzipped(request: Request) -> bytes:
             )
     elif content_encoding == "zstd":
         try:
-            body = zstandard.decompress(body)
+            dctx = zstandard.ZstdDecompressor()
+            body = dctx.decompress(body, max_output_size=50 * 1024 * 1024)  # 50 MB limit
         except zstandard.ZstdError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
