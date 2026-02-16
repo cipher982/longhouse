@@ -118,14 +118,14 @@ function CellContent({ value }: { value: CellValue }) {
   }
   if (value.type === "na") {
     return (
-      <span className="comparison-cell comparison-cell--na" aria-label="Not applicable">
+      <span className="comparison-cell comparison-cell--na" role="img" aria-label="Not applicable">
         <span className="comparison-cell-label comparison-cell-label--muted">N/A</span>
       </span>
     );
   }
   return (
-    <span className="comparison-cell comparison-cell--no" aria-label="No">
-      <XCircleIcon width={18} height={18} />
+    <span className="comparison-cell comparison-cell--no" role="img" aria-label="No">
+      <XCircleIcon width={18} height={18} aria-hidden="true" />
     </span>
   );
 }
