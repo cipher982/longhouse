@@ -125,6 +125,8 @@ Import from `../components/ui`. **Check here before building custom UI.**
 9. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `apps/zerg/backend/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
 10. **Deploy requires GHCR build** — Push triggers `runtime-image.yml` (path-filtered). Must wait for build before pulling on zerg. Use `gh run watch <id>` to wait. Marketing + control plane pull the same image via Coolify.
 11. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
+12. **LiteLLM proxy metadata required** — All OpenAI SDK calls on instances go through `llm.drose.io`. Must pass `extra_body={"metadata": {"source": "longhouse:component"}}` or get 400. New models must be added to `~/git/litellm-proxy/config.yaml` AND `hooks/model_hints.py`.
+13. **DB provider config overrides env vars** — `get_llm_client_with_db_fallback()` checks `LlmProviderConfig` table first. Stale rows with wrong keys cause silent 401s. Check DB before debugging API auth failures.
 
 ## Pushing Changes
 
@@ -259,3 +261,5 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-13) [arch] Reflection produces **action proposals** alongside insights when `action_blurb` is present (high-confidence, concrete actions). Users review at `/proposals`. Approved proposals appear in agent briefings under "Approved actions (pending execution)." Model: `ActionProposal` in `models/work.py`, API: `routers/proposals.py`.
 - (2026-02-14) [ops] **Reprovisioning an instance** = stop+remove container, then re-create with current env vars. Data is safe — SQLite lives on a host bind mount (`/var/lib/docker/data/longhouse/<subdomain>`), not inside the container. Use the admin API: `POST /api/instances/{id}/reprovision`. If secrets change on the control plane, instances must be reprovisioned to pick them up.
 - (2026-02-14) [security] SSO tokens include `instance` claim binding them to a specific subdomain. `accept_token` validates this (soft — only when both claim and `INSTANCE_ID` env var present). CP's own `jwt_secret` is never sent to instances.
+- (2026-02-16) [ops] Instances route LLM calls through LiteLLM proxy (`llm.drose.io`). All OpenAI SDK calls must pass `extra_body={"metadata": {"source": "longhouse:component"}}` or the proxy rejects with 400. Proxy allowlist: `~/git/litellm-proxy/config.yaml` + `hooks/model_hints.py` (keep in sync).
+- (2026-02-16) [ops] `get_llm_client_with_db_fallback()` checks DB `LlmProviderConfig` table before env vars. Stale DB rows with wrong API keys silently override env config → 401s. Delete stale rows: `db.query(LlmProviderConfig).filter(...).delete()`.
