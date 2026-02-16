@@ -1,8 +1,8 @@
 import clsx from "clsx";
-import { useState, useEffect, useCallback, type PropsWithChildren } from "react";
+import { useState, useEffect, useCallback, useRef, type PropsWithChildren } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "../lib/auth";
+import { useAuth, getAuthMethods, type AuthMethods } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useConfirm } from "./confirm";
@@ -18,6 +18,9 @@ function WelcomeHeader() {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [authMethods, setAuthMethods] = useState<AuthMethods | null>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   // Close mobile nav on route change
   useEffect(() => {
@@ -49,6 +52,23 @@ function WelcomeHeader() {
 
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
   const toggleMobileNav = useCallback(() => setMobileNavOpen(prev => !prev), []);
+  const closeUserMenu = useCallback(() => setUserMenuOpen(false), []);
+  const toggleUserMenu = useCallback(() => setUserMenuOpen(prev => !prev), []);
+
+  useEffect(() => {
+    getAuthMethods().then(setAuthMethods).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!userMenuOpen) return;
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [userMenuOpen]);
 
   // Only show shelf toggle on routes that have drawer UI
   const SHELF_ENABLED_ROUTES = ["/fiche"];
@@ -79,16 +99,53 @@ function WelcomeHeader() {
 
   const userInitials = getUserInitials(user);
 
-  const handleAvatarClick = async () => {
+  const controlPlaneBase = authMethods?.sso_url ? authMethods.sso_url.replace(/\/+$/, "") : null;
+
+  const handleLogout = async () => {
     const confirmed = await confirm({
       title: 'Log out?',
-      message: 'You will need to sign in again to access your account.',
+      message: 'You will need to sign in again to access this instance.',
       confirmLabel: 'Log out',
       cancelLabel: 'Stay signed in',
       variant: 'default',
     });
     if (confirmed) {
-      logout();
+      closeUserMenu();
+      await logout();
+    }
+  };
+
+  const handleLogoutEverywhere = async () => {
+    const confirmed = await confirm({
+      title: 'Log out everywhere?',
+      message: 'This signs you out of this instance and the control plane.',
+      confirmLabel: 'Log out everywhere',
+      cancelLabel: 'Cancel',
+      variant: 'warning',
+    });
+    if (!confirmed) return;
+    closeUserMenu();
+    await logout();
+    if (controlPlaneBase) {
+      const returnTo = window.location.origin;
+      window.location.href = `${controlPlaneBase}/auth/logout?return_to=${encodeURIComponent(returnTo)}`;
+    }
+  };
+
+  const handleSwitchAccount = async () => {
+    const confirmed = await confirm({
+      title: 'Switch account?',
+      message: 'You will be redirected to sign in with a different account.',
+      confirmLabel: 'Switch account',
+      cancelLabel: 'Cancel',
+      variant: 'default',
+    });
+    if (!confirmed) return;
+    closeUserMenu();
+    await logout();
+    if (controlPlaneBase) {
+      const returnTo = `${controlPlaneBase}/?switch=1`;
+      window.location.href = `${controlPlaneBase}/auth/logout?return_to=${encodeURIComponent(returnTo)}`;
     }
   };
 
@@ -163,19 +220,19 @@ function WelcomeHeader() {
             <SidebarIcon />
           </button>
         )}
-        <div className="user-menu-container">
+        <div className="user-menu-container" ref={userMenuRef}>
           <div
             className="avatar-badge"
-            aria-label="User avatar"
+            aria-label="User menu"
             role="button"
             tabIndex={0}
-            onClick={handleAvatarClick}
+            onClick={toggleUserMenu}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
-                handleAvatarClick();
+                toggleUserMenu();
               }
             }}
-            title="Click to log out"
+            title="Account menu"
           >
             {user?.avatar_url ? (
               <img
@@ -185,6 +242,21 @@ function WelcomeHeader() {
               />
             ) : (
               <span>{userInitials}</span>
+            )}
+          </div>
+          <div className={`user-dropdown ${userMenuOpen ? "" : "hidden"}`}>
+            <button type="button" className="user-menu-item" onClick={handleLogout}>
+              Log out
+            </button>
+            {controlPlaneBase && (
+              <>
+                <button type="button" className="user-menu-item" onClick={handleLogoutEverywhere}>
+                  Log out everywhere
+                </button>
+                <button type="button" className="user-menu-item" onClick={handleSwitchAccount}>
+                  Switch account
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -257,11 +329,35 @@ function WelcomeHeader() {
             className="mobile-nav-logout"
             onClick={async () => {
               closeMobileNav();
-              await handleAvatarClick();
+              await handleLogout();
             }}
           >
             Log out
           </button>
+          {controlPlaneBase && (
+            <>
+              <button
+                type="button"
+                className="mobile-nav-logout"
+                onClick={async () => {
+                  closeMobileNav();
+                  await handleLogoutEverywhere();
+                }}
+              >
+                Log out everywhere
+              </button>
+              <button
+                type="button"
+                className="mobile-nav-logout"
+                onClick={async () => {
+                  closeMobileNav();
+                  await handleSwitchAccount();
+                }}
+              >
+                Switch account
+              </button>
+            </>
+          )}
         </div>
       )}
     </nav>
