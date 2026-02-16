@@ -99,6 +99,13 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 **Notes (2026-02-16):** Instances route through LiteLLM proxy at `llm.drose.io`. All API calls must include `extra_body={"metadata": {"source": "longhouse:component"}}`. gpt-5-nano + text-embedding-3-small added to proxy allowlist. DB-stored LlmProviderConfig rows can silently override env var keys — deleted stale row on david010 to fix 401s.
 
+## [Infra] 🟡 Instance OpenAI Allowlist (1)
+
+**Goal:** Scope LiteLLM proxy routing to personal instances only (avoid global injection).
+
+- [x] Add allowlist setting for instance OpenAI env injection (subdomain/email)
+- [x] Update control-plane env + docs to use allowlist (david010 only)
+
 ## [Infra] ✅ Runtime Image Dependency Fix (1)
 
 **Goal:** Instance boots cleanly (zstandard missing in runtime image).

@@ -61,6 +61,22 @@ def _labels_for(subdomain: str) -> dict[str, str]:
     return labels
 
 
+def _openai_allowlist() -> set[str]:
+    raw = settings.instance_openai_allowlist
+    if not raw:
+        return set()
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _openai_env_allowed(subdomain: str, owner_email: str) -> bool:
+    allowlist = _openai_allowlist()
+    if not allowlist:
+        return False
+    if "*" in allowlist:
+        return True
+    return subdomain.lower() in allowlist or owner_email.lower() in allowlist
+
+
 def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> dict[str, str]:
     env: dict[str, str] = {
         "INSTANCE_ID": subdomain,
@@ -98,10 +114,11 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
         # NOTIFY_EMAIL = the instance owner's email (they get their own notifications)
         env["NOTIFY_EMAIL"] = owner_email
 
-    if settings.instance_openai_api_key:
-        env["OPENAI_API_KEY"] = settings.instance_openai_api_key
-    if settings.instance_openai_base_url:
-        env["OPENAI_BASE_URL"] = settings.instance_openai_base_url
+    if _openai_env_allowed(subdomain, owner_email):
+        if settings.instance_openai_api_key:
+            env["OPENAI_API_KEY"] = settings.instance_openai_api_key
+        if settings.instance_openai_base_url:
+            env["OPENAI_BASE_URL"] = settings.instance_openai_base_url
 
     return env
 
