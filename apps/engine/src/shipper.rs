@@ -293,40 +293,13 @@ pub async fn full_scan(
     let mut files_shipped = 0usize;
     let mut events_shipped = 0usize;
 
-    // Throttle: track events shipped in a sliding 60s window to stay
-    // under the server's 1000 events/min rate limit.
-    let mut events_this_window = 0usize;
-    let mut window_start = std::time::Instant::now();
-    const WINDOW_LIMIT: usize = 800; // leave headroom below 1000
-
     for (path, provider_name) in &all_files {
         match prepare_file(path, provider_name, algo, conn) {
             Ok(Some(item)) => {
-                let event_count = item.event_count;
-
-                // Pre-check: if adding this file would exceed the window limit, wait
-                if events_this_window > 0 && events_this_window + event_count >= WINDOW_LIMIT {
-                    let elapsed = window_start.elapsed();
-                    if elapsed < std::time::Duration::from_secs(60) {
-                        let wait = std::time::Duration::from_secs(60) - elapsed
-                            + std::time::Duration::from_millis(500);
-                        tracing::info!(
-                            "Throttling: {} events in {:.0}s, waiting {:.1}s",
-                            events_this_window,
-                            elapsed.as_secs_f64(),
-                            wait.as_secs_f64()
-                        );
-                        tokio::time::sleep(wait).await;
-                    }
-                    events_this_window = 0;
-                    window_start = std::time::Instant::now();
-                }
-
                 let events = ship_and_record(item, client, conn).await?;
                 if events > 0 {
                     files_shipped += 1;
                     events_shipped += events;
-                    events_this_window += events;
 
                     if files_shipped % 100 == 0 {
                         tracing::info!(
