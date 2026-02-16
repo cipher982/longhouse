@@ -44,28 +44,9 @@ export function DemoVideoPlaceholder({
 }: DemoVideoPlaceholderProps) {
   const [videoError, setVideoError] = useState(false);
 
+  // If no URL or video failed to load, render nothing instead of a placeholder
   if (!videoUrl || videoError) {
-    return (
-      <div className={`demo-video-placeholder ${className}`}>
-        <div className="demo-video-frame">
-          <div className="demo-video-chrome">
-            <div className="demo-video-dots">
-              <span className="dot dot-red" />
-              <span className="dot dot-yellow" />
-              <span className="dot dot-green" />
-            </div>
-            <div className="demo-video-title">Quick Tour</div>
-          </div>
-          <div className="demo-video-content">
-            <div className="demo-video-icon">&#9654;</div>
-            <div className="demo-video-text">
-              <h3>Video Walkthrough Coming Soon</h3>
-              <p>60-second tour: install, timeline, and search</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   const embedUrl = getEmbedUrl(videoUrl);

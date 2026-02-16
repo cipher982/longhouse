@@ -64,7 +64,7 @@ export function HowItWorksSection() {
 
         <div className="landing-steps-cta">
           <Button variant="primary" size="lg" onClick={handleGetStarted}>
-            Get Started
+            See Pricing
           </Button>
         </div>
       </div>
