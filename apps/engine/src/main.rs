@@ -1,8 +1,12 @@
 mod bench;
 mod config;
+mod daemon;
+mod discovery;
 mod pipeline;
+mod shipper;
 mod shipping;
 mod state;
+mod watcher;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -76,6 +80,37 @@ enum Commands {
         compression: String,
     },
 
+    /// Daemon mode: watch for file changes and ship incrementally
+    Connect {
+        /// API URL override (default: from ~/.claude/longhouse-url)
+        #[arg(long)]
+        url: Option<String>,
+
+        /// API token override (default: from ~/.claude/longhouse-device-token)
+        #[arg(long)]
+        token: Option<String>,
+
+        /// SQLite DB path override
+        #[arg(long)]
+        db: Option<PathBuf>,
+
+        /// Compression algorithm: gzip (default) or zstd
+        #[arg(long, default_value = "zstd")]
+        compression: String,
+
+        /// Flush interval in milliseconds (how long to coalesce file events)
+        #[arg(long, default_value = "500")]
+        flush_ms: u64,
+
+        /// Fallback full scan interval in seconds
+        #[arg(long, default_value = "300")]
+        fallback_scan_secs: u64,
+
+        /// Spool replay interval in seconds
+        #[arg(long, default_value = "30")]
+        spool_replay_secs: u64,
+    },
+
     /// One-shot: scan all provider sessions and ship new events
     Ship {
         /// API URL override (default: from ~/.claude/longhouse-url)
@@ -119,6 +154,37 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Connect {
+            url,
+            token,
+            db,
+            compression,
+            flush_ms,
+            fallback_scan_secs,
+            spool_replay_secs,
+        } => {
+            let algo = parse_compression_algo(&compression)?;
+            let shipper_config = ShipperConfig::from_env()?.with_overrides(
+                url.as_deref(),
+                token.as_deref(),
+                db.as_deref(),
+                None,
+            );
+
+            let connect_config = daemon::ConnectConfig {
+                shipper_config,
+                algo,
+                flush_interval: std::time::Duration::from_millis(flush_ms),
+                fallback_scan_secs,
+                spool_replay_secs,
+            };
+
+            // Use current_thread runtime for minimal resource usage
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(daemon::run(connect_config))?;
+        }
         Commands::Parse {
             path,
             offset,
