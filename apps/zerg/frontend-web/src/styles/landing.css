@@ -32,7 +32,7 @@
   .landing-header-inner {
     max-width: 1200px;
     margin: 0 auto;
-    padding: var(--space-4) var(--space-6);
+    padding: var(--space-3) min(var(--space-6), 4vw);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -243,7 +243,7 @@
   .landing-section-inner {
     max-width: 1200px;
     margin: 0 auto;
-    padding: 0 var(--space-6);
+    padding: 0 min(var(--space-6), 4vw);
   }
 
   /* Glow orb behind hero */
@@ -305,7 +305,7 @@
 
   .landing-section-title {
     font-family: var(--font-family-display);
-    font-size: var(--font-size-4xl);
+    font-size: clamp(var(--font-size-2xl), 4vw, var(--font-size-4xl));
     font-weight: var(--font-weight-bold);
     letter-spacing: var(--font-tracking-tight);
     margin-bottom: var(--space-3);
@@ -329,7 +329,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: var(--space-16) var(--space-6);
+    padding: var(--space-16) min(var(--space-6), 4vw);
     position: relative;
   }
 
@@ -389,7 +389,7 @@
 
   .landing-hero-headline {
     font-family: var(--font-family-display);
-    font-size: clamp(2.5rem, 5vw, 3.5rem);
+    font-size: clamp(1.75rem, 5vw, 3.5rem);
     font-weight: var(--font-weight-bold);
     letter-spacing: var(--font-tracking-tight);
     line-height: var(--font-line-height-tight);
@@ -509,8 +509,9 @@
   /* Friction reducers below hero CTAs */
   .landing-hero-friction-reducers {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-3);
+    gap: var(--space-2) var(--space-3);
     margin-top: var(--space-4);
     font-size: var(--font-size-sm);
     /* Bumped from muted to secondary for WCAG AA at sm size */
@@ -1276,7 +1277,7 @@
 
   .landing-footer-quote {
     font-family: var(--font-family-display);
-    font-size: var(--font-size-3xl);
+    font-size: clamp(var(--font-size-2xl), 3.5vw, var(--font-size-3xl));
     font-weight: var(--font-weight-medium);
     letter-spacing: var(--font-tracking-tight);
     /* Bumped from secondary to brighter for more impact */
@@ -1758,6 +1759,7 @@
 
   .install-command {
     flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -1765,7 +1767,7 @@
     font-family: var(--font-family-mono);
     font-size: var(--font-size-sm);
     cursor: pointer;
-    overflow-x: auto;
+    overflow: hidden;
     background: transparent;
     border: none;
   }
@@ -1779,6 +1781,8 @@
   .install-text {
     color: var(--color-text-primary);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .install-copy-btn {
@@ -1844,8 +1848,6 @@
   .comparison-table-wrapper {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-    margin: 0 calc(-1 * var(--space-4));
-    padding: 0 var(--space-4);
   }
 
   .comparison-table {
@@ -2043,6 +2045,10 @@
    -------------------------------------------------------- */
 
   @media (width <= 768px) {
+    .landing-hero {
+      min-height: auto;
+    }
+
     .landing-hero-split {
       grid-template-columns: 1fr;
       gap: var(--space-8);
@@ -2056,10 +2062,6 @@
 
     .landing-hero-visual {
       order: 2;
-    }
-
-    .landing-hero-headline {
-      font-size: 2rem;
     }
 
     .landing-hero-subhead {
@@ -2076,24 +2078,19 @@
 
     .landing-hero-ctas .ui-button--lg {
       width: 100%;
-      align-self: stretch;
     }
 
     .landing-hero-install {
       margin: var(--space-8) auto 0;
-      max-width: 100%;
     }
 
     .install-tabs {
       justify-content: center;
+      flex-wrap: wrap;
     }
 
     .install-features {
       justify-content: center;
-    }
-
-    .landing-section-title {
-      font-size: var(--font-size-3xl);
     }
 
     .landing-steps-row {
@@ -2101,7 +2098,6 @@
     }
 
     .landing-hero-friction-reducers {
-      flex-wrap: wrap;
       justify-content: center;
     }
 
@@ -2119,10 +2115,6 @@
       justify-content: center;
     }
 
-    .landing-footer-quote {
-      font-size: var(--font-size-2xl);
-    }
-
     .landing-footer-cta-buttons {
       flex-direction: column;
       align-items: center;
@@ -2138,34 +2130,12 @@
       text-align: center;
     }
 
-    .comparison-table {
-      min-width: 600px;
-    }
-
-    .comparison-feature-header {
-      min-width: 140px;
-    }
-
     .comparison-feature-desc {
       display: none;
-    }
-
-    .landing-trust-badges {
-      flex-direction: column;
-      align-items: center;
     }
   }
 
   @media (width <= 480px) {
-    .landing-section-inner {
-      padding: 0 var(--space-4);
-    }
-
-    .landing-hero {
-      padding: var(--space-12) var(--space-4);
-      min-height: auto;
-    }
-
     .landing-integrations-grid {
       grid-template-columns: repeat(2, 1fr);
     }
