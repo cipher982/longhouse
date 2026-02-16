@@ -35,6 +35,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Skill Format Docs | DONE | Migration scripts for Claude Code + Cursor (commit `5cae78af`) |
 | Harness Phase 3f-3h | 100% | 3f (MCP server + commis injection + Codex config.toml); 3g (quality gates + hooks + review fixes); 3h (research doc) |
 | Shipper Multi-Provider | DONE | Provider abstraction + Claude/Codex/Gemini parsers + review fixes |
+| Rust Engine Daemon | DONE | `apps/engine/` — `longhouse-engine connect` replaces Python watcher. 27 MB idle (vs 835 MB), 0% CPU, FSEvents/inotify, zstd compression. Commits `fe52e338`, `ca8fe86f` |
 | Install/Onboarding | 100% | All items complete: installer, doctor, connect, hooks, MCP, PATH verify, install guide docs (commit 5757d63b) |
 | OSS First-Run UX | 100% | Auto-seed on first run + guided empty state + multi-CLI detection + "No CLI" guidance all complete |
 | Landing Page Redesign | 100% | All phases + meta/OG tags + docs/pricing rewrite + dead CSS removed |
