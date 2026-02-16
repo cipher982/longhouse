@@ -26,7 +26,6 @@ import hashlib
 import hmac
 import logging
 import re
-from collections import defaultdict
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -67,55 +66,6 @@ _settings = get_settings()
 
 
 # ---------------------------------------------------------------------------
-# Rate Limiting
-# ---------------------------------------------------------------------------
-
-# In-memory rate limit tracking: device_id -> list of (timestamp, event_count)
-# Keyed by device token ID (preferred) or device_id (fallback)
-_rate_limits: dict[str, list[tuple[datetime, int]]] = defaultdict(list)
-RATE_LIMIT_EVENTS_PER_MIN = 1000  # Soft cap per device
-
-
-def check_rate_limit(rate_key: str, event_count: int) -> tuple[bool, int]:
-    """Check if request would exceed rate limit.
-
-    Args:
-        rate_key: Stable key for the caller (device token or device_id)
-        event_count: Number of events in this request
-
-    Returns:
-        Tuple of (exceeded: bool, retry_after_seconds: int)
-    """
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(minutes=1)
-
-    # Clean old entries
-    _rate_limits[rate_key] = [(ts, count) for ts, count in _rate_limits[rate_key] if ts > cutoff]
-
-    # Sum events in the last minute
-    current_events = sum(count for _, count in _rate_limits[rate_key])
-
-    # Check if this request would exceed the limit
-    if current_events + event_count > RATE_LIMIT_EVENTS_PER_MIN:
-        # Calculate retry-after based on oldest entry expiration
-        if _rate_limits[rate_key]:
-            oldest_ts = min(ts for ts, _ in _rate_limits[rate_key])
-            retry_after = int((oldest_ts + timedelta(minutes=1) - now).total_seconds())
-            retry_after = max(1, retry_after)  # At least 1 second
-        else:
-            retry_after = 60
-        return True, retry_after
-
-    # Record this request
-    _rate_limits[rate_key].append((now, event_count))
-    return False, 0
-
-
-def reset_rate_limits() -> None:
-    """Reset all rate limits. Used for testing."""
-    global _rate_limits
-    _rate_limits = defaultdict(list)
-
 
 # ---------------------------------------------------------------------------
 # Auth Dependency
@@ -735,7 +685,15 @@ async def decompress_if_gzipped(request: Request) -> bytes:
     elif content_encoding == "zstd":
         try:
             dctx = zstandard.ZstdDecompressor()
-            body = dctx.decompress(body, max_output_size=50 * 1024 * 1024)  # 50 MB limit
+            # Use streaming decompression — no size limit, handles any payload
+            chunks = []
+            with dctx.stream_reader(body) as reader:
+                while True:
+                    chunk = reader.read(1024 * 1024)  # 1 MB chunks
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            body = b"".join(chunks)
         except zstandard.ZstdError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -763,7 +721,6 @@ async def ingest_session(
 
     Features:
     - Accepts gzip-compressed payloads (Content-Encoding: gzip)
-    - Rate limiting: 1000 events/min per device_id (returns 429 if exceeded)
     - Triggers async background summary generation after successful ingest
     """
     try:
@@ -799,29 +756,6 @@ async def ingest_session(
                     device_token.device_id,
                 )
             data.device_id = device_token.device_id
-
-        # Check rate limit (prefer token-derived key)
-        rate_key = getattr(request.state, "agents_rate_key", None)
-        device_id = data.device_id or "unknown"
-        if not rate_key:
-            rate_key = f"device:{device_id}"
-
-        event_count = len(data.events) if data.events else 0
-        exceeded, retry_after = check_rate_limit(rate_key, event_count)
-
-        if exceeded:
-            logger.warning(f"Rate limit exceeded for device {device_id}: {event_count} events")
-            return Response(
-                content=json.dumps(
-                    {
-                        "detail": f"Rate limit exceeded. Max {RATE_LIMIT_EVENTS_PER_MIN} events/min per device.",
-                        "device_id": device_id,
-                    }
-                ),
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                media_type="application/json",
-                headers={"Retry-After": str(retry_after)},
-            )
 
         store = AgentsStore(db)
         result = store.ingest_session(data)

@@ -29,7 +29,7 @@ impl Default for ShipperConfig {
             workers: num_cpus::get(),
             max_batch_bytes: 5 * 1024 * 1024, // 5 MB
             timeout_seconds: 60,
-            max_retries_429: 3,
+            max_retries_429: 5,
             base_backoff_seconds: 1.0,
         }
     }
