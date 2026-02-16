@@ -809,6 +809,48 @@ class PasswordLoginRequest(BaseModel):
     password: str
 
 
+def _resolve_password_user(db: Session):
+    """Resolve the user for password login without violating single-tenant rules.
+
+    Hosted instances (OWNER_EMAIL set) must bind password auth to the owner user.
+    OSS instances keep the legacy local@longhouse user.
+    """
+    settings = get_settings()
+    import os
+
+    explicit_owner = os.getenv("OWNER_EMAIL", "").strip()
+
+    # Hosted / owner-bound instances: bind password auth to owner user
+    if settings.single_tenant and not settings.testing and explicit_owner:
+        from zerg.models import User
+        from zerg.services.single_tenant import get_owner_email
+
+        owner_email = get_owner_email().strip().lower()
+        if owner_email:
+            user = crud.get_user_by_email(db, owner_email)
+            if user:
+                return user
+
+        # If a legacy user exists (e.g., local@longhouse), reuse it and migrate email
+        existing = db.query(User).filter(User.provider != "service").order_by(User.id.asc()).first()
+        if existing:
+            if owner_email and existing.email.lower() != owner_email:
+                existing.email = owner_email
+                db.commit()
+                db.refresh(existing)
+            return existing
+
+        # No users yet — create the owner user
+        if owner_email:
+            return crud.create_user(db, email=owner_email, provider="password", skip_notification=True)
+
+    # OSS / legacy behavior
+    user = crud.get_user_by_email(db, "local@longhouse")
+    if not user:
+        user = crud.create_user(db, email="local@longhouse", provider="password", skip_notification=True)
+    return user
+
+
 @router.post("/password", response_model=TokenOut)
 def password_login(
     request: Request,
@@ -845,10 +887,7 @@ def password_login(
 
     _clear_password_failures(client_ip)
 
-    # Get or create default user for password auth
-    user = crud.get_user_by_email(db, "local@longhouse")
-    if not user:
-        user = crud.create_user(db, email="local@longhouse", provider="password", skip_notification=True)
+    user = _resolve_password_user(db)
 
     # Issue token and set cookie
     expires_in = 30 * 60  # 30 minutes
@@ -905,10 +944,7 @@ def cli_login(
 
     _clear_password_failures(client_ip)
 
-    # Get or create default user for password auth
-    user = crud.get_user_by_email(db, "local@longhouse")
-    if not user:
-        user = crud.create_user(db, email="local@longhouse", provider="password", skip_notification=True)
+    user = _resolve_password_user(db)
 
     # Issue a short-lived token (5 min) -- only for creating a device token
     access_token = _issue_access_token(
