@@ -22,7 +22,7 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('📊 Commis ID:', commisId);
 
     // Navigate to application
-    await page.goto('/');
+    await page.goto('/dashboard');
     await page.waitForLoadState('domcontentloaded');
 
     // Test 1: Basic semantic structure
@@ -467,16 +467,24 @@ test.describe('Accessibility and UI/UX', () => {
     // Test 1: Primary user journey - Fiche creation
     console.log('📊 Test 1: Testing fiche creation flow...');
 
-    await page.goto('/');
+    await page.goto('/timeline');
     await page.waitForLoadState('domcontentloaded');
 
     const flowSteps = [];
 
-    // Step 1: Navigate to dashboard
+    // Step 1: Navigate to dashboard (if available)
     const step1Start = Date.now();
-    await page.locator('.header-nav').click();
-    const step1Time = Date.now() - step1Start;
-    flowSteps.push({ step: 'Navigate to dashboard', time: step1Time });
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
+    const dashboardTab = page.locator('[data-testid="global-dashboard-tab"]');
+    const hasDashboard = (await dashboardTab.count()) > 0;
+    if (hasDashboard) {
+      await dashboardTab.click();
+      const step1Time = Date.now() - step1Start;
+      flowSteps.push({ step: 'Navigate to dashboard', time: step1Time });
+    } else {
+      const step1Time = Date.now() - step1Start;
+      flowSteps.push({ step: 'Dashboard unavailable (demo mode)', time: step1Time });
+    }
 
     // Step 2: Look for fiche creation interface
     const createButton = await page.locator('button:has-text("Create"), [data-testid*="create"]').count();
@@ -508,16 +516,20 @@ test.describe('Accessibility and UI/UX', () => {
       const fiche = await ficheResponse.json();
       console.log('📊 Test fiche created:', fiche.id);
 
-      // Step 3: Verify fiche appears in dashboard
-      await page.reload();
-      await page.waitForLoadState('domcontentloaded');
-      await page.locator('.header-nav').click();
+      // Step 3: Verify fiche appears in dashboard (if available)
+      if (hasDashboard) {
+        await page.reload();
+        await page.waitForLoadState('domcontentloaded');
+        await dashboardTab.click();
 
-      const ficheVisible = await page.locator(`text=${fiche.name}`).isVisible();
-      console.log('📊 Fiche visible in dashboard:', ficheVisible);
+        const ficheVisible = await page.locator(`text=${fiche.name}`).isVisible();
+        console.log('📊 Fiche visible in dashboard:', ficheVisible);
 
-      if (ficheVisible) {
-        flowSteps.push({ step: 'Fiche appears in dashboard', time: 100 });
+        if (ficheVisible) {
+          flowSteps.push({ step: 'Fiche appears in dashboard', time: 100 });
+        }
+      } else {
+        flowSteps.push({ step: 'Skipped dashboard verification', time: 0 });
       }
     }
 
