@@ -216,13 +216,13 @@ export default function LandingPage() {
 
       <main className="landing-main">
         <HeroSection onScrollToHowItWorks={scrollToHowItWorks} heroAnimationsEnabled={heroAnimationsEnabled} />
-        <DemoSection />
+        <SocialProof />
         <HowItWorksSection />
+        <DemoSection />
         <IntegrationsSection />
         <ComparisonTable />
         <PricingSection />
         <TrustSection />
-        <SocialProof />
         <FooterCTA />
       </main>
 

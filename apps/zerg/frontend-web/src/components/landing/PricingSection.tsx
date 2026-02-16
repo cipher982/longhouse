@@ -42,7 +42,7 @@ export function PricingSection() {
         "Works offline, data stays local",
         "Open source (Apache 2.0)",
       ],
-      ctaText: "Get Started",
+      ctaText: "Install Now",
       ctaAction: handleGetStarted,
       highlighted: true,
     },
@@ -58,7 +58,7 @@ export function PricingSection() {
         "Automatic updates and backups",
         "Your own subdomain",
       ],
-      ctaText: "Get Started",
+      ctaText: "Start Hosted",
       ctaAction: handleGetHosted,
     },
   ];
