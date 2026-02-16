@@ -97,6 +97,14 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [ ] Deploy control plane and reprovision david010
 - [ ] Seed david010 job secrets via API (LLM_BENCH_MONGODB_URI, LIFE_HUB_DB_URL, LIFE_HUB_API_KEY, GITHUB_TOKEN)
 
+## [Infra] ⏳ Runtime Image Dependency Fix (1)
+
+**Goal:** Instance boots cleanly (zstandard missing in runtime image).
+
+- [x] Add `zstandard` to backend deps
+- [ ] Push + wait for GHCR runtime build
+- [ ] Reprovision david010 and verify `/api/health`
+
 ---
 
 ## [Product] 🧠 Harness Simplification & Commis-to-Timeline (8)
