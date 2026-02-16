@@ -15,9 +15,9 @@ Authentication:
   1. Per-device token (zdt_...) created via /api/devices/tokens
   2. Legacy AGENTS_API_TOKEN env var (for backwards compatibility)
 
-Rate Limiting:
-- Ingest endpoint enforces 1000 events/min per device (token-derived when available)
-- Returns HTTP 429 with Retry-After header when exceeded
+Concurrency:
+- Background summary/embedding tasks are semaphore-gated to avoid overwhelming LLM APIs
+- Backfill endpoints handle any sessions missed during bulk ingest
 """
 
 import asyncio
@@ -414,14 +414,14 @@ class BriefingResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # During bulk ingest (offset resets, new instances), thousands of sessions
 # arrive in minutes. Without a cap, we'd spawn thousands of concurrent
-# LLM summary + embedding tasks, overwhelming the LLM proxy and OpenAI API.
-# Simple atomic counters limit in-flight tasks; excess requests are silently
-# dropped (the backfill endpoints catch up later).
+# LLM summary + embedding tasks, overwhelming the LLM API.
 
-_summary_inflight = 0
-_embedding_inflight = 0
-_MAX_SUMMARY_INFLIGHT = 3
-_MAX_EMBEDDING_INFLIGHT = 5
+# Semaphores gate concurrent background LLM/embedding calls.
+# During bulk ingest the daemon ships hundreds of sessions/minute; without a cap
+# we'd spawn thousands of concurrent API calls. Semaphores properly queue excess
+# work (up to a point) and the backfill endpoints catch up on anything dropped.
+_summary_semaphore = asyncio.Semaphore(3)
+_embedding_semaphore = asyncio.Semaphore(5)
 
 
 # ---------------------------------------------------------------------------
@@ -491,17 +491,10 @@ async def _generate_summary_background(session_id: str) -> None:
     Uses incremental_summary() with a nano-tier model for cheap, fast updates.
     Compare-and-swap (CAS) guard prevents stale overwrites from concurrent tasks.
     Throttles: skips if fewer than 2 new user/assistant messages since last summary.
-    Concurrency-limited to avoid overwhelming LLM during bulk ingest.
+    Concurrency-limited via semaphore; excess tasks queue (won't overwhelm LLM API).
     """
-    global _summary_inflight
-    if _summary_inflight >= _MAX_SUMMARY_INFLIGHT:
-        logger.debug("Summary concurrency limit reached, skipping session %s", session_id)
-        return
-    _summary_inflight += 1
-    try:
+    async with _summary_semaphore:
         await _generate_summary_impl(session_id)
-    finally:
-        _summary_inflight -= 1
 
 
 async def _generate_summary_impl(session_id: str) -> None:
@@ -643,17 +636,10 @@ async def _generate_embeddings_background(session_id: str) -> None:
 
     Independent of summary success — checks needs_embedding flag.
     Skips silently if embedding config is unavailable.
-    Concurrency-limited to avoid overwhelming embedding API during bulk ingest.
+    Concurrency-limited via semaphore; excess tasks queue (won't overwhelm embedding API).
     """
-    global _embedding_inflight
-    if _embedding_inflight >= _MAX_EMBEDDING_INFLIGHT:
-        logger.debug("Embedding concurrency limit reached, skipping session %s", session_id)
-        return
-    _embedding_inflight += 1
-    try:
+    async with _embedding_semaphore:
         await _generate_embeddings_impl(session_id)
-    finally:
-        _embedding_inflight -= 1
 
 
 async def _generate_embeddings_impl(session_id: str) -> None:
