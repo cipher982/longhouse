@@ -40,7 +40,7 @@ dev = [
 hatch = "hatch.cli:main"
 
 [project.urls]
-Repository = "https://github.com/davidrose/hatch"
+Repository = "https://github.com/cipher982/zerg/tree/main/packages/hatch-agent"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hatch"]
