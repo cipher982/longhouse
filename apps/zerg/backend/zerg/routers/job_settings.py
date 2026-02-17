@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi import BackgroundTasks
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Response
@@ -223,6 +224,7 @@ def get_repo_config(
 @router.post("/jobs/repo/config", status_code=status.HTTP_200_OK)
 def set_repo_config(
     request: JobRepoConfigRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -230,6 +232,9 @@ def set_repo_config(
 
     On update, only fields explicitly included in the request body are
     changed.  Omitting ``branch`` or ``token`` preserves the existing value.
+
+    After committing, starts git sync immediately (hot-start) so the user
+    doesn't need to restart the instance.
     """
     provided = request.model_fields_set
 
@@ -258,6 +263,33 @@ def set_repo_config(
         logger.info("Created job repo config for user %d", current_user.id)
 
     db.commit()
+
+    # Hot-start: launch git sync in background (clone → install deps → load manifest)
+    # resolve_token needs the plain value before it gets encrypted
+    _repo_url = request.repo_url
+    _branch = request.branch
+    _token = request.token
+
+    async def _hot_start_git_sync() -> None:
+        try:
+            from zerg.config import get_settings
+            from zerg.jobs.git_sync import GitSyncService
+            from zerg.jobs.git_sync import replace_git_sync_service
+
+            settings = get_settings()
+            service = GitSyncService(
+                repo_url=_repo_url,
+                local_path=Path(settings.jobs_dir),
+                branch=_branch,
+                token=_token,
+            )
+            await replace_git_sync_service(service, settings.jobs_refresh_interval_seconds)
+            logger.info("Hot-start git sync completed for %s", _repo_url)
+        except Exception:
+            logger.exception("Hot-start git sync failed")
+
+    background_tasks.add_task(_hot_start_git_sync)
+
     return {"success": True}
 
 

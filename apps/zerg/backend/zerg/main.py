@@ -570,6 +570,7 @@ async def lifespan(app: FastAPI):
                     from zerg.jobs.git_sync import GitSyncService
                     from zerg.jobs.git_sync import run_git_sync_loop
                     from zerg.jobs.git_sync import set_git_sync_service
+                    from zerg.jobs.git_sync import set_git_sync_task
                     from zerg.jobs.registry import register_all_jobs
 
                     def _resolve_repo_config() -> dict | None:
@@ -626,7 +627,8 @@ async def lifespan(app: FastAPI):
 
                         # Start background sync loop
                         if _settings.jobs_refresh_interval_seconds > 0:
-                            asyncio.create_task(run_git_sync_loop(git_service, _settings.jobs_refresh_interval_seconds))
+                            sync_task = asyncio.create_task(run_git_sync_loop(git_service, _settings.jobs_refresh_interval_seconds))
+                            set_git_sync_task(sync_task)
 
                         started.append("git_sync")
                         logger.info(

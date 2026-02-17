@@ -175,6 +175,113 @@ printf "\n==> Backfilling instance images\n"
 curl -sf -X POST "${API_URL}/api/instances/backfill-images" \
   -H "X-Admin-Token: ${ADMIN_TOKEN}" >/dev/null
 
+# ---------------------------------------------------------------------------
+# Custom jobs E2E test
+# ---------------------------------------------------------------------------
+
+FIXTURES_DIR="$ROOT_DIR/scripts/ci/fixtures/test-jobs"
+INSTANCE_DATA_DIR="$INSTANCE_DATA_ROOT/$CI_SUBDOMAIN"
+BARE_REPO_DIR="$INSTANCE_DATA_DIR/test-jobs-repo"
+
+printf "\n==> Setting up test jobs bare repo\n"
+mkdir -p "$BARE_REPO_DIR"
+git init --bare "$BARE_REPO_DIR"
+
+# Push fixture files into the bare repo
+WORK_DIR=$(mktemp -d)
+git -C "$WORK_DIR" init -b main
+cp -r "$FIXTURES_DIR"/* "$WORK_DIR/"
+git -C "$WORK_DIR" add -A
+git -C "$WORK_DIR" -c user.name="CI" -c user.email="ci@test" commit -m "test jobs"
+git -C "$WORK_DIR" remote add origin "$BARE_REPO_DIR"
+git -C "$WORK_DIR" push origin main
+rm -rf "$WORK_DIR"
+
+printf "\n==> Configuring jobs repo via API (hot-start)\n"
+curl -sf -X POST "${INSTANCE_URL}/api/jobs/repo/config" \
+  -H "Content-Type: application/json" \
+  -d "{\"repo_url\":\"file:///data/test-jobs-repo\",\"branch\":\"main\"}" \
+  >/dev/null
+
+printf "\n==> Waiting for git sync to complete\n"
+sync_ok=0
+for _ in {1..30}; do
+  sleep 2
+  repo_resp=$(curl -sf "${INSTANCE_URL}/api/jobs/repo/config" 2>/dev/null || echo "{}")
+  sync_sha=$("$PYTHON_BIN" -c "
+import json, sys
+data = json.loads(sys.argv[1])
+print(data.get('last_sync_sha') or '')
+" "$repo_resp" 2>/dev/null || echo "")
+  if [[ -n "$sync_sha" ]]; then
+    printf "  Synced: %s\n" "$sync_sha"
+    sync_ok=1
+    break
+  fi
+done
+
+if [[ "$sync_ok" -ne 1 ]]; then
+  echo "Git sync did not complete within timeout." >&2
+  docker logs "$CONTAINER_NAME" 2>&1 | tail -50 || true
+  exit 1
+fi
+
+printf "\n==> Verifying custom test job is registered\n"
+jobs_resp=$(curl -sf "${INSTANCE_URL}/api/jobs/" 2>/dev/null || echo '{"jobs":[]}')
+has_test_job=$("$PYTHON_BIN" -c "
+import json, sys
+data = json.loads(sys.argv[1])
+jobs = data.get('jobs', []) if isinstance(data, dict) else data
+found = any(j.get('id') == 'ci-echo-test' for j in jobs)
+print('yes' if found else 'no')
+" "$jobs_resp" 2>/dev/null || echo "no")
+
+if [[ "$has_test_job" != "yes" ]]; then
+  echo "Custom test job 'ci-echo-test' not found in jobs list." >&2
+  echo "Jobs response: $jobs_resp" >&2
+  docker logs "$CONTAINER_NAME" 2>&1 | tail -50 || true
+  exit 1
+fi
+printf "  ci-echo-test: registered ✓\n"
+
+printf "\n==> Triggering test job run\n"
+# Get the job ID for triggering
+run_resp=$(curl -sf -X POST "${INSTANCE_URL}/api/jobs/ci-echo-test/run" 2>/dev/null || echo "{}")
+run_status=$("$PYTHON_BIN" -c "
+import json, sys
+data = json.loads(sys.argv[1])
+print(data.get('status', 'unknown'))
+" "$run_resp" 2>/dev/null || echo "unknown")
+
+if [[ "$run_status" != "success" ]]; then
+  echo "Test job run failed (status=$run_status)." >&2
+  echo "Run response: $run_resp" >&2
+  exit 1
+fi
+printf "  ci-echo-test: executed successfully ✓\n"
+
+printf "\n==> Verifying job-health-monitor builtin is registered\n"
+has_health=$("$PYTHON_BIN" -c "
+import json, sys
+data = json.loads(sys.argv[1])
+jobs = data.get('jobs', []) if isinstance(data, dict) else data
+found = any(j.get('id') == 'job-health-monitor' for j in jobs)
+print('yes' if found else 'no')
+" "$jobs_resp" 2>/dev/null || echo "no")
+
+if [[ "$has_health" != "yes" ]]; then
+  echo "Builtin job 'job-health-monitor' not found in jobs list." >&2
+  echo "Jobs response: $jobs_resp" >&2
+  exit 1
+fi
+printf "  job-health-monitor: registered ✓\n"
+
+printf "\n==> Custom jobs E2E: PASSED\n"
+
+# ---------------------------------------------------------------------------
+# Rolling deploy test
+# ---------------------------------------------------------------------------
+
 DEPLOY_TAG="longhouse-runtime:ci-${GITHUB_SHA:-local}-deploy"
 printf "\n==> Tagging deploy image: %s\n" "$DEPLOY_TAG"
 docker tag "$IMAGE_TAG" "$DEPLOY_TAG"

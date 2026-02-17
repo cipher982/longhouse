@@ -273,6 +273,28 @@ class GitSyncService:
         }
 
 
+def _update_sync_status(*, sha: str | None, error: str | None) -> None:
+    """Persist sync status to JobRepoConfig in the DB.
+
+    Runs synchronously (called from async context via best-effort).
+    Failures are logged but never raised — sync status is informational.
+    """
+    try:
+        from zerg.database import db_session
+        from zerg.models.models import JobRepoConfig
+
+        with db_session() as db:
+            row = db.query(JobRepoConfig).first()
+            if not row:
+                return
+            row.last_sync_sha = sha
+            row.last_sync_at = datetime.now(UTC)
+            row.last_sync_error = error
+            db.commit()
+    except Exception:
+        logger.debug("Failed to update sync status in DB", exc_info=True)
+
+
 async def run_git_sync_loop(
     service: GitSyncService,
     interval_seconds: int,
@@ -283,6 +305,7 @@ async def run_git_sync_loop(
 
     - Skips if interval_seconds <= 0
     - Backs off on repeated failures
+    - On SHA change: reinstalls deps, reloads manifest, resyncs scheduler
     """
     if interval_seconds <= 0:
         logger.info("Git sync polling disabled (interval=0)")
@@ -294,8 +317,28 @@ async def run_git_sync_loop(
         result = await service.refresh()
 
         if result.get("success"):
+            # Persist success status
+            _update_sync_status(sha=result.get("current_sha"), error=None)
+
+            # On SHA change: full reload (deps + manifest + scheduler)
+            if result.get("changed"):
+                try:
+                    from zerg.jobs.loader import reload_manifest_jobs
+
+                    reload_result = await reload_manifest_jobs()
+                    logger.info("Post-sync reload: %s", reload_result)
+                except Exception:
+                    logger.exception("Failed to reload manifest after git sync")
+                    _update_sync_status(
+                        sha=result.get("current_sha"),
+                        error="manifest reload failed after sync",
+                    )
+
             wait = interval_seconds
         else:
+            # Persist failure status
+            _update_sync_status(sha=None, error=result.get("error", "unknown"))
+
             # Exponential backoff capped at error_backoff_seconds
             wait = min(
                 interval_seconds * (2 ** result.get("consecutive_failures", 1)),
@@ -308,6 +351,7 @@ async def run_git_sync_loop(
 
 # Global instance (initialized by startup)
 _git_sync_service: GitSyncService | None = None
+_git_sync_task: asyncio.Task | None = None
 
 
 def get_git_sync_service() -> GitSyncService | None:
@@ -321,10 +365,61 @@ def set_git_sync_service(service: GitSyncService) -> None:
     _git_sync_service = service
 
 
+def set_git_sync_task(task: asyncio.Task) -> None:
+    """Store the background sync loop task handle."""
+    global _git_sync_task
+    _git_sync_task = task
+
+
+def stop_git_sync() -> None:
+    """Cancel the running sync loop task (if any) and clear global state.
+
+    Safe to call even if no sync is running.
+    """
+    global _git_sync_service, _git_sync_task
+
+    if _git_sync_task and not _git_sync_task.done():
+        _git_sync_task.cancel()
+        logger.info("Cancelled git sync loop task")
+    _git_sync_task = None
+    _git_sync_service = None
+
+
+async def replace_git_sync_service(
+    service: GitSyncService,
+    interval_seconds: int,
+) -> None:
+    """Stop existing sync, clone new repo, start new sync loop.
+
+    Used by the hot-start path (API endpoint saves config → starts sync).
+    Guards against duplicate loops by cancelling the old task first.
+    """
+    stop_git_sync()
+
+    await service.ensure_cloned()
+    set_git_sync_service(service)
+
+    # Write initial sync status to DB
+    _update_sync_status(sha=service.current_sha, error=None)
+
+    if interval_seconds > 0:
+        task = asyncio.create_task(run_git_sync_loop(service, interval_seconds))
+        set_git_sync_task(task)
+
+    # Do initial manifest load
+    from zerg.jobs.loader import reload_manifest_jobs
+
+    reload_result = await reload_manifest_jobs()
+    logger.info("Hot-start reload result: %s", reload_result)
+
+
 __all__ = [
     "GitSyncError",
     "GitSyncService",
     "get_git_sync_service",
+    "replace_git_sync_service",
     "run_git_sync_loop",
     "set_git_sync_service",
+    "set_git_sync_task",
+    "stop_git_sync",
 ]
