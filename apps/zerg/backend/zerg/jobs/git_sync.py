@@ -162,6 +162,30 @@ class GitSyncService:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
+    def _ensure_safe_directory(self) -> None:
+        """Ensure safe.directory=* is in global gitconfig.
+
+        Container environments often have UID mismatches between the user
+        that created a repo (e.g. entrypoint or CI runner) and the user
+        running git commands. This is especially important for file://
+        transport where git spawns git-upload-pack as a subprocess that
+        doesn't inherit -c flags or GIT_CONFIG_* env vars reliably.
+        """
+        gitconfig = Path.home() / ".gitconfig"
+        try:
+            if gitconfig.exists() and "safe" in gitconfig.read_text():
+                return  # Already configured
+        except OSError:
+            pass
+
+        try:
+            # Append to existing or create new
+            with open(gitconfig, "a") as f:
+                f.write("\n[safe]\n\tdirectory = *\n")
+            logger.debug("Added safe.directory=* to %s", gitconfig)
+        except OSError as e:
+            logger.debug("Could not write gitconfig: %s", e)
+
     async def ensure_cloned(self) -> None:
         """
         Clone repo if not present. BLOCKING - Zerg won't start without it.
@@ -172,6 +196,8 @@ class GitSyncService:
         Raises:
             GitSyncError: If clone fails
         """
+        self._ensure_safe_directory()
+
         async with self._file_lock(exclusive=True):
             if (self.local_path / ".git").exists():
                 # Repo exists — check if remote URL matches
