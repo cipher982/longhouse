@@ -28,8 +28,8 @@ function DefaultErrorFallback({
       justifyContent: 'center',
       minHeight: '400px',
       padding: '32px',
-      backgroundColor: 'var(--dark-card, #2a2a3a)',
-      border: '1px solid var(--border-color, #3d3d5c)',
+      backgroundColor: 'var(--dark-card, #1A1410)',
+      border: '1px solid var(--border-color, #3d3428)',
       borderRadius: 'var(--radius-lg, 8px)',
       margin: '32px',
       textAlign: 'center',
@@ -37,12 +37,12 @@ function DefaultErrorFallback({
       <div style={{
         marginBottom: '16px',
         opacity: 0.6,
-        color: '#ef4444',
+        color: '#C45040',
       }}>
         <AlertTriangleIcon width={48} height={48} />
       </div>
       <h2 style={{
-        color: '#ef4444',
+        color: '#C45040',
         fontSize: '20px',
         fontWeight: '600',
         margin: '0 0 12px 0',
@@ -50,7 +50,7 @@ function DefaultErrorFallback({
         Something went wrong
       </h2>
       <p style={{
-        color: 'var(--text-secondary, #e0e0e0)',
+        color: 'var(--text-secondary, #B5A48E)',
         fontSize: '16px',
         margin: '0 0 24px 0',
         maxWidth: '500px',
@@ -62,7 +62,7 @@ function DefaultErrorFallback({
         <button
           onClick={retry}
           style={{
-            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+            background: 'linear-gradient(135deg, #5D9B4A 0%, #4A8A3A 100%)',
             border: 'none',
             color: 'white',
             padding: '10px 20px',
@@ -73,11 +73,11 @@ function DefaultErrorFallback({
             transition: 'all 0.2s ease',
           }}
           onMouseOver={(e) => {
-            e.currentTarget.style.background = 'linear-gradient(135deg, #059669 0%, #047857 100%)';
+            e.currentTarget.style.background = 'linear-gradient(135deg, #4A8A3A 0%, #3D7A2F 100%)';
             e.currentTarget.style.transform = 'translateY(-1px)';
           }}
           onMouseOut={(e) => {
-            e.currentTarget.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+            e.currentTarget.style.background = 'linear-gradient(135deg, #5D9B4A 0%, #4A8A3A 100%)';
             e.currentTarget.style.transform = 'translateY(0)';
           }}
         >
@@ -86,9 +86,9 @@ function DefaultErrorFallback({
         <button
           onClick={() => window.location.reload()}
           style={{
-            background: 'var(--dark-lighter, #33334a)',
-            border: '1px solid var(--border-color, #3d3d5c)',
-            color: 'var(--text-secondary, #e0e0e0)',
+            background: 'var(--dark-lighter, #2a2418)',
+            border: '1px solid var(--border-color, #3d3428)',
+            color: 'var(--text-secondary, #B5A48E)',
             padding: '10px 20px',
             borderRadius: 'var(--radius-sm, 4px)',
             fontSize: '14px',
@@ -97,12 +97,12 @@ function DefaultErrorFallback({
             transition: 'all 0.2s ease',
           }}
           onMouseOver={(e) => {
-            e.currentTarget.style.background = 'var(--dark-card, #2a2a3a)';
+            e.currentTarget.style.background = 'var(--dark-card, #1A1410)';
             e.currentTarget.style.color = 'var(--text, #ffffff)';
           }}
           onMouseOut={(e) => {
-            e.currentTarget.style.background = 'var(--dark-lighter, #33334a)';
-            e.currentTarget.style.color = 'var(--text-secondary, #e0e0e0)';
+            e.currentTarget.style.background = 'var(--dark-lighter, #2a2418)';
+            e.currentTarget.style.color = 'var(--text-secondary, #B5A48E)';
           }}
         >
           Reload Page
@@ -114,10 +114,10 @@ function DefaultErrorFallback({
           padding: '16px',
           background: 'rgba(0, 0, 0, 0.3)',
           borderRadius: 'var(--radius-sm, 4px)',
-          border: '1px solid var(--border-color, #3d3d5c)',
+          border: '1px solid var(--border-color, #3d3428)',
           fontSize: '12px',
           fontFamily: 'Monaco, Menlo, monospace',
-          color: 'var(--text-secondary, #e0e0e0)',
+          color: 'var(--text-secondary, #B5A48E)',
           textAlign: 'left',
           maxWidth: '600px',
         }}>

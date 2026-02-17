@@ -1123,15 +1123,15 @@ function AdminPage() {
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         padding: '20px 24px',
-                        background: 'linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)',
-                        border: '1px solid rgba(255,255,255,0.1)',
+                        background: 'linear-gradient(135deg, rgba(26,20,16,0.6) 0%, rgba(26,20,16,0.3) 100%)',
+                        border: '1px solid rgba(243,234,217,0.1)',
                         borderRadius: '12px',
                       }}>
                         <div className="demo-account-info" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <span className="demo-account-name" style={{ fontWeight: 600, fontSize: '16px', color: '#fff' }}>
+                          <span className="demo-account-name" style={{ fontWeight: 600, fontSize: '16px', color: '#F3EAD9' }}>
                             {demoUser.display_name || "Demo Account"}
                           </span>
-                          <span className="demo-account-email" style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>{emailId}</span>
+                          <span className="demo-account-email" style={{ fontSize: '13px', color: 'rgba(181,164,142,0.5)', fontFamily: 'monospace' }}>{emailId}</span>
                         </div>
                         <div className="demo-account-actions" style={{ display: 'flex', gap: '12px' }}>
                           <Button
@@ -1161,10 +1161,10 @@ function AdminPage() {
                     style={{
                       width: '100%',
                       background: 'transparent',
-                      border: '2px dashed rgba(255,255,255,0.15)',
+                      border: '2px dashed rgba(243,234,217,0.15)',
                       borderRadius: '12px',
                       padding: '16px',
-                      color: 'rgba(255,255,255,0.4)',
+                      color: 'rgba(181,164,142,0.4)',
                       cursor: 'pointer',
                       fontSize: '14px',
                       fontWeight: 500,

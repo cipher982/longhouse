@@ -150,9 +150,9 @@ ReactDOM.createRoot(container).render(
             toastOptions={{
               duration: 4000,
               style: {
-                background: '#27272a',
-                color: '#fafafa',
-                border: '1px solid #3f3f46',
+                background: '#1A1410',
+                color: '#F3EAD9',
+                border: '1px solid #3d3428',
                 borderRadius: '8px',
                 fontSize: '14px',
                 fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
@@ -160,15 +160,15 @@ ReactDOM.createRoot(container).render(
               success: {
                 duration: 3000,
                 iconTheme: {
-                  primary: '#10b981',
-                  secondary: '#fafafa',
+                  primary: '#5D9B4A',
+                  secondary: '#F3EAD9',
                 },
               },
               error: {
                 duration: 6000,
                 iconTheme: {
-                  primary: '#ef4444',
-                  secondary: '#fafafa',
+                  primary: '#C45040',
+                  secondary: '#F3EAD9',
                 },
               },
             }}

@@ -424,8 +424,8 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
     return (
       <div style={{
         position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-        background: '#030305', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: 'rgba(255, 255, 255, 0.7)', fontSize: '1rem', zIndex: 1000,
+        background: '#120B09', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'rgba(243, 234, 217, 0.7)', fontSize: '1rem', zIndex: 1000,
       }}>
         Redirecting to sign in...
       </div>
@@ -495,7 +495,7 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
         left: 0,
         right: 0,
         bottom: 0,
-        background: '#030305',
+        background: '#120B09',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -504,9 +504,8 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
     >
       <div
         style={{
-          background: 'rgba(255, 255, 255, 0.03)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          backdropFilter: 'blur(16px)',
+          background: '#1A1410',
+          border: '1px solid #231E16',
           padding: '2.5rem',
           borderRadius: '16px',
           textAlign: 'center',
@@ -514,12 +513,12 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
           maxWidth: '400px',
         }}
       >
-        <h2 style={{ marginBottom: '1.5rem', color: 'rgba(255, 255, 255, 0.95)', fontSize: '20px', fontWeight: 600 }}>
+        <h2 style={{ marginBottom: '1.5rem', color: 'rgba(243, 234, 217, 0.95)', fontSize: '20px', fontWeight: 600 }}>
           Sign in to Longhouse
         </h2>
 
         {!authMethods && (
-          <div style={{ color: 'rgba(255, 255, 255, 0.5)', padding: '1rem 0' }}>Loading...</div>
+          <div style={{ color: 'rgba(181, 164, 142, 0.5)', padding: '1rem 0' }}>Loading...</div>
         )}
 
         {showSso && (
@@ -529,8 +528,8 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
               style={{
                 width: '100%',
                 padding: '0.75rem',
-                background: 'linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)',
-                color: '#030305',
+                background: 'linear-gradient(135deg, #C9A66B 0%, #D4B87A 100%)',
+                color: '#120B09',
                 border: 'none',
                 borderRadius: '8px',
                 fontSize: '14px',
@@ -540,7 +539,7 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
             >
               Continue to your Longhouse account
             </button>
-            <div style={{ marginTop: '0.6rem', color: 'rgba(255, 255, 255, 0.55)', fontSize: '12px' }}>
+            <div style={{ marginTop: '0.6rem', color: 'rgba(181, 164, 142, 0.55)', fontSize: '12px' }}>
               Redirects to {ssoHost ?? 'control.longhouse.ai'} to sign in
             </div>
             {switchAccountUrl && (
@@ -551,7 +550,7 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
                   marginTop: '0.5rem',
                   background: 'transparent',
                   border: 'none',
-                  color: 'rgba(255, 255, 255, 0.7)',
+                  color: 'rgba(243, 234, 217, 0.7)',
                   fontSize: '12px',
                   cursor: 'pointer',
                   textDecoration: 'underline',
@@ -572,10 +571,10 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
         )}
 
         {showPassword && (showGoogle || showSso) && (
-          <div style={{ margin: '1rem 0', color: 'rgba(255, 255, 255, 0.3)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+          <div style={{ margin: '1rem 0', color: 'rgba(181, 164, 142, 0.3)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(243, 234, 217, 0.1)' }} />
             <span>or</span>
-            <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+            <div style={{ flex: 1, height: '1px', background: 'rgba(243, 234, 217, 0.1)' }} />
           </div>
         )}
 
@@ -590,18 +589,18 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
               style={{
                 width: '100%',
                 padding: '0.75rem 1rem',
-                background: 'rgba(255, 255, 255, 0.07)',
-                border: `1px solid ${passwordError ? '#ef4444' : 'rgba(255, 255, 255, 0.12)'}`,
+                background: '#211C15',
+                border: `1px solid ${passwordError ? '#C45040' : '#2a2418'}`,
                 borderRadius: '8px',
                 fontSize: '14px',
-                color: 'rgba(255, 255, 255, 0.9)',
+                color: 'rgba(243, 234, 217, 0.9)',
                 boxSizing: 'border-box',
                 marginBottom: '0.5rem',
                 outline: 'none',
               }}
             />
             {passwordError && (
-              <div style={{ color: '#ef4444', fontSize: '13px', marginBottom: '0.5rem', textAlign: 'left' }}>
+              <div style={{ color: '#C45040', fontSize: '13px', marginBottom: '0.5rem', textAlign: 'left' }}>
                 {passwordError}
               </div>
             )}
@@ -611,8 +610,8 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
               style={{
                 width: '100%',
                 padding: '0.75rem',
-                background: 'linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)',
-                color: '#030305',
+                background: 'linear-gradient(135deg, #C9A66B 0%, #D4B87A 100%)',
+                color: '#120B09',
                 border: 'none',
                 borderRadius: '8px',
                 fontSize: '14px',
@@ -629,15 +628,15 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
 
         {config.isDevelopment && (
           <>
-            <div style={{ margin: '1rem 0', color: 'rgba(255, 255, 255, 0.3)' }}>or</div>
+            <div style={{ margin: '1rem 0', color: 'rgba(181, 164, 142, 0.3)' }}>or</div>
             <button
               onClick={handleDevLogin}
               disabled={isDevLoginLoading}
               style={{
                 padding: '0.75rem 2rem',
-                background: 'rgba(16, 185, 129, 0.2)',
-                color: '#10b981',
-                border: '1px solid rgba(16, 185, 129, 0.3)',
+                background: 'rgba(93, 155, 74, 0.2)',
+                color: '#5D9B4A',
+                border: '1px solid rgba(93, 155, 74, 0.3)',
                 borderRadius: '8px',
                 fontSize: '14px',
                 fontWeight: 600,
@@ -682,8 +681,8 @@ export function AuthGuard({ children, clientId }: AuthGuardProps) {
           justifyContent: 'center',
           height: '100vh',
           fontSize: '1.2rem',
-          background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-          color: 'rgba(255, 255, 255, 0.7)',
+          background: 'linear-gradient(135deg, #120B09 0%, #1A1410 100%)',
+          color: 'rgba(243, 234, 217, 0.7)',
         }}>
           Loading...
         </div>
@@ -701,8 +700,8 @@ export function AuthGuard({ children, clientId }: AuthGuardProps) {
         justifyContent: 'center',
         height: '100vh',
         fontSize: '1.2rem',
-        background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-        color: 'rgba(255, 255, 255, 0.7)',
+        background: 'linear-gradient(135deg, #120B09 0%, #1A1410 100%)',
+        color: 'rgba(243, 234, 217, 0.7)',
       }}>
         Loading...
       </div>

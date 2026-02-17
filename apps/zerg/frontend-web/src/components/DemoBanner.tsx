@@ -9,8 +9,8 @@ export default function DemoBanner() {
         position: 'sticky',
         top: 0,
         zIndex: 9999,
-        background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
-        color: '#fff',
+        background: 'linear-gradient(90deg, #C9A66B, #D4B87A)',
+        color: '#120B09',
         textAlign: 'center',
         padding: '8px 16px',
         fontSize: '14px',
@@ -20,7 +20,7 @@ export default function DemoBanner() {
       You're viewing a live demo &mdash;{' '}
       <a
         href="https://longhouse.ai/pricing"
-        style={{ color: '#fff', textDecoration: 'underline', fontWeight: 600 }}
+        style={{ color: '#120B09', textDecoration: 'underline', fontWeight: 600 }}
       >
         Sign up for free
       </a>

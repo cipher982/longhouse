@@ -52,7 +52,7 @@ const CONNECTOR_CONFIG: Record<string, { icon: ReactNode; color: string }> = {
   email: { icon: <MailIcon {...iconSize} />, color: "#EA4335" },
 };
 
-const DEFAULT_CONFIG = { icon: <PlugIcon {...iconSize} />, color: "#6366f1" };
+const DEFAULT_CONFIG = { icon: <PlugIcon {...iconSize} />, color: "#C9A66B" };
 
 type ConnectorCardProps = {
   connector: ConnectorStatus | AccountConnectorStatus;

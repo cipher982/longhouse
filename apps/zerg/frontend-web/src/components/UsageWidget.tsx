@@ -68,10 +68,10 @@ function formatCost(cost: number): string {
 
 // Get progress bar color based on percentage
 function getProgressColor(percent: number): string {
-  if (percent >= 95) return "#ef4444"; // Red
-  if (percent >= 80) return "#f97316"; // Orange
-  if (percent >= 60) return "#eab308"; // Yellow
-  return "#22c55e"; // Green
+  if (percent >= 95) return "#C45040"; // Red
+  if (percent >= 80) return "#D4885A"; // Orange
+  if (percent >= 60) return "#D4A843"; // Yellow
+  return "#5D9B4A"; // Green
 }
 
 // Local storage key for warning toast debounce
@@ -130,8 +130,8 @@ export default function UsageWidget() {
         duration: 10000,
         position: "top-right",
         style: {
-          background: "#fef3c7",
-          border: "1px solid #f59e0b",
+          background: "#2a2418",
+          border: "1px solid #D4A843",
           padding: "12px 16px",
         },
       }

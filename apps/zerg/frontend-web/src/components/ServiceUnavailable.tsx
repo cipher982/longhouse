@@ -20,7 +20,7 @@ export function ServiceUnavailable({ retryCount, onRetry }: ServiceUnavailablePr
         left: 0,
         right: 0,
         bottom: 0,
-        background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
+        background: 'linear-gradient(135deg, #120B09 0%, #1A1410 100%)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -50,7 +50,7 @@ export function ServiceUnavailable({ retryCount, onRetry }: ServiceUnavailablePr
                 width: '12px',
                 height: '12px',
                 borderRadius: '50%',
-                background: '#10b981',
+                background: '#5D9B4A',
                 animation: 'pulse 1.4s ease-in-out infinite',
                 animationDelay: `${i * 0.2}s`,
               }}
@@ -60,7 +60,7 @@ export function ServiceUnavailable({ retryCount, onRetry }: ServiceUnavailablePr
 
         <h2
           style={{
-            color: '#fff',
+            color: '#F3EAD9',
             fontSize: '1.5rem',
             fontWeight: 600,
             marginBottom: '0.75rem',
@@ -72,7 +72,7 @@ export function ServiceUnavailable({ retryCount, onRetry }: ServiceUnavailablePr
 
         <p
           style={{
-            color: 'rgba(255, 255, 255, 0.7)',
+            color: 'rgba(243, 234, 217, 0.7)',
             fontSize: '1rem',
             lineHeight: 1.6,
             marginBottom: '1.5rem',
@@ -88,9 +88,9 @@ export function ServiceUnavailable({ retryCount, onRetry }: ServiceUnavailablePr
           <button
             onClick={onRetry}
             style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              color: '#fff',
+              background: 'rgba(243, 234, 217, 0.1)',
+              border: '1px solid rgba(243, 234, 217, 0.2)',
+              color: '#F3EAD9',
               padding: '0.75rem 1.5rem',
               borderRadius: '8px',
               fontSize: '0.875rem',
@@ -100,10 +100,10 @@ export function ServiceUnavailable({ retryCount, onRetry }: ServiceUnavailablePr
               fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
             }}
             onMouseOver={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)';
+              e.currentTarget.style.background = 'rgba(243, 234, 217, 0.15)';
             }}
             onMouseOut={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              e.currentTarget.style.background = 'rgba(243, 234, 217, 0.1)';
             }}
           >
             Retry Now
