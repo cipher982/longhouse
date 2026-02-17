@@ -227,6 +227,47 @@ def signup_page(request: Request, error: str | None = None, db: Session = Depend
 
 
 # ---------------------------------------------------------------------------
+# Email verification page
+# ---------------------------------------------------------------------------
+
+
+@router.get("/verify-email", response_class=HTMLResponse)
+def verify_email_page(
+    request: Request, error: str | None = None, resent: str | None = None, db: Session = Depends(get_db)
+):
+    user = _get_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse("/", status_code=302)
+    if user.email_verified:
+        return RedirectResponse("/dashboard", status_code=302)
+
+    notice_html = ""
+    if error:
+        notice_html = f'''<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#fca5a5;font-size:0.9rem;">{html.escape(error)}</div>'''
+    elif resent:
+        notice_html = '''<div style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#86efac;font-size:0.9rem;">Verification email resent! Check your inbox.</div>'''
+
+    body = f"""
+    <div class="hero-center">
+      <h1>Check Your Email</h1>
+      <p class="subtitle">We sent a verification link to <strong>{html.escape(user.email)}</strong></p>
+    </div>
+    <div class="card" style="max-width:440px;margin:0 auto;">
+      {notice_html}
+      <p>Click the link in the email to verify your account and get started.</p>
+      <p style="margin-top:1rem;color:#9898a3;font-size:0.875rem;">Didn't receive it? Check your spam folder or resend below.</p>
+      <form method="post" action="/auth/resend-verification" style="margin-top:1rem;">
+        <button type="submit" class="btn btn-secondary" style="width:100%;text-align:center;">Resend Verification Email</button>
+      </form>
+      <p style="text-align:center;margin-top:1.5rem;">
+        <a href="/auth/logout?return_to=/" style="color:#9898a3;font-size:0.875rem;">Sign in with a different account</a>
+      </p>
+    </div>
+    """
+    return _page("Verify Email", body, nav=False)
+
+
+# ---------------------------------------------------------------------------
 # Authenticated pages
 # ---------------------------------------------------------------------------
 
@@ -236,6 +277,10 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     user = _get_user_from_cookie(request, db)
     if not user:
         return RedirectResponse("/", status_code=302)
+
+    # Unverified email+password users must verify first
+    if not user.email_verified:
+        return RedirectResponse("/verify-email", status_code=302)
 
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
 
@@ -326,6 +371,8 @@ def dashboard_checkout(request: Request, db: Session = Depends(get_db)):
     user = _get_user_from_cookie(request, db)
     if not user:
         return RedirectResponse("/", status_code=302)
+    if not user.email_verified:
+        return RedirectResponse("/verify-email", status_code=302)
 
     # Delegate to the billing API
     from control_plane.routers.billing import _get_stripe

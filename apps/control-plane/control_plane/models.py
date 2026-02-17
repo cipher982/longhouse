@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
@@ -25,6 +26,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     instance: Mapped["Instance"] = relationship("Instance", back_populates="user", uselist=False)
 

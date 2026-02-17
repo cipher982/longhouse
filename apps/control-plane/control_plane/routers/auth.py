@@ -1,10 +1,12 @@
 """Auth for control plane: email+password and Google OAuth.
 
 Flow:
-  POST /auth/signup            → create user with email+password, set session cookie
+  POST /auth/signup            → create user (unverified), send verification email, redirect to /verify-email
   POST /auth/login             → verify email+password, set session cookie
   GET  /auth/google            → redirect to Google consent screen
-  GET  /auth/google/callback   → exchange code, upsert user, set session cookie
+  GET  /auth/google/callback   → exchange code, upsert user (auto-verified), set session cookie
+  GET  /auth/verify            → verify email via token, log in, redirect to dashboard
+  POST /auth/resend-verification → resend verification email for logged-in unverified user
   GET  /auth/status            → check if authenticated
   POST /auth/logout            → clear session cookie
 """
@@ -44,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 SESSION_COOKIE_NAME = "cp_session"
 SESSION_COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days
+VERIFY_TOKEN_MAX_AGE = 24 * 60 * 60  # 24 hours
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -135,6 +138,47 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
+
+
+def get_current_user_or_none(request: Request, db: Session = Depends(get_db)) -> User | None:
+    """Dependency: return authenticated user or None (no exception)."""
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        payload = _decode_jwt(token, settings.jwt_secret)
+    except ValueError:
+        return None
+    return db.query(User).filter(User.id == int(payload["sub"])).first()
+
+
+# ---------------------------------------------------------------------------
+# Email verification helpers
+# ---------------------------------------------------------------------------
+
+
+def _issue_verify_token(user: User) -> str:
+    """Issue a short-lived JWT for email verification."""
+    return _encode_jwt(
+        {
+            "sub": str(user.id),
+            "purpose": "email_verify",
+            "exp": int(time.time()) + VERIFY_TOKEN_MAX_AGE,
+        },
+        settings.jwt_secret,
+    )
+
+
+def _send_verification(user: User) -> None:
+    """Send verification email (best-effort — logs errors but doesn't raise to caller)."""
+    token = _issue_verify_token(user)
+    verify_url = f"https://control.{settings.root_domain}/auth/verify?token={token}"
+    try:
+        from control_plane.services.email import send_verification_email
+
+        send_verification_email(user.email, verify_url)
+    except Exception:
+        logger.exception(f"Could not send verification email to {user.email}")
 
 
 # ---------------------------------------------------------------------------
@@ -251,14 +295,18 @@ def email_signup(
 
         return _RR(f"/signup?error=An+account+with+this+email+already+exists", status_code=303)
 
-    user = User(email=email, password_hash=_hash_password(password))
+    user = User(email=email, password_hash=_hash_password(password), email_verified=False)
     db.add(user)
     db.commit()
     db.refresh(user)
     logger.info(f"Created new user via email signup: {email}")
 
+    # Send verification email
+    _send_verification(user)
+
+    # Log the user in but redirect to verify-email page (not dashboard)
     session_token = _issue_session_token(user)
-    response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=303)
+    response = RedirectResponse(f"https://control.{settings.root_domain}/verify-email", status_code=303)
     _set_session(response, session_token)
     return response
 
@@ -336,22 +384,28 @@ def google_callback(code: str | None = None, error: str | None = None, db: Sessi
     email = email.strip().lower()
 
     # Upsert user (handle concurrent callbacks for same email)
+    # Google OAuth users are auto-verified (Google already verified their email)
     user = db.query(User).filter(User.email == email).first()
     if not user:
         from sqlalchemy.exc import IntegrityError
 
         try:
-            user = User(email=email)
+            user = User(email=email, email_verified=True)
             db.add(user)
             db.commit()
             db.refresh(user)
-            logger.info(f"Created new user: {email}")
+            logger.info(f"Created new user (Google, verified): {email}")
         except IntegrityError:
             db.rollback()
             user = db.query(User).filter(User.email == email).first()
             logger.info(f"Concurrent signup resolved for: {email}")
     else:
         logger.info(f"Existing user logged in: {email}")
+
+    # Ensure Google users are always marked verified
+    if user and not user.email_verified:
+        user.email_verified = True
+        db.commit()
 
     # Issue session token + set cookie
     session_token = _issue_session_token(user)
@@ -381,10 +435,50 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
         "user": {
             "id": user.id,
             "email": user.email,
+            "email_verified": user.email_verified,
             "subscription_status": user.subscription_status,
             "has_instance": user.instance is not None,
         },
     }
+
+
+@router.get("/verify")
+def verify_email(token: str, db: Session = Depends(get_db)):
+    """Verify email via token link. Marks user verified, logs them in, redirects to dashboard."""
+    try:
+        payload = _decode_jwt(token, settings.jwt_secret)
+    except ValueError as exc:
+        error_msg = "expired" if "expired" in str(exc).lower() else "invalid"
+        return RedirectResponse(f"/verify-email?error=Verification+link+{error_msg}", status_code=302)
+
+    if payload.get("purpose") != "email_verify":
+        return RedirectResponse("/verify-email?error=Invalid+verification+link", status_code=302)
+
+    user = db.query(User).filter(User.id == int(payload["sub"])).first()
+    if not user:
+        return RedirectResponse("/verify-email?error=User+not+found", status_code=302)
+
+    user.email_verified = True
+    db.commit()
+    logger.info(f"Email verified for: {user.email}")
+
+    # Log the user in and redirect to dashboard
+    session_token = _issue_session_token(user)
+    response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=302)
+    _set_session(response, session_token)
+    return response
+
+
+@router.post("/resend-verification")
+def resend_verification(
+    user: User = Depends(get_current_user),
+):
+    """Resend verification email for the current logged-in user."""
+    if user.email_verified:
+        return RedirectResponse("/dashboard", status_code=303)
+
+    _send_verification(user)
+    return RedirectResponse("/verify-email?resent=1", status_code=303)
 
 
 @router.post("/logout")

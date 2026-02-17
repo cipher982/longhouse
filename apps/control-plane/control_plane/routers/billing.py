@@ -47,8 +47,11 @@ def _get_stripe():
 def create_checkout(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create a Stripe Checkout session for a new subscription.
 
-    Requires authenticated session (Google OAuth cookie).
+    Requires authenticated session with verified email.
     """
+    if not user.email_verified:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not verified")
+
     stripe = _get_stripe()
 
     if not settings.stripe_price_id:
