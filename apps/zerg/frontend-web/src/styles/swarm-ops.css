@@ -188,8 +188,8 @@
 
 .swarm-ops-attention-pill--auto {
   color: var(--color-brand-secondary);
-  background: rgba(99, 102, 241, 0.12);
-  border-color: rgba(99, 102, 241, 0.3);
+  background: rgba(201, 166, 107, 12);
+  border-color: rgba(201, 166, 107, 0.3);
 }
 
 .swarm-ops-attention-pill--soft {

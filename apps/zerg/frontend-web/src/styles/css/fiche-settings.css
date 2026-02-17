@@ -519,8 +519,7 @@
   .connector-modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(4px);
+    background: rgba(18, 11, 9, 0.7);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -796,7 +795,7 @@
   }
 
   .status-badge.needs-setup {
-    background: var(--color-intent-warning-muted, rgb(245 158 11 / 15%));
+    background: var(--color-intent-warning-muted, rgba(212, 168, 67, 0.15));
     color: var(--color-intent-warning);
   }
 

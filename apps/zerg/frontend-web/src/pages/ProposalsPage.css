@@ -30,7 +30,7 @@
 .proposals-filter-btn.active {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: #fff;
+  color: #F3EAD9;
 }
 
 /* Card grid */
@@ -104,7 +104,7 @@
 
 /* Status-specific styling */
 .proposal-card[data-status="approved"] {
-  border-left: 3px solid var(--color-success, #22c55e);
+  border-left: 3px solid var(--color-success, #5D9B4A);
 }
 
 .proposal-card[data-status="declined"] {

@@ -79,7 +79,7 @@
 .oikos-container [role="button"]:focus-visible {
   outline: 2px solid var(--color-neon-cyan);
   outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgb(6 182 212 / 20%);
+  box-shadow: 0 0 0 4px rgba(201, 166, 107, 20);
 }
 
 .oikos-container a:focus-visible {

@@ -151,7 +151,7 @@
   }
 
   .reset-db-btn:hover {
-    background: color-mix(in srgb, var(--color-intent-error) 85%, #000) !important;
+    background: color-mix(in srgb, var(--color-intent-error) 85%, #120B09) !important;
   }
 
   /* -------------------------------------------------------------
@@ -879,7 +879,7 @@
     border-radius: var(--radius-md);
     background: linear-gradient(
       135deg,
-      rgba(139, 92, 246, 0.15) 0%,
+      rgba(201, 166, 107, 0.15) 0%,
       rgba(59, 130, 246, 0.15) 100%
     );
     flex-shrink: 0;
@@ -1007,21 +1007,21 @@
 
   .usage-warning-toast strong {
     font-size: var(--font-size-sm);
-    color: color-mix(in srgb, var(--color-intent-warning) 70%, #000);
+    color: color-mix(in srgb, var(--color-intent-warning) 70%, #120B09);
   }
 
   .usage-warning-toast p {
     margin: 0;
     font-size: var(--font-size-xs);
     line-height: 1.5;
-    color: color-mix(in srgb, var(--color-intent-warning) 55%, #000);
+    color: color-mix(in srgb, var(--color-intent-warning) 55%, #120B09);
   }
 
   .usage-warning-dismiss {
     align-self: flex-end;
     background: transparent;
     border: 1px solid color-mix(in srgb, var(--color-intent-warning) 35%, transparent);
-    color: color-mix(in srgb, var(--color-intent-warning) 65%, #000);
+    color: color-mix(in srgb, var(--color-intent-warning) 65%, #120B09);
     padding: var(--space-1) var(--space-3);
     border-radius: var(--radius-sm);
     font-size: var(--font-size-xs);

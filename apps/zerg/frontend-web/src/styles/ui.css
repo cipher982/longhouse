@@ -54,12 +54,12 @@
   .ui-button--primary {
     background: var(--color-brand-primary);
     color: var(--color-text-primary);
-    box-shadow: 0 0 0 rgba(99, 102, 241, 0);
+    box-shadow: 0 0 0 rgba(201, 166, 107, 0);
   }
 
   .ui-button--primary:hover:not(:disabled) {
     background: var(--color-brand-primary-hover);
-    box-shadow: 0 0 15px rgba(99, 102, 241, 0.3);
+    box-shadow: 0 0 15px rgba(201, 166, 107, 0.3);
     transform: translateY(-1px);
   }
 
@@ -70,13 +70,13 @@
   }
 
   .ui-button--secondary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.12);
+    background: #2a2318;
     border-color: var(--color-brand-primary);
   }
 
   .ui-button--success {
     background: var(--color-intent-success-muted);
-    border-color: rgba(34, 197, 94, 0.2);
+    border-color: rgba(93, 155, 74, 0.2);
     color: var(--color-intent-success);
   }
 
@@ -206,7 +206,6 @@
   .ui-card--glass {
     background: var(--surface-glass-1);
     border-color: var(--border-glass-1);
-    backdrop-filter: blur(var(--blur-md));
   }
 
   .ui-card__header {
@@ -243,7 +242,7 @@
   .ui-badge--success {
     background: var(--color-intent-success-muted);
     color: var(--color-intent-success);
-    border-color: rgba(34, 197, 94, 0.2);
+    border-color: rgba(93, 155, 74, 0.2);
   }
 
   .ui-badge--warning {
@@ -274,7 +273,7 @@
   .ui-input:focus {
     outline: none;
     border-color: var(--color-brand-primary);
-    box-shadow: 0 0 0 1px var(--color-brand-primary), 0 0 15px rgba(99, 102, 241, 0.1);
+    box-shadow: 0 0 0 1px var(--color-brand-primary), 0 0 15px rgba(201, 166, 107, 0.1);
   }
 
   .ui-input::placeholder {
@@ -336,11 +335,11 @@
   }
 
   .ui-table-row--clickable:focus-visible td {
-    background: rgba(99, 102, 241, 0.08);
+    background: rgba(201, 166, 107, 8);
   }
 
   .ui-table-row--clickable:hover td {
-    background: rgba(255, 255, 255, 0.04);
+    background: #1C1610;
   }
 
   /* --- Empty State --- */

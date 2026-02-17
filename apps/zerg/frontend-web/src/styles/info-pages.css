@@ -115,7 +115,7 @@
 
   .pricing-tier.featured {
     border-color: var(--color-brand-primary);
-    box-shadow: 0 0 24px rgb(99 102 241 / 15%);
+    box-shadow: 0 0 24px rgba(201, 166, 107, 0.15);
   }
 
   .pricing-tier-badge {
@@ -556,12 +556,12 @@
   }
 
   .security-roadmap-status.done {
-    background: rgb(34 197 94 / 15%);
+    background: rgba(93, 155, 74, 0.15);
     color: var(--color-intent-success);
   }
 
   .security-roadmap-status.in-progress {
-    background: rgb(99 102 241 / 15%);
+    background: rgba(201, 166, 107, 0.15);
     color: var(--color-brand-primary);
   }
 

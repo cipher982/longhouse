@@ -10,7 +10,7 @@
   font-size: 0.8125rem;
   line-height: 1.4;
   background: var(--surface-secondary, rgba(30, 30, 35, 0.8));
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border: 1px solid var(--border-subtle, #261F18);
   border-radius: 6px;
   margin: 4px 0;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -59,15 +59,15 @@
 }
 
 .commis-tool-card--complete::before {
-  background: var(--color-success, #22c55e);
+  background: var(--color-success, #5D9B4A);
 }
 
 .commis-tool-card--failed {
-  border-color: var(--color-error, #ef4444);
+  border-color: var(--color-error, #C45040);
 }
 
 .commis-tool-card--failed::before {
-  background: var(--color-error, #ef4444);
+  background: var(--color-error, #C45040);
 }
 
 /* Detached mode - lifts to sticky position at top of chat */
@@ -82,7 +82,6 @@
   background: var(--color-void-light, rgba(10, 10, 15, 0.95));
   border: 1px solid var(--color-neon-primary, #3b82f6);
   box-shadow: var(--shadow-card, 0 2px 8px rgba(0, 0, 0, 0.2)), var(--glow-primary, 0 0 16px rgba(59, 130, 246, 0.3));
-  backdrop-filter: blur(12px);
 
   animation: commis-lift-to-sticky 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -110,7 +109,7 @@
 }
 
 .commis-tool-card__header:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: #1A1410;
 }
 
 .commis-tool-card__status-group {
@@ -137,7 +136,7 @@
 
 .commis-tool-card__task {
   flex: 1;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #F3EAD9);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -167,7 +166,7 @@
 /* Body - expanded content */
 .commis-tool-card__body {
   padding: 0 14px 14px;
-  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.05));
+  border-top: 1px solid var(--border-subtle, #1E1812);
   background: rgba(0, 0, 0, 0.1);
 }
 
@@ -189,8 +188,8 @@
 }
 
 .commis-tool-card__compact-toggle {
-  background: var(--surface-tertiary, rgba(255, 255, 255, 0.03));
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: var(--surface-tertiary, #1A1410);
+  border: 1px solid var(--border-subtle, #231E16);
   border-radius: 4px;
   color: var(--text-secondary, rgba(255, 255, 255, 0.6));
   font-size: 0.6875rem;
@@ -201,9 +200,9 @@
 }
 
 .commis-tool-card__compact-toggle:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: #231E16;
   border-color: var(--color-primary, #3b82f6);
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #F3EAD9);
 }
 
 /* Nested tools list */
@@ -213,7 +212,7 @@
   gap: 1px;
   margin-top: 4px;
   padding-left: 12px;
-  border-left: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-left: 1px solid var(--border-subtle, #261F18);
 }
 
 /* Individual nested tool - scoped under commis-tool-card */
@@ -233,7 +232,7 @@
 
 .commis-tool-card .nested-tool-name {
   font-weight: 500;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #F3EAD9);
   white-space: nowrap;
   max-width: 320px;
   overflow: hidden;
@@ -244,8 +243,8 @@
   padding: 2px 6px;
   border-radius: 4px;
   background: var(--surface-tertiary, rgba(0, 0, 0, 0.25));
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  color: var(--text-primary, #fff);
+  border: 1px solid var(--border-subtle, #231E16);
+  color: var(--text-primary, #F3EAD9);
 }
 
 .commis-tool-card .nested-tool-meta {
@@ -262,21 +261,21 @@
   letter-spacing: 0.02em;
   padding: 1px 6px;
   border-radius: 999px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--border-subtle, #231E16);
   background: var(--surface-tertiary, rgba(0, 0, 0, 0.25));
   color: var(--text-secondary, rgba(255, 255, 255, 0.65));
 }
 
 .commis-tool-card .nested-tool-meta-item--ok {
-  border-color: var(--color-success, #22c55e);
-  color: var(--color-success, #22c55e);
+  border-color: var(--color-success, #5D9B4A);
+  color: var(--color-success, #5D9B4A);
   background: rgba(34, 197, 94, 0.12);
 }
 
 .commis-tool-card .nested-tool-meta-item--warn {
-  border-color: var(--color-warning, #f59e0b);
-  color: var(--color-warning, #f59e0b);
-  background: var(--warning-muted, rgba(245, 158, 11, 0.15));
+  border-color: var(--color-warning, #D4A843);
+  color: var(--color-warning, #D4A843);
+  background: var(--warning-muted, rgba(212, 168, 67, 0.15));
 }
 
 .commis-tool-card .nested-tool-preview {
@@ -306,15 +305,15 @@
 }
 
 .commis-tool-card .nested-tool-status-completed .nested-tool-icon {
-  color: var(--color-success, #22c55e);
+  color: var(--color-success, #5D9B4A);
 }
 
 .commis-tool-card .nested-tool-status-failed .nested-tool-icon {
-  color: var(--color-error, #ef4444);
+  color: var(--color-error, #C45040);
 }
 
 .commis-tool-card .nested-tool-status-failed .nested-tool-preview {
-  color: var(--color-error, #ef4444);
+  color: var(--color-error, #C45040);
 }
 
 @keyframes nested-tool-pulse {
@@ -347,7 +346,7 @@
 }
 
 .commis-tool-card__summary-text {
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #F3EAD9);
   font-style: italic;
   line-height: 1.5;
 }
@@ -380,15 +379,15 @@
   white-space: pre-wrap;
   max-height: 160px;
   overflow: auto;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #F3EAD9);
 }
 
 /* Error display */
 .commis-tool-card__error {
   margin-top: 12px;
   padding: 8px;
-  background: var(--surface-error, rgba(239, 68, 68, 0.1));
-  border: 1px solid var(--color-error, #ef4444);
+  background: var(--surface-error, rgba(196, 80, 64, 0.1));
+  border: 1px solid var(--color-error, #C45040);
   border-radius: 4px;
   font-size: 0.8125rem;
   display: flex;
@@ -401,11 +400,11 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--color-error, #ef4444);
+  color: var(--color-error, #C45040);
 }
 
 .commis-tool-card__error-text {
-  color: var(--color-error, #ef4444);
+  color: var(--color-error, #C45040);
   line-height: 1.5;
 }
 
@@ -425,13 +424,13 @@
 .commis-tool-card .commis-icon-complete,
 .commis-tool-card .tool-icon-completed {
   display: inline-flex;
-  color: var(--color-success, #22c55e);
+  color: var(--color-success, #5D9B4A);
 }
 
 .commis-tool-card .commis-icon-failed,
 .commis-tool-card .tool-icon-failed {
   display: inline-flex;
-  color: var(--color-error, #ef4444);
+  color: var(--color-error, #C45040);
 }
 
 .commis-tool-card .commis-icon-spawned {
@@ -442,7 +441,7 @@
 /* Compact toggle button */
 .commis-tool-card__compact-toggle {
   background: transparent;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border: 1px solid var(--border-subtle, #261F18);
   border-radius: 4px;
   color: var(--text-secondary, rgba(255, 255, 255, 0.6));
   font-size: 0.75rem;
@@ -453,7 +452,7 @@
 }
 
 .commis-tool-card__compact-toggle:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: #1E1812;
   border-color: var(--color-primary, #3b82f6);
 }
 
@@ -472,7 +471,7 @@
 }
 
 .commis-tool-card .nested-tool-row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: #1A1410;
 }
 
 /* Compact mode - must come after base .nested-tool-row rule */
@@ -528,8 +527,8 @@
 
 /* Offline badge */
 .commis-tool-card .nested-tool-meta-item--offline {
-  border-color: var(--color-error, #ef4444);
-  color: var(--color-error, #ef4444);
+  border-color: var(--color-error, #C45040);
+  color: var(--color-error, #C45040);
   background: rgba(239, 68, 68, 0.12);
 }
 
@@ -538,8 +537,8 @@
   margin-top: 4px;
   margin-left: 22px;
   padding: 8px 12px;
-  background: var(--surface-tertiary, rgba(0, 0, 0, 0.3));
-  border-left: 2px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  background: var(--surface-tertiary, rgba(18, 11, 9, 0.3));
+  border-left: 2px solid var(--border-subtle, #261F18);
   border-radius: 0 4px 4px 0;
   font-size: 0.75rem;
 }
@@ -570,13 +569,13 @@
 }
 
 .commis-tool-card .nested-tool-details__section--error .nested-tool-details__label {
-  color: var(--color-error, #ef4444);
+  color: var(--color-error, #C45040);
 }
 
 .commis-tool-card .nested-tool-details__content {
   font-family: var(--font-mono, 'SF Mono', 'Monaco', 'Consolas', monospace);
   font-size: 0.6875rem;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #F3EAD9);
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
@@ -586,7 +585,7 @@
 }
 
 .commis-tool-card .nested-tool-details__section--error .nested-tool-details__content {
-  color: var(--color-error, #ef4444);
+  color: var(--color-error, #C45040);
 }
 
 .commis-tool-card .nested-tool-details__content--empty {

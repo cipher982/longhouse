@@ -20,7 +20,7 @@
 
     /* overflow handled in layout.css */
     font-family: var(--font-family-base);
-    background-color: var(--color-void, #030305);
+    background-color: var(--color-void, #120B09);
     font-size: var(--font-size-base);
     line-height: var(--font-line-height-normal);
     color: var(--color-text-primary);

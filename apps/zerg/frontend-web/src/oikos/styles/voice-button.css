@@ -90,7 +90,7 @@
 #react-root[data-ui-effects="on"] .oikos-container .reactor-ring-outer {
   width: 112px;
   height: 112px;
-  border: 2px dashed rgb(99 102 241 / 30%);
+  border: 2px dashed rgba(201, 166, 107, 0.3);
   animation: ring-rotate 12s linear infinite;
 }
 
@@ -98,10 +98,10 @@
 #react-root[data-ui-effects="on"] .oikos-container .reactor-ring-middle {
   width: 96px;
   height: 96px;
-  border: 1.5px solid rgb(99 102 241 / 20%);
-  border-top-color: rgb(99 102 241 / 60%);
+  border: 1.5px solid rgba(201, 166, 107, 0.2);
+  border-top-color: rgba(201, 166, 107, 60);
   border-right-color: transparent;
-  border-bottom-color: rgb(99 102 241 / 60%);
+  border-bottom-color: rgba(201, 166, 107, 60);
   border-left-color: transparent;
   animation: ring-rotate-reverse 8s linear infinite;
 }
@@ -110,7 +110,7 @@
 #react-root[data-ui-effects="on"] .oikos-container .reactor-ring-inner {
   width: 82px;
   height: 82px;
-  border: 1px dotted rgb(99 102 241 / 25%);
+  border: 1px dotted rgba(201, 166, 107, 25);
   animation: ring-rotate 5s linear infinite;
 }
 
@@ -160,7 +160,7 @@
 }
 
 .oikos-container .voice-button-wrapper.connecting .reactor-ring-outer {
-  border-color: rgb(99 102 241 / 50%);
+  border-color: rgba(201, 166, 107, 0.5);
   animation:
     ring-rotate 3s linear infinite,
     ring-pulse 1.5s ease-in-out infinite;
@@ -184,7 +184,7 @@
 }
 
 .oikos-container .voice-button-wrapper.ready .reactor-ring-inner {
-  border-color: rgb(34 197 94 / 20%);
+  border-color: rgba(93, 155, 74, 0.2);
   animation-duration: 8s;
 }
 
@@ -194,27 +194,27 @@
 }
 
 .oikos-container .voice-button-wrapper.listening .reactor-ring-outer {
-  border-color: rgb(6 182 212 / 50%);
+  border-color: rgba(201, 166, 107, 50);
   animation: ring-rotate 4s linear infinite;
-  box-shadow: 0 0 20px rgb(6 182 212 / 30%);
+  box-shadow: 0 0 20px rgba(201, 166, 107, 30);
 }
 
 .oikos-container .voice-button-wrapper.listening .reactor-ring-middle {
   border-top-color: var(--color-neon-cyan);
   border-bottom-color: var(--color-neon-cyan);
   animation: ring-rotate-reverse 2.5s linear infinite;
-  box-shadow: 0 0 15px rgb(6 182 212 / 40%);
+  box-shadow: 0 0 15px rgba(201, 166, 107, 40);
 }
 
 .oikos-container .voice-button-wrapper.listening .reactor-ring-inner {
-  border-color: rgb(6 182 212 / 40%);
+  border-color: rgba(201, 166, 107, 40);
   animation: ring-rotate 1.5s linear infinite;
-  box-shadow: 0 0 10px rgb(6 182 212 / 30%);
+  box-shadow: 0 0 10px rgba(201, 166, 107, 30);
 }
 
 /* Speaking - Pink energy pulse */
 .oikos-container .voice-button-wrapper.speaking .reactor-ring-outer {
-  border-color: rgb(236 72 153 / 40%);
+  border-color: rgba(196, 80, 64, 40);
   animation:
     ring-rotate 6s linear infinite,
     ring-pulse-pink 1s ease-in-out infinite;
@@ -227,7 +227,7 @@
 }
 
 .oikos-container .voice-button-wrapper.speaking .reactor-ring-inner {
-  border-color: rgb(236 72 153 / 30%);
+  border-color: rgba(196, 80, 64, 30);
   animation: ring-rotate 2s linear infinite;
 }
 
@@ -262,10 +262,10 @@
 @keyframes ring-pulse-pink {
   0%,
   100% {
-    box-shadow: 0 0 10px rgb(236 72 153 / 20%);
+    box-shadow: 0 0 10px rgba(196, 80, 64, 20);
   }
   50% {
-    box-shadow: 0 0 30px rgb(236 72 153 / 50%);
+    box-shadow: 0 0 30px rgba(196, 80, 64, 50);
   }
 }
 
@@ -308,8 +308,8 @@
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #1e1e2e 0%, #0a0a12 70%);
-  border: 2px solid rgb(99 102 241 / 30%);
+  background: radial-gradient(circle at 30% 30%, #1e1e2e 0%, #150E0B 70%);
+  border: 2px solid rgba(201, 166, 107, 0.3);
   cursor: pointer;
   position: relative;
   display: flex;
@@ -317,11 +317,11 @@
   align-items: center;
   z-index: 10;
   box-shadow:
-    inset 0 0 20px rgb(0 0 0 / 60%),
-    inset 0 2px 4px rgb(255 255 255 / 5%),
-    0 6px 20px rgb(0 0 0 / 50%),
-    0 0 0 1px rgb(255 255 255 / 5%),
-    0 0 20px rgb(99 102 241 / 15%);
+    inset 0 0 20px rgba(18, 11, 9, 0.6),
+    inset 0 2px 4px #1E1812,
+    0 6px 20px rgba(18, 11, 9, 0.5),
+    0 0 0 1px #1E1812,
+    0 0 20px rgba(201, 166, 107, 0.15);
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -331,7 +331,7 @@
   height: 20px;
   color: rgb(255 255 255 / 50%);
   transition: all 0.3s ease;
-  filter: drop-shadow(0 0 3px rgb(255 255 255 / 20%));
+  filter: drop-shadow(0 0 3px #342d20);
 }
 
 /* ============================
@@ -349,7 +349,7 @@
 
 /* Connecting */
 .oikos-container .voice-button.connecting {
-  border-color: rgb(99 102 241 / 50%);
+  border-color: rgba(201, 166, 107, 0.5);
   animation: button-connecting 1.5s ease-in-out infinite;
 }
 
@@ -362,8 +362,8 @@
 .oikos-container .voice-button.ready {
   border-color: rgb(148 163 184 / 45%);
   box-shadow:
-    inset 0 0 30px rgb(0 0 0 / 60%),
-    0 8px 30px rgb(0 0 0 / 50%),
+    inset 0 0 30px rgba(18, 11, 9, 0.6),
+    0 8px 30px rgba(18, 11, 9, 0.5),
     0 0 0 1px rgb(148 163 184 / 18%),
     0 0 30px rgb(148 163 184 / 12%);
   animation: none;
@@ -380,11 +380,11 @@
   background: radial-gradient(circle at 30% 30%, #0f2027 0%, #0a1015 70%);
   transform: scale(1.05);
   box-shadow:
-    inset 0 0 40px rgb(6 182 212 / 15%),
-    0 8px 30px rgb(0 0 0 / 50%),
-    0 0 0 2px rgb(6 182 212 / 40%),
-    0 0 60px rgb(6 182 212 / 30%),
-    0 0 100px rgb(6 182 212 / 15%);
+    inset 0 0 40px rgba(201, 166, 107, 15),
+    0 8px 30px rgba(18, 11, 9, 0.5),
+    0 0 0 2px rgba(201, 166, 107, 40),
+    0 0 60px rgba(201, 166, 107, 30),
+    0 0 100px rgba(201, 166, 107, 15);
   animation: button-listening 1.5s ease-in-out infinite;
 }
 
@@ -410,10 +410,10 @@
   border-color: var(--color-neon-pink);
   background: radial-gradient(circle at 30% 30%, #1a0a15 0%, #0f050a 70%);
   box-shadow:
-    inset 0 0 40px rgb(236 72 153 / 15%),
-    0 8px 30px rgb(0 0 0 / 50%),
-    0 0 0 2px rgb(236 72 153 / 40%),
-    0 0 50px rgb(236 72 153 / 25%);
+    inset 0 0 40px rgba(196, 80, 64, 15),
+    0 8px 30px rgba(18, 11, 9, 0.5),
+    0 0 0 2px rgba(196, 80, 64, 40),
+    0 0 50px rgba(196, 80, 64, 25);
   animation: button-speaking 1s ease-in-out infinite;
 }
 
@@ -426,9 +426,9 @@
 .oikos-container .voice-button.error {
   border-color: var(--color-intent-error);
   box-shadow:
-    inset 0 0 30px rgb(239 68 68 / 10%),
-    0 8px 30px rgb(0 0 0 / 50%),
-    0 0 0 2px rgb(239 68 68 / 30%),
+    inset 0 0 30px rgba(196, 80, 64, 0.1),
+    0 8px 30px rgba(18, 11, 9, 0.5),
+    0 0 0 2px rgba(196, 80, 64, 0.3),
     0 0 30px rgb(239 68 68 / 20%);
 }
 
@@ -450,7 +450,7 @@
 }
 
 .oikos-container .voice-button:hover:not(.disabled) .voice-icon {
-  color: #fff;
+  color: #F3EAD9;
 }
 
 /* Active */
@@ -466,17 +466,17 @@
   0%,
   100% {
     box-shadow:
-      inset 0 0 30px rgb(0 0 0 / 60%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 1px rgb(255 255 255 / 5%),
-      0 0 30px rgb(99 102 241 / 15%);
+      inset 0 0 30px rgba(18, 11, 9, 0.6),
+      0 8px 30px rgba(18, 11, 9, 0.5),
+      0 0 0 1px #1E1812,
+      0 0 30px rgba(201, 166, 107, 0.15);
   }
   50% {
     box-shadow:
-      inset 0 0 30px rgb(0 0 0 / 60%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 1px rgb(255 255 255 / 8%),
-      0 0 50px rgb(99 102 241 / 25%);
+      inset 0 0 30px rgba(18, 11, 9, 0.6),
+      0 8px 30px rgba(18, 11, 9, 0.5),
+      0 0 0 1px #231E16,
+      0 0 50px rgba(201, 166, 107, 25);
   }
 }
 
@@ -485,18 +485,18 @@
   100% {
     opacity: 1;
     box-shadow:
-      inset 0 0 30px rgb(0 0 0 / 60%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 0 rgb(99 102 241 / 40%),
-      0 0 30px rgb(99 102 241 / 20%);
+      inset 0 0 30px rgba(18, 11, 9, 0.6),
+      0 8px 30px rgba(18, 11, 9, 0.5),
+      0 0 0 0 rgba(201, 166, 107, 40),
+      0 0 30px rgba(201, 166, 107, 0.2);
   }
   50% {
     opacity: 0.85;
     box-shadow:
-      inset 0 0 30px rgb(0 0 0 / 60%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 15px rgb(99 102 241 / 0%),
-      0 0 60px rgb(99 102 241 / 40%);
+      inset 0 0 30px rgba(18, 11, 9, 0.6),
+      0 8px 30px rgba(18, 11, 9, 0.5),
+      0 0 0 15px rgba(201, 166, 107, 0),
+      0 0 60px rgba(201, 166, 107, 40);
   }
 }
 
@@ -505,17 +505,17 @@
   0%,
   100% {
     box-shadow:
-      inset 0 0 40px rgb(6 182 212 / 15%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 2px rgb(6 182 212 / 40%),
-      0 0 60px rgb(6 182 212 / 30%);
+      inset 0 0 40px rgba(201, 166, 107, 15),
+      0 8px 30px rgba(18, 11, 9, 0.5),
+      0 0 0 2px rgba(201, 166, 107, 40),
+      0 0 60px rgba(201, 166, 107, 30);
   }
   50% {
     box-shadow:
-      inset 0 0 50px rgb(6 182 212 / 25%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 4px rgb(6 182 212 / 50%),
-      0 0 80px rgb(6 182 212 / 40%);
+      inset 0 0 50px rgba(201, 166, 107, 25),
+      0 8px 30px rgba(18, 11, 9, 0.5),
+      0 0 0 4px rgba(201, 166, 107, 50),
+      0 0 80px rgba(201, 166, 107, 40);
   }
 }
 
@@ -541,18 +541,18 @@
   0%,
   100% {
     box-shadow:
-      inset 0 0 40px rgb(236 72 153 / 15%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 2px rgb(236 72 153 / 40%),
-      0 0 50px rgb(236 72 153 / 25%);
+      inset 0 0 40px rgba(196, 80, 64, 15),
+      0 8px 30px rgba(18, 11, 9, 0.5),
+      0 0 0 2px rgba(196, 80, 64, 40),
+      0 0 50px rgba(196, 80, 64, 25);
     transform: scale(1);
   }
   50% {
     box-shadow:
-      inset 0 0 50px rgb(236 72 153 / 25%),
-      0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 4px rgb(236 72 153 / 50%),
-      0 0 70px rgb(236 72 153 / 35%);
+      inset 0 0 50px rgba(196, 80, 64, 25),
+      0 8px 30px rgba(18, 11, 9, 0.5),
+      0 0 0 4px rgba(196, 80, 64, 50),
+      0 0 70px rgba(196, 80, 64, 35);
     transform: scale(1.02);
   }
 }
@@ -604,7 +604,7 @@
 }
 
 .oikos-container .voice-button.ready ~ .voice-status .voice-status-text {
-  color: #22c55e;
+  color: #5D9B4A;
 }
 
 .oikos-container .voice-button.listening ~ .voice-status .voice-status-text {
@@ -624,11 +624,10 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  background: rgb(255 255 255 / 3%);
+  background: #1A1410;
   padding: 6px 12px;
   border-radius: 20px;
   border: 1px solid var(--color-border-muted);
-  backdrop-filter: blur(8px);
   animation: slide-up-fade 0.4s ease-out 0.3s backwards;
   transition: all 0.3s ease;
   min-width: 120px;
@@ -636,55 +635,55 @@
 }
 
 .oikos-container .mode-toggle-container:hover {
-  background: rgb(255 255 255 / 5%);
-  border-color: rgb(255 255 255 / 15%);
+  background: #1E1812;
+  border-color: #2e271c;
 }
 
 .oikos-container .mode-toggle {
   width: 40px;
   height: 20px;
-  background: rgb(0 0 0 / 60%);
+  background: rgba(18, 11, 9, 0.6);
   border-radius: 20px;
   position: relative;
   cursor: pointer;
-  border: 1px solid rgb(255 255 255 / 10%);
+  border: 1px solid #261F18;
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow:
-    inset 0 2px 4px rgb(0 0 0 / 30%),
-    0 1px 0 rgb(255 255 255 / 5%);
+    inset 0 2px 4px rgba(18, 11, 9, 0.3),
+    0 1px 0 #1E1812;
 }
 
 .oikos-container .mode-toggle[aria-checked="true"] {
   background: linear-gradient(
     135deg,
-    rgb(99 102 241 / 40%) 0%,
-    rgb(6 182 212 / 40%) 100%
+    rgba(201, 166, 107, 40) 0%,
+    rgba(201, 166, 107, 40) 100%
   );
   border-color: var(--color-neon-cyan);
   box-shadow:
     inset 0 2px 4px rgb(0 0 0 / 20%),
-    0 0 15px rgb(6 182 212 / 30%);
+    0 0 15px rgba(201, 166, 107, 30);
 }
 
 .oikos-container .mode-toggle-slider {
   width: 14px;
   height: 14px;
-  background: linear-gradient(135deg, #fff 0%, #e0e0e0 100%);
+  background: linear-gradient(135deg, #F3EAD9 0%, #e0e0e0 100%);
   border-radius: 50%;
   position: absolute;
   top: 2px;
   left: 2px;
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow:
-    0 2px 6px rgb(0 0 0 / 30%),
-    0 0 0 1px rgb(255 255 255 / 10%);
+    0 2px 6px rgba(18, 11, 9, 0.3),
+    0 0 0 1px #261F18;
 }
 
 .oikos-container .mode-toggle[aria-checked="true"] .mode-toggle-slider {
   transform: translateX(20px);
-  background: linear-gradient(135deg, var(--color-neon-cyan) 0%, #22d3ee 100%);
+  background: linear-gradient(135deg, var(--color-neon-cyan) 0%, #D4B87A 100%);
   box-shadow:
-    0 2px 8px rgb(6 182 212 / 50%),
+    0 2px 8px rgba(201, 166, 107, 50),
     0 0 12px var(--color-neon-cyan);
 }
 

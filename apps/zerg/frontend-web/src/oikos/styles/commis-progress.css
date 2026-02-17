@@ -274,7 +274,6 @@
   background: var(--color-void-light);
   border: 1px solid var(--color-neon-primary);
   box-shadow: var(--shadow-card), var(--glow-primary);
-  backdrop-filter: blur(12px);
 }
 
 /* Sticky mode entrance animation */
@@ -361,13 +360,13 @@
   0% {
     box-shadow:
       var(--shadow-card),
-      0 0 0 0 rgb(99 102 241 / 60%);
+      0 0 0 0 rgba(201, 166, 107, 60);
   }
 
   50% {
     box-shadow:
       var(--shadow-card),
-      0 0 0 8px rgb(99 102 241 / 0%);
+      0 0 0 8px rgba(201, 166, 107, 0);
   }
 
   100% {

@@ -51,7 +51,7 @@
   }
 
   .add-context-modal .context-error {
-    background: var(--color-intent-error-subtle, rgba(239, 68, 68, 0.1));
+    background: var(--color-intent-error-subtle, rgba(196, 80, 64, 0.1));
     border: 1px solid var(--color-intent-error);
     color: var(--color-intent-error);
     padding: var(--space-3) var(--space-4);
