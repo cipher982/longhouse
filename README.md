@@ -20,7 +20,7 @@ longhouse serve --demo
 
 ### Hosted (beta)
 
-Join the hosted waitlist at https://longhouse.ai. Hosted unlocks always-on sync and resume-anywhere.
+Sign up at https://longhouse.ai. Hosted unlocks always-on sync and resume-anywhere.
 
 ### Self-host (local)
 
@@ -39,7 +39,7 @@ longhouse serve
 ## Install Options
 
 ### 0. Hosted (beta)
-Join the waitlist at https://longhouse.ai (hosted launches with always-on sync).
+Get started at https://longhouse.ai (Google OAuth + Stripe checkout).
 
 ### 1. One-liner install (Recommended)
 ```bash
