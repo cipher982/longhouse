@@ -24,13 +24,13 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    background: linear-gradient(160deg, rgba(18, 24, 36, 0.98), rgba(12, 16, 24, 0.95));
-    border: 1px solid rgba(120, 150, 190, 0.2);
+    background: linear-gradient(160deg, rgba(26, 20, 16, 0.98), rgba(18, 11, 9, 0.95));
+    border: 1px solid rgba(158, 124, 90, 0.2);
   }
 
   .forum-map-panel--center {
-    background: linear-gradient(135deg, rgba(12, 16, 24, 0.98), rgba(11, 14, 20, 0.98));
-    border: 1px solid rgba(88, 120, 170, 0.25);
+    background: linear-gradient(135deg, rgba(18, 11, 9, 0.98), rgba(14, 10, 7, 0.98));
+    border: 1px solid rgba(158, 124, 90, 0.25);
     position: relative;
   }
 
@@ -39,19 +39,19 @@
     align-items: center;
     justify-content: space-between;
     padding: var(--space-4) var(--space-4) var(--space-2);
-    border-bottom: 1px solid rgba(120, 150, 190, 0.15);
+    border-bottom: 1px solid rgba(158, 124, 90, 0.15);
   }
 
   .forum-panel-title {
     font-family: var(--font-display);
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);
-    color: var(--color-ink-strong, #eef2ff);
+    color: var(--color-ink-strong, #F3EAD9);
   }
 
   .forum-panel-subtitle {
     font-size: var(--font-size-xs);
-    color: rgba(190, 208, 234, 0.7);
+    color: rgba(181, 164, 142, 0.7);
     margin-top: var(--space-1);
   }
 
@@ -77,26 +77,26 @@
     gap: var(--space-1);
     padding: var(--space-3);
     border-radius: 12px;
-    background: rgba(20, 26, 36, 0.75);
-    border: 1px solid rgba(120, 150, 190, 0.2);
-    color: rgba(230, 240, 255, 0.9);
+    background: rgba(26, 20, 16, 0.75);
+    border: 1px solid rgba(158, 124, 90, 0.2);
+    color: rgba(243, 234, 217, 0.9);
     text-align: left;
     transition: transform 0.18s ease, border 0.18s ease;
   }
 
   .forum-session-row:hover {
-    border-color: rgba(110, 200, 230, 0.5);
+    border-color: rgba(201, 166, 107, 0.5);
     transform: translateY(-1px);
   }
 
   .forum-session-row:focus-visible {
-    outline: 2px solid rgba(120, 220, 240, 0.75);
+    outline: 2px solid rgba(201, 166, 107, 0.75);
     outline-offset: 2px;
   }
 
   .forum-session-row--selected {
-    border-color: rgba(120, 220, 240, 0.7);
-    box-shadow: 0 0 0 1px rgba(120, 220, 240, 0.3), 0 8px 22px rgba(8, 12, 20, 0.45);
+    border-color: rgba(201, 166, 107, 0.7);
+    box-shadow: 0 0 0 1px rgba(201, 166, 107, 0.3), 0 8px 22px rgba(12, 8, 5, 0.45);
   }
 
   .forum-session-title {
@@ -106,7 +106,7 @@
 
   .forum-session-meta {
     font-size: 0.7rem;
-    color: rgba(170, 200, 235, 0.8);
+    color: rgba(181, 164, 142, 0.8);
   }
 
   .forum-empty-actions {
@@ -122,21 +122,21 @@
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
     border-radius: 12px;
-    background: rgba(20, 26, 36, 0.75);
-    border: 1px solid rgba(120, 150, 190, 0.2);
-    color: rgba(230, 240, 255, 0.9);
+    background: rgba(26, 20, 16, 0.75);
+    border: 1px solid rgba(158, 124, 90, 0.2);
+    color: rgba(243, 234, 217, 0.9);
     font-size: var(--font-size-sm);
     text-align: left;
     transition: transform 0.18s ease, border 0.18s ease;
   }
 
   .forum-task-row:hover {
-    border-color: rgba(110, 200, 230, 0.5);
+    border-color: rgba(201, 166, 107, 0.5);
     transform: translateY(-1px);
   }
 
   .forum-task-row:focus-visible {
-    outline: 2px solid rgba(120, 220, 240, 0.75);
+    outline: 2px solid rgba(201, 166, 107, 0.75);
     outline-offset: 2px;
   }
 
@@ -146,15 +146,15 @@
   }
 
   .forum-task-row--selected {
-    border-color: rgba(120, 220, 240, 0.7);
-    box-shadow: 0 0 0 1px rgba(120, 220, 240, 0.3), 0 8px 22px rgba(8, 12, 20, 0.45);
+    border-color: rgba(201, 166, 107, 0.7);
+    box-shadow: 0 0 0 1px rgba(201, 166, 107, 0.3), 0 8px 22px rgba(12, 8, 5, 0.45);
   }
 
   .forum-task-progress {
     font-size: 0.68rem;
     letter-spacing: 0.04em;
-    color: rgba(170, 220, 255, 0.9);
-    background: rgba(60, 110, 160, 0.25);
+    color: rgba(212, 168, 67, 0.9);
+    background: rgba(158, 124, 90, 0.25);
     padding: 2px 8px;
     border-radius: 999px;
     min-width: 44px;
@@ -173,30 +173,30 @@
 
   .forum-task-status--queued,
   .forum-task-status--waiting {
-    background: rgba(120, 150, 190, 0.25);
-    color: rgba(210, 225, 245, 0.9);
+    background: rgba(158, 124, 90, 0.25);
+    color: rgba(243, 234, 217, 0.9);
   }
 
   .forum-task-status--running {
-    background: rgba(54, 235, 168, 0.2);
-    color: #36eba8;
+    background: rgba(93, 155, 74, 0.2);
+    color: #5D9B4A;
   }
 
   .forum-task-status--success {
-    background: rgba(72, 190, 120, 0.2);
-    color: #6ae2a2;
+    background: rgba(93, 155, 74, 0.2);
+    color: #7AB86A;
   }
 
   .forum-task-status--failed {
-    background: rgba(240, 84, 84, 0.2);
-    color: #f05454;
+    background: rgba(196, 80, 64, 0.2);
+    color: #C45040;
   }
 
   .forum-task-empty {
     padding: var(--space-4);
     border-radius: 12px;
-    border: 1px dashed rgba(120, 150, 190, 0.3);
-    color: rgba(190, 210, 235, 0.75);
+    border: 1px dashed rgba(158, 124, 90, 0.3);
+    color: rgba(181, 164, 142, 0.75);
     font-size: var(--font-size-sm);
     line-height: 1.5;
     text-align: center;
@@ -208,10 +208,10 @@
     height: 100%;
     min-height: 520px;
     background:
-      radial-gradient(circle at 20% 20%, rgba(90, 160, 210, 0.15), transparent 55%),
-      radial-gradient(circle at 80% 15%, rgba(240, 170, 90, 0.12), transparent 50%),
-      radial-gradient(circle at 40% 80%, rgba(70, 220, 170, 0.12), transparent 55%),
-      #0b0e14;
+      radial-gradient(circle at 20% 20%, rgba(201, 166, 107, 0.12), transparent 55%),
+      radial-gradient(circle at 80% 15%, rgba(212, 136, 90, 0.10), transparent 50%),
+      radial-gradient(circle at 40% 80%, rgba(93, 155, 74, 0.10), transparent 55%),
+      #120B09;
     overflow: hidden;
     cursor: grab;
   }
@@ -230,11 +230,11 @@
     position: absolute;
     bottom: var(--space-3);
     right: var(--space-3);
-    background: rgba(10, 12, 18, 0.72);
-    border: 1px solid rgba(130, 170, 210, 0.3);
+    background: rgba(18, 11, 9, 0.72);
+    border: 1px solid rgba(158, 124, 90, 0.3);
     border-radius: 12px;
     padding: var(--space-2) var(--space-3);
-    color: rgba(220, 235, 255, 0.9);
+    color: rgba(243, 234, 217, 0.9);
     font-size: var(--font-size-xs);
     display: grid;
     gap: var(--space-1);
@@ -256,11 +256,11 @@
   .forum-selection-title {
     font-size: var(--font-size-md);
     font-weight: var(--font-weight-semibold);
-    color: rgba(235, 245, 255, 0.95);
+    color: rgba(243, 234, 217, 0.95);
   }
 
   .forum-selection-meta {
-    color: rgba(190, 210, 235, 0.8);
+    color: rgba(181, 164, 142, 0.8);
     font-size: var(--font-size-sm);
   }
 
@@ -271,14 +271,14 @@
   }
 
   .forum-selection-empty {
-    color: rgba(180, 200, 220, 0.7);
+    color: rgba(138, 122, 100, 0.7);
     font-size: var(--font-size-sm);
     line-height: 1.5;
   }
 
   .forum-legend {
     padding: var(--space-3) var(--space-4) var(--space-4);
-    border-top: 1px solid rgba(120, 150, 190, 0.15);
+    border-top: 1px solid rgba(158, 124, 90, 0.15);
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
@@ -288,7 +288,7 @@
     font-size: var(--font-size-xs);
     text-transform: uppercase;
     letter-spacing: 0.12em;
-    color: rgba(170, 200, 230, 0.7);
+    color: rgba(138, 122, 100, 0.7);
   }
 
   .forum-legend-grid {
@@ -301,7 +301,7 @@
     align-items: center;
     gap: var(--space-2);
     font-size: var(--font-size-xs);
-    color: rgba(210, 230, 245, 0.85);
+    color: rgba(243, 234, 217, 0.85);
   }
 
   .forum-legend-swatch {
@@ -309,35 +309,35 @@
     height: 12px;
     border-radius: 4px;
     background: #342d20;
-    border: 1px solid rgba(140, 180, 220, 0.4);
+    border: 1px solid rgba(158, 124, 90, 0.4);
     flex-shrink: 0;
   }
 
   .forum-legend-swatch--unit {
-    background: #5ce0ff;
+    background: #C9A66B;
   }
 
   .forum-legend-swatch--structure {
-    background: #f7b955;
+    background: #D4A843;
   }
 
   .forum-legend-swatch--commis {
-    background: #7b7cff;
+    background: #9e7c5a;
   }
 
   .forum-legend-swatch--task {
-    background: #36eba8;
+    background: #5D9B4A;
   }
 
   .forum-legend-swatch--alert {
     background: transparent;
-    border: 2px solid #f48b4a;
+    border: 2px solid #D4885A;
     border-radius: 50%;
   }
 
   .forum-legend-swatch--marker {
     background: transparent;
-    border: 1px dashed rgba(220, 235, 255, 0.6);
+    border: 1px dashed rgba(243, 234, 217, 0.6);
   }
 
   @media (width <= 1100px) {
@@ -370,7 +370,7 @@
     gap: var(--space-3);
     height: 100%;
     min-height: 400px;
-    color: rgba(190, 210, 235, 0.8);
+    color: rgba(181, 164, 142, 0.8);
     font-size: var(--font-size-sm);
   }
 
@@ -378,14 +378,14 @@
   .forum-selection-preview {
     margin-top: var(--space-3);
     padding: var(--space-2);
-    background: rgba(20, 40, 60, 0.5);
+    background: rgba(33, 28, 21, 0.5);
     border-radius: var(--radius-sm);
-    border: 1px solid rgba(120, 150, 190, 0.15);
+    border: 1px solid rgba(158, 124, 90, 0.15);
   }
 
   .forum-selection-preview-label {
     font-size: var(--font-size-xs);
-    color: rgba(170, 200, 230, 0.6);
+    color: rgba(138, 122, 100, 0.6);
     margin-bottom: var(--space-1);
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -393,7 +393,7 @@
 
   .forum-selection-preview-text {
     font-size: var(--font-size-sm);
-    color: rgba(210, 230, 250, 0.85);
+    color: rgba(243, 234, 217, 0.85);
     line-height: 1.5;
     max-height: 120px;
     overflow-y: auto;
@@ -404,7 +404,7 @@
   .forum-selection-task {
     margin-top: var(--space-3);
     padding-top: var(--space-3);
-    border-top: 1px solid rgba(120, 150, 190, 0.15);
+    border-top: 1px solid rgba(158, 124, 90, 0.15);
   }
 
   /* Session Chat Component */
@@ -420,7 +420,7 @@
     align-items: center;
     justify-content: space-between;
     padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid rgba(120, 150, 190, 0.15);
+    border-bottom: 1px solid rgba(158, 124, 90, 0.15);
   }
 
   .session-chat-info {
@@ -435,18 +435,18 @@
     justify-content: center;
     width: 28px;
     height: 28px;
-    border: 1px solid rgba(120, 150, 190, 0.3);
+    border: 1px solid rgba(158, 124, 90, 0.3);
     border-radius: var(--radius-sm);
-    background: rgba(30, 50, 70, 0.5);
-    color: rgba(190, 210, 235, 0.8);
+    background: rgba(33, 28, 21, 0.5);
+    color: rgba(181, 164, 142, 0.8);
     cursor: pointer;
     transition: border-color 0.15s, color 0.15s;
     flex-shrink: 0;
   }
 
   .session-chat-back:hover {
-    border-color: rgba(150, 180, 210, 0.5);
-    color: rgba(220, 240, 255, 0.95);
+    border-color: rgba(201, 166, 107, 0.5);
+    color: rgba(243, 234, 217, 0.95);
   }
 
   .session-chat-titles {
@@ -458,12 +458,12 @@
   .session-chat-title {
     font-size: var(--font-size-md);
     font-weight: var(--font-weight-semibold);
-    color: rgba(235, 245, 255, 0.95);
+    color: rgba(243, 234, 217, 0.95);
   }
 
   .session-chat-provider {
     font-size: var(--font-size-xs);
-    color: rgba(170, 200, 230, 0.7);
+    color: rgba(138, 122, 100, 0.7);
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
@@ -473,15 +473,15 @@
     align-items: center;
     justify-content: space-between;
     padding: var(--space-2) var(--space-3);
-    background: rgba(240, 84, 84, 0.15);
-    border-bottom: 1px solid rgba(240, 84, 84, 0.3);
-    color: #f05454;
+    background: rgba(196, 80, 64, 0.15);
+    border-bottom: 1px solid rgba(196, 80, 64, 0.3);
+    color: #C45040;
     font-size: var(--font-size-sm);
   }
 
   .session-chat-error button {
     background: none;
-    border: 1px solid rgba(240, 84, 84, 0.5);
+    border: 1px solid rgba(196, 80, 64, 0.5);
     border-radius: var(--radius-sm);
     color: inherit;
     padding: var(--space-1) var(--space-2);
@@ -491,14 +491,14 @@
   }
 
   .session-chat-error button:hover {
-    border-color: #f05454;
+    border-color: #C45040;
   }
 
   .session-chat-lock-notice {
     padding: var(--space-2) var(--space-3);
-    background: rgba(240, 170, 90, 0.15);
-    border-bottom: 1px solid rgba(240, 170, 90, 0.3);
-    color: rgba(240, 200, 140, 0.95);
+    background: rgba(212, 168, 67, 0.15);
+    border-bottom: 1px solid rgba(212, 168, 67, 0.3);
+    color: rgba(212, 184, 122, 0.95);
     font-size: var(--font-size-sm);
   }
 
@@ -518,14 +518,14 @@
     justify-content: center;
     height: 100%;
     text-align: center;
-    color: rgba(190, 210, 235, 0.7);
+    color: rgba(181, 164, 142, 0.7);
     font-size: var(--font-size-sm);
     gap: var(--space-2);
   }
 
   .session-chat-hint {
     font-size: var(--font-size-xs);
-    color: rgba(170, 190, 210, 0.6);
+    color: rgba(138, 122, 100, 0.6);
   }
 
   .session-chat-message {
@@ -538,7 +538,7 @@
     font-size: var(--font-size-xs);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: rgba(170, 200, 230, 0.6);
+    color: rgba(138, 122, 100, 0.6);
   }
 
   .session-chat-message-content {
@@ -551,24 +551,24 @@
   }
 
   .session-chat-message--user .session-chat-message-content {
-    background: rgba(60, 120, 180, 0.25);
-    border: 1px solid rgba(90, 150, 210, 0.3);
-    color: rgba(220, 235, 255, 0.95);
+    background: rgba(201, 166, 107, 0.2);
+    border: 1px solid rgba(201, 166, 107, 0.3);
+    color: rgba(243, 234, 217, 0.95);
     align-self: flex-end;
     max-width: 90%;
   }
 
   .session-chat-message--assistant .session-chat-message-content {
-    background: rgba(40, 60, 80, 0.5);
-    border: 1px solid rgba(120, 150, 190, 0.2);
-    color: rgba(210, 230, 250, 0.9);
+    background: rgba(33, 28, 21, 0.5);
+    border: 1px solid rgba(158, 124, 90, 0.2);
+    color: rgba(243, 234, 217, 0.9);
     max-width: 95%;
   }
 
   .session-chat-message--system .session-chat-message-content {
-    background: rgba(100, 120, 140, 0.2);
-    border: 1px dashed rgba(150, 170, 190, 0.3);
-    color: rgba(180, 200, 220, 0.8);
+    background: rgba(92, 79, 61, 0.2);
+    border: 1px dashed rgba(138, 122, 100, 0.3);
+    color: rgba(181, 164, 142, 0.8);
     font-size: var(--font-size-xs);
   }
 
@@ -577,17 +577,17 @@
     flex-direction: column;
     gap: var(--space-2);
     padding: var(--space-3);
-    border-top: 1px solid rgba(120, 150, 190, 0.15);
-    background: rgba(15, 20, 28, 0.5);
+    border-top: 1px solid rgba(158, 124, 90, 0.15);
+    background: rgba(18, 11, 9, 0.5);
   }
 
   .session-chat-composer textarea {
     width: 100%;
     resize: none;
-    border: 1px solid rgba(120, 150, 190, 0.25);
+    border: 1px solid rgba(158, 124, 90, 0.25);
     border-radius: var(--radius-md);
-    background: rgba(20, 30, 45, 0.8);
-    color: rgba(220, 235, 255, 0.95);
+    background: rgba(26, 20, 16, 0.8);
+    color: rgba(243, 234, 217, 0.95);
     padding: var(--space-2) var(--space-3);
     font-size: var(--font-size-sm);
     font-family: inherit;
@@ -597,7 +597,7 @@
 
   .session-chat-composer textarea:focus {
     outline: none;
-    border-color: rgba(110, 180, 240, 0.5);
+    border-color: rgba(201, 166, 107, 0.5);
   }
 
   .session-chat-composer textarea:disabled {
@@ -606,7 +606,7 @@
   }
 
   .session-chat-composer textarea::placeholder {
-    color: rgba(150, 180, 210, 0.5);
+    color: rgba(138, 122, 100, 0.5);
   }
 
   .session-chat-actions {
