@@ -87,12 +87,23 @@ class GitSyncService:
             **os.environ,
             "GIT_TERMINAL_PROMPT": "0",  # Never prompt
         }
+        # GIT_CONFIG_* env vars are inherited by child processes (e.g. git-upload-pack
+        # spawned for file:// transport), unlike -c flags which only affect the parent.
+        config_entries: list[tuple[str, str]] = []
+
+        # Container environments: repo may be owned by different UID.
+        # Must be in env (not just -c) so subprocesses inherit it.
+        config_entries.append(("safe.directory", "*"))
+
         # Allow file:// protocol (needed for local/CI testing with bare repos).
         # Git 2.38.1+ blocks file:// by default (CVE-2022-39253).
         if self.repo_url.startswith("file://"):
-            env["GIT_CONFIG_COUNT"] = "1"
-            env["GIT_CONFIG_KEY_0"] = "protocol.file.allow"
-            env["GIT_CONFIG_VALUE_0"] = "always"
+            config_entries.append(("protocol.file.allow", "always"))
+
+        env["GIT_CONFIG_COUNT"] = str(len(config_entries))
+        for i, (key, value) in enumerate(config_entries):
+            env[f"GIT_CONFIG_KEY_{i}"] = key
+            env[f"GIT_CONFIG_VALUE_{i}"] = value
 
         if self.ssh_key_path:
             env["GIT_SSH_COMMAND"] = f"ssh -i {self.ssh_key_path} -o StrictHostKeyChecking=accept-new"
