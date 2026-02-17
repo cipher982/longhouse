@@ -38,6 +38,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Rust Engine Daemon | DONE | `apps/engine/` — `longhouse-engine connect` replaces Python watcher. 27 MB idle (vs 835 MB), 0% CPU, FSEvents/inotify, zstd compression. Commits `fe52e338`, `ca8fe86f` |
 | Install/Onboarding | 100% | All items complete: installer, doctor, connect, hooks, MCP, PATH verify, install guide docs (commit 5757d63b) |
 | OSS First-Run UX | 100% | Auto-seed on first run + guided empty state + multi-CLI detection + "No CLI" guidance all complete |
+| Frontend: Job Secrets UI | 100% | Secrets CRUD + job status + enable/disable + pre-flight UI on `/settings/secrets` |
 | Landing Page Redesign | 100% | All phases + meta/OG tags + docs/pricing rewrite + dead CSS removed |
 | AGENTS.md Accuracy Audit | DONE | Deploy section, generated paths, gotchas, checklist all verified |
 | OSS Packaging Decisions | 100% | Shipper bundled, no built-in HTTPS, auto-token flow, bundle budget — all done |
@@ -53,15 +54,14 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Section | Status | Notes |
 |---------|--------|-------|
 | Session Processing (3.5) | 100% | Core module + summarize + briefing + hook + integration tests + consumer migration all done |
-| Full Signup Flow | ~90% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs done; email injection in provisioner done; needs Google OAuth creds + Stripe product setup + smoke test |
+| Full Signup Flow | ~90% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs done; email injection in provisioner done; creds set + Stripe live; needs provisioning smoke test + resolve provisioning stall(s) |
 | Email Infrastructure | DONE | Platform-provided SES email via control plane injection + per-user override via Settings UI + `resolve_email_config()` chain (DB → env fallback). 3 commits: `a6c09f59`, `867b57ac`, `bb36e815` |
+| Pre-flight Job Validation | ~70% | Phase 1-2 done (backend 409 + force param + frontend enable guard). Phase 3 still open |
 
 ### Not Started
 | Section | Status | Notes |
 |---------|--------|-------|
 | Forum Discovery UX | 0% | No presence events, no bucket UI |
-| Frontend: Job Secrets UI | Phase 1 done | Secrets CRUD + job status + enable/disable on `/settings/secrets` |
-| Pre-flight Job Validation | Phase 1-2 done | Backend 409 + force param + frontend enable guard |
 
 > Changelogs archived. See git log for session details.
 
@@ -71,10 +71,10 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 1. **HN Launch Prep** — ✅ All blockers resolved. Landing page done; E2E infra-smoke + chat-send streaming fixed; video walkthrough optional. [Details](#launch-hn-launch-readiness--remaining-4)
 2. **Public Launch Checklist** — ✅ Complete. All items done including UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
-3. **Agent Infrastructure Consolidation** — Migrate embeddings, semantic search, recall, insights, file reservations from Life Hub → Longhouse. Spec finalized (v3, Codex-reviewed). [Details](#phase-4-agent-infrastructure-consolidation-8)
-4. **Full Signup Flow (OAuth + Stripe + Provisioning)** — User clicks "Get Started" → Google OAuth → Stripe checkout → auto-provision instance. Requires OAuth, Stripe integration, and landing page wiring. [Details](#infra-full-signup-flow-8)
-5. **Frontend: Job Secrets UI** — Settings page for managing job secrets with SecretField metadata (labels, types, placeholders). Backend API exists; needs React UI. [Details](#product-frontend-job-secrets-ui-4)
-6. **Pre-flight Job Validation** — Block job enable when required secrets are missing. Wire status endpoint into enable flow + frontend guards. [Details](#product-pre-flight-job-validation-3)
+3. **Full Signup Flow (OAuth + Stripe + Provisioning)** — OAuth + Stripe live; needs provisioning smoke test + resolve provisioning stall(s). [Details](#infra-full-signup-flow-8)
+4. **Pre-flight Job Validation** — Phase 3 (failure tagging + job list summary). [Details](#product-pre-flight-job-validation-3)
+5. **Semantic Search / Recall UI** — Wire backend semantic search + recall into Timeline UI (beyond Oikos). [Details](#phase-4-agent-infrastructure-consolidation-8)
+6. **Oikos Dispatch Contract + Compaction** — Implement explicit dispatch (direct/tool/CLI + backend intent) and compaction strategy. [Details](#product-harness-simplification--commis-to-timeline-8)
 
 ---
 
@@ -429,7 +429,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Architecture:** Tiny FastAPI control plane handles signup/billing/provisioning. Uses Docker API directly (not Coolify). Runtime image bundles frontend + backend per user.
 
-**Current state (2026-02-15):** OAuth, Stripe, webhooks, provisioning trigger, dashboard, provisioning status page, landing page CTAs, and **platform-provided email injection** all implemented. Control plane injects SES env vars into instances during provisioning (`provisioner.py:_env_for()`). Needs Google OAuth credentials + Stripe product setup + smoke test.
+**Current state (2026-02-17):** OAuth, Stripe, webhooks, provisioning trigger, dashboard, provisioning status page, landing page CTAs, and **platform-provided email injection** all implemented. Control plane injects SES env vars into instances during provisioning (`provisioner.py:_env_for()`). OAuth + Stripe creds are set; needs provisioning smoke test + resolve provisioning stall(s).
 
 **Decisions / Notes (2026-02-04):**
 - Control plane + user instances will live on **zerg** (single host for now).
@@ -491,7 +491,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 - [x] Control plane `login-token` endpoint exists (issues JWT with `sub=user_id` + `email` claim)
 - [x] Instance `accept-token` endpoint exists and handles CP-issued tokens (dual-secret validation)
-- [ ] Wire auto-redirect after provisioning: dashboard "Open Instance" link could include accept-token for seamless SSO
+- [x] Wire auto-redirect after provisioning: provisioning page redirects through `/dashboard/open-instance` for SSO
 - [ ] Handle returning users: "Sign In" → OAuth → find instance → redirect with token
 
 ### Phase 5: Landing Page + Control Plane UI ✅
@@ -567,15 +567,13 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Phase 2: Per-Job Secret Status View (2)
 
-- [ ] Add `components/JobSecretStatus.tsx` — shows which secrets a job needs and which are configured
+- [x] Add per-job secret status panel (implemented inline in `JobSecretsPage.tsx`)
   - Uses `GET /api/jobs/{job_id}/secrets/status` response
-  - Renders SecretField metadata: label (fallback to key), type hint, placeholder, description, required badge
-  - Green check / red X for `configured` status
+  - Renders SecretField metadata: label (fallback to key), required badge
+  - Green/yellow status indicator for `configured`
   - "Configure" button next to unconfigured secrets → opens upsert form pre-filled with key
   - Progress indicator: "3 of 5 secrets configured"
-- [ ] Integrate into job detail view (wherever individual job config is shown)
-  - If job list page exists: expand row or detail panel shows secret status
-  - If not: standalone at `/jobs/{jobId}/secrets`
+- [x] Integrate into job list view on `/settings/secrets` (no separate job detail page yet)
 - [ ] Form rendering based on SecretField metadata:
   - `type: "password"` → password input (default)
   - `type: "text"` → text input
@@ -583,17 +581,17 @@ Update screenshots to show Timeline, not old dashboard.
   - `placeholder` → input placeholder
   - `description` → help text below input
   - `required` → asterisk + validation
-- [ ] Inline upsert form: user can configure a secret directly from the status view without navigating away
+- [x] Configure flow: user can configure a secret from status view (prefill + scroll to form)
 
 ### Phase 3: Polish (1)
 
-- [ ] Empty state for no secrets configured — guidance text + link to docs
-- [ ] Toast notifications on save/delete success/failure
+- [x] Empty state for no secrets configured — guidance text (docs link optional)
+- [x] Toast notifications on save/delete success/failure
 - [ ] Keyboard shortcuts: Escape to cancel form, Enter to submit
 - [ ] Loading skeletons while fetching
 - [ ] Mobile-responsive layout (secrets page should work on tablet)
 
-**Files:** `apps/zerg/frontend/src/pages/JobSecretsPage.tsx`, `apps/zerg/frontend/src/services/api/jobSecrets.ts`, `apps/zerg/frontend/src/components/JobSecretStatus.tsx`
+**Files:** `apps/zerg/frontend-web/src/pages/JobSecretsPage.tsx`, `apps/zerg/frontend-web/src/services/api/jobSecrets.ts`
 
 ---
 
