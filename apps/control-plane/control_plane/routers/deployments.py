@@ -38,6 +38,12 @@ class DeploymentCreate(BaseModel):
     dry_run: bool = False
     force: bool = False
 
+    def model_post_init(self, __context) -> None:
+        if self.max_parallel < 1:
+            raise ValueError("max_parallel must be >= 1")
+        if self.failure_threshold < 1:
+            raise ValueError("failure_threshold must be >= 1")
+
 
 class InstanceDeployInfo(BaseModel):
     id: int
@@ -308,6 +314,13 @@ def rollback_deployment(deploy_id: str, payload: RollbackCreate, db: Session = D
     original = db.query(Deployment).filter(Deployment.id == deploy_id).first()
     if not original:
         raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Prevent rollback while deploy is still running
+    if original.status in ("pending", "in_progress"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Deployment {deploy_id} is still {original.status}. Wait for completion or pause first.",
+        )
 
     # Find instances to roll back
     scope_filter = [Instance.deploy_id == deploy_id]

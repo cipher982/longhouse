@@ -153,6 +153,7 @@ class Provisioner:
         *,
         password: str | None = None,
         image: str | None = None,
+        skip_pull: bool = False,
     ) -> ProvisionResult:
         container_name = f"longhouse-{subdomain}"
         use_image = image or settings.image
@@ -176,8 +177,9 @@ class Provisioner:
         if settings.publish_ports:
             ports = {settings.instance_port: settings.instance_port}
 
-        # Pull image before provisioning to avoid stale cache
-        self.client.images.pull(use_image)
+        # Pull image before provisioning (skip if batch deploy already pre-pulled)
+        if not skip_pull:
+            self.client.images.pull(use_image)
 
         container = self.client.containers.run(
             image=use_image,

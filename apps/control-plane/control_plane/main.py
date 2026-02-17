@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 
 from sqlalchemy import text
@@ -52,31 +51,29 @@ def _recover_stale_deploys():
     """Mark instances stuck in 'deploying' as failed and pause interrupted deployments."""
     db = SessionLocal()
     try:
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        # Deployments stuck in "in_progress" → mark paused (do this FIRST)
+        stale_deploys = (
+            db.query(Deployment)
+            .filter(Deployment.status == "in_progress")
+            .all()
+        )
+        stale_deploy_ids = set()
+        for deploy in stale_deploys:
+            deploy.status = "paused"
+            stale_deploy_ids.add(deploy.id)
+            logger.warning(f"Paused interrupted deployment {deploy.id}")
 
-        # Instances stuck in "deploying" for >5 minutes → mark failed
+        # ALL instances in "deploying" state → mark failed (no age check — if the
+        # control plane restarted, no worker is advancing them regardless of age)
         stale_instances = (
             db.query(Instance)
-            .filter(
-                Instance.deploy_state == "deploying",
-                Instance.deploy_started_at < stale_cutoff,
-            )
+            .filter(Instance.deploy_state == "deploying")
             .all()
         )
         for inst in stale_instances:
             inst.deploy_state = "failed"
             inst.deploy_error = "Control plane restarted during deploy"
             logger.warning(f"Marked stale deploying instance {inst.subdomain} as failed")
-
-        # Deployments stuck in "in_progress" → mark paused for manual resume
-        stale_deploys = (
-            db.query(Deployment)
-            .filter(Deployment.status == "in_progress")
-            .all()
-        )
-        for deploy in stale_deploys:
-            deploy.status = "paused"
-            logger.warning(f"Paused interrupted deployment {deploy.id}")
 
         if stale_instances or stale_deploys:
             db.commit()

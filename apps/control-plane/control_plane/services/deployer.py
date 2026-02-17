@@ -5,7 +5,6 @@ so it can resume after control plane restarts.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 from datetime import timezone
@@ -46,15 +45,14 @@ def _deploy_single_instance(
 
     try:
         provisioner.deprovision_instance(inst.container_name)
+        # skip_pull=True: batch deploy pre-pulls once to avoid tag drift between instances
         result = provisioner.provision_instance(
-            inst.subdomain, owner_email=user.email, image=deploy.image
+            inst.subdomain, owner_email=user.email, image=deploy.image, skip_pull=True
         )
         inst.container_name = result.container_name
 
-        # Wait for health check
-        healthy = provisioner.wait_for_health(inst.subdomain, timeout=120)
-        if not healthy:
-            raise RuntimeError("Health check returned False")
+        # wait_for_health raises RuntimeError on timeout (never returns False)
+        provisioner.wait_for_health(inst.subdomain, timeout=120)
 
         inst.deploy_state = "succeeded"
         inst.current_image = deploy.image
@@ -118,7 +116,7 @@ def _run_deploy(deploy_id: str, db: Session) -> None:
 
     provisioner = Provisioner()
 
-    # Pre-pull image once
+    # Pre-pull image once — all instances use this cached image (no per-instance pulls)
     try:
         provisioner.client.images.pull(deploy.image)
         pulled = provisioner.client.images.get(deploy.image)
