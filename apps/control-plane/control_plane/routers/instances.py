@@ -303,7 +303,7 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         )
 
     provisioner = Provisioner()
-    provisioner.deprovision_instance(f"longhouse-{inst.subdomain}")
+    provisioner.deprovision_instance(inst.container_name)
     result = provisioner.provision_instance(inst.subdomain, owner_email=user.email)
 
     inst.status = "provisioning"

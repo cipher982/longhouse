@@ -128,11 +128,11 @@ def _run_deploy(deploy_id: str, db: Session) -> None:
         logger.error(f"Failed to pull image {deploy.image}: {exc}")
         deploy.status = "failed"
         deploy.completed_at = _utcnow()
-        # Reset pending instances
+        # Mark pending instances as skipped (keep deploy_id for status visibility)
         db.query(Instance).filter(
             Instance.deploy_id == deploy_id,
             Instance.deploy_state == "pending",
-        ).update({"deploy_state": "idle", "deploy_id": None})
+        ).update({"deploy_state": "skipped"})
         db.commit()
         return
 
@@ -152,11 +152,11 @@ def _run_deploy(deploy_id: str, db: Session) -> None:
         # Check failure threshold BEFORE starting batch
         if deploy.failure_count >= deploy.failure_threshold:
             deploy.status = "paused"
-            # Reset remaining pending instances
+            # Mark remaining pending instances as skipped (keep deploy_id for status visibility)
             db.query(Instance).filter(
                 Instance.deploy_id == deploy_id,
                 Instance.deploy_state == "pending",
-            ).update({"deploy_state": "idle", "deploy_id": None})
+            ).update({"deploy_state": "skipped"})
             db.commit()
             logger.warning(
                 f"Deployment {deploy_id} paused: {deploy.failure_count} failures "
@@ -169,6 +169,23 @@ def _run_deploy(deploy_id: str, db: Session) -> None:
             if not success:
                 deploy.failure_count += 1
                 db.commit()
+                # Check threshold mid-batch to avoid exceeding it
+                if deploy.failure_count >= deploy.failure_threshold:
+                    break
+
+    # Check if threshold was hit in the final batch
+    if deploy.failure_count >= deploy.failure_threshold:
+        deploy.status = "paused"
+        db.query(Instance).filter(
+            Instance.deploy_id == deploy_id,
+            Instance.deploy_state == "pending",
+        ).update({"deploy_state": "skipped"})
+        db.commit()
+        logger.warning(
+            f"Deployment {deploy_id} paused: {deploy.failure_count} failures "
+            f"reached threshold {deploy.failure_threshold}"
+        )
+        return
 
     # Finalize
     deploy.status = "completed" if deploy.failure_count == 0 else "failed"

@@ -1,9 +1,10 @@
 # Rolling Deploy for Multi-Tenant Instances
 
-**Status:** Final
+**Status:** Implemented
 **Author:** Claude (David's agent)
 **Reviewed by:** Codex (GPT-5.2)
 **Date:** 2026-02-16
+**Updated:** 2026-02-17 (post-implementation hardening)
 
 ## Problem
 
@@ -203,21 +204,20 @@ async def run_deploy(deploy_id: str, db: Session):
         # Check failure threshold BEFORE starting batch
         if deploy.failure_count >= deploy.failure_threshold:
             deploy.status = "paused"
-            for inst in remaining_instances:
-                inst.deploy_state = "idle"
-                inst.deploy_id = None
+            # Mark remaining as "skipped" (keep deploy_id for visibility)
+            for inst in remaining_pending:
+                inst.deploy_state = "skipped"
             db.commit()
             return
 
-        results = await asyncio.gather(*[
-            deploy_single_instance(inst, deploy, db)
-            for inst in batch
-        ])
-
-        for success, inst in results:
+        for inst in batch:
+            success = deploy_single_instance(inst, deploy, db)
             if not success:
                 deploy.failure_count += 1
-        db.commit()
+                db.commit()
+                # Mid-batch threshold check
+                if deploy.failure_count >= deploy.failure_threshold:
+                    break
 
     deploy.status = "completed" if deploy.failure_count == 0 else "failed"
     deploy.completed_at = utcnow()
@@ -267,7 +267,7 @@ async def deploy_single_instance(inst, deploy, db):
         db.commit()
 ```
 
-**Crash recovery**: on control plane startup, check for any Deployment with `status=in_progress`. Resume the reconcile loop — it picks up instances still in `pending` or `failed` state. Instances stuck in `deploying` for >5 minutes are marked `failed` and retried.
+**Crash recovery**: on control plane startup, check for any Deployment with `status=in_progress`. ALL instances in `deploying` state are immediately marked `failed` (no age check — if the control plane restarted, no worker is advancing them). In-progress deployments are paused. The reconcile loop can then be resumed manually.
 
 ### 6. Ring-Based Canary Strategy
 
@@ -297,7 +297,7 @@ curl -X POST .../deployments -d '{"image": "...:<sha>", "rings": [2]}'
 
 - **Per-instance**: `deploy_id` on Instance acts as a soft lock. `POST /api/instances/{id}/reprovision` checks `deploy_id` — if set and deployment is active, returns `409 Conflict`.
 - **Global**: `POST /api/deployments` checks for any deployment with `status=in_progress`. Only one active deployment at a time. Returns `409` if one exists.
-- **Stale state cleanup**: on startup, instances with `deploy_state=deploying` and `deploy_started_at` older than 5 minutes are marked `failed`.
+- **Stale state cleanup**: on startup, ALL instances with `deploy_state=deploying` are marked `failed` (no age check needed — if CP restarted, no worker is progressing them).
 
 ### 8. Backfill Existing Instances
 
@@ -377,7 +377,7 @@ Full ring automation (0 → 1 → 2 with health gates) is a future CI enhancemen
 
 1. **SQLite single-writer** — can't run old+new simultaneously. Brief downtime (seconds) per instance is acceptable. Mitigated by pre-pulling image before stopping container.
 2. **No queue system** — asyncio background tasks + DB-driven state. Single control plane process; at 100 instances with max_parallel=5, this is sufficient.
-3. **Failure threshold** — default 3, checked before each batch starts (not after). Prevents cascading failures.
+3. **Failure threshold** — default 3, checked before each batch AND after each instance within a batch. Prevents exceeding the threshold mid-batch.
 4. **Image digest stored** — resolved at pull time for immutable reference. Tag kept for readability. Rollback uses `last_healthy_image` which includes the tag.
 5. **One active deployment** — simplicity over parallelism. No overlapping deploys.
 6. **Ring assignment** — manual via admin API. Auto-assignment is future work.
@@ -394,9 +394,22 @@ Full ring automation (0 → 1 → 2 with health gates) is a future CI enhancemen
 
 ## Resolved Questions (from Codex review)
 
-1. **Crash recovery**: Deployment + instance state is fully DB-driven. Startup hook resumes incomplete deploys.
-2. **Rollback target**: `last_healthy_image` (only set after health check passes) is the default. Explicit image override available.
-3. **Race conditions**: `deploy_id` on instance + global single-active-deployment constraint prevent concurrent modification.
+1. **Crash recovery**: Deployment + instance state is fully DB-driven. Startup hook marks ALL deploying instances as failed (no age check) and pauses in-progress deployments.
+2. **Rollback target**: `last_healthy_image` (only set after health check passes) is the default. Rollback validates all instances share the same target image — rejects with 400 if mismatched.
+3. **Race conditions**: `deploy_id` on instance + global single-active-deployment constraint prevent concurrent modification. Post-insert race guard detects two concurrent `POST /api/deployments` and rolls back the second.
 4. **Audit trail**: `Deployment` table serves as deploy history. Per-instance `deploy_error` captures failure details.
-5. **Stale state**: 5-minute TTL on `deploying` state; marked `failed` on startup.
+5. **Stale state**: ALL instances in `deploying` state are marked `failed` on startup — no age check needed since no worker is progressing them after a restart.
 6. **Backfill**: One-time `POST /api/instances/backfill-images` reads running container image refs.
+7. **Image drift**: Pre-pull once with `skip_pull=True` on per-instance provisions. All instances in a batch use the same cached image.
+8. **Skipped instances**: When deploy pauses or fails, pending instances get `deploy_state="skipped"` (not cleared) so they remain visible in status reporting.
+9. **Mid-batch threshold**: Failure count is checked after each instance within a batch, not just between batches. Prevents exceeding the threshold.
+10. **Container name**: `reprovision` uses `inst.container_name` from DB (not hardcoded `longhouse-{subdomain}`).
+11. **Input validation**: `max_parallel >= 1` and `failure_threshold >= 1` enforced by Pydantic model.
+
+## Test Coverage
+
+17 unit tests in `apps/control-plane/tests/test_deployer.py`:
+- `_deploy_single_instance`: success, failure with rollback, failure without rollback (same image)
+- `_run_deploy`: happy path, failure threshold pause, mid-batch threshold, image pull failure
+- Crash recovery: stale deploying → failed, in_progress → paused
+- API endpoints: create deployment, concurrent reject, status, skipped count, list, rollback mismatch, rollback success, dry run, validation

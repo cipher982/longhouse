@@ -73,6 +73,7 @@ class DeploymentStatus(BaseModel):
     failed: int
     pending: int
     rolled_back: int
+    skipped: int
     failure_threshold: int
     created_at: datetime | None = None
     completed_at: datetime | None = None
@@ -207,6 +208,21 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
         reason=payload.reason,
     )
     db.add(deploy)
+    db.flush()
+
+    # Post-insert race guard: if another request snuck in, back off
+    if not payload.force:
+        active_count = (
+            db.query(Deployment)
+            .filter(Deployment.status.in_(["pending", "in_progress"]))
+            .count()
+        )
+        if active_count > 1:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Another deployment was created concurrently. Retry.",
+            )
 
     # Mark instances as pending
     for inst, _skip in deployable:
@@ -247,7 +263,7 @@ def get_deployment(deploy_id: str, db: Session = Depends(get_db)):
 
     # Also include instances that were part of this deploy but rolled back/completed
     # (deploy_id may have been cleared on pause)
-    state_counts = {"succeeded": 0, "deploying": 0, "failed": 0, "pending": 0, "rolled_back": 0}
+    state_counts = {"succeeded": 0, "deploying": 0, "failed": 0, "pending": 0, "rolled_back": 0, "skipped": 0}
     failed_instances: list[InstanceDeployInfo] = []
 
     for inst in instances:
@@ -276,6 +292,7 @@ def get_deployment(deploy_id: str, db: Session = Depends(get_db)):
         failed=state_counts["failed"],
         pending=state_counts["pending"],
         rolled_back=state_counts["rolled_back"],
+        skipped=state_counts["skipped"],
         failure_threshold=deploy.failure_threshold,
         created_at=deploy.created_at,
         completed_at=deploy.completed_at,
@@ -342,9 +359,17 @@ def rollback_deployment(deploy_id: str, payload: RollbackCreate, db: Session = D
             detail=f"{len(no_rollback)} instances have no last_healthy_image to roll back to",
         )
 
-    # Create a new rollback deployment per unique image
-    # For simplicity, use the first instance's last_healthy_image (they should all be the same)
-    rollback_image = instances[0].last_healthy_image
+    # Verify all instances agree on the rollback target
+    unique_images = {inst.last_healthy_image for inst in instances}
+    if len(unique_images) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Instances have {len(unique_images)} different last_healthy_image values: "
+                f"{', '.join(sorted(unique_images))}. Roll back specific instances manually."
+            ),
+        )
+    rollback_image = unique_images.pop()
     rollback_id = _generate_deploy_id()
 
     deploy = Deployment(
