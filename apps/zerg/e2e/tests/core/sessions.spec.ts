@@ -10,12 +10,31 @@ import { randomUUID } from 'crypto';
 import { test, expect, type Page } from '../fixtures';
 
 async function ensureDemoProviders(page: Page): Promise<void> {
+  // Hero empty state has no toolbar — seed demos first if visible
+  const heroEmpty = page.locator('.sessions-hero-empty');
+  if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
+    const loadDemo = page.getByRole('button', { name: /Load demo/i });
+    await loadDemo.click();
+    // Wait for toolbar to appear (hero state is replaced by normal timeline)
+    await page.waitForSelector('.sessions-toolbar', { timeout: 15000 });
+  }
+
+  // Open filter panel if collapsed
+  const filterPanel = page.locator('#filter-panel');
+  if (!(await filterPanel.isVisible().catch(() => false))) {
+    const toggleBtn = page.locator('.sessions-filter-toggle');
+    if (await toggleBtn.isVisible()) {
+      await toggleBtn.click();
+    }
+  }
+
   const providerSelect = page.locator('select[aria-label="provider"]');
   const hasClaude = await providerSelect.locator('option[value="claude"]').count();
   if (hasClaude > 0) {
     return;
   }
 
+  // Fallback: try loading demos if provider not yet available
   const loadDemo = page.getByRole('button', { name: /Load demo/i });
   if (await loadDemo.isVisible()) {
     await loadDemo.click();
@@ -36,26 +55,34 @@ test.describe('Sessions Page', () => {
     await expect(page.locator('.header-nav')).toBeVisible();
     await expect(page.locator('.nav-tab:has-text("Timeline")')).toBeVisible();
 
-    // Should show either sessions list or empty state
+    // Should show either sessions list or hero empty state
     const hasSessions = await page.locator('.session-card').count() > 0;
-    const hasEmptyState = await page.locator('.timeline-empty').isVisible();
+    const hasHeroEmpty = await page.locator('.sessions-hero-empty').isVisible();
 
-    expect(hasSessions || hasEmptyState).toBe(true);
+    expect(hasSessions || hasHeroEmpty).toBe(true);
   });
 
   test('Filter bar is visible and interactive', async ({ page }) => {
     await page.goto('/timeline');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    // Filter bar should be visible
-    const filterBar = page.locator('.sessions-filter-bar');
-    await expect(filterBar).toBeVisible();
+    // Seed demos first so toolbar is visible (hero state has no toolbar)
+    await ensureDemoProviders(page);
 
-    // Filter selects should be present
-    await expect(filterBar.locator('select').first()).toBeVisible();
+    // Toolbar should be visible
+    const toolbar = page.locator('.sessions-toolbar');
+    await expect(toolbar).toBeVisible();
 
-    // Search input should be present
-    await expect(filterBar.locator('input[type="search"]')).toBeVisible();
+    // Search input should be present on the toolbar
+    await expect(toolbar.locator('input[type="search"]')).toBeVisible();
+
+    // Filter toggle should be present
+    await expect(page.locator('.sessions-filter-toggle')).toBeVisible();
+
+    // Filter panel should be open (ensureDemoProviders opened it)
+    const filterPanel = page.locator('#filter-panel');
+    await expect(filterPanel).toBeVisible();
+    await expect(filterPanel.locator('select').first()).toBeVisible();
   });
 
   test('Filter by provider updates URL', async ({ page }) => {
@@ -74,6 +101,13 @@ test.describe('Sessions Page', () => {
   test('Search input triggers debounced query', async ({ page }) => {
     await page.goto('/timeline');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    // If hero state, seed demos first so search input is on toolbar
+    const heroEmpty = page.locator('.sessions-hero-empty');
+    if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await page.getByRole('button', { name: /Load demo/i }).click();
+      await page.waitForSelector('.sessions-toolbar', { timeout: 15000 });
+    }
 
     // Type in search
     const searchInput = page.locator('input[type="search"]');
@@ -136,7 +170,7 @@ test.describe('Sessions Page', () => {
   });
 
   test('Clear filters button removes all filters', async ({ page }) => {
-    // Navigate with pre-set filters
+    // Navigate with pre-set filters — filtersOpen auto-opens from URL params
     await page.goto('/timeline?provider=claude&project=zerg');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
