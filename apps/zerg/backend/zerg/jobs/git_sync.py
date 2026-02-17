@@ -87,12 +87,24 @@ class GitSyncService:
             **os.environ,
             "GIT_TERMINAL_PROMPT": "0",  # Never prompt
         }
+        # Build a list of git config overrides via GIT_CONFIG_* env vars.
+        # This avoids needing `git config --global` which may not persist.
+        config_entries: list[tuple[str, str]] = []
+
+        # Container environments: repo may be owned by different UID
+        # (e.g. bootstrap creates /data/jobs, then container runs as different user)
+        config_entries.append(("safe.directory", "*"))
+
         # Allow file:// protocol (needed for local/CI testing with bare repos).
         # Git 2.38.1+ blocks file:// by default (CVE-2022-39253).
         if self.repo_url.startswith("file://"):
-            env["GIT_CONFIG_COUNT"] = "1"
-            env["GIT_CONFIG_KEY_0"] = "protocol.file.allow"
-            env["GIT_CONFIG_VALUE_0"] = "always"
+            config_entries.append(("protocol.file.allow", "always"))
+
+        env["GIT_CONFIG_COUNT"] = str(len(config_entries))
+        for i, (key, value) in enumerate(config_entries):
+            env[f"GIT_CONFIG_KEY_{i}"] = key
+            env[f"GIT_CONFIG_VALUE_{i}"] = value
+
         if self.ssh_key_path:
             env["GIT_SSH_COMMAND"] = f"ssh -i {self.ssh_key_path} -o StrictHostKeyChecking=accept-new"
         return env
@@ -184,9 +196,6 @@ class GitSyncService:
                         str(self.local_path),
                     ]
                 )
-
-                # Configure safe.directory for container environments
-                await self._run_git(["config", "--global", "--add", "safe.directory", str(self.local_path)])
 
                 self._current_sha = await self._get_head_sha()
                 self._write_sha()
@@ -293,8 +302,10 @@ class GitSyncService:
         stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
-            # Sanitize error message too
-            err_msg = stderr.decode().replace(self.token or "", "[TOKEN]")
+            # Sanitize error message (only replace token if actually set)
+            err_msg = stderr.decode()
+            if self.token:
+                err_msg = err_msg.replace(self.token, "[TOKEN]")
             raise GitSyncError(f"git {args[0]} failed: {err_msg}")
 
         return stdout.decode() if stdout else ""
