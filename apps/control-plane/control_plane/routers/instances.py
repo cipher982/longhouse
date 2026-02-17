@@ -246,6 +246,13 @@ def deprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     if not inst:
         raise HTTPException(status_code=404, detail="instance not found")
 
+    # Concurrency guard: reject if instance is part of an active deployment
+    if inst.deploy_id and inst.deploy_state in ("pending", "deploying"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Instance is part of active deployment {inst.deploy_id}",
+        )
+
     provisioner = Provisioner()
     provisioner.deprovision_instance(inst.container_name)
 

@@ -158,10 +158,11 @@ class Provisioner:
         container_name = f"longhouse-{subdomain}"
         use_image = image or settings.image
 
-        existing = self.client.containers.list(all=True, filters={"name": container_name})
-        if existing:
-            container = existing[0]
+        try:
+            container = self.client.containers.get(container_name)
             return ProvisionResult(container_name=container.name, data_path="")
+        except docker.errors.NotFound:
+            pass
 
         # Use provided password or generate a new one
         if password:

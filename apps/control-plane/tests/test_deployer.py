@@ -462,3 +462,115 @@ class TestDeploymentAPI:
             headers=ADMIN_HEADERS,
         )
         assert resp.status_code == 422
+
+    @patch("control_plane.routers.deployments.run_deploy_sync")
+    def test_force_still_blocks_concurrent_deploy(self, mock_run, client, db_session):
+        """force=true must NOT allow concurrent deploys — two threads on same instances would corrupt state."""
+        user = _make_user(db_session)
+        _make_instance(db_session, user, current_image="ghcr.io/test/app:old")
+        _make_deployment(db_session, deploy_id="d-existing", status="in_progress")
+
+        resp = client.post(
+            "/api/deployments",
+            json={"image": "ghcr.io/test/app:new", "force": True},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == 409
+        assert "concurrent" in resp.json()["detail"].lower() or "in progress" in resp.json()["detail"].lower()
+
+    @patch("control_plane.routers.deployments.run_deploy_sync")
+    def test_rollback_blocked_during_active_deploy(self, mock_run, client, db_session):
+        """Rollback should be rejected if another deployment is already running."""
+        user = _make_user(db_session)
+        old_deploy = _make_deployment(db_session, deploy_id="d-old", status="failed")
+        _make_instance(
+            db_session, user,
+            deploy_id=old_deploy.id,
+            deploy_state="failed",
+            last_healthy_image="ghcr.io/test/app:old",
+        )
+        # Another deploy is in progress
+        _make_deployment(db_session, deploy_id="d-active", status="in_progress")
+
+        resp = client.post(
+            f"/api/deployments/{old_deploy.id}/rollback",
+            json={"scope": "failed"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == 409
+
+    def test_deploy_id_uniqueness(self, client, db_session):
+        """Deploy IDs should include random suffix to avoid collisions."""
+        from control_plane.routers.deployments import _generate_deploy_id
+        ids = {_generate_deploy_id() for _ in range(100)}
+        assert len(ids) == 100  # all unique
+
+
+# ---------------------------------------------------------------------------
+# Deprovision concurrency guard tests
+# ---------------------------------------------------------------------------
+
+
+class TestDeprovisionGuard:
+    @patch("control_plane.routers.instances.Provisioner")
+    def test_deprovision_blocked_during_deploy(self, MockProv, client, db_session):
+        """Deprovision should be rejected if instance is part of an active deployment."""
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session, user,
+            deploy_id="d-active",
+            deploy_state="deploying",
+        )
+
+        resp = client.post(
+            f"/api/instances/{inst.id}/deprovision",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == 409
+        assert "active deployment" in resp.json()["detail"]
+
+    @patch("control_plane.routers.instances.Provisioner")
+    def test_deprovision_allowed_after_deploy(self, MockProv, client, db_session):
+        """Deprovision should work fine if instance's deploy is complete."""
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session, user,
+            deploy_id="d-done",
+            deploy_state="succeeded",
+        )
+
+        resp = client.post(
+            f"/api/instances/{inst.id}/deprovision",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Double failure (deploy + rollback both fail) tests
+# ---------------------------------------------------------------------------
+
+
+class TestDoubleFailure:
+    def test_deploy_and_rollback_both_fail_sets_instance_down(self, db_session):
+        """When both deploy and rollback fail, instance.status should reflect it's down."""
+        user = _make_user(db_session)
+        deploy = _make_deployment(db_session)
+        inst = _make_instance(
+            db_session, user,
+            deploy_id=deploy.id,
+            deploy_state="pending",
+            last_healthy_image="ghcr.io/test/app:old",
+        )
+
+        prov = MagicMock()
+        # Health check fails (deploy fails)
+        prov.wait_for_health.side_effect = RuntimeError("Health check failed")
+        # Rollback provision also fails
+        prov.provision_instance.side_effect = RuntimeError("Docker daemon error")
+
+        result = _deploy_single_instance(inst, user, deploy, prov, db_session)
+
+        assert result is False
+        assert inst.status == "failed"  # reflects instance is DOWN
+        assert "Rollback also failed" in inst.deploy_error

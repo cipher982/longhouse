@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 from datetime import datetime
 from datetime import timezone
@@ -91,7 +92,8 @@ class RollbackCreate(BaseModel):
 
 def _generate_deploy_id() -> str:
     now = datetime.now(timezone.utc)
-    return f"d-{now.strftime('%Y%m%d-%H%M%S')}"
+    suffix = secrets.token_hex(3)  # 6 hex chars to avoid second-granularity collisions
+    return f"d-{now.strftime('%Y%m%d-%H%M%S')}-{suffix}"
 
 
 def _get_targeted_instances(
@@ -127,15 +129,17 @@ def _get_targeted_instances(
 def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
     """Create a new rolling deployment."""
     # Global concurrency: only one active deployment at a time
+    # force=true skips ring prerequisites but NEVER allows concurrent deploys —
+    # two deploy threads on the same instances would corrupt state and orphan containers
     active = (
         db.query(Deployment)
         .filter(Deployment.status.in_(["pending", "in_progress"]))
         .first()
     )
-    if active and not payload.force:
+    if active:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Active deployment {active.id} in progress. Use force=true to override.",
+            detail=f"Active deployment {active.id} in progress. Cannot run concurrent deploys.",
         )
 
     # Ring prerequisite enforcement
@@ -211,18 +215,17 @@ def create_deployment(payload: DeploymentCreate, db: Session = Depends(get_db)):
     db.flush()
 
     # Post-insert race guard: if another request snuck in, back off
-    if not payload.force:
-        active_count = (
-            db.query(Deployment)
-            .filter(Deployment.status.in_(["pending", "in_progress"]))
-            .count()
+    active_count = (
+        db.query(Deployment)
+        .filter(Deployment.status.in_(["pending", "in_progress"]))
+        .count()
+    )
+    if active_count > 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another deployment was created concurrently. Retry.",
         )
-        if active_count > 1:
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Another deployment was created concurrently. Retry.",
-            )
 
     # Mark instances as pending
     for inst, _skip in deployable:
@@ -337,6 +340,18 @@ def rollback_deployment(deploy_id: str, payload: RollbackCreate, db: Session = D
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Deployment {deploy_id} is still {original.status}. Wait for completion or pause first.",
+        )
+
+    # Block if another deployment is already running
+    active = (
+        db.query(Deployment)
+        .filter(Deployment.status.in_(["pending", "in_progress"]))
+        .first()
+    )
+    if active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Active deployment {active.id} in progress. Wait for it to complete first.",
         )
 
     # Find instances to roll back

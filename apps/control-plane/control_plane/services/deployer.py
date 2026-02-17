@@ -80,7 +80,10 @@ def _deploy_single_instance(
                 inst.current_image = inst.last_healthy_image
                 logger.info(f"Rolled back {inst.subdomain} to {inst.last_healthy_image}")
             except Exception as rb_exc:
-                logger.error(f"Rollback failed for {inst.subdomain}: {rb_exc}")
+                # Deploy failed AND rollback failed — instance has no running container
+                inst.status = "failed"
+                inst.deploy_error = f"Deploy failed: {str(exc)[:200]}; Rollback also failed: {str(rb_exc)[:200]}"
+                logger.error(f"CRITICAL: Rollback failed for {inst.subdomain}: {rb_exc}. Instance is DOWN.")
 
         db.commit()
         return False
