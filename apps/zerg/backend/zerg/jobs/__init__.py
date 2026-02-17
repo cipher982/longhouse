@@ -36,10 +36,14 @@ Usage:
 from .git_sync import GitSyncError
 from .git_sync import GitSyncService
 from .git_sync import get_git_sync_service
+from .git_sync import replace_git_sync_service
 from .git_sync import run_git_sync_loop
 from .git_sync import set_git_sync_service
+from .git_sync import set_git_sync_task
+from .git_sync import stop_git_sync
 from .loader import get_manifest_metadata
 from .loader import load_jobs_manifest
+from .loader import reload_manifest_jobs
 from .registry import JobConfig
 from .registry import JobRegistry
 from .registry import job_registry
@@ -55,9 +59,13 @@ __all__ = [
     "GitSyncError",
     "GitSyncService",
     "get_git_sync_service",
+    "replace_git_sync_service",
     "run_git_sync_loop",
     "set_git_sync_service",
+    "set_git_sync_task",
+    "stop_git_sync",
     # Manifest loader
     "load_jobs_manifest",
+    "reload_manifest_jobs",
     "get_manifest_metadata",
 ]

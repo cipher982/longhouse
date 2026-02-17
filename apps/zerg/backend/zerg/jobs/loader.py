@@ -15,10 +15,6 @@ import logging
 import runpy
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +30,66 @@ def get_manifest_metadata(job_id: str) -> dict | None:
 def set_manifest_metadata(job_id: str, metadata: dict) -> None:
     """Store metadata for a manifest-loaded job."""
     _manifest_metadata[job_id] = metadata
+
+
+def _get_builtin_job_ids() -> set[str]:
+    """Return the set of builtin job IDs (tagged 'builtin' in registry)."""
+    from zerg.jobs.registry import job_registry
+
+    return {cfg.id for cfg in job_registry.list_jobs() if "builtin" in (cfg.tags or [])}
+
+
+def _clear_job_modules() -> int:
+    """Remove cached job modules from sys.modules so code changes are picked up.
+
+    Python caches modules in ``sys.modules`` — without this, ``runpy.run_path``
+    on the manifest will re-import stale bytecode for ``jobs.*`` submodules.
+
+    Returns the number of modules evicted.
+    """
+    to_remove = [key for key in sys.modules if key == "jobs" or key.startswith("jobs.")]
+    for key in to_remove:
+        del sys.modules[key]
+    if to_remove:
+        logger.info("Evicted %d cached job modules: %s", len(to_remove), to_remove)
+    return len(to_remove)
+
+
+async def reload_manifest_jobs() -> dict:
+    """Full reload: snapshot → clear modules → install deps → load manifest → sync scheduler.
+
+    Used by both the sync loop (on SHA change) and hot-start from the API.
+
+    Returns:
+        Dict with sync_result keys (added, removed, rescheduled) or error info.
+    """
+    from zerg.jobs.registry import job_registry
+
+    # 1. Snapshot current jobs for scheduler diff
+    old_snapshot = job_registry.snapshot_jobs()
+
+    # 2. Compute builtin IDs to preserve
+    builtin_ids = _get_builtin_job_ids()
+
+    # 3. Invalidate cached job modules in sys.modules
+    _clear_job_modules()
+
+    # 4. Load manifest (installs deps internally, clears non-builtin jobs)
+    success = await load_jobs_manifest(clear_existing=True, builtin_job_ids=builtin_ids)
+
+    if not success:
+        logger.warning("Manifest reload failed — scheduler not synced")
+        return {"success": False, "error": "manifest load failed"}
+
+    # 5. Sync scheduler (add/remove/reschedule cron triggers)
+    sync_result = job_registry.sync_jobs(old_snapshot)
+    logger.info(
+        "Manifest reload complete: added=%d removed=%d rescheduled=%d",
+        sync_result["added"],
+        sync_result["removed"],
+        sync_result["rescheduled"],
+    )
+    return {"success": True, **sync_result}
 
 
 async def load_jobs_manifest(clear_existing: bool = False, builtin_job_ids: set[str] | None = None) -> bool:
@@ -205,4 +261,11 @@ def _execute_manifest(manifest_path: Path, repo_root: Path, git_sha: str | None)
             sys.path.remove(repo_root_str)
 
 
-__all__ = ["load_jobs_manifest", "get_manifest_metadata", "set_manifest_metadata"]
+__all__ = [
+    "load_jobs_manifest",
+    "reload_manifest_jobs",
+    "get_manifest_metadata",
+    "set_manifest_metadata",
+    "_get_builtin_job_ids",
+    "_clear_job_modules",
+]
