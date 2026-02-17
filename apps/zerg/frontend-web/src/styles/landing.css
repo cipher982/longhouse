@@ -230,7 +230,6 @@
     background-color: var(--color-surface-page);
     color: var(--color-text-primary);
     font-family: var(--font-family-base);
-    overflow-x: hidden;
     position: relative;
   }
 
@@ -342,6 +341,13 @@
     max-width: 1200px;
     width: 100%;
     animation: landing-fadeInUp 0.8s ease-out;
+  }
+
+  /* Grid items default to min-width:auto which prevents shrinking
+     below content width. Override so they respect the grid track. */
+  .landing-hero-text,
+  .landing-hero-visual {
+    min-width: 0;
   }
 
   @keyframes landing-fadeInUp {
