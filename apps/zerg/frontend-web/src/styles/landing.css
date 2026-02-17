@@ -207,7 +207,8 @@
   html.public-page-scroll,
   body.public-page-scroll {
     height: auto;
-    overflow: visible;
+    overflow-x: hidden;
+    overflow-y: auto;
     /* Prevent sticky header from obscuring anchor targets */
     scroll-padding-top: 88px;
   }
