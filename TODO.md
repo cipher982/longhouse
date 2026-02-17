@@ -78,6 +78,13 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
+## [Infra] ✅ Rolling Deploy Hardening + CI E2E (2)
+
+**Goal:** Strengthen rolling deploy safety + cover the deploy flow in CI provisioning E2E.
+
+- [x] Harden rollback path: health check + status updates on failure
+- [x] Add CI provisioning E2E deploy step + coverage
+
 ## [Product] ✅ Jobs Pack Reliability + Legacy Secrets Bridge (5)
 
 **Goal:** Make external jobs packs load reliably (deps + manifest resilience) and ensure legacy `os.getenv()` jobs see DB-stored secrets safely.

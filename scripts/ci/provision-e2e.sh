@@ -18,7 +18,15 @@ require_cmd() {
 
 require_cmd docker
 require_cmd curl
-require_cmd python
+
+if command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+else
+  echo "Missing required command: python or python3" >&2
+  exit 1
+fi
 
 if ! docker info >/dev/null 2>&1; then
   echo "Docker is not available. This gate requires a working Docker daemon." >&2
@@ -31,14 +39,14 @@ printf "\n==> Building runtime image: %s\n" "$IMAGE_TAG"
 docker build -f "$ROOT_DIR/docker/runtime.dockerfile" -t "$IMAGE_TAG" "$ROOT_DIR"
 
 make_secret() {
-  python - <<'PY'
+  "$PYTHON_BIN" - <<'PY'
 import base64, os
 print(base64.urlsafe_b64encode(os.urandom(32)).decode())
 PY
 }
 
 make_token() {
-  python - <<'PY'
+  "$PYTHON_BIN" - <<'PY'
 import secrets
 print(secrets.token_urlsafe(32))
 PY
@@ -95,7 +103,7 @@ CONTROL_PLANE_PID=$!
 cd "$ROOT_DIR"
 
 printf "\n==> Waiting for control plane health\n"
-for _ in {1..60}; do
+for _ in {1..150}; do
   if curl -sf "${API_URL}/health" >/dev/null; then
     break
   fi
@@ -120,7 +128,7 @@ curl -sf -X POST "${API_URL}/api/instances" \
   -d "{\"email\":\"ci@example.com\",\"subdomain\":\"${CI_SUBDOMAIN}\"}" \
   -o "$response_file"
 
-INSTANCE_ID=$(python - <<'PY' "$response_file"
+INSTANCE_ID=$("$PYTHON_BIN" - <<'PY' "$response_file"
 import json, sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as handle:
@@ -129,7 +137,7 @@ print(data["id"])
 PY
 ) || { echo "Failed to parse instance response:"; cat "$response_file"; exit 1; }
 
-CONTAINER_NAME=$(python - <<'PY' "$response_file"
+CONTAINER_NAME=$("$PYTHON_BIN" - <<'PY' "$response_file"
 import json, sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as handle:
@@ -162,5 +170,68 @@ printf "\n==> Running smoke checks\n"
 curl -sf "${INSTANCE_URL}/api/health" >/dev/null
 curl -sf "${INSTANCE_URL}/api/health" >/dev/null
 curl -sf "${INSTANCE_URL}/timeline" >/dev/null
+
+printf "\n==> Backfilling instance images\n"
+curl -sf -X POST "${API_URL}/api/instances/backfill-images" \
+  -H "X-Admin-Token: ${ADMIN_TOKEN}" >/dev/null
+
+DEPLOY_TAG="longhouse-runtime:ci-${GITHUB_SHA:-local}-deploy"
+printf "\n==> Tagging deploy image: %s\n" "$DEPLOY_TAG"
+docker tag "$IMAGE_TAG" "$DEPLOY_TAG"
+
+printf "\n==> Starting rolling deploy (%s)\n" "$DEPLOY_TAG"
+deploy_resp=$(mktemp)
+curl -sf -X POST "${API_URL}/api/deployments" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+  -d "{\"image\":\"${DEPLOY_TAG}\"}" \
+  -o "$deploy_resp"
+
+DEPLOY_ID=$("$PYTHON_BIN" - <<'PY' "$deploy_resp"
+import json, sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data["id"])
+PY
+) || { echo "Failed to parse deployment response:"; cat "$deploy_resp"; exit 1; }
+
+printf "\n==> Waiting for deployment %s\n" "$DEPLOY_ID"
+status_file=$(mktemp)
+deploy_status="pending"
+for _ in {1..60}; do
+  curl -sf "${API_URL}/api/deployments/${DEPLOY_ID}" \
+    -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+    -o "$status_file"
+  read -r deploy_status deploy_succeeded deploy_failed <<<"$("$PYTHON_BIN" - <<'PY' "$status_file"
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data.get("status", ""), data.get("succeeded", 0), data.get("failed", 0))
+PY
+)"
+  if [[ "$deploy_status" != "pending" && "$deploy_status" != "in_progress" ]]; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$deploy_status" != "completed" ]]; then
+  echo "Deployment did not complete successfully (status=${deploy_status})." >&2
+  cat "$status_file" >&2
+  exit 1
+fi
+if [[ "${deploy_succeeded:-0}" -ne 1 || "${deploy_failed:-0}" -ne 0 ]]; then
+  echo "Unexpected deployment counts: succeeded=${deploy_succeeded:-0}, failed=${deploy_failed:-0}" >&2
+  cat "$status_file" >&2
+  exit 1
+fi
+
+printf "\n==> Verifying instance health after deploy\n"
+if ! curl -sf "${INSTANCE_URL}/api/health" >/dev/null; then
+  echo "Instance health check failed after deploy." >&2
+  docker logs "$CONTAINER_NAME" || true
+  exit 1
+fi
 
 echo "✅ Provisioning E2E checks passed."
