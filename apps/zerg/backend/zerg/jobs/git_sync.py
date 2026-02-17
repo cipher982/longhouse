@@ -97,6 +97,34 @@ class GitSyncService:
             env["GIT_SSH_COMMAND"] = f"ssh -i {self.ssh_key_path} -o StrictHostKeyChecking=accept-new"
         return env
 
+    async def _ensure_remote_url(self) -> None:
+        """Ensure origin remote points to the configured repo_url.
+
+        Called inside ensure_cloned (under exclusive lock) when the repo
+        directory already exists. Handles:
+        - Hot-start with a changed config (different URL)
+        - Bootstrap-created repos that have no origin remote
+        """
+        try:
+            current_url = (await self._run_git(["remote", "get-url", "origin"], cwd=self.local_path, capture=True)).strip()
+        except Exception:
+            current_url = ""
+
+        expected_url = self._get_auth_url()
+        if current_url == expected_url:
+            return
+
+        if current_url:
+            logger.info("Remote URL changed, updating origin: %s", self._safe_url())
+            await self._run_git(["remote", "set-url", "origin", expected_url], cwd=self.local_path)
+        else:
+            logger.info("Adding origin remote: %s", self._safe_url())
+            await self._run_git(["remote", "add", "origin", expected_url], cwd=self.local_path)
+
+        # Fetch + reset to pick up remote content
+        await self._run_git(["fetch", "origin", self.branch], cwd=self.local_path)
+        await self._run_git(["checkout", "-B", self.branch, f"origin/{self.branch}"], cwd=self.local_path)
+
     @asynccontextmanager
     async def _file_lock(self, exclusive: bool = True):
         """
@@ -126,11 +154,16 @@ class GitSyncService:
         """
         Clone repo if not present. BLOCKING - Zerg won't start without it.
 
+        If the repo already exists but the remote URL has changed (e.g. hot-start
+        with a new config), updates the remote URL and does a fresh fetch+reset.
+
         Raises:
             GitSyncError: If clone fails
         """
         async with self._file_lock(exclusive=True):
             if (self.local_path / ".git").exists():
+                # Repo exists — check if remote URL matches
+                await self._ensure_remote_url()
                 logger.info("Jobs repo already cloned at %s", self.local_path)
                 self._current_sha = await self._get_head_sha()
                 self._write_sha()
