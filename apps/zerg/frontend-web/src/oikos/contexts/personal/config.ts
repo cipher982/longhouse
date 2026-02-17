@@ -101,12 +101,12 @@ export const personalConfig: VoiceAgentConfig = {
   },
 
   theme: {
-    primaryColor: '#0891b2',      // Cyan-600
-    secondaryColor: '#334155',    // Slate-700
-    backgroundColor: '#0b1220',   // Dark blue-gray
-    textColor: '#e5e7eb',        // Gray-200
-    accentColor: '#06b6d4',      // Cyan-500
-    borderColor: '#1f2937'       // Gray-800
+    primaryColor: '#C9A66B',      // Aged gold
+    secondaryColor: '#2a2418',    // Warm dark
+    backgroundColor: '#120B09',   // Espresso
+    textColor: '#F3EAD9',        // Cream
+    accentColor: '#C9A66B',      // Gold
+    borderColor: '#2a2418'       // Warm border
   },
 
   branding: {

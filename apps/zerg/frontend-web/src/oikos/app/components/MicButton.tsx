@@ -30,7 +30,7 @@ export function MicButton({
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const visualizerRef = useRef<RadialVisualizer | null>(null)
   const renderStateRef = useRef(0)
-  const renderColorRef = useRef('#475569')
+  const renderColorRef = useRef('#5C4F3D')
   const isConnected = status !== 'idle' && status !== 'connecting' && status !== 'error'
   const isConnecting = status === 'connecting'
   const isBusy = status === 'processing' || status === 'speaking'
@@ -56,7 +56,7 @@ export function MicButton({
   useEffect(() => {
     const micActive = status === 'listening'
     renderStateRef.current = micActive ? 1 : 0
-    renderColorRef.current = micActive ? '#06b6d4' : '#475569'
+    renderColorRef.current = micActive ? '#C9A66B' : '#5C4F3D'
 
     const viz = visualizerRef.current
     if (!viz) return

@@ -31,10 +31,10 @@ type PointerState = {
 };
 
 const ENTITY_COLORS: Record<ForumEntity["type"], string> = {
-  unit: "#5CE0FF",
-  structure: "#F7B955",
-  commis: "#7B7CFF",
-  task_node: "#36EBA8",
+  unit: "#C9A66B",
+  structure: "#D4A843",
+  commis: "#9e7c5a",
+  task_node: "#5D9B4A",
 };
 
 const DESK_WIDTH = 28;
@@ -42,10 +42,10 @@ const DESK_HEIGHT = 16;
 const DESK_HIT_PADDING = 8;
 
 const ALERT_COLORS: Record<ForumAlert["level"], string> = {
-  L0: "#46E2F2",
-  L1: "#F7C055",
-  L2: "#F48B4A",
-  L3: "#F05454",
+  L0: "#C9A66B",
+  L1: "#D4A843",
+  L2: "#D4885A",
+  L3: "#C45040",
 };
 
 export function ForumCanvas({
@@ -254,7 +254,7 @@ function drawCanvas(
   ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
   ctx.clearRect(0, 0, size.width, size.height);
 
-  ctx.fillStyle = "#0B0E14";
+  ctx.fillStyle = "#120B09";
   ctx.fillRect(0, 0, size.width, size.height);
 
   ctx.save();
@@ -272,7 +272,7 @@ function drawCanvas(
 }
 
 function drawGrid(ctx: CanvasRenderingContext2D, layout: ForumMapLayout) {
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+  ctx.strokeStyle = "rgba(243, 234, 217, 0.05)";
   ctx.lineWidth = 1;
   for (let col = 0; col < layout.grid.cols; col += 1) {
     const start = gridToIso({ col, row: 0 }, layout);
@@ -307,15 +307,15 @@ function drawRooms(ctx: CanvasRenderingContext2D, rooms: Map<string, ForumRoom>,
     ctx.lineTo(corners[2].x, corners[2].y);
     ctx.lineTo(corners[3].x, corners[3].y);
     ctx.closePath();
-    ctx.fillStyle = index % 2 === 0 ? "rgba(33, 72, 99, 0.18)" : "rgba(77, 54, 108, 0.16)";
+    ctx.fillStyle = index % 2 === 0 ? "rgba(42, 36, 24, 0.35)" : "rgba(33, 28, 21, 0.35)";
     ctx.fill();
-    ctx.strokeStyle = "rgba(120, 160, 220, 0.18)";
+    ctx.strokeStyle = "rgba(201, 166, 107, 0.18)";
     ctx.lineWidth = 2;
     ctx.stroke();
 
     const label = room.name || room.id;
     const labelPoint = gridToIso(room.center, layout);
-    ctx.fillStyle = "rgba(210, 230, 255, 0.7)";
+    ctx.fillStyle = "rgba(243, 234, 217, 0.7)";
     ctx.font = "12px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -333,12 +333,12 @@ function drawEntities(
   entities.forEach((entity) => {
     const iso = gridToIso(entity.position, layout);
     const isDisabled = entity.status === "disabled";
-    const color = isDisabled ? "rgba(130, 150, 190, 0.35)" : ENTITY_COLORS[entity.type] || "#7B7CFF";
+    const color = isDisabled ? "rgba(138, 122, 100, 0.35)" : ENTITY_COLORS[entity.type] || "#9e7c5a";
     const deskX = iso.x - DESK_WIDTH / 2;
     const deskY = iso.y - DESK_HEIGHT / 2;
 
     ctx.fillStyle = color;
-    ctx.strokeStyle = "rgba(10, 12, 18, 0.7)";
+    ctx.strokeStyle = "rgba(18, 11, 9, 0.7)";
     ctx.lineWidth = 2;
     beginRoundedRect(ctx, deskX, deskY, DESK_WIDTH, DESK_HEIGHT, 4);
     ctx.fill();
@@ -346,20 +346,20 @@ function drawEntities(
 
     const label = entity.label ?? entity.id;
     const subtitle = typeof entity.meta?.subtitle === "string" ? (entity.meta.subtitle as string) : null;
-    ctx.fillStyle = "rgba(235, 245, 255, 0.9)";
+    ctx.fillStyle = "rgba(243, 234, 217, 0.9)";
     ctx.font = "11px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(label, iso.x, iso.y + DESK_HEIGHT / 2 + 12);
 
     if (subtitle) {
-      ctx.fillStyle = "rgba(180, 200, 230, 0.7)";
+      ctx.fillStyle = "rgba(181, 164, 142, 0.7)";
       ctx.font = "9px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
       ctx.fillText(subtitle, iso.x, iso.y + DESK_HEIGHT / 2 + 24);
     }
 
     if (selectedEntityId === entity.id) {
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+      ctx.strokeStyle = "rgba(201, 166, 107, 0.7)";
       ctx.lineWidth = 2;
       beginRoundedRect(ctx, deskX - 4, deskY - 4, DESK_WIDTH + 8, DESK_HEIGHT + 8, 6);
       ctx.stroke();
@@ -379,7 +379,7 @@ function drawTasks(
     ctx.save();
     ctx.translate(position.x, position.y - 12);
     ctx.rotate(Math.PI / 4);
-    ctx.fillStyle = task.status === "failed" ? "#F05454" : "#36EBA8";
+    ctx.fillStyle = task.status === "failed" ? "#C45040" : "#5D9B4A";
     ctx.fillRect(-4, -4, 8, 8);
     ctx.restore();
   });
@@ -413,7 +413,7 @@ function drawMarkers(
       return;
     }
     const iso = gridToIso(marker.position, layout);
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+    ctx.strokeStyle = "rgba(243, 234, 217, 0.6)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(iso.x - 6, iso.y - 6);

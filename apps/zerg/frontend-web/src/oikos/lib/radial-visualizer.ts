@@ -28,7 +28,7 @@ export class RadialVisualizer {
   private lastTimestamp = 0;
   private targetLevel = 0;
   private displayLevel = 0;
-  private renderColor = '#3b82f6';
+  private renderColor = '#C9A66B';
   private renderState = 0;
   private pulseClock = 0;
   private readonly outerInset: number;
@@ -270,8 +270,8 @@ export class RadialVisualizer {
     }
 
     const barColor = ctx.createLinearGradient(cx, cy - innerR, cx, cy + baseR);
-    const barStart = assistantActive && !micActive ? '#38bdf8' : accent;
-    const barEnd = assistantActive && !micActive ? 'rgba(56,189,248,0.35)' : 'rgba(6,182,212,0.25)';
+    const barStart = assistantActive && !micActive ? '#D4B87A' : accent;
+    const barEnd = assistantActive && !micActive ? 'rgba(212,184,122,0.35)' : 'rgba(201,166,107,0.25)';
     barColor.addColorStop(0, barStart);
     barColor.addColorStop(1, barEnd);
 

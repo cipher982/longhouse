@@ -232,11 +232,11 @@ function TraceDetailView({
   if (!detail) return null;
 
   const statusColors: Record<string, { color: string; bg: string }> = {
-    SUCCESS: { color: "#10b981", bg: "rgba(16, 185, 129, 0.15)" },
-    FAILED: { color: "#ef4444", bg: "rgba(239, 68, 68, 0.15)" },
-    RUNNING: { color: "#f59e0b", bg: "rgba(245, 158, 11, 0.15)" },
+    SUCCESS: { color: "#5D9B4A", bg: "rgba(93, 155, 74, 0.15)" },
+    FAILED: { color: "#C45040", bg: "rgba(196, 80, 64, 0.15)" },
+    RUNNING: { color: "#D4A843", bg: "rgba(212, 168, 67, 0.15)" },
   };
-  const statusStyle = statusColors[detail.status] || { color: "#6b7280", bg: "rgba(107, 114, 128, 0.15)" };
+  const statusStyle = statusColors[detail.status] || { color: "#8A7A64", bg: "rgba(138, 122, 100, 0.15)" };
 
   return (
     <Card>
