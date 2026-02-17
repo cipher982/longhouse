@@ -174,8 +174,12 @@ CLI agents (Claude Code, Codex, Gemini) can call back into Longhouse's toolbox v
 **Longhouse exposes as MCP tools:**
 - `search_sessions` — find past solutions in the session archive
 - `get_session_detail` — retrieve specific session content/events
+- `recall` — chunk-level semantic recall with event window retrieval
 - `memory_read` / `memory_write` — persistent memory across commis runs
-- `notify_oikos` — commis reports status back to Oikos coordinator
+- `log_insight` / `query_insights` — write/read insights
+- `reserve_file` / `check_reservation` / `release_reservation` — prevent edit conflicts
+- `get_reflections` — retrieve recent reflection briefings
+- `notify_oikos` — commis reports status back to Oikos coordinator (currently logs)
 
 **How it works:**
 - Longhouse runs an MCP server (stdio transport for local, streamable HTTP for remote)
@@ -183,7 +187,7 @@ CLI agents (Claude Code, Codex, Gemini) can call back into Longhouse's toolbox v
 - Commis spawned via `hatch` automatically get the Longhouse MCP server configured
 - A hatch-spawned agent can search "how did we implement retry logic?" against the Longhouse archive mid-task
 
-**Current State (as of 2026-02-10):** MCP server implemented with stdio and HTTP transport. 5 tools exposed: `search_sessions`, `get_session_detail`, `memory_read`, `memory_write`, `notify_oikos`. Auto-registered via `longhouse connect --install`. Auto-configured for commis workspaces (injected into `.claude/settings.json` at spawn time). Codex `config.toml` MCP registration supported. Quality gates (verify hooks) injected into commis workspaces.
+**Current State (as of 2026-02-12):** MCP server implemented with stdio and HTTP transport. Toolset expanded (search/detail/recall, memory, insights, reservations, reflections, notify). Auto-registered via `longhouse connect --install`. Auto-configured for commis workspaces (injected into `.claude/settings.json` at spawn time). Codex `config.toml` MCP registration supported. Quality gates (verify hooks) injected into commis workspaces. `notify_oikos` still logs (WebSocket delivery pending).
 
 ### Multi-Provider Backend Integration
 
@@ -344,13 +348,13 @@ This is not a modal or tour - it's inline content that disappears once sessions 
 
 **Current State (as of 2026-02-11):** Auto-seed on first run and guided empty state with "Load demo sessions" CTA are implemented. `longhouse serve --demo` / `--demo-fresh` also supported. Multi-CLI detection (Claude Code, Codex CLI, Gemini CLI) in onboard wizard with guidance when no CLI is found. Install guide docs at `docs/install-guide.md`.
 
-**Docs-as-source validation:**
-README contains an `onboarding-contract` JSON block that CI executes:
+**Docs-as-source validation (target, not implemented yet):**
+README will contain an `onboarding-contract` JSON block that CI executes:
 - Steps to run (`pip install longhouse`, `longhouse serve`, health check)
 - Cleanup commands
 - CTA selectors to verify (e.g., `[data-testid='demo-cta']`)
 
-If the README drifts from reality, CI fails. No hidden env flags - everything declared in the contract.
+If the README drifts from reality, CI should fail. No hidden env flags — everything declared in the contract.
 
 **OSS install + onboarding (canonical):**
 - **One-liner install is the primary path:** `curl -fsSL https://get.longhouse.ai/install.sh | bash`
@@ -626,7 +630,7 @@ The shipper daemon for providers without hook support (Codex, Gemini, Cursor):
 **Current State (as of 2026-02-15):**
 - **Rust engine daemon** (`apps/engine/`) replaces the Python watcher daemon for always-on background shipping. Resource profile: 27 MB RSS idle (vs 835 MB Python), 0% CPU idle, 3 threads, <1s wake-to-ship latency. Uses FSEvents (macOS) / inotify (Linux) via `notify` crate, tokio single-threaded runtime, zstd compression (12x faster than gzip).
 - `longhouse-engine connect --url URL --compression zstd` is the new daemon command. Watches Claude, Codex, and Gemini directories. SQLite state tracking with dual-offset model (queued vs acked) and pointer-based spool for offline resilience.
-- **Python `longhouse connect`** remains for `--install` (hooks, MCP server registration, launchd/systemd setup) and `longhouse auth` (device-token flow). The Python watcher is superseded by the Rust daemon.
+- **Python `longhouse connect`** remains for `--install` (hooks, MCP server registration, launchd/systemd setup) and `longhouse auth` (device-token flow). The watch loop is still Python unless users run `longhouse-engine connect`; Rust is available as the replacement daemon.
 - Hook-based push still works: Stop hook ships session on Claude Code response completion; SessionStart hook shows recent sessions.
 
 **Testing:** Shipper smoke test (`make test-shipper-smoke`) validates the end-to-end ingest path: file parse → API post → session appears in timeline. Rust engine: 26 unit tests covering parser, compressor, state, spool, discovery.
