@@ -358,6 +358,15 @@ export default function SessionsPage() {
   const [searchQuery, setSearchQuery] = useState(searchParams.get("query") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
 
+  // Collapsible filters — open by default if URL has active filters
+  const hasUrlFilters = !!(
+    searchParams.get("project") ||
+    searchParams.get("provider") ||
+    searchParams.get("environment") ||
+    (searchParams.get("days_back") && Number(searchParams.get("days_back")) !== 14)
+  );
+  const [filtersOpen, setFiltersOpen] = useState(hasUrlFilters);
+
   // Pagination state
   const [limit, setLimit] = useState(PAGE_SIZE);
 
@@ -435,6 +444,7 @@ export default function SessionsPage() {
     setEnvironment("");
     setDaysBack(14);
     setSearchQuery("");
+    setFiltersOpen(false);
   }, []);
 
 
@@ -458,8 +468,16 @@ export default function SessionsPage() {
     }
   }, [queryClient]);
 
-  const hasFilters = project || provider || environment || daysBack !== 14 || searchQuery;
+  const hasFilters = !!(project || provider || environment || daysBack !== 14 || searchQuery);
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
+
+  // Count active non-default filters (for badge)
+  const activeFilterCount = [
+    project,
+    provider,
+    environment,
+    daysBack !== 14 ? "active" : "",
+  ].filter(Boolean).length;
 
   // Ready signal for E2E
   useEffect(() => {
@@ -504,12 +522,57 @@ export default function SessionsPage() {
     );
   }
 
+  // Hero empty state — no sessions, no filters: show full-viewport centered CTA
+  if (showGuidedEmptyState) {
+    return (
+      <PageShell size="wide" className="sessions-page-container">
+        <div className="sessions-hero-empty">
+          <EmptyState
+            title="Welcome to Longhouse"
+            description="Your AI coding sessions from Claude Code, Codex, and Gemini will appear here as a searchable timeline."
+            action={
+              <div className="sessions-guided-actions">
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={handleSeedDemo}
+                  disabled={demoLoading}
+                >
+                  {demoLoading ? "Loading..." : "Load demo sessions"}
+                </Button>
+                {seedError && (
+                  <p style={{ color: "var(--color-intent-error)", marginTop: "0.5rem", fontSize: "0.875rem" }}>
+                    {seedError}
+                  </p>
+                )}
+              </div>
+            }
+          />
+          <div className="sessions-guided-steps">
+            <p className="sessions-guided-steps-label">To start shipping your own sessions:</p>
+            <ol className="sessions-guided-steps-list">
+              <li><code>longhouse connect</code> &mdash; link your CLI tools</li>
+              <li>Use Claude Code, Codex, or Gemini as normal</li>
+              <li>Sessions appear here automatically</li>
+            </ol>
+            <p className="sessions-guided-cli-hint">
+              Don&apos;t have a CLI yet? Longhouse supports{" "}
+              <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
+              <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
+              <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
+            </p>
+          </div>
+        </div>
+      </PageShell>
+    );
+  }
+
   return (
     <PageShell size="wide" className="sessions-page-container">
       <div className="sessions-page">
         <SectionHeader
           title="Timeline"
-          description="A unified view of your AI coding sessions."
+          actions={total > 0 ? <span className="sessions-header-count">{total} sessions</span> : undefined}
         />
 
         {!config.llmAvailable && sessions.length > 0 && (
@@ -519,9 +582,44 @@ export default function SessionsPage() {
           </div>
         )}
 
-        {/* Filter Bar */}
-        <div className="sessions-filter-bar">
-          <div className="sessions-filters">
+        {/* Compact Toolbar */}
+        <div className="sessions-toolbar">
+          <Input
+            type="search"
+            placeholder="Search timeline..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="sessions-search-input"
+          />
+          <div className="sessions-toolbar-actions">
+            {hasFilters && (
+              <Button variant="ghost" size="sm" onClick={handleClearFilters}>
+                Clear
+              </Button>
+            )}
+            <button
+              type="button"
+              className={`sessions-filter-toggle${filtersOpen ? " sessions-filter-toggle--open" : ""}`}
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-expanded={filtersOpen}
+              aria-controls="filter-panel"
+              aria-label={`Filters${activeFilterCount > 0 ? ` (${activeFilterCount} active)` : ""}`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="4" y1="6" x2="20" y2="6" />
+                <line x1="8" y1="12" x2="20" y2="12" />
+                <line x1="12" y1="18" x2="20" y2="18" />
+              </svg>
+              {activeFilterCount > 0 && (
+                <span className="sessions-filter-badge">{activeFilterCount}</span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Collapsible Filter Panel */}
+        {filtersOpen && (
+          <div id="filter-panel" role="region" aria-label="Session filters" className="sessions-filter-panel">
             <FilterSelect
               label="project"
               value={project}
@@ -544,62 +642,10 @@ export default function SessionsPage() {
             />
             <DaysSelect value={daysBack} onChange={setDaysBack} />
           </div>
-          <div className="sessions-search">
-            <Input
-              type="search"
-              placeholder="Search timeline..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="sessions-search-input"
-            />
-            {hasFilters && (
-              <Button variant="ghost" size="sm" onClick={handleClearFilters}>
-                Clear
-              </Button>
-            )}
-          </div>
-        </div>
+        )}
 
         {/* Timeline List */}
-        {showGuidedEmptyState ? (
-          <div className="sessions-guided-empty">
-            <EmptyState
-              title="Welcome to Longhouse"
-              description="Your AI coding sessions from Claude Code, Codex, and Gemini will appear here as a searchable timeline."
-              action={
-                <div className="sessions-guided-actions">
-                  <Button
-                    variant="primary"
-                    size="md"
-                    onClick={handleSeedDemo}
-                    disabled={demoLoading}
-                  >
-                    {demoLoading ? "Loading..." : "Load demo sessions"}
-                  </Button>
-                  {seedError && (
-                    <p style={{ color: "var(--color-intent-error)", marginTop: "0.5rem", fontSize: "0.875rem" }}>
-                      {seedError}
-                    </p>
-                  )}
-                </div>
-              }
-            />
-            <div className="sessions-guided-steps">
-              <p className="sessions-guided-steps-label">To start shipping your own sessions:</p>
-              <ol className="sessions-guided-steps-list">
-                <li><code>longhouse connect</code> &mdash; link your CLI tools</li>
-                <li>Use Claude Code, Codex, or Gemini as normal</li>
-                <li>Sessions appear here automatically</li>
-              </ol>
-              <p className="sessions-guided-cli-hint">
-                Don&apos;t have a CLI yet? Longhouse supports{" "}
-                <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
-                <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
-                <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
-              </p>
-            </div>
-          </div>
-        ) : sessions.length === 0 ? (
+        {sessions.length === 0 ? (
           <EmptyState
             title="No timeline sessions found"
             description={

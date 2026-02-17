@@ -36,24 +36,95 @@
   }
 
   /* ---------------------------------------------------------------------------
-   * Filter Bar
+   * Hero Empty State (first-run, viewport-centered)
    * ---------------------------------------------------------------------------*/
 
-  .sessions-filter-bar {
+  .sessions-hero-empty {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     align-items: center;
-    gap: var(--space-4);
-    padding: var(--space-4);
-    background: var(--surface-glass-1);
-    border: 1px solid var(--border-glass-1);
-    border-radius: var(--radius-lg);
+    justify-content: center;
+    gap: var(--space-8);
+    min-height: calc(100dvh - 160px);
+    padding: var(--space-8) var(--space-4);
   }
 
-  .sessions-filters {
+  /* ---------------------------------------------------------------------------
+   * Compact Toolbar
+   * ---------------------------------------------------------------------------*/
+
+  .sessions-toolbar {
     display: flex;
+    align-items: center;
     gap: var(--space-3);
+  }
+
+  .sessions-toolbar .sessions-search-input {
+    flex: 1;
+    max-width: 400px;
+  }
+
+  .sessions-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+
+  .sessions-filter-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-2);
+    background: transparent;
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-md);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .sessions-filter-toggle:hover {
+    border-color: var(--color-border-primary);
+    color: var(--color-text-primary);
+  }
+
+  .sessions-filter-toggle--open {
+    background: var(--surface-glass-2);
+    border-color: var(--color-border-primary);
+    color: var(--color-text-primary);
+  }
+
+  .sessions-filter-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: var(--color-brand-primary);
+    color: var(--color-text-inverse);
+    font-size: 11px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1;
+  }
+
+  .sessions-header-count {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-normal);
+  }
+
+  /* ---------------------------------------------------------------------------
+   * Collapsible Filter Panel
+   * ---------------------------------------------------------------------------*/
+
+  .sessions-filter-panel {
+    display: flex;
     flex-wrap: wrap;
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
   }
 
   .sessions-filter-select {
@@ -79,19 +150,6 @@
   .sessions-filter-select:focus {
     outline: none;
     border-color: var(--color-brand-primary);
-  }
-
-  .sessions-search {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: 1;
-    min-width: 200px;
-  }
-
-  .sessions-search-input {
-    flex: 1;
-    max-width: 300px;
   }
 
   /* ---------------------------------------------------------------------------
@@ -325,14 +383,6 @@
   /* ---------------------------------------------------------------------------
    * Guided Empty State (First-Run UX)
    * ---------------------------------------------------------------------------*/
-
-  .sessions-guided-empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-8);
-    padding: var(--space-8) var(--space-4);
-  }
 
   .sessions-guided-actions {
     display: flex;
@@ -897,25 +947,21 @@
    * ---------------------------------------------------------------------------*/
 
   @media (max-width: 768px) {
-    .sessions-filter-bar {
-      flex-direction: column;
-      align-items: stretch;
+    .sessions-toolbar {
+      flex-wrap: wrap;
     }
 
-    .sessions-filters {
-      width: 100%;
+    .sessions-toolbar .sessions-search-input {
+      max-width: none;
+      flex: 1 1 100%;
+    }
+
+    .sessions-filter-panel {
+      flex-direction: column;
     }
 
     .sessions-filter-select {
       flex: 1;
-    }
-
-    .sessions-search {
-      width: 100%;
-    }
-
-    .sessions-search-input {
-      max-width: none;
     }
 
     .session-group-list {
