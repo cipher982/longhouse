@@ -146,7 +146,7 @@ class TestConfigureZai:
         config = configure_zai("test prompt", laptop_context)
         assert config.env["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
         assert config.env["ANTHROPIC_AUTH_TOKEN"] == mock_zai_key
-        assert config.env["ANTHROPIC_MODEL"] == "glm-4.7"
+        assert config.env["ANTHROPIC_MODEL"] == "glm-5"
 
     def test_unsets_bedrock_vars(self, mock_zai_key, laptop_context):
         """Unsets CLAUDE_CODE_USE_BEDROCK and ANTHROPIC_API_KEY."""
@@ -289,6 +289,17 @@ class TestConfigureCodex:
         config = configure_codex("test", laptop_context, model="gpt-5")
         assert "-m" in config.cmd
         assert "gpt-5" in config.cmd
+
+    def test_reasoning_effort(self, mock_openai_key, laptop_context):
+        """Reasoning effort adds -c flag."""
+        config = configure_codex("test", laptop_context, reasoning_effort="high")
+        assert "-c" in config.cmd
+        assert "model_reasoning_effort=high" in config.cmd
+
+    def test_no_reasoning_effort_by_default(self, mock_openai_key, laptop_context):
+        """No reasoning effort flag when not specified."""
+        config = configure_codex("test", laptop_context)
+        assert "-c" not in config.cmd
 
     def test_prompt_via_stdin(self, mock_openai_key, laptop_context):
         """Prompt passed via stdin_data."""

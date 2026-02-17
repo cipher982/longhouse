@@ -55,7 +55,7 @@ def configure_zai(
     *,
     api_key: str | None = None,
     base_url: str = "https://api.z.ai/api/anthropic",
-    model: str = "glm-4.7",
+    model: str = "glm-5",
     resume: str | None = None,
     output_format: str = "text",
     include_partial_messages: bool = False,
@@ -164,6 +164,7 @@ def configure_codex(
     *,
     api_key: str | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     full_auto: bool = True,
     **_: Any,
 ) -> BackendConfig:
@@ -201,6 +202,10 @@ def configure_codex(
     # Model override if specified
     if model:
         cmd.extend(["-m", model])
+
+    # Reasoning effort override — passed as -c config override
+    if reasoning_effort:
+        cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
 
     return BackendConfig(cmd=cmd, env=env, stdin_data=prompt.encode("utf-8"))
 

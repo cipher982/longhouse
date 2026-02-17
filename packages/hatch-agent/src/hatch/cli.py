@@ -88,6 +88,12 @@ Environment Variables:
     )
 
     parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high", "xhigh"],
+        help="Codex reasoning effort level (codex backend only)",
+    )
+
+    parser.add_argument(
         "--output-format",
         choices=["text", "json", "stream-json"],
         default="text",
@@ -226,6 +232,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         backend_kwargs["model"] = args.model
     if args.api_key:
         backend_kwargs["api_key"] = args.api_key
+    if args.reasoning_effort:
+        backend_kwargs["reasoning_effort"] = args.reasoning_effort
     if args.resume:
         backend_kwargs["resume"] = args.resume
     if args.output_format:
