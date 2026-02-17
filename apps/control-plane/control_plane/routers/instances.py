@@ -295,6 +295,13 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="instance not found")
     inst, user = row
 
+    # Concurrency guard: reject if instance is part of an active deployment
+    if inst.deploy_id and inst.deploy_state in ("pending", "deploying"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Instance is part of active deployment {inst.deploy_id}",
+        )
+
     provisioner = Provisioner()
     provisioner.deprovision_instance(f"longhouse-{inst.subdomain}")
     result = provisioner.provision_instance(inst.subdomain, owner_email=user.email)
@@ -303,6 +310,9 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     inst.container_name = result.container_name
     if result.password_hash:
         inst.password_hash = result.password_hash
+    # Track image version
+    if result.image:
+        inst.current_image = result.image
     db.commit()
     db.refresh(inst)
 
@@ -316,6 +326,33 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         created_at=inst.created_at,
         last_health_at=inst.last_health_at,
     )
+
+
+@router.post("/backfill-images", dependencies=[Depends(require_admin)])
+def backfill_images(db: Session = Depends(get_db)):
+    """One-time backfill: read running container image refs into Instance records."""
+    import docker
+
+    client = docker.DockerClient(base_url=settings.docker_host)
+    instances = db.query(Instance).filter(Instance.status.in_(["active", "provisioning"])).all()
+    updated = 0
+
+    for inst in instances:
+        try:
+            container = client.containers.get(inst.container_name)
+            image_ref = container.image.tags[0] if container.image.tags else None
+            if not image_ref:
+                digests = container.image.attrs.get("RepoDigests", [])
+                image_ref = digests[0] if digests else None
+            if image_ref:
+                inst.current_image = image_ref
+                inst.last_healthy_image = image_ref
+                updated += 1
+        except Exception:  # noqa: BLE001
+            continue
+
+    db.commit()
+    return {"ok": True, "updated": updated, "total": len(instances)}
 
 
 @router.post("/{instance_id}/login-token", response_model=TokenOut, dependencies=[Depends(require_admin)])

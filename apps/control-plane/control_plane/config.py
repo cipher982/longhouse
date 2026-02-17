@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     instance_google_client_id: str | None = None
     instance_google_client_secret: str | None = None
 
+    # Deployment defaults
+    deploy_max_parallel: int = 5
+    deploy_failure_threshold: int = 3
+
     # Email (SES) — injected into instances so email works out of the box
     instance_aws_ses_access_key_id: str | None = None
     instance_aws_ses_secret_access_key: str | None = None

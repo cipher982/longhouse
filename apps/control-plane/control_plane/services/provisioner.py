@@ -31,6 +31,8 @@ class ProvisionResult:
     data_path: str
     password: str | None = field(default=None)
     password_hash: str | None = field(default=None)
+    image: str | None = field(default=None)
+    image_digest: str | None = field(default=None)
 
 
 def _host_for(subdomain: str) -> str:
@@ -150,8 +152,10 @@ class Provisioner:
         owner_email: str,
         *,
         password: str | None = None,
+        image: str | None = None,
     ) -> ProvisionResult:
         container_name = f"longhouse-{subdomain}"
+        use_image = image or settings.image
 
         existing = self.client.containers.list(all=True, filters={"name": container_name})
         if existing:
@@ -172,11 +176,11 @@ class Provisioner:
         if settings.publish_ports:
             ports = {settings.instance_port: settings.instance_port}
 
-        # Always pull latest image before provisioning to avoid stale cache
-        self.client.images.pull(settings.image)
+        # Pull image before provisioning to avoid stale cache
+        self.client.images.pull(use_image)
 
         container = self.client.containers.run(
-            image=settings.image,
+            image=use_image,
             name=container_name,
             detach=True,
             labels=labels,
@@ -187,11 +191,23 @@ class Provisioner:
 
         self.ensure_network(container)
 
+        # Resolve image digest for immutable reference
+        image_digest = None
+        try:
+            pulled = self.client.images.get(use_image)
+            digests = pulled.attrs.get("RepoDigests", [])
+            if digests:
+                image_digest = digests[0]
+        except Exception:  # noqa: BLE001
+            pass
+
         return ProvisionResult(
             container_name=container.name,
             data_path=data_path,
             password=password,
             password_hash=password_hash,
+            image=use_image,
+            image_digest=image_digest,
         )
 
     def deprovision_instance(self, container_name: str) -> None:

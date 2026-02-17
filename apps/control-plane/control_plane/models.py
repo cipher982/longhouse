@@ -47,4 +47,32 @@ class Instance(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
 
+    # Version tracking (rolling deploy)
+    current_image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    desired_image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_healthy_image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deploy_ring: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+
+    # Deploy state
+    deploy_state: Mapped[str] = mapped_column(String(32), default="idle", server_default="idle")
+    deploy_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deploy_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deploy_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     user: Mapped[User] = relationship("User", back_populates="instance")
+
+
+class Deployment(Base):
+    __tablename__ = "cp_deployments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    image: Mapped[str] = mapped_column(Text)
+    image_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    rings: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    max_parallel: Mapped[int] = mapped_column(Integer, default=5)
+    failure_threshold: Mapped[int] = mapped_column(Integer, default=3)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
