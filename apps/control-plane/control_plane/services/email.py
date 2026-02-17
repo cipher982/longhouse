@@ -24,7 +24,9 @@ def _get_ses_client():
 
 def send_verification_email(to: str, verify_url: str) -> None:
     """Send an email verification link to the user."""
-    from_email = settings.instance_from_email or "noreply@longhouse.ai"
+    # Always send control plane emails from longhouse.ai, not the instance sender
+    # (instance_from_email may be drose.io which causes spoofing issues with Google Workspace)
+    from_email = "noreply@longhouse.ai"
     subject = "Verify your Longhouse email"
     html_body = f"""\
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
