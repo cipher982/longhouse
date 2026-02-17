@@ -20,7 +20,7 @@ longhouse serve --demo
 
 ### Hosted (beta)
 
-Sign up at https://longhouse.ai. Hosted unlocks always-on sync and resume-anywhere.
+Sign up at https://longhouse.ai. Hosted unlocks always-on sync and resume from any device (Claude sessions today).
 
 ### Self-host (local)
 
@@ -34,7 +34,7 @@ longhouse serve
 
 - **Timeline**: Searchable archive of all your AI coding sessions
 - **Search**: FTS5-powered instant discovery across all sessions (launch requirement)
-- **Resume**: Continue any session from any device (hosted)
+- **Resume**: Continue Claude Code sessions (hosted or self-hosted)
 
 ## Install Options
 
