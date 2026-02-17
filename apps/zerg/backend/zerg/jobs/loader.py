@@ -11,6 +11,7 @@ jobs are registered by executing manifest.py from the cloned repo.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import runpy
 import sys
@@ -45,11 +46,15 @@ def _clear_job_modules() -> int:
     Python caches modules in ``sys.modules`` — without this, ``runpy.run_path``
     on the manifest will re-import stale bytecode for ``jobs.*`` submodules.
 
+    Also evicts the ``zerg_jobs_manifest`` entry that ``runpy.run_path`` creates
+    and invalidates import caches so finders pick up new/changed files.
+
     Returns the number of modules evicted.
     """
-    to_remove = [key for key in sys.modules if key == "jobs" or key.startswith("jobs.")]
+    to_remove = [key for key in sys.modules if key == "jobs" or key.startswith("jobs.") or key == "zerg_jobs_manifest"]
     for key in to_remove:
         del sys.modules[key]
+    importlib.invalidate_caches()
     if to_remove:
         logger.info("Evicted %d cached job modules: %s", len(to_remove), to_remove)
     return len(to_remove)

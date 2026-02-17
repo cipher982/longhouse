@@ -87,6 +87,12 @@ class GitSyncService:
             **os.environ,
             "GIT_TERMINAL_PROMPT": "0",  # Never prompt
         }
+        # Allow file:// protocol (needed for local/CI testing with bare repos).
+        # Git 2.38.1+ blocks file:// by default (CVE-2022-39253).
+        if self.repo_url.startswith("file://"):
+            env["GIT_CONFIG_COUNT"] = "1"
+            env["GIT_CONFIG_KEY_0"] = "protocol.file.allow"
+            env["GIT_CONFIG_VALUE_0"] = "always"
         if self.ssh_key_path:
             env["GIT_SSH_COMMAND"] = f"ssh -i {self.ssh_key_path} -o StrictHostKeyChecking=accept-new"
         return env
@@ -371,8 +377,8 @@ def set_git_sync_task(task: asyncio.Task) -> None:
     _git_sync_task = task
 
 
-def stop_git_sync() -> None:
-    """Cancel the running sync loop task (if any) and clear global state.
+async def stop_git_sync() -> None:
+    """Cancel the running sync loop task (if any) and wait for it to finish.
 
     Safe to call even if no sync is running.
     """
@@ -380,6 +386,10 @@ def stop_git_sync() -> None:
 
     if _git_sync_task and not _git_sync_task.done():
         _git_sync_task.cancel()
+        try:
+            await _git_sync_task
+        except (asyncio.CancelledError, Exception):
+            pass  # Expected — task was cancelled
         logger.info("Cancelled git sync loop task")
     _git_sync_task = None
     _git_sync_service = None
@@ -394,7 +404,7 @@ async def replace_git_sync_service(
     Used by the hot-start path (API endpoint saves config → starts sync).
     Guards against duplicate loops by cancelling the old task first.
     """
-    stop_git_sync()
+    await stop_git_sync()
 
     await service.ensure_cloned()
     set_git_sync_service(service)

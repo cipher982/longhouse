@@ -10,10 +10,12 @@ Checks:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from typing import Any
 
 from apscheduler.triggers.cron import CronTrigger
@@ -36,8 +38,8 @@ def _has_repo_config() -> bool:
         return False
 
 
-def _get_recent_runs(job_id: str, limit: int = 3) -> list[dict]:
-    """Get recent queue entries for a specific job."""
+def _get_recent_runs_sync(job_id: str, limit: int = 3) -> list[dict]:
+    """Get recent queue entries for a specific job (sync, run via to_thread)."""
     from zerg.jobs.queue import _connect
 
     conn = _connect()
@@ -55,6 +57,11 @@ def _get_recent_runs(job_id: str, limit: int = 3) -> list[dict]:
         return [dict(row) for row in rows]
     finally:
         conn.close()
+
+
+async def _get_recent_runs(job_id: str, limit: int = 3) -> list[dict]:
+    """Get recent queue entries (non-blocking)."""
+    return await asyncio.to_thread(_get_recent_runs_sync, job_id, limit)
 
 
 async def run() -> dict[str, Any]:
@@ -80,13 +87,16 @@ async def run() -> dict[str, Any]:
             trigger = CronTrigger.from_crontab(config.cron)
             # Get two consecutive fire times to determine the interval
             t1 = trigger.get_next_fire_time(None, now)
-            t2 = trigger.get_next_fire_time(t1, t1)
-            if not t1 or not t2:
+            if not t1:
+                continue
+            # Advance "now" past t1 so get_next_fire_time returns the *next* fire
+            t2 = trigger.get_next_fire_time(t1, t1 + timedelta(seconds=1))
+            if not t2:
                 continue
             interval = t2 - t1
             staleness_threshold = interval * 2
 
-            runs = _get_recent_runs(config.id, limit=1)
+            runs = await _get_recent_runs(config.id, limit=1)
             if not runs:
                 # No runs at all — only alert if job has been registered long enough
                 continue
@@ -109,7 +119,7 @@ async def run() -> dict[str, Any]:
     # ── Check 3: Consecutive failures ───────────────────────────────
     for config in job_registry.list_jobs(enabled_only=True):
         try:
-            runs = _get_recent_runs(config.id, limit=3)
+            runs = await _get_recent_runs(config.id, limit=3)
             if len(runs) >= 3 and all(r.get("status") in ("failure", "dead") for r in runs):
                 last_error = runs[0].get("last_error", "unknown")
                 issues.append(f"CONSECUTIVE FAILURES: {config.id} — last 3 runs all failed. " f"Latest error: {str(last_error)[:200]}")
