@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from datetime import timezone
 
+import docker
 from sqlalchemy.orm import Session
 
 from control_plane.db import SessionLocal
@@ -66,6 +67,7 @@ def _deploy_single_instance(
     except Exception as exc:
         inst.deploy_state = "failed"
         inst.deploy_error = str(exc)[:500]
+        inst.status = "failed"
         logger.error(f"Deploy failed for {inst.subdomain}: {exc}")
 
         # Attempt rollback to last known good image
@@ -76,8 +78,11 @@ def _deploy_single_instance(
                     inst.subdomain, owner_email=user.email, image=inst.last_healthy_image
                 )
                 inst.container_name = result.container_name
+                provisioner.wait_for_health(inst.subdomain, timeout=120)
                 inst.deploy_state = "rolled_back"
                 inst.current_image = inst.last_healthy_image
+                inst.status = "active"
+                inst.last_health_at = _utcnow()
                 logger.info(f"Rolled back {inst.subdomain} to {inst.last_healthy_image}")
             except Exception as rb_exc:
                 # Deploy failed AND rollback failed — instance has no running container
@@ -122,11 +127,21 @@ def _run_deploy(deploy_id: str, db: Session) -> None:
     # Pre-pull image once — all instances use this cached image (no per-instance pulls)
     try:
         provisioner.client.images.pull(deploy.image)
-        pulled = provisioner.client.images.get(deploy.image)
-        digests = pulled.attrs.get("RepoDigests", [])
-        if digests and not deploy.image_digest:
-            deploy.image_digest = digests[0]
+    except docker.errors.ImageNotFound:
+        try:
+            provisioner.client.images.get(deploy.image)
+            logger.warning("Image %s not found in registry; using local image", deploy.image)
+        except docker.errors.ImageNotFound as exc:
+            logger.error(f"Failed to pull image {deploy.image}: {exc}")
+            deploy.status = "failed"
+            deploy.completed_at = _utcnow()
+            # Mark pending instances as skipped (keep deploy_id for status visibility)
+            db.query(Instance).filter(
+                Instance.deploy_id == deploy_id,
+                Instance.deploy_state == "pending",
+            ).update({"deploy_state": "skipped"})
             db.commit()
+            return
     except Exception as exc:
         logger.error(f"Failed to pull image {deploy.image}: {exc}")
         deploy.status = "failed"
@@ -138,6 +153,15 @@ def _run_deploy(deploy_id: str, db: Session) -> None:
         ).update({"deploy_state": "skipped"})
         db.commit()
         return
+
+    try:
+        pulled = provisioner.client.images.get(deploy.image)
+        digests = pulled.attrs.get("RepoDigests", [])
+        if digests and not deploy.image_digest:
+            deploy.image_digest = digests[0]
+            db.commit()
+    except Exception:  # noqa: BLE001
+        pass
 
     # Get all instances for this deploy that haven't succeeded
     instances_with_users = (

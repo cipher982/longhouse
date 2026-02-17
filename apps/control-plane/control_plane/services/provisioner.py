@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
 import time
@@ -11,6 +12,8 @@ import docker
 import httpx
 
 from control_plane.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _generate_password() -> tuple[str, str]:
@@ -180,7 +183,15 @@ class Provisioner:
 
         # Pull image before provisioning (skip if batch deploy already pre-pulled)
         if not skip_pull:
-            self.client.images.pull(use_image)
+            try:
+                self.client.images.pull(use_image)
+            except docker.errors.ImageNotFound:
+                # Allow local-only tags (CI/dev) when the image exists locally.
+                try:
+                    self.client.images.get(use_image)
+                    logger.warning("Image %s not found in registry; using local image", use_image)
+                except docker.errors.ImageNotFound:
+                    raise
 
         container = self.client.containers.run(
             image=use_image,
@@ -222,8 +233,11 @@ class Provisioner:
         container.remove()
 
     def wait_for_health(self, subdomain: str, timeout: int = 120) -> bool:
-        host = _host_for(subdomain)
-        url = f"https://{host}/api/health"
+        if settings.publish_ports:
+            url = f"http://127.0.0.1:{settings.instance_port}/api/health"
+        else:
+            host = _host_for(subdomain)
+            url = f"https://{host}/api/health"
         deadline = time.time() + timeout
         last_error = None
 

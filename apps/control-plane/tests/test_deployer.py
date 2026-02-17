@@ -159,13 +159,17 @@ class TestDeploySingleInstance:
             deploy_state="pending",
             last_healthy_image="ghcr.io/test/app:old",
         )
-        prov = _mock_provisioner(succeed=False)
+        prov = _mock_provisioner(succeed=True)
+        # First health check fails (deploy), second succeeds (rollback)
+        prov.wait_for_health.side_effect = [RuntimeError("Health check failed"), True]
 
         result = _deploy_single_instance(inst, user, deploy, prov, db_session)
 
         assert result is False
         assert inst.deploy_state == "rolled_back"
         assert inst.current_image == "ghcr.io/test/app:old"
+        assert inst.status == "active"
+        assert inst.last_health_at is not None
         assert inst.deploy_error is not None
 
     def test_failure_no_rollback_when_same_image(self, db_session):
@@ -183,6 +187,24 @@ class TestDeploySingleInstance:
 
         assert result is False
         assert inst.deploy_state == "failed"  # no rollback attempted
+        assert inst.status == "failed"
+
+    def test_failure_without_last_healthy_image_marks_failed(self, db_session):
+        user = _make_user(db_session)
+        deploy = _make_deployment(db_session)
+        inst = _make_instance(
+            db_session, user,
+            deploy_id=deploy.id,
+            deploy_state="pending",
+            last_healthy_image=None,
+        )
+        prov = _mock_provisioner(succeed=False)
+
+        result = _deploy_single_instance(inst, user, deploy, prov, db_session)
+
+        assert result is False
+        assert inst.deploy_state == "failed"
+        assert inst.status == "failed"
 
 
 # ---------------------------------------------------------------------------
