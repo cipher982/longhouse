@@ -1,5 +1,5 @@
 /*
- * Design Tokens
+ * Design Tokens — Warm Gold
  * Single source of truth for colors, spacing, typography, etc.
  * Edit this file directly - no build step needed.
  */
@@ -10,47 +10,47 @@
 
 :root {
   /* Brand Colors */
-  --color-brand-primary: #6366f1;
-  --color-brand-primary-hover: #4f46e5;
-  --color-brand-secondary: #818cf8;
-  --color-brand-accent: #f59e0b;
+  --color-brand-primary: #C9A66B;
+  --color-brand-primary-hover: #B8923C;
+  --color-brand-secondary: #9e7c5a;
+  --color-brand-accent: #D4A843;
 
-  /* Neon/Cyber Colors (Oikos chat UI) */
-  --color-neon-primary: #6366f1;
-  --color-neon-secondary: #a855f7;
-  --color-neon-cyan: #06b6d4;
-  --color-neon-pink: #ec4899;
+  /* Warm Accent Colors (Oikos chat UI) */
+  --color-neon-primary: #C9A66B;
+  --color-neon-secondary: #D4B87A;
+  --color-neon-cyan: #C9A66B;
+  --color-neon-pink: #C45040;
 
   /* Intent/Semantic Colors */
-  --color-intent-success: #22c55e;
-  --color-intent-success-muted: rgba(34, 197, 94, 0.15);
-  --color-intent-warning: #f59e0b;
-  --color-intent-warning-muted: rgba(245, 158, 11, 0.15);
-  --color-intent-error: #ef4444;
-  --color-intent-error-muted: rgba(239, 68, 68, 0.15);
+  --color-intent-success: #5D9B4A;
+  --color-intent-success-muted: rgba(93, 155, 74, 0.15);
+  --color-intent-warning: #D4A843;
+  --color-intent-warning-muted: rgba(212, 168, 67, 0.15);
+  --color-intent-error: #C45040;
+  --color-intent-error-muted: rgba(196, 80, 64, 0.15);
 
   /* Text Colors */
   /* WCAG AA requires 4.5:1 contrast ratio for normal text */
-  /* Against #030305 (page bg): */
-  /* - #fafafa = 19.5:1 (primary - excellent) */
-  /* - #b4b4bc = 7.9:1 (secondary - was #a1a1aa ~5.5:1, now WCAG AA compliant) */
-  /* - #9898a3 = 5.3:1 (muted - was #71717a ~2.8:1, now WCAG AA compliant) */
-  --color-text-primary: #fafafa;
-  --color-text-secondary: #b4b4bc;
-  --color-text-muted: #9898a3;
-  --color-text-inverse: #09090b;
+  /* Against #120B09 (page bg): */
+  /* - #F3EAD9 = ~15:1 (primary - excellent) */
+  /* - #B5A48E = ~6.5:1 (secondary - WCAG AA compliant) */
+  /* - #8A7A64 = ~3.5:1 (muted - large text only, 18px+) */
+  --color-text-primary: #F3EAD9;
+  --color-text-secondary: #B5A48E;
+  --color-text-muted: #8A7A64;
+  --color-text-inverse: #120B09;
 
   /* Border Colors */
-  --color-border-primary: #3f3f46;
-  --color-border-subtle: #27272a;
-  --color-border-muted: rgba(255, 255, 255, 0.08);
+  --color-border-primary: #3d3428;
+  --color-border-subtle: #2a2418;
+  --color-border-muted: #231E16;
 
   /* Legacy Background Colors */
-  --color-legacy-bg-dark: #18181b;
-  --color-legacy-bg-darker: #09090b;
-  --color-legacy-bg-hover: #27272a;
-  --color-legacy-bg-button: #27272a;
-  --color-legacy-bg-button-hover: #3f3f46;
+  --color-legacy-bg-dark: #1A1410;
+  --color-legacy-bg-darker: #120B09;
+  --color-legacy-bg-hover: #2a2418;
+  --color-legacy-bg-button: #2a2418;
+  --color-legacy-bg-button-hover: #3d3428;
 
   /* Typography */
   --font-family-display: 'General Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -111,26 +111,26 @@
   --radius-full: 9999px;
 
   /* Shadows */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.6);
-  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 15px rgb(99 102 241 / 30%);
-  --shadow-glow-strong: 0 0 25px rgb(99 102 241 / 50%);
-  --shadow-glow-cyan: 0 0 15px rgb(6 182 212 / 30%);
-  --shadow-glow-error: 0 0 15px rgb(239 68 68 / 30%);
+  --shadow-xs: 0 1px 2px rgba(18, 11, 9, 0.3);
+  --shadow-sm: 0 2px 4px rgba(18, 11, 9, 0.3);
+  --shadow-md: 0 4px 12px rgba(18, 11, 9, 0.4);
+  --shadow-lg: 0 8px 24px rgba(18, 11, 9, 0.5);
+  --shadow-xl: 0 16px 48px rgba(18, 11, 9, 0.6);
+  --shadow-card: 0 8px 32px rgba(18, 11, 9, 0.4);
+  --shadow-glow: 0 0 15px rgba(201, 166, 107, 0.25);
+  --shadow-glow-strong: 0 0 25px rgba(201, 166, 107, 0.40);
+  --shadow-glow-cyan: 0 0 15px rgba(201, 166, 107, 0.25);
+  --shadow-glow-error: 0 0 15px rgba(196, 80, 64, 0.30);
 
-  /* Blur */
-  --blur-sm: 8px;
-  --blur-md: 16px;
-  --blur-lg: 24px;
+  /* Blur — reduced for warm solid surfaces */
+  --blur-sm: 0px;
+  --blur-md: 0px;
+  --blur-lg: 0px;
 
-  /* Glass Presets (Shared UI System) */
-  --surface-glass-1: rgba(255, 255, 255, 0.03);
-  --surface-glass-2: rgba(255, 255, 255, 0.07);
-  --border-glass-1: rgba(255, 255, 255, 0.08);
+  /* Solid Surface Presets (replaces glass) */
+  --surface-glass-1: #1A1410;
+  --surface-glass-2: #211C15;
+  --border-glass-1: #231E16;
 
   /* Motion */
   --motion-duration-instant: 50ms;
@@ -175,23 +175,23 @@
 }
 
 /* =============================================================================
-   Theme: Glass (Global)
+   Theme: Warm Gold (Global)
    ============================================================================= */
 
 :root {
-  --color-void: #030305;
-  --color-void-light: #0a0a12;
-  --color-surface-page: #030305;
-  --color-surface-section: rgba(10, 10, 15, 0.45);
-  --color-surface-card: rgba(255, 255, 255, 0.03);
-  --color-surface-elevated: rgba(255, 255, 255, 0.07);
-  --color-surface-overlay: rgba(255, 255, 255, 0.04);
+  --color-void: #120B09;
+  --color-void-light: #150E0B;
+  --color-surface-page: #120B09;
+  --color-surface-section: rgba(18, 11, 9, 0.45);
+  --color-surface-card: #1A1410;
+  --color-surface-elevated: #211C15;
+  --color-surface-overlay: #1C1610;
   --color-surface-primary: var(--color-surface-card);
   --color-surface-secondary: var(--color-surface-section);
   --color-surface-tertiary: var(--color-surface-elevated);
-  --color-glass: rgba(20, 20, 30, 0.6);
-  --color-glass-border: rgba(255, 255, 255, 0.08);
-  --color-surface-dark: #1a1a2e;
+  --color-glass: rgba(26, 20, 16, 0.6);
+  --color-glass-border: #231E16;
+  --color-surface-dark: #1A1410;
 }
 
 /* =============================================================================
@@ -241,13 +241,13 @@
   --accent-purple: var(--color-neon-primary);
   --accent-pink: var(--color-neon-pink);
   --accent-blue: var(--color-neon-cyan);
-  --glow-primary: 0 0 20px rgb(99 102 241 / 30%);
-  --glow-cyan: 0 0 20px rgb(6 182 212 / 30%);
+  --glow-primary: 0 0 20px rgba(201, 166, 107, 0.25);
+  --glow-cyan: 0 0 20px rgba(201, 166, 107, 0.25);
 
   /* Gradient aliases */
-  --primary-gradient: linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%);
-  --secondary-gradient: linear-gradient(135deg, #38bdf8 0%, #06b6d4 100%);
-  --success-gradient: linear-gradient(135deg, #0ba360 0%, #3cba92 100%);
+  --primary-gradient: linear-gradient(135deg, #C9A66B 0%, #D4B87A 100%);
+  --secondary-gradient: linear-gradient(135deg, #D4B87A 0%, #C9A66B 100%);
+  --success-gradient: linear-gradient(135deg, #4A8A3A 0%, #5D9B4A 100%);
 
   /* Border shortcuts */
   --border-color: var(--color-border-primary);
