@@ -9,6 +9,12 @@ anyio==4.12.1
     #   httpx
     #   starlette
     #   watchfiles
+boto3==1.42.50
+    # via longhouse-control-plane (pyproject.toml)
+botocore==1.42.50
+    # via
+    #   boto3
+    #   s3transfer
 certifi==2026.1.4
     # via
     #   httpcore
@@ -37,6 +43,10 @@ idna==3.11
     #   anyio
     #   httpx
     #   requests
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
 psycopg==3.3.2
     # via longhouse-control-plane (pyproject.toml)
 psycopg-binary==3.3.2
@@ -49,6 +59,8 @@ pydantic-core==2.41.5
     # via pydantic
 pydantic-settings==2.12.0
     # via longhouse-control-plane (pyproject.toml)
+python-dateutil==2.9.0.post0
+    # via botocore
 python-dotenv==1.2.1
     # via
     #   pydantic-settings
@@ -61,6 +73,10 @@ requests==2.32.5
     # via
     #   docker
     #   stripe
+s3transfer==0.16.0
+    # via boto3
+six==1.17.0
+    # via python-dateutil
 sqlalchemy==2.0.46
     # via longhouse-control-plane (pyproject.toml)
 starlette==0.50.0
@@ -81,6 +97,7 @@ typing-inspection==0.4.2
     #   pydantic-settings
 urllib3==2.6.3
     # via
+    #   botocore
     #   docker
     #   requests
 uvicorn==0.40.0
