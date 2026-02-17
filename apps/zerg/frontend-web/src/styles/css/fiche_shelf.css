@@ -6,7 +6,6 @@
   width: 260px;
   flex-shrink: 0;
   background: var(--surface-glass-1);
-  backdrop-filter: blur(var(--blur-md));
   border-right: 1px solid var(--border-glass-1);
   padding: var(--space-4);
   box-sizing: border-box;
@@ -63,7 +62,7 @@
 
 .shelf-search-input:focus {
   border-color: var(--color-brand-primary);
-  box-shadow: 0 0 0 2px rgb(99 102 241 / 20%);
+  box-shadow: 0 0 0 2px rgba(201, 166, 107, 0.2);
 }
 
 .shelf-section-toggle {

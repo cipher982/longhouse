@@ -451,7 +451,7 @@
   .llm-capability-source {
     font-size: 11px;
     color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.06);
+    background: #1F1912;
     padding: 1px 6px;
     border-radius: 3px;
     font-family: Monaco, Menlo, monospace;

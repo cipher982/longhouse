@@ -161,7 +161,7 @@
 .devices-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(18, 11, 9, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -175,7 +175,7 @@
   border-radius: 12px;
   width: 100%;
   max-width: 480px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 20px 40px rgba(18, 11, 9, 0.3);
 }
 
 .devices-modal-header {

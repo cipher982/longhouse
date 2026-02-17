@@ -20,7 +20,7 @@
   pointer-events: none; /* Ignore clicks */
 
   /* Dark fallback when CSS variables aren’t loaded yet */
-  background-color: var(--dark, #000);
+  background-color: var(--dark, #120B09);
 
   /*
     IMPORTANT PERF NOTE (Carmack-style):
@@ -50,14 +50,14 @@
 }
 
 .landing-page .particle-bg::before {
-  background-image: radial-gradient(circle, rgb(255 255 255 / 12%) 0%, transparent 40%);
+  background-image: radial-gradient(circle, #2a2318 0%, transparent 40%);
   background-size: 3px 3px;
   background-position: 0 0;
   opacity: 0.9;
 }
 
 .landing-page .particle-bg::after {
-  background-image: radial-gradient(circle, rgb(255 255 255 / 7%) 0%, transparent 40%);
+  background-image: radial-gradient(circle, #211C15 0%, transparent 40%);
   background-size: 3px 3px;
   background-position: 1.5px 1.5px;
   opacity: 0.9;

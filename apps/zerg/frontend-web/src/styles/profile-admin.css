@@ -106,7 +106,7 @@
     background: linear-gradient(
       135deg,
       var(--color-brand-primary-hover) 0%,
-      color-mix(in srgb, var(--color-brand-primary) 70%, #000) 100%
+      color-mix(in srgb, var(--color-brand-primary) 70%, #120B09) 100%
     );
     transform: translateY(-1px);
     box-shadow: 0 4px 8px color-mix(in srgb, var(--color-brand-primary) 30%, transparent);
@@ -143,7 +143,7 @@
   .form-input:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 2px rgb(99 102 241 / 15%);
+    box-shadow: 0 0 0 2px rgba(201, 166, 107, 0.15);
   }
 
   .form-input.disabled {
@@ -175,7 +175,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 8px 0;
-    border-bottom: 1px solid rgb(255 255 255 / 10%);
+    border-bottom: 1px solid #261F18;
   }
 
   .info-label {
@@ -291,7 +291,7 @@
 
   .metric-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgb(0 0 0 / 30%);
+    box-shadow: 0 4px 12px rgba(18, 11, 9, 0.3);
   }
 
   .metric-title {
@@ -376,7 +376,6 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.85);
-    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -431,13 +430,13 @@
   }
 
   .admin-devtool-card--trace {
-    background-color: rgba(168, 85, 247, 0.05);
+    background-color: rgba(201, 166, 107, 5);
     border-color: var(--color-border);
   }
 
   .admin-devtool-card--trace:hover {
-    background-color: rgba(168, 85, 247, 0.1);
-    border-color: rgba(168, 85, 247, 0.3);
+    background-color: rgba(201, 166, 107, 10);
+    border-color: rgba(201, 166, 107, 30);
   }
 
   .admin-devtool-card--reliability {
@@ -622,7 +621,7 @@
   }
 
   .top-agents-table tr:hover {
-    background: rgb(255 255 255 / 5%);
+    background: #1E1812;
   }
 
   /* Admin Actions */
@@ -694,9 +693,9 @@
   .demo-empty-state {
     text-align: center;
     padding: 48px 24px;
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%);
+    background: linear-gradient(135deg, rgba(201, 166, 107, 5) 0%, rgba(139, 92, 246, 0.05) 100%);
     border-radius: 12px;
-    border: 1px dashed rgba(99, 102, 241, 0.3);
+    border: 1px dashed rgba(201, 166, 107, 0.3);
   }
 
   .demo-empty-state p {
@@ -716,15 +715,15 @@
     justify-content: space-between;
     align-items: center;
     padding: 20px 24px;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(135deg, #1A1410 0%, rgba(255, 255, 255, 0.01) 100%);
+    border: 1px solid #231E16;
     border-radius: 12px;
     transition: all 0.2s ease;
   }
 
   .demo-account-card:hover {
-    border-color: rgba(99, 102, 241, 0.4);
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(139, 92, 246, 0.04) 100%);
+    border-color: rgba(201, 166, 107, 40);
+    background: linear-gradient(135deg, rgba(201, 166, 107, 8) 0%, rgba(139, 92, 246, 0.04) 100%);
   }
 
   .demo-account-info {
@@ -736,7 +735,7 @@
   .demo-account-name {
     font-weight: 600;
     font-size: 16px;
-    color: #fff;
+    color: #F3EAD9;
     display: block;
   }
 
@@ -756,7 +755,7 @@
   .demo-add-button {
     width: 100%;
     background: transparent;
-    border: 2px dashed rgba(255, 255, 255, 0.15);
+    border: 2px dashed #2e271c;
     border-radius: 12px;
     padding: 16px;
     color: rgba(255, 255, 255, 0.4);
@@ -767,9 +766,9 @@
   }
 
   .demo-add-button:hover:not(:disabled) {
-    border-color: rgba(99, 102, 241, 0.5);
-    color: rgba(99, 102, 241, 0.9);
-    background: rgba(99, 102, 241, 0.05);
+    border-color: rgba(201, 166, 107, 0.5);
+    color: rgba(201, 166, 107, 90);
+    background: rgba(201, 166, 107, 5);
   }
 
   .demo-add-button:disabled {
@@ -796,7 +795,7 @@
     padding: 32px;
     max-width: 500px;
     width: 90%;
-    box-shadow: 0 20px 60px rgb(0 0 0 / 50%);
+    box-shadow: 0 20px 60px rgba(18, 11, 9, 0.5);
     animation: slideUp var(--motion-duration-normal) ease;
   }
 
@@ -915,7 +914,7 @@
   }
 
   .users-table .clickable-row:hover {
-    background: rgb(255 255 255 / 5%);
+    background: #1E1812;
   }
 
   .users-table .user-cell {
@@ -993,7 +992,7 @@
   }
 
   .modal-close:hover {
-    background: rgb(255 255 255 / 10%);
+    background: #261F18;
     color: var(--text);
   }
 

@@ -96,7 +96,7 @@
   width: 28px;
   height: 28px;
   border-radius: 10px;
-  background: rgb(255 255 255 / 5%);
+  background: #1E1812;
   border: 1px solid var(--color-border-muted);
   display: flex;
   align-items: center;
@@ -110,18 +110,18 @@
 .oikos-container .message.assistant .message-avatar {
   background: linear-gradient(
     135deg,
-    rgb(6 182 212 / 10%) 0%,
-    rgb(99 102 241 / 10%) 100%
+    rgba(201, 166, 107, 10) 0%,
+    rgba(201, 166, 107, 0.1) 100%
   );
-  border-color: rgb(99 102 241 / 30%);
+  border-color: rgba(201, 166, 107, 0.3);
   color: var(--color-neon-cyan);
 }
 
 .oikos-container .message.user .message-avatar {
   background: var(--color-neon-primary);
   border: none;
-  color: #fff;
-  box-shadow: 0 0 15px rgb(99 102 241 / 40%);
+  color: #F3EAD9;
+  box-shadow: 0 0 15px rgba(201, 166, 107, 40);
 }
 
 /* Bubbles */
@@ -132,22 +132,21 @@
   line-height: 1.5;
   position: relative;
   /* Glass border effect */
-  border: 1px solid rgb(255 255 255 / 10%);
+  border: 1px solid #261F18;
   box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
 }
 
 .oikos-container .message.assistant .message-content {
   background: linear-gradient(
     135deg,
-    rgb(255 255 255 / 5%) 0%,
+    #1E1812 0%,
     rgb(255 255 255 / 1%) 100%
   );
-  backdrop-filter: blur(10px);
-  border: 1px solid rgb(255 255 255 / 8%);
+  border: 1px solid #231E16;
   color: var(--color-text-primary);
   border-top-left-radius: 4px;
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 10%),
+    inset 0 1px 0 #261F18,
     0 4px 20px rgb(0 0 0 / 20%);
 }
 
@@ -155,16 +154,15 @@
 .oikos-container .message.user .message-content {
   background: linear-gradient(
     135deg,
-    rgb(99 102 241 / 80%) 0%,
+    rgba(201, 166, 107, 80) 0%,
     rgb(79 70 229 / 90%) 100%
   );
-  color: #fff;
+  color: #F3EAD9;
   border-top-right-radius: 4px;
   box-shadow:
-    0 4px 20px rgb(99 102 241 / 25%),
-    inset 0 1px 0 rgb(255 255 255 / 20%);
-  backdrop-filter: blur(4px);
-  border: 1px solid rgb(255 255 255 / 10%);
+    0 4px 20px rgba(201, 166, 107, 25),
+    inset 0 1px 0 #342d20;
+  border: 1px solid #261F18;
 }
 
 /* Streaming Effect - Matrix Style */
@@ -309,8 +307,8 @@
 .oikos-container .user-turn {
   background: linear-gradient(
     135deg,
-    rgb(99 102 241 / 20%) 0%,
-    rgb(139 92 246 / 20%) 100%
+    rgba(201, 166, 107, 0.2) 0%,
+    rgba(201, 166, 107, 0.2) 100%
   );
   border: 1px solid rgb(139 92 246 / 30%);
   margin-left: auto;
@@ -318,8 +316,8 @@
 }
 
 .oikos-container .assistant-turn {
-  background: rgb(255 255 255 / 3%);
-  border: 1px solid rgb(255 255 255 / 8%);
+  background: #1A1410;
+  border: 1px solid #231E16;
   margin-right: auto;
   border-bottom-left-radius: 4px;
 }
@@ -327,10 +325,10 @@
 .oikos-container .assistant-turn.streaming {
   background: linear-gradient(
     135deg,
-    rgb(6 182 212 / 10%) 0%,
-    rgb(99 102 241 / 10%) 100%
+    rgba(201, 166, 107, 10) 0%,
+    rgba(201, 166, 107, 0.1) 100%
   );
-  border-color: rgb(6 182 212 / 30%);
+  border-color: rgba(201, 166, 107, 30);
 }
 
 /* Turn Header with Role Icon */
@@ -428,7 +426,7 @@
 
 /* Inline code */
 .oikos-container .message-content code {
-  background: rgb(0 0 0 / 30%);
+  background: rgba(18, 11, 9, 0.3);
   padding: 0.15em 0.4em;
   border-radius: 4px;
   font-family: var(--font-family-mono);
@@ -438,12 +436,12 @@
 
 /* Code blocks */
 .oikos-container .message-content pre {
-  background: rgb(0 0 0 / 40%);
+  background: rgba(18, 11, 9, 0.4);
   padding: 1em;
   border-radius: 8px;
   overflow-x: auto;
   margin: 0.75em 0;
-  border: 1px solid rgb(255 255 255 / 10%);
+  border: 1px solid #261F18;
 }
 
 .oikos-container .message-content pre code {
@@ -460,7 +458,7 @@
   margin: 0.75em 0;
   padding: 0.5em 1em;
   border-left: 3px solid var(--color-neon-cyan);
-  background: rgb(6 182 212 / 10%);
+  background: rgba(201, 166, 107, 10);
   border-radius: 0 4px 4px 0;
 }
 
@@ -528,7 +526,7 @@
 /* Horizontal rules */
 .oikos-container .message-content hr {
   border: none;
-  border-top: 1px solid rgb(255 255 255 / 20%);
+  border-top: 1px solid #342d20;
   margin: 1em 0;
 }
 
@@ -543,12 +541,12 @@
 .oikos-container .message-content th,
 .oikos-container .message-content td {
   padding: 0.5em 0.75em;
-  border: 1px solid rgb(255 255 255 / 15%);
+  border: 1px solid #2e271c;
   text-align: left;
 }
 
 .oikos-container .message-content th {
-  background: rgb(255 255 255 / 5%);
+  background: #1E1812;
   font-weight: 600;
 }
 
@@ -611,8 +609,8 @@
   font-size: var(--font-size-xs);
   font-family: var(--font-family-mono);
   color: var(--color-neon-cyan);
-  background: rgb(6 182 212 / 8%);
-  border: 1px solid rgb(6 182 212 / 20%);
+  background: rgba(201, 166, 107, 8);
+  border: 1px solid rgba(201, 166, 107, 20);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -621,10 +619,10 @@
 }
 
 .oikos-container .trace-cta__link:hover {
-  background: rgb(6 182 212 / 15%);
-  border-color: rgb(6 182 212 / 40%);
+  background: rgba(201, 166, 107, 15);
+  border-color: rgba(201, 166, 107, 40);
   color: var(--color-neon-cyan);
-  text-shadow: 0 0 8px rgb(6 182 212 / 30%);
+  text-shadow: 0 0 8px rgba(201, 166, 107, 30);
 }
 
 .oikos-container .trace-cta__icon {
@@ -657,5 +655,5 @@
 .oikos-container .trace-cta__dismiss:hover {
   opacity: 1 !important;
   color: var(--color-text-secondary);
-  background: rgb(255 255 255 / 8%);
+  background: #231E16;
 }

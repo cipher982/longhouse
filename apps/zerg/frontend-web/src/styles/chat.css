@@ -70,7 +70,6 @@
       align-items: center;
       padding: var(--space-3) var(--space-5);
       background-color: rgb(9 9 11 / 80%); /* Translucent */
-      backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--color-border-muted);
       min-height: 60px;
       gap: var(--space-4);
@@ -134,7 +133,7 @@
     .chat-thread-toggle--active {
       border-color: var(--color-brand-primary);
       color: var(--color-brand-primary);
-      background: rgba(99, 102, 241, 0.12);
+      background: rgba(201, 166, 107, 12);
     }
 
     .chat-settings-btn:hover {
@@ -393,7 +392,7 @@
       color: var(--color-text-primary);
       border-bottom-left-radius: 4px;
       margin-right: auto;
-      border: 1px solid rgb(255 255 255 / 3%);
+      border: 1px solid #1A1410;
     }
 
     /* Pending message style */
@@ -443,7 +442,7 @@
       justify-content: space-between;
       align-items: center;
       padding: var(--space-1) var(--space-3);
-      background-color: rgb(255 255 255 / 3%);
+      background-color: #1A1410;
       border-bottom: 1px solid var(--color-border-muted);
       font-size: 11px;
       color: var(--color-text-muted);
@@ -561,7 +560,7 @@
     }
 
     .chat-input-main:hover {
-      border-color: rgb(255 255 255 / 10%);
+      border-color: #261F18;
       background-color: color-mix(
         in srgb,
         var(--color-surface-elevated) 95%,
@@ -648,10 +647,10 @@
     .runner-setup-card {
       background: linear-gradient(
         135deg,
-        rgb(99 102 241 / 5%) 0%,
-        rgb(6 182 212 / 5%) 100%
+        rgba(201, 166, 107, 5) 0%,
+        rgba(201, 166, 107, 5) 100%
       );
-      border: 1px solid rgb(99 102 241 / 20%);
+      border: 1px solid rgba(201, 166, 107, 0.2);
       border-radius: var(--radius-lg);
       overflow: hidden;
       max-width: 600px;
@@ -678,8 +677,8 @@
       align-items: center;
       gap: var(--space-2);
       padding: var(--space-3) var(--space-4);
-      background: rgb(255 255 255 / 3%);
-      border-bottom: 1px solid rgb(255 255 255 / 5%);
+      background: #1A1410;
+      border-bottom: 1px solid #1E1812;
     }
 
     .runner-setup-icon {
@@ -710,7 +709,7 @@
     }
 
     .runner-setup-code {
-      background-color: rgb(0 0 0 / 30%);
+      background-color: rgba(18, 11, 9, 0.3);
       border: 1px solid var(--color-border-muted);
       border-radius: var(--radius-md);
       padding: var(--space-3);
