@@ -23,14 +23,19 @@ app = FastAPI(title="Longhouse Control Plane", version="0.1.0")
 @app.on_event("startup")
 def _startup():
     Base.metadata.create_all(bind=engine)
-    # Migrate: add email_verified column if missing
+    # Migrate: add email_verified column if missing, backfill existing users as verified
     with engine.connect() as conn:
         try:
             conn.execute(text("ALTER TABLE cp_users ADD COLUMN email_verified BOOLEAN DEFAULT 0"))
+            # Backfill: existing users were already trusted — mark them verified
+            conn.execute(text("UPDATE cp_users SET email_verified = 1"))
             conn.commit()
-            logger.info("Added email_verified column to cp_users")
-        except Exception:
-            conn.rollback()  # Column already exists
+            logger.info("Added email_verified column to cp_users and backfilled existing users as verified")
+        except Exception as exc:
+            conn.rollback()
+            # "duplicate column" is expected if migration already ran — anything else is worth logging
+            if "duplicate" not in str(exc).lower():
+                logger.warning(f"email_verified migration skipped: {exc}")
 
 
 app.include_router(health.router)

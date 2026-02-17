@@ -169,16 +169,18 @@ def _issue_verify_token(user: User) -> str:
     )
 
 
-def _send_verification(user: User) -> None:
-    """Send verification email (best-effort — logs errors but doesn't raise to caller)."""
+def _send_verification(user: User) -> bool:
+    """Send verification email. Returns True on success, False on failure."""
     token = _issue_verify_token(user)
     verify_url = f"https://control.{settings.root_domain}/auth/verify?token={token}"
     try:
         from control_plane.services.email import send_verification_email
 
         send_verification_email(user.email, verify_url)
+        return True
     except Exception:
         logger.exception(f"Could not send verification email to {user.email}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +479,9 @@ def resend_verification(
     if user.email_verified:
         return RedirectResponse("/dashboard", status_code=303)
 
-    _send_verification(user)
-    return RedirectResponse("/verify-email?resent=1", status_code=303)
+    if _send_verification(user):
+        return RedirectResponse("/verify-email?resent=1", status_code=303)
+    return RedirectResponse("/verify-email?error=Could+not+send+email.+Please+try+again+later.", status_code=303)
 
 
 @router.post("/logout")
