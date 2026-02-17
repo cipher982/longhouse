@@ -386,7 +386,7 @@ function RunnerStatusIndicator() {
   }
 
   const allOnline = runnerStatus.online === runnerStatus.total;
-  const color = allOnline ? "#10b981" : "#f59e0b"; // green or yellow
+  const color = allOnline ? "#5D9B4A" : "#D4A843"; // olive or warm amber
 
   return (
     <span

@@ -531,7 +531,7 @@
   color: var(--color-text-muted);
 }
 
-/* Connecting - indigo pulse */
+/* Connecting - gold pulse */
 .oikos-container .mic-button--connecting {
   border-color: var(--color-neon-primary);
   color: var(--color-neon-primary);
@@ -561,7 +561,7 @@
     0 0 20px rgba(201, 166, 107, 40);
 }
 
-/* Processing - indigo spin */
+/* Processing - gold spin */
 .oikos-container .mic-button--processing {
   border-color: var(--color-neon-primary);
   color: var(--color-neon-primary);

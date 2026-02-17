@@ -230,7 +230,7 @@ function showUI() {
       #perf-debug-ui h3 {
         margin: 0 0 12px 0;
         font-size: 14px;
-        color: #6366f1;
+        color: #C9A66B;
       }
       #perf-debug-ui label {
         display: flex;
@@ -253,7 +253,7 @@ function showUI() {
         margin: 12px 0;
       }
       #perf-debug-ui button {
-        background: #6366f1;
+        background: #C9A66B;
         color: white;
         border: none;
         padding: 8px 16px;

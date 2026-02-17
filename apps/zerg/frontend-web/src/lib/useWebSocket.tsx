@@ -429,15 +429,15 @@ export function ConnectionStatusIndicator({
   const getStatusColor = () => {
     switch (status) {
       case ConnectionStatus.CONNECTED:
-        return '#10b981'; // green
+        return '#5D9B4A'; // olive
       case ConnectionStatus.CONNECTING:
       case ConnectionStatus.RECONNECTING:
-        return '#f59e0b'; // yellow
+        return '#D4A843'; // warm amber
       case ConnectionStatus.ERROR:
-        return '#ef4444'; // red
+        return '#C45040'; // warm red
       case ConnectionStatus.DISCONNECTED:
       default:
-        return '#6b7280'; // gray
+        return '#8A7A64'; // muted
     }
   };
 
