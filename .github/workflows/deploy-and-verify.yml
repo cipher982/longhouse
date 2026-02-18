@@ -66,6 +66,7 @@ jobs:
           ssh zerg 'cd /opt/longhouse/david && docker compose pull && docker compose up -d'
 
       - name: Deploy Coolify apps (marketing + control plane)
+        if: ${{ secrets.COOLIFY_DEMO_UUID != '' && secrets.COOLIFY_CP_UUID != '' }}
         run: |
           ssh clifford "
             TOKEN=\$(sudo cat /data/coolify/source/.env | grep '^API_TOKEN=' | cut -d= -f2-) && \
