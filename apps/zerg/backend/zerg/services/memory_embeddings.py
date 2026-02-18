@@ -56,6 +56,7 @@ def embed_query(query: str) -> np.ndarray:
     response = client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=[query],
+        extra_body={"metadata": {"source": "longhouse:memory-embeddings"}},
     )
     vec = np.array(response.data[0].embedding, dtype=np.float32)
     return _normalize(vec)
@@ -67,6 +68,7 @@ def embed_texts(texts: Iterable[str]) -> np.ndarray:
     response = client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=list(texts),
+        extra_body={"metadata": {"source": "longhouse:memory-embeddings"}},
     )
     vectors = np.array([item.embedding for item in response.data], dtype=np.float32)
     return np.vstack([_normalize(v) for v in vectors])
