@@ -98,6 +98,7 @@ async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | Non
             {"role": "system", "content": [{"type": "input_text", "text": SUMMARY_SYSTEM_PROMPT}]},
             {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
         ],
+        extra_body={"metadata": {"source": "longhouse:memory-summarizer"}},
     )
 
     output_text = _extract_output_text(response)
