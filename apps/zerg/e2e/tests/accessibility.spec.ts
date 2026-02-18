@@ -1,27 +1,46 @@
 import { test, expect } from './fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
-// Re-enabled: Testing if aria-label issues have been fixed
+/**
+ * Accessibility tests using axe-core.
+ *
+ * Runs WCAG 2.0 AA checks including color contrast on key pages.
+ * This is the canonical accessibility test — axe-core computes real
+ * contrast ratios from rendered styles in the browser DOM.
+ */
 
-test.describe('Accessibility – dashboard smoke', () => {
-  test('dashboard view has no serious axe violations', async ({ page }) => {
-    await page.goto('/');
+const PAGES_TO_TEST = [
+  { name: 'landing', path: '/', needsAuth: false },
+  { name: 'dashboard', path: '/dashboard', needsAuth: true },
+  { name: 'timeline', path: '/timeline', needsAuth: true },
+  { name: 'settings', path: '/settings', needsAuth: true },
+];
 
-    // Run axe accessibility checks
-    const accessibilityScanResults = await new AxeBuilder({ page })
-      .withTags(['wcag2a', 'wcag2aa'])
-      .analyze();
+test.describe('Accessibility – axe-core WCAG AA', () => {
+  for (const pageDef of PAGES_TO_TEST) {
+    test(`${pageDef.name} has no serious axe violations`, async ({ page }) => {
+      await page.goto(pageDef.path);
+      await page.waitForLoadState('domcontentloaded');
 
-    // Filter for only critical and serious violations
-    const seriousViolations = accessibilityScanResults.violations.filter(
-      (violation) => violation.impact === 'critical' || violation.impact === 'serious'
-    );
+      // Wait for content to render (auth-gated pages redirect to dashboard)
+      await page.waitForTimeout(500);
 
-    // Log violations for debugging if any exist
-    if (seriousViolations.length > 0) {
-      console.log('Accessibility violations found:', JSON.stringify(seriousViolations, null, 2));
-    }
+      const results = await new AxeBuilder({ page })
+        .withTags(['wcag2a', 'wcag2aa'])
+        .analyze();
 
-    expect(seriousViolations).toEqual([]);
-  });
+      const seriousViolations = results.violations.filter(
+        (violation) => violation.impact === 'critical' || violation.impact === 'serious'
+      );
+
+      if (seriousViolations.length > 0) {
+        const summary = seriousViolations.map(v =>
+          `[${v.impact}] ${v.id}: ${v.description} (${v.nodes.length} instances)`
+        ).join('\n');
+        console.log(`Accessibility violations on ${pageDef.name}:\n${summary}`);
+      }
+
+      expect(seriousViolations).toEqual([]);
+    });
+  }
 });

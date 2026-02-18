@@ -96,6 +96,17 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
+      # CSS rgba alpha validation (catches recolor script bugs)
+      # Alpha values >1 are clamped to 1.0, making colors fully opaque
+      # -----------------------------------------------------------------------
+      - id: css-rgba-validate
+        name: CSS rgba alpha validation
+        entry: scripts/validate-rgba.sh
+        language: system
+        files: \.css$
+        pass_filenames: false
+
+      # -----------------------------------------------------------------------
       # Vulture dead code detection (unused functions/classes/variables)
       # -----------------------------------------------------------------------
       - id: python-vulture

@@ -312,7 +312,7 @@ test-e2e-grep: ## @internal Run E2E tests by name (usage: make test-e2e-grep GRE
 
 test-e2e-a11y: ## @internal Run accessibility UI/UX checks (axe + heuristics)
 	@echo "🧪 Running accessibility UI/UX checks..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts tests/accessibility_ui_ux.spec.ts
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
 
 qa-ui: ## Quick UI QA (accessibility checks)
 	$(MAKE) test-e2e-a11y
