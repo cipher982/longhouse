@@ -22,8 +22,13 @@ test.describe('Accessibility – axe-core WCAG AA', () => {
       await page.goto(pageDef.path);
       await page.waitForLoadState('domcontentloaded');
 
-      // Wait for content to render (auth-gated pages redirect to dashboard)
-      await page.waitForTimeout(500);
+      // Wait for app content to render
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="app-container"], .landing-page') !== null,
+        { timeout: 10000 }
+      ).catch(() => {
+        // Landing page may not have these markers — proceed anyway
+      });
 
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa'])
