@@ -430,13 +430,13 @@
   }
 
   .admin-devtool-card--trace {
-    background-color: rgba(201, 166, 107, 5);
+    background-color: rgba(201, 166, 107, 0.05);
     border-color: var(--color-border);
   }
 
   .admin-devtool-card--trace:hover {
-    background-color: rgba(201, 166, 107, 10);
-    border-color: rgba(201, 166, 107, 30);
+    background-color: rgba(201, 166, 107, 0.10);
+    border-color: rgba(201, 166, 107, 0.30);
   }
 
   .admin-devtool-card--reliability {
@@ -693,7 +693,7 @@
   .demo-empty-state {
     text-align: center;
     padding: 48px 24px;
-    background: linear-gradient(135deg, rgba(201, 166, 107, 5) 0%, rgba(139, 92, 246, 0.05) 100%);
+    background: linear-gradient(135deg, rgba(201, 166, 107, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%);
     border-radius: 12px;
     border: 1px dashed rgba(201, 166, 107, 0.3);
   }
@@ -723,7 +723,7 @@
 
   .demo-account-card:hover {
     border-color: rgba(201, 166, 107, 0.40);
-    background: linear-gradient(135deg, rgba(201, 166, 107, 8) 0%, rgba(139, 92, 246, 0.04) 100%);
+    background: linear-gradient(135deg, rgba(201, 166, 107, 0.08) 0%, rgba(139, 92, 246, 0.04) 100%);
   }
 
   .demo-account-info {
@@ -767,8 +767,8 @@
 
   .demo-add-button:hover:not(:disabled) {
     border-color: rgba(201, 166, 107, 0.5);
-    color: rgba(201, 166, 107, 90);
-    background: rgba(201, 166, 107, 5);
+    color: rgba(201, 166, 107, 0.90);
+    background: rgba(201, 166, 107, 0.05);
   }
 
   .demo-add-button:disabled {

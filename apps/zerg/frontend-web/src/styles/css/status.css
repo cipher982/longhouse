@@ -120,6 +120,6 @@
 }
 
 .status-indicator.status-processing {
-  background: rgba(158, 124, 90, 15);
+  background: rgba(158, 124, 90, 0.15);
   color: var(--color-brand-secondary);
 }

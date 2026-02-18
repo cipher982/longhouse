@@ -335,7 +335,7 @@
   }
 
   .ui-table-row--clickable:focus-visible td {
-    background: rgba(201, 166, 107, 8);
+    background: rgba(201, 166, 107, 0.08);
   }
 
   .ui-table-row--clickable:hover td {

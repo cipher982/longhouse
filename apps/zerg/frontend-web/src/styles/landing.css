@@ -440,19 +440,19 @@
     /* Strong prominence: bright glow + solid border to stand out from dark bg */
     box-shadow:
       0 0 24px rgba(201, 166, 107, 0.5),
-      0 0 48px rgba(201, 166, 107, 25),
+      0 0 48px rgba(201, 166, 107, 0.25),
       0 4px 16px rgba(18, 11, 9, 0.4);
-    border: 1px solid rgba(158, 124, 90, 70) !important;
+    border: 1px solid rgba(158, 124, 90, 0.70) !important;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-cta-main.ui-button--primary:hover {
     box-shadow:
-      0 0 32px rgba(201, 166, 107, 60),
-      0 0 64px rgba(201, 166, 107, 35),
+      0 0 32px rgba(201, 166, 107, 0.60),
+      0 0 64px rgba(201, 166, 107, 0.35),
       0 6px 20px rgba(18, 11, 9, 0.5);
     transform: translateY(-3px);
-    border-color: rgba(158, 124, 90, 90) !important;
+    border-color: rgba(158, 124, 90, 0.90) !important;
   }
 
   .landing-hero-cta-secondary {

@@ -133,7 +133,7 @@
     .chat-thread-toggle--active {
       border-color: var(--color-brand-primary);
       color: var(--color-brand-primary);
-      background: rgba(201, 166, 107, 12);
+      background: rgba(201, 166, 107, 0.12);
     }
 
     .chat-settings-btn:hover {
@@ -647,8 +647,8 @@
     .runner-setup-card {
       background: linear-gradient(
         135deg,
-        rgba(201, 166, 107, 5) 0%,
-        rgba(201, 166, 107, 5) 100%
+        rgba(201, 166, 107, 0.05) 0%,
+        rgba(201, 166, 107, 0.05) 100%
       );
       border: 1px solid rgba(201, 166, 107, 0.2);
       border-radius: var(--radius-lg);
