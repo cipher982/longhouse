@@ -251,4 +251,5 @@ class Provisioner:
                 last_error = str(exc)
             time.sleep(2)
 
-        raise RuntimeError(f"Health check failed for {host}: {last_error}")
+        target = _host_for(subdomain)
+        raise RuntimeError(f"Health check failed for {target}: {last_error}")
