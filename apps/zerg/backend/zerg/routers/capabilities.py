@@ -381,6 +381,7 @@ async def test_llm_provider(
                     model=test_model,
                     messages=[{"role": "user", "content": "Say 'ok'"}],
                     max_tokens=3,
+                    extra_body={"metadata": {"source": "longhouse:capabilities-test"}},
                 )
                 if resp.choices:
                     return LlmProviderTestResponse(success=True, message="Connection successful")

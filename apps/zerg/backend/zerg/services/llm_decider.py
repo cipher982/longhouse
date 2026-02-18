@@ -328,6 +328,7 @@ async def call_llm_decider(
                 ],
                 max_completion_tokens=8,  # We only need one word (GPT-5 compatible)
                 temperature=0,
+                extra_body={"metadata": {"source": "longhouse:roundabout"}},
             ),
             timeout=timeout_seconds,
         )
