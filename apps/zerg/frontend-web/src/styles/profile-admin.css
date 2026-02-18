@@ -722,7 +722,7 @@
   }
 
   .demo-account-card:hover {
-    border-color: rgba(201, 166, 107, 40);
+    border-color: rgba(201, 166, 107, 0.40);
     background: linear-gradient(135deg, rgba(201, 166, 107, 8) 0%, rgba(139, 92, 246, 0.04) 100%);
   }
 

@@ -138,7 +138,7 @@
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    background: rgba(201, 166, 107, 40);
+    background: rgba(201, 166, 107, 0.40);
     pointer-events: none;
     animation: click-ripple 0.6s ease-out forwards;
     z-index: 99999;

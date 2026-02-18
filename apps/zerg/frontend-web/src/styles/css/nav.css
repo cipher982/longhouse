@@ -177,7 +177,7 @@
   border-radius: 1px;
   box-shadow:
     0 0 8px var(--color-brand-primary),
-    0 0 16px rgba(201, 166, 107, 40);
+    0 0 16px rgba(201, 166, 107, 0.40);
   opacity: 0.9;
   transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
 }
