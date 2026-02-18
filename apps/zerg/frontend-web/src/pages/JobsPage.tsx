@@ -10,17 +10,72 @@ import {
   Spinner,
   Table,
 } from "../components/ui";
-import { useDisableJob, useEnableJob, useJobs, useJobsRepoStatus } from "../hooks/useJobSecrets";
+import {
+  useDisableJob,
+  useEnableJob,
+  useJobs,
+  useJobsRepoStatus,
+  useRecentJobRuns,
+} from "../hooks/useJobSecrets";
+import type { JobRunHistoryInfo } from "../services/api/jobSecrets";
 import { ApiError } from "../services/api/base";
+import RepoConnectPanel from "../components/jobs/RepoConnectPanel";
+
+function runStatusVariant(status: string): "success" | "error" | "warning" | "neutral" {
+  switch (status) {
+    case "success":
+      return "success";
+    case "failure":
+    case "dead":
+      return "error";
+    case "timeout":
+      return "warning";
+    default:
+      return "neutral";
+  }
+}
+
+function relativeTime(iso: string | null): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function formatDuration(ms: number | null): string {
+  if (ms == null) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  return `${minutes}m ${rem}s`;
+}
 
 export default function JobsPage() {
   const navigate = useNavigate();
   const { data: jobs, isLoading: jobsLoading, error: jobsError } = useJobs();
   const { data: repo, isLoading: repoLoading, error: repoError } = useJobsRepoStatus();
+  const { data: recentRunsData, isLoading: runsLoading } = useRecentJobRuns(50);
   const enableMutation = useEnableJob();
   const disableMutation = useDisableJob();
 
   const allJobs = jobs ?? [];
+  const allRuns = recentRunsData?.runs ?? [];
+
+  // Build a map of job_id -> most recent run for the "Last Run" column
+  const lastRunByJob = new Map<string, JobRunHistoryInfo>();
+  for (const run of allRuns) {
+    if (!lastRunByJob.has(run.job_id)) {
+      lastRunByJob.set(run.job_id, run);
+    }
+  }
   const toggling = enableMutation.isPending || disableMutation.isPending;
 
   const handleToggle = (jobId: string, enabled: boolean) => {
@@ -59,6 +114,10 @@ export default function JobsPage() {
       />
 
       <div className="settings-stack settings-stack--lg">
+        <div className="repo-connect-panel">
+          <RepoConnectPanel />
+        </div>
+
         <Card>
           <Card.Header>
             <h3 className="settings-section-title">Jobs Repo</h3>
@@ -117,16 +176,71 @@ export default function JobsPage() {
                 variant="error"
               />
             ) : !allJobs.length ? (
-              <EmptyState
-                title="No jobs registered"
-                description="Connect a jobs repo or add jobs to /data/jobs to get started."
-              />
+              <div className="settings-stack settings-stack--lg">
+                <div>
+                  <h3 className="settings-section-title">Set up your first scheduled job</h3>
+                  <p className="text-muted" style={{ marginTop: "0.25rem" }}>
+                    Run Python scripts on a schedule — process data, send reports, sync services.
+                    Jobs run in your private instance with access to secrets and email notifications.
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                  <Card style={{ flex: "1 1 0", minWidth: "240px" }}>
+                    <Card.Body>
+                      <div className="settings-stack settings-stack--md">
+                        <div>
+                          <Badge variant="success">Recommended</Badge>
+                        </div>
+                        <strong>Start from template</strong>
+                        <p className="text-muted">
+                          Fork our starter repo with a working example job and manifest.
+                        </p>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() =>
+                            window.open(
+                              "https://github.com/cipher982/longhouse-jobs-template",
+                              "_blank",
+                              "noopener",
+                            )
+                          }
+                        >
+                          View Template
+                        </Button>
+                      </div>
+                    </Card.Body>
+                  </Card>
+                  <Card style={{ flex: "1 1 0", minWidth: "240px" }}>
+                    <Card.Body>
+                      <div className="settings-stack settings-stack--md">
+                        <strong>Connect your repo</strong>
+                        <p className="text-muted">
+                          Already have a jobs repo? Connect it above to sync your jobs.
+                        </p>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() =>
+                            document
+                              .querySelector(".repo-connect-panel")
+                              ?.scrollIntoView({ behavior: "smooth" })
+                          }
+                        >
+                          Go to Connect
+                        </Button>
+                      </div>
+                    </Card.Body>
+                  </Card>
+                </div>
+              </div>
             ) : (
               <Table>
                 <Table.Header>
                   <Table.Cell isHeader>Job</Table.Cell>
                   <Table.Cell isHeader>Cron</Table.Cell>
                   <Table.Cell isHeader>Status</Table.Cell>
+                  <Table.Cell isHeader>Last Run</Table.Cell>
                   <Table.Cell isHeader>Secrets</Table.Cell>
                   <Table.Cell isHeader>Actions</Table.Cell>
                 </Table.Header>
@@ -144,6 +258,20 @@ export default function JobsPage() {
                         </Badge>
                       </Table.Cell>
                       <Table.Cell>
+                        {(() => {
+                          const lastRun = lastRunByJob.get(job.id);
+                          if (!lastRun) return "—";
+                          return (
+                            <span>
+                              <Badge variant={runStatusVariant(lastRun.status)}>
+                                {lastRun.status}
+                              </Badge>{" "}
+                              <span className="text-muted">{relativeTime(lastRun.started_at)}</span>
+                            </span>
+                          );
+                        })()}
+                      </Table.Cell>
+                      <Table.Cell>
                         {job.secrets.length > 0 ? `${job.secrets.length} declared` : "—"}
                       </Table.Cell>
                       <Table.Cell>
@@ -155,6 +283,59 @@ export default function JobsPage() {
                         >
                           {toggling ? "..." : job.enabled ? "Disable" : "Enable"}
                         </Button>
+                      </Table.Cell>
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table>
+            )}
+          </Card.Body>
+        </Card>
+        <Card>
+          <Card.Header>
+            <h3 className="settings-section-title">Recent Runs</h3>
+          </Card.Header>
+          <Card.Body>
+            {runsLoading ? (
+              <div className="settings-stack settings-stack--md">
+                <Spinner size="sm" />
+                <span className="text-muted">Loading recent runs...</span>
+              </div>
+            ) : !allRuns.length ? (
+              <EmptyState
+                title="No runs yet"
+                description="Job runs will appear here once jobs start executing."
+              />
+            ) : (
+              <Table>
+                <Table.Header>
+                  <Table.Cell isHeader>Job</Table.Cell>
+                  <Table.Cell isHeader>Status</Table.Cell>
+                  <Table.Cell isHeader>Started</Table.Cell>
+                  <Table.Cell isHeader>Duration</Table.Cell>
+                  <Table.Cell isHeader>Error</Table.Cell>
+                </Table.Header>
+                <Table.Body>
+                  {allRuns.slice(0, 10).map((run) => (
+                    <Table.Row key={run.id}>
+                      <Table.Cell>{run.job_id}</Table.Cell>
+                      <Table.Cell>
+                        <Badge variant={runStatusVariant(run.status)}>{run.status}</Badge>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <span className="text-muted">{relativeTime(run.started_at)}</span>
+                      </Table.Cell>
+                      <Table.Cell>{formatDuration(run.duration_ms)}</Table.Cell>
+                      <Table.Cell>
+                        {run.error_message ? (
+                          <span className="text-muted" title={run.error_message}>
+                            {run.error_message.length > 60
+                              ? `${run.error_message.slice(0, 60)}...`
+                              : run.error_message}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
                       </Table.Cell>
                     </Table.Row>
                   ))}

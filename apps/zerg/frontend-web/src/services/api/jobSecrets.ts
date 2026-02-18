@@ -72,6 +72,48 @@ export interface EnableJobError {
   missing?: string[];
 }
 
+export interface JobRunHistoryInfo {
+  id: string;
+  job_id: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface JobRunHistoryResponse {
+  runs: JobRunHistoryInfo[];
+  total: number;
+}
+
+// ---------------------------------------------------------------------------
+// Repo Config types
+// ---------------------------------------------------------------------------
+
+export interface JobRepoConfigResponse {
+  repo_url: string;
+  branch: string;
+  has_token: boolean;
+  last_sync_sha: string | null;
+  last_sync_at: string | null;
+  last_sync_error: string | null;
+  source: string;
+}
+
+export interface JobRepoConfigRequest {
+  repo_url: string;
+  branch?: string;
+  token?: string;
+}
+
+export interface JobRepoVerifyResponse {
+  success: boolean;
+  commit_sha?: string;
+  error?: string;
+}
+
 // ---------------------------------------------------------------------------
 // API functions
 // ---------------------------------------------------------------------------
@@ -120,4 +162,54 @@ export async function disableJob(jobId: string): Promise<JobInfo> {
   return request<JobInfo>(`/jobs/${encodeURIComponent(jobId)}/disable`, {
     method: "POST",
   });
+}
+
+// ---------------------------------------------------------------------------
+// Repo Config API functions
+// ---------------------------------------------------------------------------
+
+export async function getRepoConfig(): Promise<JobRepoConfigResponse> {
+  return request<JobRepoConfigResponse>(`/jobs/repo/config`);
+}
+
+export async function saveRepoConfig(
+  config: JobRepoConfigRequest,
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/jobs/repo/config`, {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+export async function verifyRepoConfig(
+  config: JobRepoConfigRequest,
+): Promise<JobRepoVerifyResponse> {
+  return request<JobRepoVerifyResponse>(`/jobs/repo/verify`, {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+export async function deleteRepoConfig(): Promise<void> {
+  await request<void>(`/jobs/repo/config`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Run History API functions
+// ---------------------------------------------------------------------------
+
+export async function getRecentJobRuns(limit = 10): Promise<JobRunHistoryResponse> {
+  return request<JobRunHistoryResponse>(`/jobs/runs/recent?limit=${limit}`);
+}
+
+export async function getJobRuns(
+  jobId: string,
+  limit = 25,
+  offset = 0,
+): Promise<JobRunHistoryResponse> {
+  return request<JobRunHistoryResponse>(
+    `/jobs/${encodeURIComponent(jobId)}/runs?limit=${limit}&offset=${offset}`,
+  );
 }

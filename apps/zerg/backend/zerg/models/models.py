@@ -894,6 +894,29 @@ class JobRepoConfig(Base):
     owner = relationship("User", backref="job_repo_config")
 
 
+# ---------------------------------------------------------------------------
+# Job Runs – Persistent record of each scheduled job execution
+# ---------------------------------------------------------------------------
+
+
+class JobRun(Base):
+    """Persistent record of each job execution."""
+
+    __tablename__ = "job_runs"
+
+    id = Column(String(36), primary_key=True)  # UUID
+    job_id = Column(String(255), nullable=False, index=True)
+    status = Column(String(20), nullable=False)  # success, failure, dead, timeout
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)  # JSON string for extra data
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (Index("idx_job_runs_job_created", "job_id", "created_at"),)
+
+
 class EmailSendLog(Base):
     """Audit log for sent emails.
 
