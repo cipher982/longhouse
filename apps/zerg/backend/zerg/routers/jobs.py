@@ -17,6 +17,7 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
 from pydantic import BaseModel
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
@@ -24,6 +25,7 @@ from zerg.dependencies.auth import require_admin
 from zerg.jobs.registry import _normalize_secret_fields
 from zerg.jobs.registry import job_registry
 from zerg.jobs.registry import register_all_jobs
+from zerg.models.models import JobRun
 from zerg.models.models import JobSecret
 from zerg.models.models import User as UserModel
 
@@ -72,6 +74,26 @@ class JobRunResponse(BaseModel):
     result: dict[str, Any] | None = None
     error: str | None = None
     error_type: str | None = None
+
+
+class JobRunHistoryInfo(BaseModel):
+    """Single job run record for history queries."""
+
+    id: str
+    job_id: str
+    status: str
+    started_at: str | None
+    finished_at: str | None
+    duration_ms: int | None
+    error_message: str | None
+    created_at: str
+
+
+class JobRunHistoryResponse(BaseModel):
+    """Response for job run history queries."""
+
+    runs: list[JobRunHistoryInfo]
+    total: int
 
 
 def _job_info_from_config(config) -> JobInfo:
@@ -251,6 +273,43 @@ async def sync_jobs_repo(
         raise HTTPException(status_code=500, detail=f"Failed to sync jobs repo: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Job Run History Endpoints (must come before /{job_id} to avoid shadowing)
+# ---------------------------------------------------------------------------
+
+
+def _job_run_to_info(run: JobRun) -> JobRunHistoryInfo:
+    """Convert a JobRun ORM instance to a JobRunHistoryInfo schema."""
+    return JobRunHistoryInfo(
+        id=run.id,
+        job_id=run.job_id,
+        status=run.status,
+        started_at=run.started_at.isoformat() if run.started_at else None,
+        finished_at=run.finished_at.isoformat() if run.finished_at else None,
+        duration_ms=run.duration_ms,
+        error_message=run.error_message,
+        created_at=run.created_at.isoformat() if run.created_at else "",
+    )
+
+
+@router.get("/runs/recent", response_model=JobRunHistoryResponse)
+async def get_recent_job_runs(
+    limit: int = Query(25, ge=1, le=100, description="Max results to return"),
+    current_user: UserModel = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get recent job runs across all jobs (for dashboard).
+
+    Returns the most recent runs ordered by created_at descending.
+    """
+    total = db.query(sa_func.count(JobRun.id)).scalar() or 0
+    runs = db.query(JobRun).order_by(JobRun.created_at.desc()).limit(limit).all()
+    return JobRunHistoryResponse(
+        runs=[_job_run_to_info(r) for r in runs],
+        total=total,
+    )
+
+
 @router.get("/", response_model=JobListResponse)
 async def list_jobs(
     enabled_only: bool = False,
@@ -282,6 +341,27 @@ async def get_job(
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
     return _job_info_from_config(config)
+
+
+@router.get("/{job_id}/runs", response_model=JobRunHistoryResponse)
+async def get_job_runs(
+    job_id: str,
+    limit: int = Query(25, ge=1, le=100, description="Max results to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    current_user: UserModel = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get run history for a specific job.
+
+    Returns runs for the given job ordered by created_at descending,
+    with pagination support via limit/offset.
+    """
+    total = db.query(sa_func.count(JobRun.id)).filter(JobRun.job_id == job_id).scalar() or 0
+    runs = db.query(JobRun).filter(JobRun.job_id == job_id).order_by(JobRun.created_at.desc()).offset(offset).limit(limit).all()
+    return JobRunHistoryResponse(
+        runs=[_job_run_to_info(r) for r in runs],
+        total=total,
+    )
 
 
 @router.post("/{job_id}/run", response_model=JobRunResponse)
