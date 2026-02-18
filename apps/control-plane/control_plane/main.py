@@ -9,6 +9,7 @@ from sqlalchemy import text
 from fastapi import FastAPI
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from control_plane.db import Base
 from control_plane.db import engine
@@ -29,6 +30,7 @@ app = FastAPI(title="Longhouse Control Plane", version="0.1.0")
 
 app.state.limiter = auth.limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.on_event("startup")

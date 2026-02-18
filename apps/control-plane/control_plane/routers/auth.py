@@ -140,6 +140,11 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
+    # Reject non-session tokens (e.g. password_reset, email_verify)
+    purpose = payload.get("purpose")
+    if purpose is not None and purpose != "session":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token purpose")
+
     user = db.query(User).filter(User.id == int(payload["sub"])).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
@@ -154,6 +159,10 @@ def get_current_user_or_none(request: Request, db: Session = Depends(get_db)) ->
     try:
         payload = _decode_jwt(token, settings.jwt_secret)
     except ValueError:
+        return None
+    # Reject non-session tokens (e.g. password_reset, email_verify)
+    purpose = payload.get("purpose")
+    if purpose is not None and purpose != "session":
         return None
     return db.query(User).filter(User.id == int(payload["sub"])).first()
 
@@ -528,11 +537,16 @@ def logout_redirect(return_to: str | None = None):
 
 
 def _issue_reset_token(user: User) -> str:
-    """Issue a short-lived JWT for password reset (1 hour)."""
+    """Issue a short-lived JWT for password reset (1 hour).
+
+    Includes a hash prefix (phash) so the token is invalidated once the
+    password is changed — prevents replay after use.
+    """
     return _encode_jwt(
         {
             "sub": str(user.id),
             "purpose": "password_reset",
+            "phash": user.password_hash[:8] if user.password_hash else "",
             "exp": int(time.time()) + RESET_TOKEN_MAX_AGE,
         },
         settings.jwt_secret,
@@ -609,6 +623,11 @@ def reset_password(
     if not user:
         return RedirectResponse("/reset-password?error=User+not+found", status_code=303)
 
+
+    # Reject replayed tokens: phash must match current password hash prefix
+    expected_phash = user.password_hash[:8] if user.password_hash else ""
+    if payload.get("phash", "") != expected_phash:
+        return RedirectResponse("/reset-password?error=Reset+link+already+used", status_code=303)
     user.password_hash = _hash_password(password)
     db.commit()
     logger.info(f"Password reset for: {user.email}")
