@@ -108,8 +108,8 @@
     inset: 0;
     background:
       radial-gradient(ellipse at 25% 75%, rgba(201, 166, 107, 0.2), transparent 50%),
-      radial-gradient(ellipse at 75% 25%, rgba(201, 166, 107, 15), transparent 45%),
-      radial-gradient(ellipse at 50% 50%, rgba(196, 80, 64, 12), transparent 55%);
+      radial-gradient(ellipse at 75% 25%, rgba(201, 166, 107, 0.15), transparent 45%),
+      radial-gradient(ellipse at 50% 50%, rgba(196, 80, 64, 0.12), transparent 55%);
     pointer-events: none;
     z-index: -2;
     opacity: 0.6;

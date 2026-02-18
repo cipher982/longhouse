@@ -78,7 +78,7 @@
   inset: -4px;
   background: radial-gradient(
     circle,
-    rgba(201, 166, 107, 25) 0%,
+    rgba(201, 166, 107, 0.25) 0%,
     transparent 70%
   );
   border-radius: 50%;

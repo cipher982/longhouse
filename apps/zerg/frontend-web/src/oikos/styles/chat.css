@@ -110,7 +110,7 @@
 .oikos-container .message.assistant .message-avatar {
   background: linear-gradient(
     135deg,
-    rgba(201, 166, 107, 10) 0%,
+    rgba(201, 166, 107, 0.10) 0%,
     rgba(201, 166, 107, 0.1) 100%
   );
   border-color: rgba(201, 166, 107, 0.3);
@@ -154,13 +154,13 @@
 .oikos-container .message.user .message-content {
   background: linear-gradient(
     135deg,
-    rgba(201, 166, 107, 80) 0%,
+    rgba(201, 166, 107, 0.80) 0%,
     rgb(79 70 229 / 90%) 100%
   );
   color: #F3EAD9;
   border-top-right-radius: 4px;
   box-shadow:
-    0 4px 20px rgba(201, 166, 107, 25),
+    0 4px 20px rgba(201, 166, 107, 0.25),
     inset 0 1px 0 #342d20;
   border: 1px solid #261F18;
 }
@@ -325,10 +325,10 @@
 .oikos-container .assistant-turn.streaming {
   background: linear-gradient(
     135deg,
-    rgba(201, 166, 107, 10) 0%,
+    rgba(201, 166, 107, 0.10) 0%,
     rgba(201, 166, 107, 0.1) 100%
   );
-  border-color: rgba(201, 166, 107, 30);
+  border-color: rgba(201, 166, 107, 0.30);
 }
 
 /* Turn Header with Role Icon */
@@ -458,7 +458,7 @@
   margin: 0.75em 0;
   padding: 0.5em 1em;
   border-left: 3px solid var(--color-neon-cyan);
-  background: rgba(201, 166, 107, 10);
+  background: rgba(201, 166, 107, 0.10);
   border-radius: 0 4px 4px 0;
 }
 
@@ -609,8 +609,8 @@
   font-size: var(--font-size-xs);
   font-family: var(--font-family-mono);
   color: var(--color-neon-cyan);
-  background: rgba(201, 166, 107, 8);
-  border: 1px solid rgba(201, 166, 107, 20);
+  background: rgba(201, 166, 107, 0.08);
+  border: 1px solid rgba(201, 166, 107, 0.20);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -619,10 +619,10 @@
 }
 
 .oikos-container .trace-cta__link:hover {
-  background: rgba(201, 166, 107, 15);
+  background: rgba(201, 166, 107, 0.15);
   border-color: rgba(201, 166, 107, 0.40);
   color: var(--color-neon-cyan);
-  text-shadow: 0 0 8px rgba(201, 166, 107, 30);
+  text-shadow: 0 0 8px rgba(201, 166, 107, 0.30);
 }
 
 .oikos-container .trace-cta__icon {

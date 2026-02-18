@@ -15,7 +15,7 @@
   width: 100%;
   height: 80%;
   background-image:
-    linear-gradient(rgba(201, 166, 107, 80) 2px, transparent 2px),
+    linear-gradient(rgba(201, 166, 107, 0.80) 2px, transparent 2px),
     linear-gradient(90deg, rgba(201, 166, 107, 0.5) 2px, transparent 2px);
   background-size: 50px 50px;
   background-position: center bottom;
@@ -25,7 +25,7 @@
   pointer-events: none;
   z-index: 0; /* Lowered from 1 */
   mask-image: linear-gradient(to top, rgba(0,0,0,1) 0%, transparent 60%);
-  filter: drop-shadow(0 0 10px rgba(201, 166, 107, 60));
+  filter: drop-shadow(0 0 10px rgba(201, 166, 107, 0.60));
   will-change: transform;
 }
 
@@ -80,7 +80,7 @@
 }
 
 .oikos-container .brand-logo-wrapper:hover .brand-logo {
-  filter: drop-shadow(0 0 12px rgba(201, 166, 107, 60));
+  filter: drop-shadow(0 0 12px rgba(201, 166, 107, 0.60));
 }
 
 /* Ambient glow behind logo */
@@ -89,7 +89,7 @@
   inset: -4px;
   background: radial-gradient(
     circle,
-    rgba(201, 166, 107, 25) 0%,
+    rgba(201, 166, 107, 0.25) 0%,
     transparent 70%
   );
   border-radius: 50%;
@@ -113,7 +113,7 @@
 }
 
 .oikos-container .brand-link:hover .brand-logo {
-  filter: drop-shadow(0 0 12px rgba(201, 166, 107, 60));
+  filter: drop-shadow(0 0 12px rgba(201, 166, 107, 0.60));
 }
 
 /* Global Navigation - Cyber Tabs */
@@ -469,7 +469,7 @@
 .oikos-container .send-button:hover:not(:disabled) {
   background: var(--color-neon-primary-dark);
   transform: scale(1.05);
-  box-shadow: 0 0 30px rgba(201, 166, 107, 60);
+  box-shadow: 0 0 30px rgba(201, 166, 107, 0.60);
 }
 
 .oikos-container .send-button:disabled {
@@ -554,10 +554,10 @@
 .oikos-container .mic-button--listening {
   border-color: var(--color-neon-cyan);
   color: var(--color-neon-cyan);
-  background: rgba(201, 166, 107, 10);
+  background: rgba(201, 166, 107, 0.10);
   transform: scale(1.08);
   box-shadow:
-    0 0 0 2px rgba(201, 166, 107, 30),
+    0 0 0 2px rgba(201, 166, 107, 0.30),
     0 0 20px rgba(201, 166, 107, 0.40);
 }
 
@@ -572,8 +572,8 @@
 .oikos-container .mic-button--speaking {
   border-color: var(--color-neon-pink);
   color: var(--color-neon-pink);
-  background: rgba(196, 80, 64, 10);
-  box-shadow: 0 0 15px rgba(196, 80, 64, 35);
+  background: rgba(196, 80, 64, 0.10);
+  box-shadow: 0 0 15px rgba(196, 80, 64, 0.35);
   animation: mic-speaking 1s ease-in-out infinite;
 }
 
@@ -616,10 +616,10 @@
 
 @keyframes mic-speaking {
   0%, 100% {
-    box-shadow: 0 0 10px rgba(196, 80, 64, 25);
+    box-shadow: 0 0 10px rgba(196, 80, 64, 0.25);
   }
   50% {
-    box-shadow: 0 0 20px rgba(196, 80, 64, 45);
+    box-shadow: 0 0 20px rgba(196, 80, 64, 0.45);
   }
 }
 
