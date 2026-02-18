@@ -66,19 +66,25 @@ jobs:
           ssh zerg 'cd /opt/longhouse/david && docker compose pull && docker compose up -d'
 
       - name: Deploy Coolify apps (marketing + control plane)
-        if: ${{ secrets.COOLIFY_DEMO_UUID != '' && secrets.COOLIFY_CP_UUID != '' }}
+        env:
+          COOLIFY_DEMO_UUID: ${{ secrets.COOLIFY_DEMO_UUID }}
+          COOLIFY_CP_UUID: ${{ secrets.COOLIFY_CP_UUID }}
         run: |
+          if [[ -z "$COOLIFY_DEMO_UUID" || -z "$COOLIFY_CP_UUID" ]]; then
+            echo "Skipping Coolify deploy — COOLIFY_DEMO_UUID or COOLIFY_CP_UUID not configured"
+            exit 0
+          fi
           ssh clifford "
             TOKEN=\$(sudo cat /data/coolify/source/.env | grep '^API_TOKEN=' | cut -d= -f2-) && \
             curl -sf -X POST \
               -H \"Authorization: Bearer \$TOKEN\" \
               -H 'Content-Type: application/json' \
-              -d '{\"uuid\":\"${{ secrets.COOLIFY_DEMO_UUID }}\"}' \
+              -d '{\"uuid\":\"$COOLIFY_DEMO_UUID\"}' \
               'http://localhost:8000/api/v1/deploy' && \
             curl -sf -X POST \
               -H \"Authorization: Bearer \$TOKEN\" \
               -H 'Content-Type: application/json' \
-              -d '{\"uuid\":\"${{ secrets.COOLIFY_CP_UUID }}\"}' \
+              -d '{\"uuid\":\"$COOLIFY_CP_UUID\"}' \
               'http://localhost:8000/api/v1/deploy'
           "
 
