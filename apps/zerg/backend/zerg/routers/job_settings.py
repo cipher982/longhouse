@@ -34,6 +34,7 @@ from zerg.schemas.job_settings_schemas import JobSecretListItem
 from zerg.schemas.job_settings_schemas import JobSecretsStatusResponse
 from zerg.schemas.job_settings_schemas import JobSecretUpsertRequest
 from zerg.schemas.job_settings_schemas import SecretStatusItem
+from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
 logger = logging.getLogger(__name__)
@@ -265,10 +266,13 @@ def set_repo_config(
     db.commit()
 
     # Hot-start: launch git sync in background (clone → install deps → load manifest)
-    # resolve_token needs the plain value before it gets encrypted
-    _repo_url = request.repo_url
-    _branch = request.branch
-    _token = request.token
+    # Re-query the committed row to get effective values (handles partial updates
+    # where branch/token were omitted and preserved from the existing row).
+    db.refresh(existing or config)
+    committed = existing or config
+    _repo_url = committed.repo_url
+    _branch = committed.branch
+    _token = decrypt(committed.encrypted_token) if committed.encrypted_token else None
 
     async def _hot_start_git_sync() -> None:
         try:

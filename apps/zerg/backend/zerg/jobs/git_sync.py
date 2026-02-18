@@ -68,21 +68,14 @@ class GitSyncService:
             self._current_sha = self._sha_file.read_text().strip()
         return self._current_sha
 
-    def _get_auth_url(self) -> str:
-        """Build authenticated git URL. Token is NOT logged."""
-        if self.token:
-            # Token auth only works with HTTPS URLs, not SSH
-            if self.repo_url.startswith("git@") or self.repo_url.startswith("ssh://"):
-                logger.warning("Token auth ignored for SSH repo URL; use ssh_key_path instead")
-                return self.repo_url
-            # https://token@github.com/user/repo.git
-            parsed = urlparse(self.repo_url)
-            authed = parsed._replace(netloc=f"{self.token}@{parsed.netloc}")
-            return urlunparse(authed)
-        return self.repo_url
-
     def _get_git_env(self) -> dict:
-        """Environment for git commands."""
+        """Environment for git commands.
+
+        Auth is injected here via GIT_CONFIG_* env vars so credentials never
+        persist in .git/config or appear in CLI args.  For HTTPS repos with a
+        token we use ``http.<url>.extraheader`` which git sends on every fetch/
+        push without embedding the PAT in the remote URL.
+        """
         env = {
             **os.environ,
             "GIT_TERMINAL_PROMPT": "0",  # Never prompt
@@ -92,13 +85,28 @@ class GitSyncService:
         config_entries: list[tuple[str, str]] = []
 
         # Container environments: repo may be owned by different UID.
-        # Must be in env (not just -c) so subprocesses inherit it.
-        config_entries.append(("safe.directory", "*"))
+        # Scope to specific paths rather than blanket * for defense-in-depth.
+        config_entries.append(("safe.directory", str(self.local_path)))
+
+        # Token auth via http.extraheader — never persisted on disk.
+        # Only for HTTPS URLs; SSH uses ssh_key_path instead.
+        if self.token and not self.repo_url.startswith(("git@", "ssh://", "file://")):
+            import base64
+
+            # GitHub accepts "x-access-token:<token>" as Basic auth
+            b64 = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
+            parsed = urlparse(self.repo_url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+            config_entries.append((f"http.{base_url}.extraheader", f"Authorization: Basic {b64}"))
 
         # Allow file:// protocol (needed for local/CI testing with bare repos).
         # Git 2.38.1+ blocks file:// by default (CVE-2022-39253).
         if self.repo_url.startswith("file://"):
             config_entries.append(("protocol.file.allow", "always"))
+            # Also trust the remote bare repo path (different UID in CI/containers)
+            remote_path = urlparse(self.repo_url).path
+            if remote_path:
+                config_entries.append(("safe.directory", remote_path))
 
         env["GIT_CONFIG_COUNT"] = str(len(config_entries))
         for i, (key, value) in enumerate(config_entries):
@@ -116,13 +124,18 @@ class GitSyncService:
         directory already exists. Handles:
         - Hot-start with a changed config (different URL)
         - Bootstrap-created repos that have no origin remote
+
+        Stores the bare URL (no token) in .git/config. Auth is injected
+        per-command via http.extraheader in _get_git_env() so the PAT
+        never persists on disk.
         """
         try:
             current_url = (await self._run_git(["remote", "get-url", "origin"], cwd=self.local_path, capture=True)).strip()
         except Exception:
             current_url = ""
 
-        expected_url = self._get_auth_url()
+        # Store bare URL (no credentials) in remote config
+        expected_url = self.repo_url
         if current_url == expected_url:
             return
 
@@ -163,26 +176,40 @@ class GitSyncService:
             os.close(fd)
 
     def _ensure_safe_directory(self) -> None:
-        """Ensure safe.directory=* is in global gitconfig.
+        """Ensure safe.directory entries for our repos in global gitconfig.
 
         Container environments often have UID mismatches between the user
         that created a repo (e.g. entrypoint or CI runner) and the user
         running git commands. This is especially important for file://
         transport where git spawns git-upload-pack as a subprocess that
         doesn't inherit -c flags or GIT_CONFIG_* env vars reliably.
+
+        Scoped to specific paths rather than blanket * for defense-in-depth.
         """
         gitconfig = Path.home() / ".gitconfig"
-        try:
-            if gitconfig.exists() and "safe" in gitconfig.read_text():
-                return  # Already configured
-        except OSError:
-            pass
+        paths_to_trust = [str(self.local_path)]
+        if self.repo_url.startswith("file://"):
+            from urllib.parse import urlparse
+
+            remote_path = urlparse(self.repo_url).path
+            if remote_path:
+                paths_to_trust.append(remote_path)
 
         try:
-            # Append to existing or create new
+            existing_content = gitconfig.read_text() if gitconfig.exists() else ""
+        except OSError:
+            existing_content = ""
+
+        # Only add paths not already present
+        new_entries = [p for p in paths_to_trust if p not in existing_content]
+        if not new_entries:
+            return
+
+        try:
             with open(gitconfig, "a") as f:
-                f.write("\n[safe]\n\tdirectory = *\n")
-            logger.debug("Added safe.directory=* to %s", gitconfig)
+                for path in new_entries:
+                    f.write(f"\n[safe]\n\tdirectory = {path}\n")
+            logger.debug("Added safe.directory entries to %s: %s", gitconfig, new_entries)
         except OSError as e:
             logger.debug("Could not write gitconfig: %s", e)
 
@@ -218,7 +245,7 @@ class GitSyncService:
                         "clone",
                         "--single-branch",
                         f"--branch={self.branch}",
-                        self._get_auth_url(),  # Token in URL, not logged
+                        self.repo_url,  # Bare URL; auth via http.extraheader in env
                         str(self.local_path),
                     ]
                 )
@@ -312,9 +339,8 @@ class GitSyncService:
         capture: bool = False,
     ) -> str:
         """Run git command. Never logs the full URL (may contain token)."""
-        # -c safe.directory=* on the command line is the most reliable way
-        # to bypass ownership checks in container environments where UIDs differ.
-        cmd = ["git", "-c", "safe.directory=*", *args]
+        # Scoped safe.directory on CLI for the parent process; env vars cover subprocesses.
+        cmd = ["git", "-c", f"safe.directory={self.local_path}", *args]
 
         # Log sanitized command (hide token)
         safe_args = ["[REDACTED]" if "ghp_" in a or "@" in a else a for a in args]
