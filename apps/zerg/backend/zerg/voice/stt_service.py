@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from dataclasses import dataclass
 
 from openai import AsyncOpenAI
@@ -66,7 +67,11 @@ class STTService:
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
             settings = get_settings()
-            self._client = AsyncOpenAI(api_key=settings.openai_api_key)
+            kwargs: dict = {"api_key": settings.openai_api_key}
+            base_url = os.getenv("OPENAI_BASE_URL")
+            if base_url:
+                kwargs["base_url"] = base_url
+            self._client = AsyncOpenAI(**kwargs)
         return self._client
 
     async def transcribe_bytes(
@@ -125,6 +130,7 @@ class STTService:
                 response_format="json",
                 prompt=prompt,
                 language=language,
+                extra_body={"metadata": {"source": "longhouse:stt"}},
             )
         except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to caller
             logger.exception("STT: transcription failed")

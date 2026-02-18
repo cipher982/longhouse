@@ -142,7 +142,11 @@ class TTSService:
             if not api_key:
                 settings = get_settings()
                 api_key = settings.openai_api_key
-            self._openai_client = AsyncOpenAI(api_key=api_key)
+            kwargs: dict = {"api_key": api_key}
+            base_url = os.getenv("OPENAI_BASE_URL")
+            if base_url:
+                kwargs["base_url"] = base_url
+            self._openai_client = AsyncOpenAI(**kwargs)
         return self._openai_client
 
     def _get_temp_dir(self) -> Path:
@@ -210,7 +214,10 @@ class TTSService:
             if instructions:
                 payload["instructions"] = instructions
 
-            response = await self._get_openai_client().audio.speech.create(**payload)
+            response = await self._get_openai_client().audio.speech.create(
+                **payload,
+                extra_body={"metadata": {"source": "longhouse:tts"}},
+            )
 
             audio_data = await response.aread()
             latency_ms = int((time.time() - start_time) * 1000)
