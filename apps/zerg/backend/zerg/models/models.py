@@ -914,7 +914,10 @@ class JobRun(Base):
     metadata_json = Column(Text, nullable=True)  # JSON string for extra data
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
-    __table_args__ = (Index("idx_job_runs_job_created", "job_id", "created_at"),)
+    __table_args__ = (
+        Index("idx_job_runs_job_created", "job_id", "created_at"),
+        Index("idx_job_runs_created", "created_at"),
+    )
 
 
 class EmailSendLog(Base):

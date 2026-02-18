@@ -96,6 +96,12 @@ class JobRunHistoryResponse(BaseModel):
     total: int
 
 
+class JobLastRunResponse(BaseModel):
+    """Last run per job for dashboard overview."""
+
+    last_runs: dict[str, JobRunHistoryInfo]  # job_id -> last run
+
+
 def _job_info_from_config(config) -> JobInfo:
     """Build a JobInfo from a JobConfig, normalizing secret fields."""
     return JobInfo(
@@ -308,6 +314,30 @@ async def get_recent_job_runs(
         runs=[_job_run_to_info(r) for r in runs],
         total=total,
     )
+
+
+@router.get("/runs/last", response_model=JobLastRunResponse)
+async def get_last_job_runs(
+    current_user: UserModel = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get the most recent run for each job.
+
+    Returns a dict mapping job_id to its latest JobRunHistoryInfo.
+    More accurate than the capped /runs/recent for the "Last Run" column.
+    """
+    from sqlalchemy import distinct
+
+    # Get all unique job_ids
+    job_ids = [row[0] for row in db.query(distinct(JobRun.job_id)).all()]
+
+    last_runs: dict[str, JobRunHistoryInfo] = {}
+    for jid in job_ids:
+        run = db.query(JobRun).filter(JobRun.job_id == jid).order_by(JobRun.created_at.desc()).first()
+        if run:
+            last_runs[jid] = _job_run_to_info(run)
+
+    return JobLastRunResponse(last_runs=last_runs)
 
 
 @router.get("/", response_model=JobListResponse)

@@ -14,6 +14,7 @@ import {
   verifyRepoConfig,
   deleteRepoConfig,
   getRecentJobRuns,
+  getLastJobRuns,
   getJobRuns,
   type JobSecretListItem,
   type JobSecretUpsertRequest,
@@ -24,6 +25,7 @@ import {
   type JobRepoConfigRequest,
   type JobRepoVerifyResponse,
   type JobRunHistoryResponse,
+  type JobLastRunResponse,
 } from "../services/api/jobSecrets";
 
 // List all secrets (keys only, no values)
@@ -107,8 +109,16 @@ export function useDisableJob() {
 // Recent runs across all jobs
 export function useRecentJobRuns(limit = 10) {
   return useQuery<JobRunHistoryResponse>({
-    queryKey: ["job-runs-recent"],
+    queryKey: ["job-runs-recent", limit],
     queryFn: () => getRecentJobRuns(limit),
+  });
+}
+
+// Last run per job (accurate, not capped)
+export function useLastJobRuns() {
+  return useQuery<JobLastRunResponse>({
+    queryKey: ["job-runs-last"],
+    queryFn: getLastJobRuns,
   });
 }
 

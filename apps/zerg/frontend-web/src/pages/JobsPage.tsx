@@ -16,8 +16,8 @@ import {
   useJobs,
   useJobsRepoStatus,
   useRecentJobRuns,
+  useLastJobRuns,
 } from "../hooks/useJobSecrets";
-import type { JobRunHistoryInfo } from "../services/api/jobSecrets";
 import { ApiError } from "../services/api/base";
 import RepoConnectPanel from "../components/jobs/RepoConnectPanel";
 
@@ -62,20 +62,16 @@ export default function JobsPage() {
   const navigate = useNavigate();
   const { data: jobs, isLoading: jobsLoading, error: jobsError } = useJobs();
   const { data: repo, isLoading: repoLoading, error: repoError } = useJobsRepoStatus();
-  const { data: recentRunsData, isLoading: runsLoading } = useRecentJobRuns(50);
+  const { data: recentRunsData, isLoading: runsLoading, error: runsError } = useRecentJobRuns(10);
+  const { data: lastRunData } = useLastJobRuns();
   const enableMutation = useEnableJob();
   const disableMutation = useDisableJob();
 
   const allJobs = jobs ?? [];
   const allRuns = recentRunsData?.runs ?? [];
 
-  // Build a map of job_id -> most recent run for the "Last Run" column
-  const lastRunByJob = new Map<string, JobRunHistoryInfo>();
-  for (const run of allRuns) {
-    if (!lastRunByJob.has(run.job_id)) {
-      lastRunByJob.set(run.job_id, run);
-    }
-  }
+  // Last run per job from dedicated endpoint (accurate, not capped)
+  const lastRunByJob = lastRunData?.last_runs ?? {};
   const toggling = enableMutation.isPending || disableMutation.isPending;
 
   const handleToggle = (jobId: string, enabled: boolean) => {
@@ -259,7 +255,7 @@ export default function JobsPage() {
                       </Table.Cell>
                       <Table.Cell>
                         {(() => {
-                          const lastRun = lastRunByJob.get(job.id);
+                          const lastRun = lastRunByJob[job.id];
                           if (!lastRun) return "—";
                           return (
                             <span>
@@ -301,6 +297,12 @@ export default function JobsPage() {
                 <Spinner size="sm" />
                 <span className="text-muted">Loading recent runs...</span>
               </div>
+            ) : runsError ? (
+              <EmptyState
+                title="Failed to load run history"
+                description={String(runsError)}
+                variant="error"
+              />
             ) : !allRuns.length ? (
               <EmptyState
                 title="No runs yet"
