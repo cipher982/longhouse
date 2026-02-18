@@ -173,6 +173,9 @@ def home(request: Request, error: str | None = None, db: Session = Depends(get_d
       <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
         Don\'t have an account? <a href="/signup">Create one</a>
       </p>
+      <div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:0.6rem;margin-top:0.75rem;color:#a5b4fc;font-size:0.8rem;text-align:center;">
+        New here? We recommend signing up with Google below.
+      </div>
     </div>
     <div style="max-width:400px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;">
@@ -202,17 +205,8 @@ def signup_page(request: Request, error: str | None = None, db: Session = Depend
       <h1>Create Account</h1>
       <p class="subtitle">Get started with Longhouse.</p>
     </div>
-    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
-      {error_html}
-      <form method="post" action="/auth/signup">
-        <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
-        <label>Password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters"></label>
-        <label>Confirm password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password"></label>
-        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Create Account</button>
-      </form>
-      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
-        Already have an account? <a href="/">Sign in</a>
-      </p>
+    <div style="max-width:400px;margin:0 auto 1.25rem;">
+      <a href="/auth/google" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;padding:0.85rem 1.75rem;font-size:1rem;">{_GOOGLE_ICON} Sign up with Google</a>
     </div>
     <div style="max-width:400px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;">
@@ -220,7 +214,23 @@ def signup_page(request: Request, error: str | None = None, db: Session = Depend
         <span style="color:#9898a3;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em;">or</span>
         <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
       </div>
-      <a href="/auth/google" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;">{_GOOGLE_ICON} Continue with Google</a>
+    </div>
+    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;opacity:0.5;">
+      <div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#a5b4fc;font-size:0.875rem;text-align:center;">
+        Email signup coming soon &mdash; sign up with Google to get started.
+      </div>
+      {error_html}
+      <form method="post" action="/auth/signup">
+        <label style="color:#6b6b76;">Email <input type="email" name="email" required placeholder="you@example.com" disabled style="opacity:0.5;cursor:not-allowed;"></label>
+        <label style="color:#6b6b76;">Password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters" disabled style="opacity:0.5;cursor:not-allowed;"></label>
+        <label style="color:#6b6b76;">Confirm password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password" disabled style="opacity:0.5;cursor:not-allowed;"></label>
+        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;opacity:0.5;cursor:not-allowed;" disabled>Create Account</button>
+      </form>
+      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+        Already have an account? <a href="/">Sign in</a>
+      </p>
+    </div>
+    <div style="max-width:400px;margin:0 auto;">
       <p style="text-align:center;margin-top:2rem;"><a href="https://longhouse.ai" style="color:#9898a3;font-size:0.875rem;">&larr; Back to longhouse.ai</a></p>
     </div>
     """
