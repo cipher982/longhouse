@@ -7,6 +7,8 @@ Flow:
   GET  /auth/google/callback   → exchange code, upsert user (auto-verified), set session cookie
   GET  /auth/verify            → verify email via token, log in, redirect to dashboard
   POST /auth/resend-verification → resend verification email for logged-in unverified user
+  POST /auth/reset-password-request → send password reset email (always 200)
+  POST /auth/reset-password    → validate token + update password
   GET  /auth/status            → check if authenticated
   POST /auth/logout            → clear session cookie
 """
@@ -50,6 +52,7 @@ limiter = Limiter(key_func=get_remote_address)
 SESSION_COOKIE_NAME = "cp_session"
 SESSION_COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days
 VERIFY_TOKEN_MAX_AGE = 24 * 60 * 60  # 24 hours
+RESET_TOKEN_MAX_AGE = 60 * 60  # 1 hour
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -516,4 +519,102 @@ def logout_redirect(return_to: str | None = None):
 
     response = RedirectResponse(target, status_code=302)
     response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", httponly=True, secure=True, samesite="lax")
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Password reset helpers
+# ---------------------------------------------------------------------------
+
+
+def _issue_reset_token(user: User) -> str:
+    """Issue a short-lived JWT for password reset (1 hour)."""
+    return _encode_jwt(
+        {
+            "sub": str(user.id),
+            "purpose": "password_reset",
+            "exp": int(time.time()) + RESET_TOKEN_MAX_AGE,
+        },
+        settings.jwt_secret,
+    )
+
+
+def _send_password_reset(user: User) -> bool:
+    """Send password reset email. Returns True on success, False on failure."""
+    token = _issue_reset_token(user)
+    reset_url = f"https://control.{settings.root_domain}/reset-password?token={token}"
+    try:
+        from control_plane.services.email import send_password_reset_email
+
+        send_password_reset_email(user.email, reset_url)
+        return True
+    except Exception:
+        logger.exception(f"Could not send password reset email to {user.email}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Password reset routes
+# ---------------------------------------------------------------------------
+
+
+@router.post("/reset-password-request")
+@limiter.limit("3/minute")
+def reset_password_request(
+    request: Request,
+    email: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Request a password reset link. Always returns 200 to prevent email enumeration."""
+    email = email.strip().lower()
+
+    user = db.query(User).filter(User.email == email).first()
+    if user and user.password_hash:
+        _send_password_reset(user)
+
+    # Always redirect with the same message regardless of whether user exists
+    return RedirectResponse("/forgot-password?sent=1", status_code=303)
+
+
+@router.post("/reset-password")
+def reset_password(
+    token: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Reset password using a valid JWT token."""
+    if len(password) < 8:
+        return RedirectResponse(
+            f"/reset-password?token={token}&error=Password+must+be+at+least+8+characters",
+            status_code=303,
+        )
+
+    if password != password_confirm:
+        return RedirectResponse(
+            f"/reset-password?token={token}&error=Passwords+do+not+match",
+            status_code=303,
+        )
+
+    try:
+        payload = _decode_jwt(token, settings.jwt_secret)
+    except ValueError as exc:
+        error_msg = "expired" if "expired" in str(exc).lower() else "invalid"
+        return RedirectResponse(f"/reset-password?error=Reset+link+{error_msg}", status_code=303)
+
+    if payload.get("purpose") != "password_reset":
+        return RedirectResponse("/reset-password?error=Invalid+reset+link", status_code=303)
+
+    user = db.query(User).filter(User.id == int(payload["sub"])).first()
+    if not user:
+        return RedirectResponse("/reset-password?error=User+not+found", status_code=303)
+
+    user.password_hash = _hash_password(password)
+    db.commit()
+    logger.info(f"Password reset for: {user.email}")
+
+    # Log the user in and redirect to dashboard
+    session_token = _issue_session_token(user)
+    response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=303)
+    _set_session(response, session_token)
     return response

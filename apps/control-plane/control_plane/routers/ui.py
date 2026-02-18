@@ -267,6 +267,97 @@ def verify_email_page(
     return _page("Verify Email", body, nav=False)
 
 
+
+# ---------------------------------------------------------------------------
+# Password reset pages
+# ---------------------------------------------------------------------------
+
+
+@router.get("/forgot-password", response_class=HTMLResponse)
+def forgot_password_page(request: Request, sent: str | None = None, db: Session = Depends(get_db)):
+    user = _get_user_from_cookie(request, db)
+    if user:
+        return RedirectResponse("/dashboard", status_code=302)
+
+    notice_html = ""
+    if sent:
+        notice_html = (
+            '<div style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);'
+            'border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#86efac;font-size:0.9rem;">'
+            "If an account exists with that email, we've sent a password reset link. Check your inbox."
+            "</div>"
+        )
+
+    body = f"""
+    <div class="hero-center">
+      <h1>Forgot Password</h1>
+      <p class="subtitle">Enter your email and we'll send you a reset link.</p>
+    </div>
+    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+      {notice_html}
+      <form method="post" action="/auth/reset-password-request">
+        <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
+        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Send Reset Link</button>
+      </form>
+      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+        Remember your password? <a href="/">Sign in</a>
+      </p>
+    </div>
+    """
+    return _page("Forgot Password", body, nav=False)
+
+
+@router.get("/reset-password", response_class=HTMLResponse)
+def reset_password_page(
+    request: Request, token: str | None = None, error: str | None = None, db: Session = Depends(get_db)
+):
+    error_html = ""
+    if error:
+        error_html = (
+            '<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);'
+            'border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#fca5a5;font-size:0.9rem;">'
+            f"{html.escape(error)}</div>"
+        )
+
+    if not token and not error:
+        return RedirectResponse("/forgot-password", status_code=302)
+
+    if not token:
+        body = f"""
+        <div class="hero-center">
+          <h1>Reset Password</h1>
+        </div>
+        <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+          {error_html}
+          <p style="text-align:center;margin-top:0.75rem;">
+            <a href="/forgot-password" class="btn btn-primary" style="text-align:center;">Request New Reset Link</a>
+          </p>
+        </div>
+        """
+        return _page("Reset Password", body, nav=False)
+
+    token_escaped = html.escape(token)
+    body = f"""
+    <div class="hero-center">
+      <h1>Reset Password</h1>
+      <p class="subtitle">Choose a new password for your account.</p>
+    </div>
+    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+      {error_html}
+      <form method="post" action="/auth/reset-password">
+        <input type="hidden" name="token" value="{token_escaped}">
+        <label>New password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters"></label>
+        <label>Confirm new password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password"></label>
+        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Reset Password</button>
+      </form>
+      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+        <a href="/">Back to sign in</a>
+      </p>
+    </div>
+    """
+    return _page("Reset Password", body, nav=False)
+
+
 # ---------------------------------------------------------------------------
 # Authenticated pages
 # ---------------------------------------------------------------------------
