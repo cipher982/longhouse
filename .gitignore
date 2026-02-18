@@ -232,6 +232,9 @@ apps/zerg/backend/.qa-home/
 # Vibetest results
 vibetest-results/
 
+# Visual compare results
+visual-compare-results/
+
 # Temp working files
 .tmp/
 

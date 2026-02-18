@@ -16,6 +16,7 @@
     "pngjs": "^7.0.0"
   },
   "dependencies": {
+    "@google/genai": "^1.41.0",
     "openai": "^5.23.1"
   },
   "type": "module"

@@ -266,7 +266,7 @@ test-e2e-core: ## @internal Run core E2E tests only (no retries, must pass 100%)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=core --retries=0 --workers=1
 
-test-full: ## Full suite (unit + full E2E + evals + visual baselines)
+test-full: ## Full suite (unit + full E2E + evals + visual baselines + visual compare)
 	@echo "🧪 Running full suite (unit + full E2E + evals + visual baselines)..."
 	$(MAKE) test
 	$(MAKE) test-e2e-core
@@ -274,6 +274,7 @@ test-full: ## Full suite (unit + full E2E + evals + visual baselines)
 	$(MAKE) eval
 	$(MAKE) qa-ui-baseline
 	$(MAKE) qa-ui-baseline-mobile
+	$(MAKE) qa-visual-compare-fast
 
 test-all: ## @internal Deprecated alias for test-full
 	$(MAKE) test-full
@@ -342,10 +343,17 @@ qa-ui-baseline-mobile-update: ## @internal Update visual baselines for mobile vi
 	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
 	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
 
-qa-ui-full: ## Full UI regression sweep (a11y + desktop + mobile baselines)
+qa-visual-compare: ## Visual comparison with LLM triage (catches color/layout catastrophes)
+	$(MAKE) test-e2e-single TEST="--project=chromium tests/visual_compare.spec.ts"
+
+qa-visual-compare-fast: ## Visual comparison without LLM (pixelmatch only, faster)
+	SKIP_LLM=1 $(MAKE) test-e2e-single TEST="--project=chromium tests/visual_compare.spec.ts"
+
+qa-ui-full: ## Full UI regression sweep (a11y + desktop + mobile baselines + visual compare)
 	$(MAKE) qa-ui
 	$(MAKE) qa-ui-baseline
 	$(MAKE) qa-ui-baseline-mobile
+	$(MAKE) qa-visual-compare-fast
 
 test-perf: ## Run performance evaluation tests (chat latency profiling)
 	@echo "🧪 Running performance evaluation tests..."

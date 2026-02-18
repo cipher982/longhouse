@@ -1,28 +1,13 @@
 import { test, expect, type Page } from './fixtures';
 import { waitForPageReady } from './helpers/ready-signals';
+import { APP_PAGES, type PageDef } from './helpers/page-list';
 import { resetDatabase } from './test-utils';
-
-const BASE_QUERY = 'clock=frozen&effects=off&seed=ui-baseline';
-
-const APP_PAGES = [
-  { name: 'dashboard', path: `/dashboard?${BASE_QUERY}`, ready: 'page' },
-  { name: 'chat', path: `/chat?${BASE_QUERY}`, ready: 'page' },
-  { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
-  { name: 'profile', path: `/profile?${BASE_QUERY}`, ready: 'page' },
-  { name: 'runners', path: `/runners?${BASE_QUERY}`, ready: 'page' },
-  { name: 'integrations', path: `/settings/integrations?${BASE_QUERY}`, ready: 'page' },
-  { name: 'knowledge', path: `/settings/knowledge?${BASE_QUERY}`, ready: 'page' },
-  { name: 'contacts', path: `/settings/contacts?${BASE_QUERY}`, ready: 'page' },
-  { name: 'admin', path: `/admin?${BASE_QUERY}`, ready: 'page' },
-  { name: 'traces', path: `/traces?${BASE_QUERY}`, ready: 'page' },
-  { name: 'reliability', path: `/reliability?${BASE_QUERY}`, ready: 'page' },
-];
 
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
 });
 
-async function waitForAppReady(page: Page, mode: string) {
+async function waitForAppReady(page: Page, mode: PageDef['ready']) {
   if (mode === 'page') {
     await waitForPageReady(page, { timeout: 20000 });
     return;
@@ -35,7 +20,7 @@ async function waitForAppReady(page: Page, mode: string) {
   }
 }
 
-async function captureBaseline(page: Page, path: string, name: string, ready: string) {
+async function captureBaseline(page: Page, path: string, name: string, ready: PageDef['ready']) {
   await page.goto(path);
   await waitForAppReady(page, ready);
   await expect(page).toHaveScreenshot(`${name}.png`, {

@@ -1,15 +1,5 @@
 import { test, expect, type Page } from './fixtures';
-
-const BASE_QUERY = 'clock=frozen&effects=off&seed=ui-baseline';
-
-const PUBLIC_PAGES = [
-  { name: 'landing', path: `/landing?${BASE_QUERY}&fx=none` },
-  { name: 'pricing', path: `/pricing?${BASE_QUERY}` },
-  { name: 'docs', path: `/docs?${BASE_QUERY}` },
-  { name: 'changelog', path: `/changelog?${BASE_QUERY}` },
-  { name: 'privacy', path: `/privacy?${BASE_QUERY}` },
-  { name: 'security', path: `/security?${BASE_QUERY}` },
-];
+import { PUBLIC_PAGES, type PageDef } from './helpers/page-list';
 
 async function captureBaseline(page: Page, path: string, name: string) {
   await page.goto(path);
