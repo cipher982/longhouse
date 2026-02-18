@@ -31,6 +31,8 @@ from fastapi import Form
 from fastapi import Response
 from fastapi import status
 from fastapi.responses import RedirectResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from control_plane.config import settings
@@ -39,6 +41,7 @@ from control_plane.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+limiter = Limiter(key_func=get_remote_address)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -272,7 +275,9 @@ def _get_userinfo(access_token: str) -> dict[str, Any]:
 
 
 @router.post("/signup")
+@limiter.limit("5/minute")
 def email_signup(
+    request: Request,
     email: str = Form(...),
     password: str = Form(...),
     password_confirm: str = Form(...),
@@ -314,7 +319,9 @@ def email_signup(
 
 
 @router.post("/login")
+@limiter.limit("10/minute")
 def email_login(
+    request: Request,
     email: str = Form(...),
     password: str = Form(...),
     db: Session = Depends(get_db),
@@ -472,7 +479,9 @@ def verify_email(token: str, db: Session = Depends(get_db)):
 
 
 @router.post("/resend-verification")
+@limiter.limit("3/minute")
 def resend_verification(
+    request: Request,
     user: User = Depends(get_current_user),
 ):
     """Resend verification email for the current logged-in user."""

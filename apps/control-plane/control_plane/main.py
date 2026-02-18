@@ -7,6 +7,8 @@ from datetime import timezone
 from sqlalchemy import text
 
 from fastapi import FastAPI
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from control_plane.db import Base
 from control_plane.db import engine
@@ -24,6 +26,9 @@ from control_plane.routers import webhooks
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Longhouse Control Plane", version="0.1.0")
+
+app.state.limiter = auth.limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.on_event("startup")

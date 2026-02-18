@@ -24,6 +24,8 @@ charset-normalizer==3.4.4
     # via requests
 click==8.3.1
     # via uvicorn
+deprecated==1.3.1
+    # via limits
 docker==7.1.0
     # via longhouse-control-plane (pyproject.toml)
 fastapi==0.128.1
@@ -47,6 +49,10 @@ jmespath==1.1.0
     # via
     #   boto3
     #   botocore
+limits==5.8.0
+    # via slowapi
+packaging==26.0
+    # via limits
 psycopg==3.3.2
     # via longhouse-control-plane (pyproject.toml)
 psycopg-binary==3.3.2
@@ -77,6 +83,8 @@ s3transfer==0.16.0
     # via boto3
 six==1.17.0
     # via python-dateutil
+slowapi==0.1.9
+    # via longhouse-control-plane (pyproject.toml)
 sqlalchemy==2.0.46
     # via longhouse-control-plane (pyproject.toml)
 starlette==0.50.0
@@ -86,6 +94,7 @@ stripe==14.3.0
 typing-extensions==4.15.0
     # via
     #   fastapi
+    #   limits
     #   pydantic
     #   pydantic-core
     #   sqlalchemy
@@ -108,3 +117,5 @@ watchfiles==1.1.1
     # via uvicorn
 websockets==16.0
     # via uvicorn
+wrapt==2.1.1
+    # via deprecated
