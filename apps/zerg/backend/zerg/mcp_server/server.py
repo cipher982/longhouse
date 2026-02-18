@@ -491,4 +491,55 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         except Exception as exc:
             return json.dumps({"error": str(exc)})
 
+    # ------------------------------------------------------------------
+    # Tool: visual_compare
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def visual_compare(
+        before_path: str,
+        after_path: str,
+        skip_llm: bool = False,
+    ) -> str:
+        """Compare two screenshots for visual regressions.
+
+        Uses pixelmatch for deterministic pixel diff, then Gemini vision LLM
+        for semantic triage if diff exceeds threshold. Catches color catastrophes,
+        broken layouts, and missing elements while ignoring font rendering variance.
+
+        Args:
+            before_path: Absolute path to baseline/before screenshot PNG.
+            after_path: Absolute path to current/after screenshot PNG.
+            skip_llm: Skip LLM triage, only report pixelmatch numbers (default false).
+        """
+        import subprocess  # noqa: PLC0415
+
+        script = Path(__file__).parents[4] / "scripts" / "visual-compare.ts"
+        if not script.exists():
+            return json.dumps({"error": f"Script not found: {script}"})
+
+        for p, label in [(before_path, "before"), (after_path, "after")]:
+            if not Path(p).exists():
+                return json.dumps({"error": f"{label} file not found: {p}"})
+
+        cmd = ["bun", "run", str(script), before_path, after_path, "--json"]
+        if skip_llm:
+            cmd.append("--skip-llm")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=str(script.parent.parent),
+            )
+            # Exit code 1 = failures detected (still valid JSON output)
+            if result.returncode == 2:
+                return json.dumps({"error": result.stderr.strip() or "Unknown error"})
+            return result.stdout
+        except subprocess.TimeoutExpired:
+            return json.dumps({"error": "visual-compare timed out after 120s"})
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
     return server
