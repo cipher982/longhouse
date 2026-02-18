@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 # Track manifest load metadata for job runs
 _manifest_metadata: dict[str, dict] = {}
 
+# Process-wide lock: serializes manifest reloads so hot-start and sync-loop
+# can't interleave (clear modules, clear registry, re-execute manifest).
+_reload_lock = asyncio.Lock()
+
 
 def get_manifest_metadata(job_id: str) -> dict | None:
     """Get metadata for a manifest-loaded job (git SHA, loaded_at, etc.)."""
@@ -64,10 +68,17 @@ async def reload_manifest_jobs() -> dict:
     """Full reload: snapshot → clear modules → install deps → load manifest → sync scheduler.
 
     Used by both the sync loop (on SHA change) and hot-start from the API.
+    Serialized via _reload_lock to prevent interleaved reloads.
 
     Returns:
         Dict with sync_result keys (added, removed, rescheduled) or error info.
     """
+    async with _reload_lock:
+        return await _reload_manifest_jobs_locked()
+
+
+async def _reload_manifest_jobs_locked() -> dict:
+    """Inner reload logic (must be called under _reload_lock)."""
     from zerg.jobs.registry import job_registry
 
     # 1. Snapshot current jobs for scheduler diff
@@ -83,8 +94,14 @@ async def reload_manifest_jobs() -> dict:
     success = await load_jobs_manifest(clear_existing=True, builtin_job_ids=builtin_ids)
 
     if not success:
-        logger.warning("Manifest reload failed — scheduler not synced")
-        return {"success": False, "error": "manifest load failed"}
+        # Finding 3: resync scheduler even on failure so stale triggers are removed.
+        # Jobs were already cleared in load_jobs_manifest; sync removes their triggers.
+        sync_result = job_registry.sync_jobs(old_snapshot)
+        logger.warning(
+            "Manifest reload failed — scheduler synced to remove stale triggers: removed=%d",
+            sync_result["removed"],
+        )
+        return {"success": False, "error": "manifest load failed", **sync_result}
 
     # 5. Sync scheduler (add/remove/reschedule cron triggers)
     sync_result = job_registry.sync_jobs(old_snapshot)

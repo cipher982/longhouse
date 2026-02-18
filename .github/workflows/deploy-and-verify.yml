@@ -44,12 +44,12 @@ jobs:
             HostName 100.120.197.80
             User zerg
             IdentityFile ~/.ssh/deploy_key
-            StrictHostKeyChecking no
+            StrictHostKeyChecking accept-new
           Host clifford
             HostName clifford
             User drose
             IdentityFile ~/.ssh/deploy_key
-            StrictHostKeyChecking no
+            StrictHostKeyChecking accept-new
           SSHEOF
 
       # ── Record current state for rollback ──────────────────────
