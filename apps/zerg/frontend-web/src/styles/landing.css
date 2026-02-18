@@ -1930,11 +1930,11 @@
 
   /* Highlighted Longhouse column */
   .comparison-approach-header--highlighted {
-    background: rgba(201, 166, 107, 8);
+    background: rgba(201, 166, 107, 0.08);
   }
 
   .comparison-td--highlighted {
-    background: rgba(201, 166, 107, 6);
+    background: rgba(201, 166, 107, 0.06);
   }
 
   .comparison-table tbody tr:hover .comparison-td--highlighted {

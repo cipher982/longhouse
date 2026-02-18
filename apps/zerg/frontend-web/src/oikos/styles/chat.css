@@ -121,7 +121,7 @@
   background: var(--color-neon-primary);
   border: none;
   color: #F3EAD9;
-  box-shadow: 0 0 15px rgba(201, 166, 107, 40);
+  box-shadow: 0 0 15px rgba(201, 166, 107, 0.40);
 }
 
 /* Bubbles */
@@ -620,7 +620,7 @@
 
 .oikos-container .trace-cta__link:hover {
   background: rgba(201, 166, 107, 15);
-  border-color: rgba(201, 166, 107, 40);
+  border-color: rgba(201, 166, 107, 0.40);
   color: var(--color-neon-cyan);
   text-shadow: 0 0 8px rgba(201, 166, 107, 30);
 }

@@ -7,7 +7,7 @@
 
 const GITHUB_PROFILE = "https://github.com/cipher982";
 const GITHUB_REPO = "https://github.com/cipher982/longhouse";
-const TWITTER_PROFILE = "https://x.com/drose_999";
+const TWITTER_PROFILE = "https://x.com/drose101";
 const LICENSE = "Apache-2.0";
 
 export function SocialProof() {
@@ -51,7 +51,7 @@ export function SocialProof() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
               </svg>
-              <span>@drose_999</span>
+              <span>@drose101</span>
             </a>
 
             <a
