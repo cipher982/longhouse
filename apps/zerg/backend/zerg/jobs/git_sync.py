@@ -438,6 +438,14 @@ async def run_git_sync_loop(
                         error="manifest reload failed after sync",
                     )
 
+            # Periodic retention cleanup
+            try:
+                from zerg.jobs.ops_db import cleanup_old_job_runs
+
+                cleanup_old_job_runs()
+            except Exception:
+                logger.debug("Job run cleanup failed (non-fatal)", exc_info=True)
+
             wait = interval_seconds
         else:
             # Persist failure status

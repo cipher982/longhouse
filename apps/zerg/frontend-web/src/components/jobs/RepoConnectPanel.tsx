@@ -157,6 +157,16 @@ function RepoStatusCard({
 }) {
   const deleteMutation = useDeleteRepoConfig();
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [showUpdateToken, setShowUpdateToken] = useState(false);
+  const [newToken, setNewToken] = useState("");
+  const updateMutation = useSaveRepoConfig();
+
+  const handleUpdateToken = () => {
+    updateMutation.mutate(
+      { repo_url: config.repo_url, branch: config.branch, token: newToken },
+      { onSuccess: () => { setShowUpdateToken(false); setNewToken(""); } },
+    );
+  };
 
   const handleDisconnect = () => {
     deleteMutation.mutate(undefined, {
@@ -191,6 +201,26 @@ function RepoStatusCard({
           <span className="text-muted">never</span>
         )}
       </div>
+      {!showUpdateToken ? (
+        <Button variant="secondary" size="sm" onClick={() => setShowUpdateToken(true)}>
+          Update Token
+        </Button>
+      ) : (
+        <form onSubmit={(e) => { e.preventDefault(); handleUpdateToken(); }} className="settings-stack settings-stack--sm">
+          <Input
+            type="password"
+            value={newToken}
+            onChange={(e) => setNewToken(e.target.value)}
+            placeholder="New token (ghp_...)"
+          />
+          <div className="secret-form__actions">
+            <Button variant="ghost" size="sm" onClick={() => setShowUpdateToken(false)}>Cancel</Button>
+            <Button variant="primary" size="sm" type="submit" disabled={!newToken.trim() || updateMutation.isPending}>
+              {updateMutation.isPending ? "Saving..." : "Save Token"}
+            </Button>
+          </div>
+        </form>
+      )}
       {config.last_sync_error && (
         <div>
           <strong>Last Error</strong>{" "}

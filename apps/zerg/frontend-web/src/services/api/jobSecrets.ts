@@ -88,6 +88,10 @@ export interface JobRunHistoryResponse {
   total: number;
 }
 
+export interface JobLastRunResponse {
+  last_runs: Record<string, JobRunHistoryInfo>;
+}
+
 // ---------------------------------------------------------------------------
 // Repo Config types
 // ---------------------------------------------------------------------------
@@ -199,6 +203,10 @@ export async function deleteRepoConfig(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Run History API functions
 // ---------------------------------------------------------------------------
+
+export async function getLastJobRuns(): Promise<JobLastRunResponse> {
+  return request<JobLastRunResponse>(`/jobs/runs/last`);
+}
 
 export async function getRecentJobRuns(limit = 10): Promise<JobRunHistoryResponse> {
   return request<JobRunHistoryResponse>(`/jobs/runs/recent?limit=${limit}`);
