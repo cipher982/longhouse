@@ -54,7 +54,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 | Section | Status | Notes |
 |---------|--------|-------|
 | Session Processing (3.5) | 100% | Core module + summarize + briefing + hook + integration tests + consumer migration all done |
-| Full Signup Flow | ~90% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs done; email injection in provisioner done; creds set + Stripe live; needs provisioning smoke test + resolve provisioning stall(s) |
+| Full Signup Flow | ~95% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs done; email injection in provisioner done; creds set + Stripe live; provisioning QA pipeline done (53 tests); resolved `wait_for_health` UnboundLocalError; stall idempotency verified |
 | Email Infrastructure | DONE | Platform-provided SES email via control plane injection + per-user override via Settings UI + `resolve_email_config()` chain (DB → env fallback). 3 commits: `a6c09f59`, `867b57ac`, `bb36e815` |
 | Pre-flight Job Validation | ~70% | Phase 1-2 done (backend 409 + force param + frontend enable guard). Phase 3 still open |
 
@@ -71,7 +71,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 1. **HN Launch Prep** — ✅ All blockers resolved. Landing page done; E2E infra-smoke + chat-send streaming fixed; video walkthrough optional. [Details](#launch-hn-launch-readiness--remaining-4)
 2. **Public Launch Checklist** — ✅ Complete. All items done including UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
-3. **Full Signup Flow (OAuth + Stripe + Provisioning)** — OAuth + Stripe live; needs provisioning smoke test + resolve provisioning stall(s). [Details](#infra-full-signup-flow-8)
+3. **Full Signup Flow (OAuth + Stripe + Provisioning)** — OAuth + Stripe live; provisioning QA pipeline done (53 tests); stall idempotency verified. [Details](#infra-full-signup-flow-8)
 4. **Pre-flight Job Validation** — Phase 3 (failure tagging + job list summary). [Details](#product-pre-flight-job-validation-3)
 5. **Semantic Search / Recall UI** — Wire backend semantic search + recall into Timeline UI (beyond Oikos). [Details](#phase-4-agent-infrastructure-consolidation-8)
 6. **Oikos Dispatch Contract + Compaction** — Implement explicit dispatch (direct/tool/CLI + backend intent) and compaction strategy. [Details](#product-harness-simplification--commis-to-timeline-8)
@@ -429,7 +429,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 **Architecture:** Tiny FastAPI control plane handles signup/billing/provisioning. Uses Docker API directly (not Coolify). Runtime image bundles frontend + backend per user.
 
-**Current state (2026-02-17):** OAuth, Stripe, webhooks, provisioning trigger, dashboard, provisioning status page, landing page CTAs, and **platform-provided email injection** all implemented. Control plane injects SES env vars into instances during provisioning (`provisioner.py:_env_for()`). OAuth + Stripe creds are set; needs provisioning smoke test + resolve provisioning stall(s).
+**Current state (2026-02-18):** OAuth, Stripe, webhooks, provisioning trigger, dashboard, provisioning status page, landing page CTAs, and **platform-provided email injection** all implemented. Control plane injects SES env vars into instances during provisioning (`provisioner.py:_env_for()`). OAuth + Stripe creds are set. **Provisioning QA pipeline done** — 53 tests covering full signup flow, Stripe webhooks, provisioning, health checks, and stall idempotency. Fixed `wait_for_health` UnboundLocalError when `publish_ports=True`.
 
 **Decisions / Notes (2026-02-04):**
 - Control plane + user instances will live on **zerg** (single host for now).
