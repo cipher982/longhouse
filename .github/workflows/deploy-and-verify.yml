@@ -21,8 +21,10 @@ jobs:
     env:
       MARKETING_URL: https://longhouse.ai
       CP_URL: https://control.longhouse.ai
-      FRONTEND_URL: https://david010.longhouse.ai
-      API_URL: https://david010.longhouse.ai
+      # Deploy and test the compose-managed instance (has SMOKE_TEST_SECRET)
+      FRONTEND_URL: https://david.longhouse.ai
+      API_URL: https://david.longhouse.ai
+      CONTAINER_NAME: longhouse-david
       ZERG_HOST: 100.120.197.80
       ZERG_USER: zerg
 
@@ -54,13 +56,12 @@ jobs:
       - name: Record previous image SHA
         id: prev
         run: |
-          FULL_SHA=$(ssh zerg 'docker inspect longhouse-david --format "{{index .Config.Labels \"org.opencontainers.image.revision\"}}" 2>/dev/null' || echo "")
-          # Image tags use 7-char short SHA (docker/metadata-action type=sha,prefix=)
+          FULL_SHA=$(ssh zerg "docker inspect $CONTAINER_NAME --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}'" 2>/dev/null || echo "")
           SHORT_SHA="${FULL_SHA:0:7}"
           echo "sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "Previous image revision: ${SHORT_SHA:-unknown} (full: ${FULL_SHA:-unknown})"
 
-      # ── Deploy all 3 targets ───────────────────────────────────
+      # ── Deploy ────────────────────────────────────────────────
       - name: Deploy user instance (zerg)
         run: |
           ssh zerg 'cd /opt/longhouse/david && docker compose pull && docker compose up -d'
@@ -71,7 +72,7 @@ jobs:
           COOLIFY_CP_UUID: ${{ secrets.COOLIFY_CP_UUID }}
         run: |
           if [[ -z "$COOLIFY_DEMO_UUID" || -z "$COOLIFY_CP_UUID" ]]; then
-            echo "Skipping Coolify deploy — COOLIFY_DEMO_UUID or COOLIFY_CP_UUID not configured"
+            echo "Skipping Coolify deploy — secrets not configured"
             exit 0
           fi
           ssh clifford "
