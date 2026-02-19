@@ -101,6 +101,10 @@
     background: var(--color-brand-accent-subtle, rgba(255, 149, 0, 0.18));
   }
 
+  .session-card-similarity {
+    margin-top: var(--space-1);
+  }
+
   .sessions-toolbar-actions {
     display: flex;
     align-items: center;

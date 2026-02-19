@@ -229,17 +229,19 @@ interface SessionCardProps {
   session: AgentSession;
   onClick: () => void;
   highlightQuery?: string;
+  isSemanticResult?: boolean;
 }
 
-function SessionCard({ session, onClick, highlightQuery }: SessionCardProps) {
+function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
   const turnCount = session.user_messages + session.assistant_messages;
   const toolCount = session.tool_calls;
   const isActive = !session.ended_at;
 
   const title = getSessionTitle(session);
 
-  // Show search snippet during search, otherwise show summary
-  const showSnippet = highlightQuery && session.match_snippet;
+  // Semantic results: show summary + similarity badge (not the raw "Similarity: 0.xxx" snippet)
+  // Keyword results: show FTS match snippet with highlights
+  const showSnippet = highlightQuery && session.match_snippet && !isSemanticResult;
   const showSummary = !showSnippet && session.summary;
 
   return (
@@ -271,6 +273,11 @@ function SessionCard({ session, onClick, highlightQuery }: SessionCardProps) {
         {showSnippet && (
           <div className="session-card-snippet">
             {renderHighlightedText(session.match_snippet!, highlightQuery!)}
+          </div>
+        )}
+        {isSemanticResult && session.match_snippet && (
+          <div className="session-card-similarity">
+            <Badge variant="neutral">{session.match_snippet}</Badge>
           </div>
         )}
         {session.git_branch && (
@@ -317,9 +324,10 @@ interface SessionGroupProps {
   sessions: AgentSession[];
   onSessionClick: (session: AgentSession) => void;
   highlightQuery?: string;
+  isSemanticResult?: boolean;
 }
 
-function SessionGroup({ title, sessions, onSessionClick, highlightQuery }: SessionGroupProps) {
+function SessionGroup({ title, sessions, onSessionClick, highlightQuery, isSemanticResult }: SessionGroupProps) {
   return (
     <div className="session-group">
       <div className="session-group-header">
@@ -333,6 +341,7 @@ function SessionGroup({ title, sessions, onSessionClick, highlightQuery }: Sessi
             session={session}
             onClick={() => onSessionClick(session)}
             highlightQuery={highlightQuery}
+            isSemanticResult={isSemanticResult}
           />
         ))}
       </div>
@@ -422,7 +431,7 @@ export default function SessionsPage() {
       project: project || undefined,
       provider: provider || undefined,
       days_back: daysBack,
-      limit,
+      limit: Math.min(limit, 50),
     }),
     [debouncedQuery, project, provider, daysBack, limit]
   );
@@ -628,6 +637,7 @@ export default function SessionsPage() {
               className={`sessions-semantic-toggle${semanticMode ? " sessions-semantic-toggle--active" : ""}`}
               onClick={() => setSemanticMode((v) => !v)}
               aria-pressed={semanticMode}
+              aria-label="Semantic search"
               title={semanticMode ? "Switch to keyword search" : "Switch to semantic search (AI-powered)"}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -717,6 +727,7 @@ export default function SessionsPage() {
                 sessions={daySessions}
                 onSessionClick={handleSessionClick}
                 highlightQuery={debouncedQuery}
+                isSemanticResult={useSemanticQuery}
               />
             ))}
           </div>
