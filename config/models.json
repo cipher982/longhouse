@@ -133,10 +133,11 @@
       "$comment": "Default OSS profile: no overrides"
     },
     "david": {
-      "$comment": "David's instance: summarization on gpt-5-mini (z.ai summary_update removed — API paths broken)",
+      "$comment": "David's instance: summarization on gpt-5-mini",
       "text": {
         "useCases": {
-          "summarization": "gpt-5-mini"
+          "summarization": "gpt-5-mini",
+          "summary_update": "gpt-5-mini"
         }
       }
     }
