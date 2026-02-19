@@ -323,10 +323,17 @@ class SessionShipper:
                 events = list(parse_session_file(session_file, offset=read_offset))
             new_offset = self._new_offset_for(session_file)
         else:
-            # JSONL files — single-pass parse + metadata extraction
-            # Eliminates the redundant file re-read from extract_session_metadata()
-            events, last_good_offset, metadata = parse_session_file_full(session_file, offset=read_offset)
-            new_offset = last_good_offset
+            # JSONL files
+            if provider and provider.name != "claude":
+                # Non-Claude JSONL (e.g. Codex): use provider-specific parser.
+                # parse_session_file_full is Claude-only; non-Claude formats use
+                # different event types (response_item, session_meta, etc.).
+                events = list(provider.parse_file(session_file, offset=read_offset))
+                new_offset = session_file.stat().st_size
+                metadata = provider.extract_metadata(session_file)
+            else:
+                # Claude JSONL — single-pass parse + metadata (optimized path)
+                events, new_offset, metadata = parse_session_file_full(session_file, offset=read_offset)
 
         if not events:
             # No new events, but update offset

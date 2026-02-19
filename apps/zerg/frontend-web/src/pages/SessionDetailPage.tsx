@@ -607,6 +607,20 @@ export default function SessionDetailPage() {
                   return <UserMessage key={event.id} event={event} isHighlighted={isHighlighted} />;
                 }
                 if (event.role === "assistant") {
+                  // Codex (and similar) emit tool calls as assistant events with
+                  // tool_name set but no content_text. Render them as ToolCall
+                  // instead of showing the misleading "(thinking...)" placeholder.
+                  if (event.tool_name && !event.content_text) {
+                    return (
+                      <ToolCall
+                        key={event.id}
+                        event={event}
+                        isExpanded={expandedTools.has(event.id)}
+                        onToggle={() => toggleTool(event.id)}
+                        isHighlighted={isHighlighted}
+                      />
+                    );
+                  }
                   return <AssistantMessage key={event.id} event={event} isHighlighted={isHighlighted} />;
                 }
                 if (event.role === "tool") {

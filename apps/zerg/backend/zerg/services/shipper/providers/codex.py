@@ -298,7 +298,9 @@ class CodexProvider:
         # Split: rollout, YYYY, MM, DDThh, mm, ss, UUID...
         parts = stem.split("-", 7)
         if len(parts) >= 7:
-            return parts[6]
+            # Rejoin all remaining parts to reconstruct the full UUID
+            # e.g. rollout-2026-02-19T09-56-00-<uuid-part1>-<uuid-part2>-...
+            return "-".join(parts[6:])
         return stem
 
 
