@@ -239,7 +239,7 @@ def _check_server() -> list[CheckResult]:
 
 
 def _check_shipper() -> list[CheckResult]:
-    """Shipper checks: Claude sessions, device token, shipper log, service."""
+    """Engine checks: Claude sessions, device token, engine log, service."""
     results: list[CheckResult] = []
     claude_dir = _get_claude_dir()
 
@@ -261,11 +261,13 @@ def _check_shipper() -> list[CheckResult]:
     else:
         results.append(CheckResult(FAIL, "Device token not configured", "Run: longhouse auth"))
 
-    # Shipper log
-    log_path = claude_dir / "shipper.log"
-    if log_path.exists():
+    # Engine log (rolling daily files: engine.log.YYYY-MM-DD)
+    log_dir = claude_dir / "logs"
+    engine_logs = sorted(log_dir.glob("engine.log.*")) if log_dir.is_dir() else []
+    if engine_logs:
         try:
-            stat = log_path.stat()
+            latest = engine_logs[-1]
+            stat = latest.stat()
             size_kb = stat.st_size / 1024
             mod_time = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
             age = datetime.now(timezone.utc) - mod_time
@@ -277,23 +279,23 @@ def _check_shipper() -> list[CheckResult]:
             else:
                 age_str = f"{int(age.total_seconds() / 86400)}d ago"
 
-            results.append(CheckResult(PASS, f"Shipper log exists ({size_kb:.0f} KB, last modified {age_str})"))
+            results.append(CheckResult(PASS, f"Engine log exists ({size_kb:.0f} KB, last modified {age_str})"))
         except Exception:
-            results.append(CheckResult(PASS, "Shipper log exists"))
+            results.append(CheckResult(PASS, "Engine log exists"))
     else:
-        results.append(CheckResult(WARN, "No shipper log found", "Run: longhouse connect"))
+        results.append(CheckResult(WARN, "No engine log found", "Run: longhouse connect --install"))
 
-    # Shipper service status
+    # Engine service status
     try:
         from zerg.services.shipper import get_service_status
 
         status = get_service_status()
         if status == "running":
-            results.append(CheckResult(PASS, "Shipper service running"))
+            results.append(CheckResult(PASS, "Engine service running"))
         elif status == "stopped":
-            results.append(CheckResult(WARN, "Shipper service stopped", "Start with: longhouse connect --install"))
+            results.append(CheckResult(WARN, "Engine service stopped", "Start with: longhouse connect --install"))
         else:
-            results.append(CheckResult(WARN, "Shipper service not installed", "Install with: longhouse connect --install"))
+            results.append(CheckResult(WARN, "Engine service not installed", "Install with: longhouse connect --install"))
     except Exception:
         # Service check not available on this platform
         pass
