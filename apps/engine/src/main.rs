@@ -2,6 +2,8 @@ mod bench;
 mod config;
 mod daemon;
 mod discovery;
+mod error_tracker;
+mod heartbeat;
 mod pipeline;
 mod shipper;
 mod shipping;
@@ -109,6 +111,10 @@ enum Commands {
         /// Spool replay interval in seconds
         #[arg(long, default_value = "30")]
         spool_replay_secs: u64,
+
+        /// Log directory for rolling log files (default: ~/.claude/logs, or LONGHOUSE_LOG_DIR env)
+        #[arg(long)]
+        log_dir: Option<PathBuf>,
     },
 
     /// One-shot: scan all provider sessions and ship new events
@@ -143,15 +149,73 @@ enum Commands {
     },
 }
 
-fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("longhouse_engine=info".parse()?),
-        )
-        .init();
+fn resolve_log_dir(log_dir_arg: Option<&std::path::Path>) -> std::path::PathBuf {
+    if let Some(p) = log_dir_arg {
+        return p.to_path_buf();
+    }
+    if let Ok(dir) = std::env::var("LONGHOUSE_LOG_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".claude").join("logs")
+}
 
+fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(keep_days * 86400))
+        .unwrap_or(std::time::UNIX_EPOCH);
+
+    if let Ok(entries) = std::fs::read_dir(log_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("log") {
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    if let Ok(modified) = meta.modified() {
+                        if modified < cutoff {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // For Connect (daemon) mode: use rolling file appender.
+    // For all other commands: log to stderr as usual.
+    let _guard;
+    match &cli.command {
+        Commands::Connect { log_dir, .. } => {
+            let log_path = resolve_log_dir(log_dir.as_deref());
+            std::fs::create_dir_all(&log_path)?;
+            prune_old_logs(&log_path, 7);
+
+            let file_appender = tracing_appender::rolling::daily(&log_path, "engine.log");
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            _guard = Some(guard);
+
+            tracing_subscriber::fmt()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::from_default_env()
+                        .add_directive("longhouse_engine=info".parse()?),
+                )
+                .init();
+        }
+        _ => {
+            _guard = None;
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::from_default_env()
+                        .add_directive("longhouse_engine=info".parse()?),
+                )
+                .init();
+        }
+    }
 
     match cli.command {
         Commands::Connect {
@@ -162,6 +226,7 @@ fn main() -> anyhow::Result<()> {
             flush_ms,
             fallback_scan_secs,
             spool_replay_secs,
+            log_dir: _,
         } => {
             let algo = parse_compression_algo(&compression)?;
             let shipper_config = ShipperConfig::from_env()?.with_overrides(
