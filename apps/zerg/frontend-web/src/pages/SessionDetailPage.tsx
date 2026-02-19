@@ -22,6 +22,7 @@ import {
 } from "../components/ui";
 import { SessionChat } from "../components/SessionChat";
 import type { ActiveSession } from "../hooks/useActiveSessions";
+import { parseUTC } from "../lib/dateUtils";
 import "../styles/sessions.css";
 
 // ---------------------------------------------------------------------------
@@ -29,14 +30,14 @@ import "../styles/sessions.css";
 // ---------------------------------------------------------------------------
 
 function formatTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleTimeString(undefined, {
+  return parseUTC(dateStr).toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
   });
 }
 
 function formatFullDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleString(undefined, {
+  return parseUTC(dateStr).toLocaleString(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -47,8 +48,8 @@ function formatFullDate(dateStr: string): string {
 
 function formatDuration(startedAt: string, endedAt: string | null): string {
   if (!endedAt) return "In progress";
-  const start = new Date(startedAt);
-  const end = new Date(endedAt);
+  const start = parseUTC(startedAt);
+  const end = parseUTC(endedAt);
   const diffMs = end.getTime() - start.getTime();
   const diffMins = Math.floor(diffMs / 60000);
 

@@ -31,6 +31,7 @@ import {
   Spinner,
   Input,
 } from "../components/ui";
+import { parseUTC } from "../lib/dateUtils";
 import "../styles/sessions.css";
 
 // ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ const ENVIRONMENT_OPTIONS = ["production", "commis", "development", "test"] as c
 // ---------------------------------------------------------------------------
 
 function formatRelativeTime(dateStr: string): string {
-  const date = new Date(dateStr);
+  const date = parseUTC(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
@@ -61,7 +62,7 @@ function formatRelativeTime(dateStr: string): string {
 }
 
 function getDateKey(dateStr: string): string {
-  const date = new Date(dateStr);
+  const date = parseUTC(dateStr);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today);
@@ -156,8 +157,8 @@ function renderHighlightedText(text: string, query: string) {
 
 function formatDuration(startedAt: string, endedAt: string | null): string {
   if (!endedAt) return "In progress";
-  const start = new Date(startedAt);
-  const end = new Date(endedAt);
+  const start = parseUTC(startedAt);
+  const end = parseUTC(endedAt);
   const diffMs = end.getTime() - start.getTime();
   const diffMins = Math.floor(diffMs / 60000);
 
