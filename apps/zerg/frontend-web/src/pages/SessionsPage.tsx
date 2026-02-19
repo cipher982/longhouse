@@ -14,10 +14,11 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useSearchParams, useLocation, Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { config } from "../lib/config";
-import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
+import { useAgentSessions, useAgentFilters, useSemanticSearch } from "../hooks/useAgentSessions";
 import {
   type AgentSession,
   type AgentSessionFilters,
+  type SemanticSearchFilters,
   seedDemoSessions,
 } from "../services/api/agents";
 import {
@@ -357,6 +358,7 @@ export default function SessionsPage() {
   );
   const [searchQuery, setSearchQuery] = useState(searchParams.get("query") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
+  const [semanticMode, setSemanticMode] = useState(searchParams.get("semantic") === "1");
 
   // Collapsible filters — open by default if URL has active filters
   const hasUrlFilters = !!(
@@ -391,8 +393,9 @@ export default function SessionsPage() {
     if (environment) params.set("environment", environment);
     if (daysBack !== 14) params.set("days_back", String(daysBack));
     if (debouncedQuery) params.set("query", debouncedQuery);
+    if (semanticMode) params.set("semantic", "1");
     setSearchParams(params, { replace: true });
-  }, [project, provider, environment, daysBack, debouncedQuery, setSearchParams]);
+  }, [project, provider, environment, daysBack, debouncedQuery, semanticMode, setSearchParams]);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -412,14 +415,41 @@ export default function SessionsPage() {
     [project, provider, environment, daysBack, debouncedQuery, limit]
   );
 
-  // Fetch sessions with polling
-  const { data, isLoading, error, refetch } = useAgentSessions(filters, {
-    refetchInterval: 30_000, // Refresh every 30s
+  // Semantic search filters (only used when semantic mode is on + query present)
+  const semanticFilters: SemanticSearchFilters = useMemo(
+    () => ({
+      query: debouncedQuery || "",
+      project: project || undefined,
+      provider: provider || undefined,
+      days_back: daysBack,
+      limit,
+    }),
+    [debouncedQuery, project, provider, daysBack, limit]
+  );
+
+  const useSemanticQuery = semanticMode && !!debouncedQuery;
+
+  // Keyword search (default)
+  const keywordResult = useAgentSessions(filters, {
+    refetchInterval: 30_000,
+    enabled: !useSemanticQuery,
   });
 
-  const sessions = data?.sessions || [];
+  // Semantic search (when toggled on + query present)
+  const semanticResult = useSemanticSearch(semanticFilters, {
+    enabled: useSemanticQuery,
+  });
+
+  // Merge results based on mode
+  const activeResult = useSemanticQuery ? semanticResult : keywordResult;
+  const data = activeResult.data;
+  const isLoading = activeResult.isLoading;
+  const error = activeResult.error;
+  const refetch = activeResult.refetch;
+
+  const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;
-  const hasMore = sessions.length < total;
+  const hasMore = !useSemanticQuery && sessions.length < total;
 
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
@@ -444,6 +474,7 @@ export default function SessionsPage() {
     setEnvironment("");
     setDaysBack(14);
     setSearchQuery("");
+    setSemanticMode(false);
     setFiltersOpen(false);
   }, []);
 
@@ -584,13 +615,29 @@ export default function SessionsPage() {
 
         {/* Compact Toolbar */}
         <div className="sessions-toolbar">
-          <Input
-            type="search"
-            placeholder="Search timeline..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="sessions-search-input"
-          />
+          <div className="sessions-search-row">
+            <Input
+              type="search"
+              placeholder={semanticMode ? "Semantic search..." : "Search timeline..."}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="sessions-search-input"
+            />
+            <button
+              type="button"
+              className={`sessions-semantic-toggle${semanticMode ? " sessions-semantic-toggle--active" : ""}`}
+              onClick={() => setSemanticMode((v) => !v)}
+              aria-pressed={semanticMode}
+              title={semanticMode ? "Switch to keyword search" : "Switch to semantic search (AI-powered)"}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                <path d="M2 12h20" />
+              </svg>
+              <span>Semantic</span>
+            </button>
+          </div>
           <div className="sessions-toolbar-actions">
             {hasFilters && (
               <Button variant="ghost" size="sm" onClick={handleClearFilters}>

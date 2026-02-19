@@ -110,7 +110,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - [x] Add instance OpenAI settings + provisioner env injection + docs
 - [x] Set `CONTROL_PLANE_INSTANCE_OPENAI_API_KEY` + `CONTROL_PLANE_INSTANCE_OPENAI_BASE_URL` in Coolify
 - [x] Deploy control plane and reprovision david010
-- [ ] Seed david010 job secrets via API (LLM_BENCH_MONGODB_URI, LIFE_HUB_DB_URL, LIFE_HUB_API_KEY, GITHUB_TOKEN)
+- [x] Seed david010 job secrets via API (LLM_BENCH_MONGODB_URI, LIFE_HUB_DB_URL, LIFE_HUB_API_KEY, GITHUB_TOKEN) — seeded 2026-02-18 via PUT /api/jobs/secrets, using clifford Tailscale IP for cross-server DB access
 
 **Notes (2026-02-16):** Instances route through LiteLLM proxy at `llm.drose.io`. All API calls must include `extra_body={"metadata": {"source": "longhouse:component"}}`. gpt-5-nano + text-embedding-3-small added to proxy allowlist. DB-stored LlmProviderConfig rows can silently override env var keys — deleted stale row on david010 to fix 401s.
 

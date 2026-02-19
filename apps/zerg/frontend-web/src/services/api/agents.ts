@@ -263,6 +263,96 @@ export async function fetchAgentFilters(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Semantic Search & Recall Types
+// ---------------------------------------------------------------------------
+
+export interface SemanticSearchFilters {
+  query: string;
+  project?: string;
+  provider?: string;
+  days_back?: number;
+  limit?: number;
+}
+
+export interface SemanticSearchResponse {
+  sessions: AgentSession[];
+  total: number;
+}
+
+export interface RecallMatch {
+  session_id: string;
+  chunk_index: number;
+  score: number;
+  event_index_start: number | null;
+  event_index_end: number | null;
+  total_events: number;
+  context: RecallContextTurn[];
+}
+
+export interface RecallContextTurn {
+  index: number;
+  role: string;
+  content: string;
+  tool_name: string | null;
+  is_match: boolean;
+}
+
+export interface RecallResponse {
+  matches: RecallMatch[];
+  total: number;
+}
+
+export interface RecallFilters {
+  query: string;
+  project?: string;
+  since_days?: number;
+  max_results?: number;
+  context_turns?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Semantic Search & Recall API Functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Semantic search for sessions using embeddings.
+ */
+export async function fetchSemanticSearch(
+  filters: SemanticSearchFilters
+): Promise<SemanticSearchResponse> {
+  const params = new URLSearchParams();
+  params.set("query", filters.query);
+  if (filters.project) params.set("project", filters.project);
+  if (filters.provider) params.set("provider", filters.provider);
+  if (filters.days_back) params.set("days_back", String(filters.days_back));
+  if (filters.limit) params.set("limit", String(filters.limit));
+
+  return request<SemanticSearchResponse>(
+    `/agents/sessions/semantic?${params.toString()}`,
+    { method: "GET" }
+  );
+}
+
+/**
+ * Recall: turn-level semantic search with context windows.
+ */
+export async function fetchRecall(
+  filters: RecallFilters
+): Promise<RecallResponse> {
+  const params = new URLSearchParams();
+  params.set("query", filters.query);
+  if (filters.project) params.set("project", filters.project);
+  if (filters.since_days) params.set("since_days", String(filters.since_days));
+  if (filters.max_results) params.set("max_results", String(filters.max_results));
+  if (filters.context_turns) params.set("context_turns", String(filters.context_turns));
+
+  return request<RecallResponse>(
+    `/agents/recall?${params.toString()}`,
+    { method: "GET" }
+  );
+}
+
 export interface DemoSeedResponse {
   seeded: boolean;
   sessions_created: number;

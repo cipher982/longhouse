@@ -12,6 +12,8 @@ import {
   fetchAgentSessionSummaries,
   fetchAgentSessionPreview,
   fetchAgentFilters,
+  fetchSemanticSearch,
+  fetchRecall,
   type AgentSessionFilters,
   type AgentSessionsListResponse,
   type AgentSession,
@@ -20,6 +22,10 @@ import {
   type AgentSessionSummaryListResponse,
   type AgentSessionPreview,
   type AgentFiltersResponse,
+  type SemanticSearchFilters,
+  type SemanticSearchResponse,
+  type RecallFilters,
+  type RecallResponse,
 } from "../services/api";
 
 /**
@@ -115,4 +121,36 @@ export function useAgentSessionFilters(daysBack: number = 90, enabled: boolean =
  */
 export function useAgentFilters(daysBack: number = 90, enabled: boolean = true) {
   return useAgentSessionFilters(daysBack, enabled);
+}
+
+/**
+ * Hook for semantic search (embedding-based similarity).
+ */
+export function useSemanticSearch(
+  filters: SemanticSearchFilters,
+  options: { enabled?: boolean } = {}
+) {
+  return useQuery<SemanticSearchResponse>({
+    queryKey: ["semantic-search", filters],
+    queryFn: () => fetchSemanticSearch(filters),
+    enabled: options.enabled !== false && !!filters.query,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+  });
+}
+
+/**
+ * Hook for recall (turn-level semantic search with context).
+ */
+export function useRecall(
+  filters: RecallFilters,
+  options: { enabled?: boolean } = {}
+) {
+  return useQuery<RecallResponse>({
+    queryKey: ["recall", filters],
+    queryFn: () => fetchRecall(filters),
+    enabled: options.enabled !== false && !!filters.query,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+  });
 }
