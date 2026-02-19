@@ -911,6 +911,7 @@ class JobRun(Base):
     finished_at = Column(DateTime, nullable=True)
     duration_ms = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
+    error_type = Column(String(50), nullable=True)  # RuntimeError, MissingSecret, TimeoutError, etc.
     metadata_json = Column(Text, nullable=True)  # JSON string for extra data
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 

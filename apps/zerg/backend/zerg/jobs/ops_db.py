@@ -47,6 +47,7 @@ async def emit_job_run(
     ended_at: datetime,
     duration_ms: int,
     error_message: str | None = None,
+    error_type: str | None = None,
     tags: list[str] | None = None,
     project: str | None = None,
     scheduler: str | None = None,
@@ -82,6 +83,7 @@ async def emit_job_run(
                 finished_at=ended_at,
                 duration_ms=duration_ms,
                 error_message=error_message,
+                error_type=error_type,
                 metadata_json=metadata_json,
             )
             db.add(run)
