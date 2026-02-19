@@ -48,8 +48,7 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 if [[ -z "$TRANSCRIPT" ]] || [[ ! -f "$TRANSCRIPT" ]]; then
     exit 0
 fi
-longhouse ship --file "$TRANSCRIPT" --quiet 2>/dev/null
-exit 0
+exec __ENGINE_PATH__ ship --file "$TRANSCRIPT" --quiet 2>/dev/null
 """
 
 SESSION_START_HOOK_SCRIPT = """\
@@ -219,6 +218,7 @@ def install_hooks(
     url: str,
     token: str | None = None,
     claude_dir: str | None = None,
+    engine_path: str | None = None,
 ) -> list[str]:
     """Install Longhouse hook scripts and inject them into settings.json.
 
@@ -258,9 +258,23 @@ def install_hooks(
     #    point to the right place even when --claude-dir is used)
     # ------------------------------------------------------------------
     resolved_dir = str(config_dir)
+
+    # Resolve engine path at install time and bake it into the hook.
+    # exec replaces the shell process — zero Python overhead on every stop.
+    if engine_path is None:
+        try:
+            from zerg.services.shipper.service import get_engine_executable
+
+            engine_path = get_engine_executable()
+        except RuntimeError:
+            engine_path = "longhouse-engine"  # last resort: rely on PATH
+
     ship_script_content = SHIP_HOOK_SCRIPT.replace(
         "$HOME/.claude/",
         f"{resolved_dir}/",
+    ).replace(
+        "__ENGINE_PATH__",
+        engine_path,
     )
     session_start_script_content = SESSION_START_HOOK_SCRIPT.replace(
         "$HOME/.claude/",
