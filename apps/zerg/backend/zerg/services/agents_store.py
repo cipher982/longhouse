@@ -517,6 +517,52 @@ class AgentsStore:
         rows.reverse()
         return rows
 
+    def _fts_matching_ids(self, session_id: UUID, query: str) -> Optional[List[int]]:
+        """Return event IDs matching query within a session via FTS5, or None to use LIKE fallback.
+
+        Returns:
+            List of matching event IDs (may be empty — caller should treat as no-match).
+            None if FTS is unavailable or fails — caller should fall back to LIKE.
+        """
+        if not self._fts_available():
+            return None
+        try:
+            rows = self.db.execute(
+                text(
+                    "SELECT e.id FROM events_fts "
+                    "JOIN events e ON e.id = events_fts.rowid "
+                    "WHERE events_fts MATCH :q AND e.session_id = :sid"
+                ),
+                {"q": self._fts_query(query), "sid": str(session_id)},
+            ).fetchall()
+            return [r[0] for r in rows]
+        except Exception as exc:
+            logger.warning("FTS5 within-session search failed, falling back to LIKE: %s", exc)
+            return None
+
+    def _apply_query_filter(self, stmt, session_id: UUID, query: str):
+        """Apply content search filter to a statement using FTS5 or LIKE fallback.
+
+        LIKE fallback searches both content_text and tool_output_text to match FTS coverage.
+        Returns (stmt, should_return_empty) — the latter is True when FTS returns no matches.
+        """
+        matching_ids = self._fts_matching_ids(session_id, query)
+        if matching_ids is not None:
+            if not matching_ids:
+                return stmt, True
+            return stmt.where(AgentEvent.id.in_(matching_ids)), False
+        # LIKE fallback: cover same fields as FTS index (content_text + tool_output_text)
+        like = f"%{query}%"
+        return (
+            stmt.where(
+                or_(
+                    AgentEvent.content_text.ilike(like),
+                    AgentEvent.tool_output_text.ilike(like),
+                )
+            ),
+            False,
+        )
+
     def get_session_events(
         self,
         session_id: UUID,
@@ -537,27 +583,10 @@ class AgentsStore:
         if tool_name:
             stmt = stmt.where(AgentEvent.tool_name == tool_name)
 
-        # query: FTS5 within-session content search with LIKE fallback
         if query:
-            if self._fts_available():
-                try:
-                    rows = self.db.execute(
-                        text(
-                            "SELECT e.id FROM events_fts "
-                            "JOIN events e ON e.id = events_fts.rowid "
-                            "WHERE events_fts MATCH :q AND e.session_id = :sid"
-                        ),
-                        {"q": self._fts_query(query), "sid": str(session_id)},
-                    ).fetchall()
-                    matching_ids = [r[0] for r in rows]
-                    if not matching_ids:
-                        return []
-                    stmt = stmt.where(AgentEvent.id.in_(matching_ids))
-                except Exception as exc:
-                    logger.warning("FTS5 within-session search failed, falling back to LIKE: %s", exc)
-                    stmt = stmt.where(AgentEvent.content_text.ilike(f"%{query}%"))
-            else:
-                stmt = stmt.where(AgentEvent.content_text.ilike(f"%{query}%"))
+            stmt, empty = self._apply_query_filter(stmt, session_id, query)
+            if empty:
+                return []
 
         stmt = stmt.limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())
@@ -571,8 +600,6 @@ class AgentsStore:
         query: Optional[str] = None,
     ) -> int:
         """Count events for a session with the same filters as get_session_events."""
-        from sqlalchemy import func
-
         stmt = select(func.count()).select_from(AgentEvent).where(AgentEvent.session_id == session_id)
 
         if roles:
@@ -582,25 +609,9 @@ class AgentsStore:
             stmt = stmt.where(AgentEvent.tool_name == tool_name)
 
         if query:
-            if self._fts_available():
-                try:
-                    rows = self.db.execute(
-                        text(
-                            "SELECT e.id FROM events_fts "
-                            "JOIN events e ON e.id = events_fts.rowid "
-                            "WHERE events_fts MATCH :q AND e.session_id = :sid"
-                        ),
-                        {"q": self._fts_query(query), "sid": str(session_id)},
-                    ).fetchall()
-                    matching_ids = [r[0] for r in rows]
-                    if not matching_ids:
-                        return 0
-                    stmt = stmt.where(AgentEvent.id.in_(matching_ids))
-                except Exception as exc:
-                    logger.warning("FTS5 count failed, falling back to LIKE: %s", exc)
-                    stmt = stmt.where(AgentEvent.content_text.ilike(f"%{query}%"))
-            else:
-                stmt = stmt.where(AgentEvent.content_text.ilike(f"%{query}%"))
+            stmt, empty = self._apply_query_filter(stmt, session_id, query)
+            if empty:
+                return 0
 
         result = self.db.execute(stmt).scalar()
         return result or 0

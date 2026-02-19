@@ -5,6 +5,7 @@
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { ConversationTurn, CompanyDocument, OutboxOp, TurnRole } from './types'
+import { parseUTC } from '../../lib/dateUtils'
 
 interface SyncResponse {
   ok: boolean
@@ -324,7 +325,7 @@ export class ConversationManager {
     )
     if (!resp.ok) throw new Error(`pull failed: ${resp.status}`)
     const json = await resp.json() as { ops?: any[]; nextCursor?: number }
-    const ops: OutboxOp[] = (json.ops || []).map((o: any) => ({ ...o, ts: new Date(o.ts) }))
+    const ops: OutboxOp[] = (json.ops || []).map((o: any) => ({ ...o, ts: parseUTC(o.ts) }))
     const nextCursor: number = json.nextCursor ?? cursor
 
     if (ops.length > 0 && this.db) {
@@ -336,7 +337,7 @@ export class ConversationManager {
           if (!t?.id || !body?.conversationId) continue
           const turn: ConversationTurn = {
             id: t.id,
-            timestamp: new Date(t.timestamp || op.ts),
+            timestamp: parseUTC(t.timestamp || op.ts),
             conversationId: body.conversationId,
             userTranscript: t.userTranscript,
             assistantResponse: t.assistantResponse

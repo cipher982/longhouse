@@ -195,3 +195,14 @@ def test_pagination(tmp_path):
     # Together they cover the first 4 of 5 events
     assert len(page1_ids | page2_ids) == 4
     assert len(all_events) == 5
+
+
+def test_query_matches_tool_output_text(tmp_path):
+    """LIKE fallback (and FTS) must search tool_output_text, not only content_text."""
+    store, _ = _make_store(tmp_path, "tool_output_search.db")
+    session = _seed_session(store)
+
+    # "grep output" appears only in the Bash tool's tool_output_text, not in content_text
+    events = store.get_session_events(session, query="grep output")
+    assert len(events) >= 1
+    assert any("grep output" in (e.tool_output_text or "") for e in events)
