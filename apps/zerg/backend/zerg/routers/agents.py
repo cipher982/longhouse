@@ -1365,6 +1365,7 @@ async def semantic_search_sessions(
     query: str = Query(..., description="Search query"),
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
+    environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     db: Session = Depends(get_db),
@@ -1398,6 +1399,8 @@ async def semantic_search_sessions(
         filter_query = filter_query.filter(AgentSession.project == project)
     if provider:
         filter_query = filter_query.filter(AgentSession.provider == provider)
+    if environment:
+        filter_query = filter_query.filter(AgentSession.environment == environment)
     valid_ids = {str(row[0]) for row in filter_query.all()}
 
     # Search
