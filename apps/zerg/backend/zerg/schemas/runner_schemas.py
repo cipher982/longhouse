@@ -95,7 +95,7 @@ class RunnerListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class RunnerJobResponse(BaseModel):
+class RunnerJobResponse(UTCBaseModel):
     """Response model for a runner job."""
 
     model_config = ConfigDict(from_attributes=True)

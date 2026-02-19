@@ -11,12 +11,14 @@ from typing import Optional
 from pydantic import BaseModel
 from pydantic import Field
 
+from zerg.utils.time import UTCBaseModel
+
 # ---------------------------------------------------------------------------
 # Secrets
 # ---------------------------------------------------------------------------
 
 
-class JobSecretListItem(BaseModel):
+class JobSecretListItem(UTCBaseModel):
     """Single secret entry in list response (value never exposed)."""
 
     key: str = Field(..., description="Secret key identifier")
@@ -37,7 +39,7 @@ class JobSecretUpsertRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class JobRepoConfigResponse(BaseModel):
+class JobRepoConfigResponse(UTCBaseModel):
     """Repo config response (token never exposed)."""
 
     repo_url: str

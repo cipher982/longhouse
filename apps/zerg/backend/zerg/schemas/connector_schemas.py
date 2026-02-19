@@ -135,7 +135,7 @@ class ConnectorSuccessResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ConnectorDetailResponse(BaseModel):
+class ConnectorDetailResponse(UTCBaseModel):
     """Detailed response for a single configured connector.
 
     Note: Credentials are never returned - only metadata.
