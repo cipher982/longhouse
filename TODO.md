@@ -54,10 +54,15 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Session Processing (3.5) | 100% | Core module + summarize + briefing + hook + integration tests + consumer migration all done |
-| Full Signup Flow | ~95% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs done; email injection in provisioner done; creds set + Stripe live; provisioning QA pipeline done (53 tests); resolved `wait_for_health` UnboundLocalError; stall idempotency verified |
-| Email Infrastructure | DONE | Platform-provided SES email via control plane injection + per-user override via Settings UI + `resolve_email_config()` chain (DB → env fallback). 3 commits: `a6c09f59`, `867b57ac`, `bb36e815` |
 | Pre-flight Job Validation | ~70% | Phase 1-2 done (backend 409 + force param + frontend enable guard). Phase 3 still open |
+| Semantic Search / Recall UI | ~50% | Backend + MCP complete; frontend not wired |
+
+### Done (move to archive when convenient)
+| Section | Status | Notes |
+|---------|--------|-------|
+| Session Processing (3.5) | 100% | Core module + summarize + briefing + hook + integration tests + consumer migration all done |
+| Full Signup Flow | 100% | OAuth + Stripe + webhooks + provisioning + dashboard + landing CTAs + SSO returning users + live E2E test + 53 unit tests. Rate limiting + password reset shipped. |
+| Email Infrastructure | DONE | Platform-provided SES email via control plane injection + per-user override via Settings UI + `resolve_email_config()` chain (DB → env fallback). 3 commits: `a6c09f59`, `867b57ac`, `bb36e815` |
 
 ### Not Started
 | Section | Status | Notes |
@@ -70,12 +75,14 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **HN Launch Prep** — ✅ All blockers resolved. Landing page done; E2E infra-smoke + chat-send streaming fixed; video walkthrough optional. [Details](#launch-hn-launch-readiness--remaining-4)
-2. **Public Launch Checklist** — ✅ Complete. All items done including UI smoke snapshots. [Details](#launch-public-launch-checklist-6)
-3. **Full Signup Flow (OAuth + Stripe + Provisioning)** — OAuth + Stripe live; provisioning QA pipeline done (53 tests); stall idempotency verified. [Details](#infra-full-signup-flow-8)
-4. **Pre-flight Job Validation** — Phase 3 (failure tagging + job list summary). [Details](#product-pre-flight-job-validation-3)
-5. **Semantic Search / Recall UI** — Wire backend semantic search + recall into Timeline UI (beyond Oikos). [Details](#phase-4-agent-infrastructure-consolidation-8)
-6. **Oikos Dispatch Contract + Compaction** — Implement explicit dispatch (direct/tool/CLI + backend intent) and compaction strategy. [Details](#product-harness-simplification--commis-to-timeline-8)
+1. ~~**HN Launch Prep**~~ — ✅ Done.
+2. ~~**Public Launch Checklist**~~ — ✅ Done.
+3. ~~**Full Signup Flow**~~ — ✅ Done (100%). OAuth + Stripe + provisioning + SSO + live E2E + rate limiting + password reset.
+4. **Semantic Search / Recall UI** — Wire backend semantic search + recall into Timeline UI. Backend + MCP done; needs frontend. [Details](#phase-4-agent-infrastructure-consolidation-8)
+5. **Seed david010 job secrets** — 4 API calls to unblock sauron-jobs on the instance.
+6. **Pre-flight Job Validation Phase 3** — Failure tagging + job list summary. [Details](#product-pre-flight-job-validation-3)
+7. **Forum Discovery UX** — Explicit presence signals for sessions. 0% done, large scope. [Details](#product-forum-discovery-ux--explicit-presence-signals-7)
+8. **Oikos Dispatch Contract + Compaction** — Deferred; implement when usage demands it. [Details](#product-harness-simplification--commis-to-timeline-8)
 
 ---
 
@@ -443,7 +450,7 @@ Update screenshots to show Timeline, not old dashboard.
 
 - [x] Wildcard DNS `*.longhouse.ai` resolves via Cloudflare (verified 2026-02-05)
 - [x] Routing layer: Caddy (coolify-proxy) with caddy-docker-proxy labels — verified working on zerg (2026-02-11). Labels `caddy=david.longhouse.ai` + `caddy.reverse_proxy={{upstreams 8000}}` route traffic correctly.
-- [ ] Manual provision smoke test: test2/test3 instances provisioned + routed (needs rerun)
+- [x] Manual provision smoke test: superseded by `scripts/provision-e2e-live.sh` (live E2E against prod)
 - [x] Add control-plane → instance auth bridge endpoint — dual-secret validation + email-based user resolution (commits `a2709611`, `d911d500`)
 
 ### Phase 1: Scaffold + Auth ✅
@@ -493,7 +500,7 @@ Update screenshots to show Timeline, not old dashboard.
 - [x] Control plane `login-token` endpoint exists (issues JWT with `sub=user_id` + `email` claim)
 - [x] Instance `accept-token` endpoint exists and handles CP-issued tokens (dual-secret validation)
 - [x] Wire auto-redirect after provisioning: provisioning page redirects through `/dashboard/open-instance` for SSO
-- [ ] Handle returning users: "Sign In" → OAuth → find instance → redirect with token
+- [x] Handle returning users: "Sign In" → OAuth → find instance → redirect with token
 
 ### Phase 5: Landing Page + Control Plane UI ✅
 
@@ -793,7 +800,7 @@ Close the remaining open questions from VISION.md.
 **Open drift items:**
 - [Infra/docs] DB size claim stale; prod DB reset 2026-02-05 (no users). Update docs/launch notes once data exists.
 - [Docs vs release] PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
-- [Docs vs UI] Timeline resume only in Forum Drop-In (Claude-only), not on `/timeline`. **Tracked** in "Public Launch Checklist."
+- ~~[Docs vs UI] Timeline resume only in Forum Drop-In (Claude-only), not on `/timeline`.~~ **FIXED** — Resume button works on SessionDetailPage for Claude sessions.
 - ~~[Docs vs code] Installer lacks PATH-based Claude shim + fresh-shell verification.~~ **FIXED** — fresh-shell PATH verification added (commit `1600b094`).
 - ~~[Docs vs UI] Timeline empty state has no "Load demo" CTA.~~ **FIXED** — guided empty state with "Load demo sessions" button + connect steps.
 
