@@ -131,6 +131,85 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ---
 
+## [Tech Debt] 🗑️ Remove Python Shipper — Migrate to Rust Engine (4)
+
+**Goal:** The Rust engine (`longhouse-engine connect`) replaced the Python watcher daemon. Remove the dead Python shipping/watching code and migrate `longhouse connect --install` to manage the Rust binary instead.
+
+**Context:** Rust engine is DONE and running. Python shipper is still wired into `cli/connect.py` as the backing daemon for `--install`/`--uninstall`/`--status`. Service management (launchd plist, systemd unit) lives in `services/shipper/service.py` and must be migrated to point at the Rust binary before deletion.
+
+**Files to delete** (pure shipping logic, replaced by Rust engine):
+- `apps/zerg/backend/zerg/services/shipper/shipper.py` — SessionShipper, SessionWatcher, ShipperConfig, ShipResult
+- `apps/zerg/backend/zerg/services/shipper/watcher.py` — file watcher loop
+- `apps/zerg/backend/zerg/services/shipper/spool.py` — offline spool (SQLite)
+- `apps/zerg/backend/zerg/services/shipper/state.py` — state tracking
+- `apps/zerg/backend/zerg/services/shipper/providers/` — provider parsers (keep `parser.py` — still used by commis_job_processor)
+
+**Files to keep / migrate:**
+- `hooks.py` — still needed for hook installation in `connect` flow
+- `token.py` — token/URL storage used by CLI + MCP server
+- `parser.py` — JSONL parsing used by `commis_job_processor.py`
+- `service.py` — migrate launchd/systemd logic to manage `longhouse-engine` binary instead of Python process
+
+**CLI changes (`cli/connect.py`):**
+- Remove `_ship_file`, `_ship_once`, `_watch_loop`, `_spool_replay_loop`, `_polling_loop` (all replaced by `longhouse-engine connect`)
+- Update `--install` to write a plist/unit pointing at `longhouse-engine connect` (reuse migrated service.py logic)
+- Remove all `SessionShipper`, `SessionWatcher`, `ShipperConfig`, `ShipResult` imports/usage
+
+**Also fix while here:**
+- Remove dead `scan_interval_seconds`, `batch_size`, `max_batch_bytes` from ShipperConfig (unused fields)
+- Note: keep zstd decompression in `routers/agents.py` — Rust engine supports zstd as a non-default option (`CompressionAlgo::Zstd`), so this is not dead code
+
+**Subtasks:**
+- [ ] Migrate `service.py` install/uninstall/status to manage Rust engine binary
+- [ ] Update `cli/connect.py` `--install` path to use migrated service.py
+- [ ] Delete shipper.py, watcher.py, spool.py, state.py, providers/
+- [ ] Update `__init__.py` exports
+- [ ] Remove dead ShipperConfig fields
+- [ ] Remove zstd dead code from agents.py ingest
+- [ ] `make test` + `make test-e2e` pass
+
+---
+
+## [Tech Debt] 🔧 Ingest Pipeline Reliability + Efficiency (3)
+
+**Goal:** Fix reliability and efficiency gaps in the post-ingest LLM/embedding pipeline found in first-principles review.
+
+**Background task reliability (highest priority):**
+- FastAPI `BackgroundTasks` are fire-and-forget — lost on process crash, no retry, no persistence (`routers/agents.py:792-798`)
+- Replace with a lightweight SQLite-backed task queue (pending/running/done rows) polled by a background worker
+- Gives retries, crash recovery, and visibility into failed summaries/embeddings
+
+**Summary is not truly incremental:**
+- `_generate_summary_impl` loads *all* events every run (`.all()`), slices in Python (`agents.py:537-607`)
+- On CAS conflict it re-reads all events again and may re-run the LLM call
+- Fix: store `last_summarized_event_id` on the session; only load events after that cursor
+
+**Embeddings lack per-event cursor:**
+- Same full-table scan pattern — session-level `needs_embedding` flag, no per-event cursor (`agents.py:663-677`)
+- Fix: per-event `embedded` bool or a high-water mark like summary cursor
+
+**Duplicate title/summary pipelines:**
+- `title_generator.py` is a separate OpenAI Responses API flow that bypasses `models_config` and DB fallback (`title_generator.py:94-156`)
+- Session summarization already produces a title — consolidate: have `summarize_events()` return a title field, drop `title_generator.py`
+
+**Semaphores are in-process only:**
+- `_summary_semaphore` / `_embedding_semaphore` do nothing under multi-worker deploys (`agents.py:412-424`)
+- Naturally resolved once we move to a persistent task queue
+
+**Watcher queue coalescing:**
+- Rapid file writes enqueue the same path multiple times → redundant parse/ship cycles (`watcher.py:150-152`)
+- Dedupe the queue by path before processing (moot after Python shipper removal, skip if doing that first)
+
+**Subtasks:**
+- [ ] Design SQLite task queue schema (session_id, task_type, status, attempts, error)
+- [ ] Replace BackgroundTasks calls with task queue inserts + polling worker
+- [ ] Add `last_summarized_event_id` cursor to sessions table; update summary logic
+- [ ] Add per-event embedding cursor or high-water mark
+- [ ] Consolidate title generation into summarize_events() output; delete title_generator.py
+- [ ] `make test` + `make test-e2e` pass
+
+---
+
 ## [Product] 🧠 Harness Simplification & Commis-to-Timeline (8)
 
 **Goal:** Stop building our own agent harness. Lean on CLI agents (Claude Code, Codex, Gemini CLI). Make commis output visible in the timeline. Remove ~25K LOC of dead code.
