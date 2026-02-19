@@ -271,6 +271,7 @@ export interface SemanticSearchFilters {
   query: string;
   project?: string;
   provider?: string;
+  environment?: string;
   days_back?: number;
   limit?: number;
 }
@@ -325,6 +326,7 @@ export async function fetchSemanticSearch(
   params.set("query", filters.query);
   if (filters.project) params.set("project", filters.project);
   if (filters.provider) params.set("provider", filters.provider);
+  if (filters.environment) params.set("environment", filters.environment);
   if (filters.days_back) params.set("days_back", String(filters.days_back));
   if (filters.limit) params.set("limit", String(filters.limit));
 

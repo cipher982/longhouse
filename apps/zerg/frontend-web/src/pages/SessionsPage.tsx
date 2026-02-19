@@ -430,10 +430,11 @@ export default function SessionsPage() {
       query: debouncedQuery || "",
       project: project || undefined,
       provider: provider || undefined,
+      environment: environment || undefined,
       days_back: daysBack,
       limit: Math.min(limit, 50),
     }),
-    [debouncedQuery, project, provider, daysBack, limit]
+    [debouncedQuery, project, provider, environment, daysBack, limit]
   );
 
   const useSemanticQuery = semanticMode && !!debouncedQuery;
