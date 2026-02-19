@@ -88,7 +88,7 @@ function ProposalCard({
 
 export default function ProposalsPage() {
   const [activeStatus, setActiveStatus] = useState<string>("pending");
-  const { data, isLoading, error } = useProposals({ status: activeStatus });
+  const { data, isLoading, error, refetch } = useProposals({ status: activeStatus });
   const approve = useApproveProposal();
   const decline = useDeclineProposal();
 
@@ -106,6 +106,7 @@ export default function ProposalsPage() {
           variant="error"
           title="Failed to load proposals"
           description={error.message}
+          action={<Button variant="primary" onClick={() => refetch()}>Try Again</Button>}
         />
       </PageShell>
     );
