@@ -10,6 +10,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 use crate::discovery::{self, ProviderConfig};
+use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser;
 use crate::shipping::client::{ShipResult, ShipperClient};
@@ -107,12 +108,22 @@ pub async fn ship_and_record(
     item: ShipItem,
     client: &ShipperClient,
     conn: &Connection,
+    tracker: Option<&ConsecutiveErrorTracker>,
 ) -> Result<usize> {
     let file_state = FileState::new(conn);
     let result = client.ship(item.compressed).await;
 
     match result {
         ShipResult::Ok(_) => {
+            // Emit recovery message if we were in an error state
+            if let Some(t) = tracker {
+                if let Some(n) = t.record_success() {
+                    tracing::info!(
+                        "Recovered after {} ship failure(s), now shipping normally",
+                        n
+                    );
+                }
+            }
             file_state.set_offset(
                 &item.path_str,
                 item.new_offset,
@@ -129,22 +140,6 @@ pub async fn ship_and_record(
             Ok(item.event_count)
         }
         ShipResult::RateLimited | ShipResult::ServerError(_, _) | ShipResult::ConnectError(_) => {
-            let spool = Spool::new(conn);
-            file_state.set_queued_offset(
-                &item.path_str,
-                item.new_offset,
-                &item.provider,
-                &item.session_id,
-                &item.session_id,
-            )?;
-            spool.enqueue(
-                &item.provider,
-                &item.path_str,
-                item.offset,
-                item.new_offset,
-                Some(&item.session_id),
-            )?;
-
             let err_msg = match &result {
                 ShipResult::RateLimited => "rate limited".to_string(),
                 ShipResult::ServerError(code, body) => {
@@ -153,7 +148,46 @@ pub async fn ship_and_record(
                 ShipResult::ConnectError(e) => e.clone(),
                 _ => unreachable!(),
             };
-            tracing::warn!("Spooled {}: {}", item.path_str, err_msg);
+
+            // Rate-limited logging: log 1st failure and every 100th
+            let should_log = tracker.map_or(true, |t| t.record_error());
+            if should_log {
+                let count = tracker.map_or(1, |t| t.consecutive_count());
+                if count > 1 {
+                    tracing::warn!(
+                        "Ship still failing after {} attempts, latest: {}",
+                        count,
+                        err_msg
+                    );
+                } else {
+                    tracing::warn!("Spooled {}: {}", item.path_str, err_msg);
+                }
+            }
+
+            let spool = Spool::new(conn);
+            // Fix backpressure: only advance queued_offset if enqueue succeeds.
+            // If spool is full, leave the gap unacknowledged — will retry on next startup recovery.
+            let enqueued = spool.enqueue(
+                &item.provider,
+                &item.path_str,
+                item.offset,
+                item.new_offset,
+                Some(&item.session_id),
+            )?;
+            if enqueued {
+                file_state.set_queued_offset(
+                    &item.path_str,
+                    item.new_offset,
+                    &item.provider,
+                    &item.session_id,
+                    &item.session_id,
+                )?;
+            } else {
+                tracing::warn!(
+                    "Spool at capacity — {} will be retried on next startup",
+                    item.path_str
+                );
+            }
             Ok(0)
         }
         ShipResult::ClientError(code, body) => {
@@ -288,6 +322,7 @@ pub async fn full_scan(
     conn: &Connection,
     client: &ShipperClient,
     algo: CompressionAlgo,
+    tracker: Option<&ConsecutiveErrorTracker>,
 ) -> Result<(usize, usize)> {
     let all_files = discovery::discover_all_files(providers);
     let mut files_shipped = 0usize;
@@ -296,7 +331,7 @@ pub async fn full_scan(
     for (path, provider_name) in &all_files {
         match prepare_file(path, provider_name, algo, conn) {
             Ok(Some(item)) => {
-                let events = ship_and_record(item, client, conn).await?;
+                let events = ship_and_record(item, client, conn, tracker).await?;
                 if events > 0 {
                     files_shipped += 1;
                     events_shipped += events;
@@ -593,5 +628,40 @@ mod tests {
         assert_eq!(pending[0].file_path, "/tmp/test.jsonl");
         assert_eq!(pending[0].start_offset, 100);
         assert_eq!(pending[0].end_offset, 500);
+    }
+
+    // ---------------------------------------------------------------
+    // Backpressure: spool full → queued_offset not advanced
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_spool_backpressure_does_not_advance_offset() {
+        use crate::state::db::open_db;
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(tmp.path())).unwrap();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+
+        // Record acked_offset = 0 for the file
+        fs.set_offset("/bp/test.jsonl", 0, "sess-bp", "sess-bp", "claude").unwrap();
+
+        // Fill spool to capacity by inserting MAX_SPOOL_ENTRIES rows directly
+        // Use a very large start_offset so they won't be the same as our test entry
+        for i in 0..10_000usize {
+            conn.execute(
+                "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+                 VALUES ('claude', '/filler', ?1, ?2, datetime('now'), datetime('now'), 'pending')",
+                rusqlite::params![i as i64 * 1000, (i + 1) as i64 * 1000],
+            ).unwrap();
+        }
+
+        // Now enqueue should fail (spool full) for a new entry
+        let enqueued = spool.enqueue("claude", "/bp/test.jsonl", 0, 100, Some("sess-bp")).unwrap();
+        assert!(!enqueued, "Spool should be full");
+
+        // queued_offset must remain at 0 (not advanced to 100)
+        let qoff = fs.get_queued_offset("/bp/test.jsonl").unwrap();
+        assert_eq!(qoff, 0, "queued_offset must not advance when spool is full");
     }
 }

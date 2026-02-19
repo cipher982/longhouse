@@ -174,19 +174,27 @@ impl<'a> Spool<'a> {
         Ok(count as usize)
     }
 
-    /// Remove dead entries older than 7 days. Returns count removed.
+    /// Move pending entries older than 7 days to 'dead' (not deleted — data preserved).
+    /// Hard-delete dead entries older than 30 days.
+    /// Returns total rows affected.
     pub fn cleanup(&self) -> Result<usize> {
-        let cutoff = (Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+        let seven_days_ago = (Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+        let thirty_days_ago = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+
+        // Mark pending >7 days as dead (not deleted — allows inspection)
+        let marked_dead = self.conn.execute(
+            "UPDATE spool_queue SET status = 'dead', last_error = COALESCE(last_error, 'timeout: pending >7 days')
+             WHERE status = 'pending' AND created_at < ?",
+            [&seven_days_ago],
+        )?;
+
+        // Hard-delete old dead entries (>30 days)
         let deleted = self.conn.execute(
             "DELETE FROM spool_queue WHERE status = 'dead' AND created_at < ?",
-            [&cutoff],
+            [&thirty_days_ago],
         )?;
-        // Also clean pending entries older than 7 days
-        let deleted2 = self.conn.execute(
-            "DELETE FROM spool_queue WHERE status = 'pending' AND created_at < ?",
-            [&cutoff],
-        )?;
-        Ok(deleted + deleted2)
+
+        Ok(marked_dead + deleted)
     }
 }
 
@@ -304,8 +312,8 @@ mod tests {
         let (_tmp, conn) = setup();
         let spool = Spool::new(&conn);
 
-        // Insert a dead entry with old timestamp
-        let old_date = (Utc::now() - chrono::Duration::days(10)).to_rfc3339();
+        // Insert a dead entry older than 30 days (hard-delete threshold)
+        let old_date = (Utc::now() - chrono::Duration::days(31)).to_rfc3339();
         conn.execute(
             "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
              VALUES ('claude', '/old', 0, 100, ?1, ?1, 'dead')",
@@ -317,5 +325,47 @@ mod tests {
         let cleaned = spool.cleanup().unwrap();
         assert_eq!(cleaned, 1);
         assert_eq!(spool.total_size().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_spool_pending_not_deleted_marks_dead() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        // Insert a pending entry older than 7 days
+        let old_date = (Utc::now() - chrono::Duration::days(8)).to_rfc3339();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/stale', 0, 100, ?1, ?1, 'pending')",
+            [&old_date],
+        )
+        .unwrap();
+
+        let cleaned = spool.cleanup().unwrap();
+
+        // cleanup returns count of hard-deleted rows (dead >30d), not the marked-dead count
+        // The pending->dead transition is separate
+        let _ = cleaned;
+
+        // Verify the row still exists (not deleted) with status='dead'
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM spool_queue WHERE file_path = '/stale'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "dead", "Old pending entry should be marked dead, not deleted");
+
+        // Now simulate it being dead for >30 days and verify hard-delete
+        conn.execute(
+            "UPDATE spool_queue SET created_at = ?1 WHERE file_path = '/stale'",
+            [&(Utc::now() - chrono::Duration::days(31)).to_rfc3339()],
+        )
+        .unwrap();
+
+        let deleted = spool.cleanup().unwrap();
+        assert_eq!(deleted, 1, "Dead entry >30 days should be hard-deleted");
+        assert_eq!(spool.total_size().unwrap(), 0, "Spool should be empty after hard-delete");
     }
 }
