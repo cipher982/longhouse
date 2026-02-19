@@ -171,6 +171,38 @@ class AgentEvent(AgentsBase):
     )
 
 
+class AgentHeartbeat(AgentsBase):
+    """Periodic health check from a running engine daemon.
+
+    Stores the latest heartbeat per device, with history retained for 30 days.
+    Auto-created via AgentsBase.metadata.create_all() — no Alembic required.
+    """
+
+    __tablename__ = "agent_heartbeats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    device_id = Column(String(255), nullable=False, index=True)
+    received_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    # Engine version
+    version = Column(String(50), nullable=True)
+
+    # Last successful ship timestamp
+    last_ship_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Stats
+    spool_pending = Column(Integer, default=0)
+    parse_errors_1h = Column(Integer, default=0)
+    consecutive_failures = Column(Integer, default=0)
+    disk_free_bytes = Column(BigInteger, default=0)
+    is_offline = Column(Integer, default=0)  # 0/1 (SQLite has no bool)
+
+    # Full payload for forward compatibility
+    raw_json = Column(Text, nullable=True)
+
+    __table_args__ = (Index("ix_heartbeats_device_received", "device_id", "received_at"),)
+
+
 class SessionEmbedding(AgentsBase):
     """Embedding vectors for session search and recall."""
 

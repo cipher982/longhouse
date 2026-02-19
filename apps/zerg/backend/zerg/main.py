@@ -73,6 +73,7 @@ from zerg.routers.fiche_config import router as fiche_config_router
 from zerg.routers.fiche_connectors import router as fiche_connectors_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
+from zerg.routers.heartbeat import router as heartbeat_router
 from zerg.routers.insights import router as insights_router
 from zerg.routers.job_settings import router as job_settings_router
 from zerg.routers.jobs import router as jobs_router
@@ -982,6 +983,7 @@ api_app.include_router(reliability_router)  # Reliability Dashboard (admin only)
 api_app.include_router(skills_router)  # Skills Platform for workspace-scoped tools
 api_app.include_router(session_chat_router)  # Forum session chat (drop-in)
 api_app.include_router(agents_router)  # Agents schema for cross-provider session tracking
+api_app.include_router(heartbeat_router)  # Engine daemon heartbeat ingest
 api_app.include_router(device_tokens_router)  # Per-device authentication tokens
 api_app.include_router(insights_router)  # Insights tracking for agent infrastructure
 api_app.include_router(proposals_router)  # Action proposals review queue
