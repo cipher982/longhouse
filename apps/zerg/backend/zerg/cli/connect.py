@@ -536,6 +536,13 @@ def connect(
         return
 
     # Normal connect mode — exec longhouse-engine (replaces this process)
+
+    # Persist url/token so the engine can read them from files.
+    # This handles the case where explicit --url/--token were passed but
+    # not yet written (auto-auth already persists on that path).
+    save_token(token, config_dir)
+    save_zerg_url(url, config_dir)
+
     try:
         engine = get_engine_executable()
     except RuntimeError as e:
@@ -818,6 +825,13 @@ def _handle_install(
     interval: int,
 ) -> None:
     """Handle --install flag."""
+    # Persist url/token BEFORE installing the service so the engine
+    # can read them from files on startup (plist/unit don't carry them).
+    config_dir = Path(claude_dir) if claude_dir else None
+    save_zerg_url(url, config_dir)
+    if token:
+        save_token(token, config_dir)
+
     typer.echo("Installing engine service...")
     typer.echo(f"  URL: {url}")
 
