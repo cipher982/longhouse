@@ -510,23 +510,68 @@
   .session-detail-page {
     display: flex;
     flex-direction: column;
-    gap: var(--space-6);
+    gap: var(--space-4);
   }
 
   .session-detail-header {
     display: flex;
     flex-direction: column;
-    gap: var(--space-4);
+    gap: var(--space-2);
   }
 
   .session-detail-nav {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .session-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .breadcrumb-separator {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+
+  .breadcrumb-current {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 400px;
+  }
+
+  .session-detail-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .back-button {
     align-self: flex-start;
+    flex-shrink: 0;
+  }
+
+  /* Collapsible summary */
+  .session-detail-summary {
+    cursor: pointer;
+  }
+
+  .session-detail-summary .session-detail-summary-label {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .session-detail-summary[open] .session-detail-summary-text {
+    margin-top: var(--space-2);
   }
 
   .session-resume-container {

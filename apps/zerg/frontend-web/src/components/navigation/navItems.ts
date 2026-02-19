@@ -12,11 +12,9 @@ const BASE_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", testId: "global-dashboard-tab" },
   { label: "Jobs", href: "/jobs", testId: "global-jobs-tab" },
   { label: "Forum", href: "/forum", testId: "global-forum-tab" },
-  { label: "Integrations", href: "/settings/integrations", testId: "global-integrations-tab" },
-  { label: "Contacts", href: "/settings/contacts", testId: "global-contacts-tab" },
-  { label: "Secrets", href: "/settings/secrets", testId: "global-secrets-tab" },
-  { label: "Runners", href: "/runners", testId: "global-runners-tab" },
   { label: "Proposals", href: "/proposals", testId: "global-proposals-tab" },
+  { label: "Runners", href: "/runners", testId: "global-runners-tab" },
+  { label: "Settings", href: "/settings/integrations", testId: "global-settings-tab" },
 ];
 
 const DEMO_ITEMS: NavItem[] = [

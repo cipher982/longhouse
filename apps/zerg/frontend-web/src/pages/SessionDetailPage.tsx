@@ -451,33 +451,33 @@ export default function SessionDetailPage() {
         {/* Header */}
         <div className="session-detail-header">
           <div className="session-detail-nav">
-            <Button variant="ghost" onClick={handleBack} className="back-button">
-              &larr; Back
-            </Button>
-            {canResume && (
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => setShowResume(true)}
-              >
-                Resume Session
+            <span className="session-breadcrumb">
+              <Button variant="ghost" onClick={handleBack} className="back-button">
+                &larr; Timeline
               </Button>
-            )}
-          </div>
-          <SectionHeader
-            title={title}
-            description={session.cwd ? truncatePath(session.cwd, 80) : undefined}
-            actions={
-              toolEvents.length > 0 ? (
+              <span className="breadcrumb-separator">/</span>
+              <span className="breadcrumb-current">{title}</span>
+            </span>
+            <div className="session-detail-actions">
+              {canResume && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => setShowResume(true)}
+                >
+                  Resume Session
+                </Button>
+              )}
+              {toolEvents.length > 0 && (
                 <Button variant="ghost" size="sm" onClick={toggleAll}>
                   {allExpanded ? "Collapse All" : "Expand All"}
                 </Button>
-              ) : undefined
-            }
-          />
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Metadata */}
+        {/* Compact metadata row */}
         <div className="session-detail-meta">
           <div className="meta-item">
             <span
@@ -488,22 +488,25 @@ export default function SessionDetailPage() {
           </div>
           <span className="meta-separator">&middot;</span>
           <div className="meta-item">
-            <span className="meta-label">Started</span>
+            <span className={`session-status-badge ${session.ended_at ? 'completed' : 'in-progress'}`}>
+              <span className={`status-dot ${session.ended_at ? 'completed' : 'in-progress'}`} />
+              {session.ended_at ? 'Completed' : 'In Progress'}
+            </span>
+          </div>
+          <span className="meta-separator">&middot;</span>
+          <div className="meta-item">
             <span className="meta-value">{formatFullDate(session.started_at)}</span>
           </div>
           <span className="meta-separator">&middot;</span>
           <div className="meta-item">
-            <span className="meta-label">Duration</span>
             <span className="meta-value">
               {formatDuration(session.started_at, session.ended_at)}
             </span>
           </div>
           <span className="meta-separator">&middot;</span>
           <div className="meta-item">
-            <span className={`session-status-badge ${session.ended_at ? 'completed' : 'in-progress'}`}>
-              <span className={`status-dot ${session.ended_at ? 'completed' : 'in-progress'}`} />
-              {session.ended_at ? 'Completed' : 'In Progress'}
-            </span>
+            <Badge variant="neutral">{turnCount} turns</Badge>
+            <Badge variant="neutral">{session.tool_calls} tools</Badge>
           </div>
           {session.environment && session.environment !== 'production' && (
             <>
@@ -515,34 +518,33 @@ export default function SessionDetailPage() {
               </div>
             </>
           )}
-          <span className="meta-separator">&middot;</span>
-          <div className="meta-item">
-            <Badge variant="neutral">{turnCount} turns</Badge>
-            <Badge variant="neutral">{session.tool_calls} tools</Badge>
-          </div>
+          {session.git_branch && (
+            <>
+              <span className="meta-separator">&middot;</span>
+              <div className="meta-item">
+                <span className="git-branch">
+                  <span className="branch-icon">&#x2387;</span>
+                  {session.git_branch}
+                </span>
+              </div>
+            </>
+          )}
+          {session.cwd && (
+            <>
+              <span className="meta-separator">&middot;</span>
+              <div className="meta-item">
+                <span className="meta-value text-muted">{truncatePath(session.cwd, 50)}</span>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Git info */}
-        {(session.git_branch || session.git_repo) && (
-          <div className="session-detail-git">
-            {session.git_branch && (
-              <span className="git-branch">
-                <span className="branch-icon">&#x2387;</span>
-                {session.git_branch}
-              </span>
-            )}
-            {session.git_repo && (
-              <span className="git-repo">{session.git_repo}</span>
-            )}
-          </div>
-        )}
-
-        {/* Summary */}
+        {/* Collapsible summary */}
         {session.summary && (
-          <div className="session-detail-summary">
-            <div className="session-detail-summary-label">Summary</div>
+          <details className="session-detail-summary">
+            <summary className="session-detail-summary-label">Summary</summary>
             <div className="session-detail-summary-text">{session.summary}</div>
-          </div>
+          </details>
         )}
 
         {/* Event Timeline */}
