@@ -1,27 +1,16 @@
-"""Shipper module for syncing Claude Code sessions to Zerg.
+"""Shipper module for syncing AI agent sessions to Longhouse.
 
-This module provides tools to:
-1. Parse Claude Code JSONL session files
-2. Track shipped offsets for incremental sync
-3. Ship sessions to Zerg's /api/agents/ingest endpoint
-4. Watch for real-time file changes (sub-second sync)
-5. Spool byte-range pointers locally when API unreachable
-6. Install/manage shipper as a system service
+The session shipping daemon is the Rust engine (longhouse-engine).
+This module provides the supporting Python infrastructure:
+- parser.py: JSONL parsing (used by commis_job_processor)
+- hooks.py: Claude Code hook + MCP server installation
+- token.py: device token / URL persistence
+- service.py: launchd/systemd service management for longhouse-engine
 
 Usage:
-    from zerg.services.shipper import SessionShipper, SessionWatcher
-
-    # One-shot ship
-    shipper = SessionShipper()
-    result = await shipper.scan_and_ship()
-
-    # Real-time watching
-    watcher = SessionWatcher(shipper)
-    await watcher.start()
-
     # Service management
     from zerg.services.shipper import install_service, get_service_status
-    install_service(url="https://api.longhouse.ai", token="xxx")
+    install_service(url="https://api.longhouse.ai")
     status = get_service_status()  # "running", "stopped", "not-installed"
 """
 
@@ -36,13 +25,6 @@ from zerg.services.shipper.service import get_service_info
 from zerg.services.shipper.service import get_service_status
 from zerg.services.shipper.service import install_service
 from zerg.services.shipper.service import uninstall_service
-from zerg.services.shipper.shipper import SessionShipper
-from zerg.services.shipper.shipper import ShipperConfig
-from zerg.services.shipper.shipper import ShipResult
-from zerg.services.shipper.spool import OfflineSpool
-from zerg.services.shipper.spool import SpoolEntry
-from zerg.services.shipper.state import ShippedSession
-from zerg.services.shipper.state import ShipperState
 from zerg.services.shipper.token import clear_token
 from zerg.services.shipper.token import clear_zerg_url
 from zerg.services.shipper.token import get_token_path
@@ -50,7 +32,6 @@ from zerg.services.shipper.token import get_zerg_url
 from zerg.services.shipper.token import load_token
 from zerg.services.shipper.token import save_token
 from zerg.services.shipper.token import save_zerg_url
-from zerg.services.shipper.watcher import SessionWatcher
 
 __all__ = [
     "clear_token",
@@ -64,19 +45,11 @@ __all__ = [
     "install_mcp_server",
     "install_service",
     "load_token",
-    "OfflineSpool",
     "ParsedEvent",
     "parse_session_file",
     "parse_session_file_full",
     "save_token",
     "save_zerg_url",
-    "SessionShipper",
-    "SessionWatcher",
-    "ShipperConfig",
-    "ShipResult",
-    "ShippedSession",
-    "ShipperState",
-    "SpoolEntry",
     "uninstall_service",
     "upsert_codex_mcp_toml",
 ]

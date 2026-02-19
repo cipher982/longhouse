@@ -41,11 +41,11 @@ class ServerConfig:
 
 @dataclass
 class ShipperConfig:
-    """Shipper configuration."""
+    """Engine (longhouse-engine) configuration."""
 
-    mode: str = "watch"  # "watch" or "poll"
     api_url: str = "http://localhost:8080"
-    interval: int = 30
+    flush_ms: int = 500
+    fallback_scan_secs: int = 300
 
 
 @dataclass
@@ -97,15 +97,15 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
             # Load shipper config
             if "shipper" in data:
                 shipper_data = data["shipper"]
-                if "mode" in shipper_data:
-                    config.shipper.mode = shipper_data["mode"]
-                    sources["shipper.mode"] = "file"
                 if "api_url" in shipper_data:
                     config.shipper.api_url = shipper_data["api_url"]
                     sources["shipper.api_url"] = "file"
-                if "interval" in shipper_data:
-                    config.shipper.interval = int(shipper_data["interval"])
-                    sources["shipper.interval"] = "file"
+                if "flush_ms" in shipper_data:
+                    config.shipper.flush_ms = int(shipper_data["flush_ms"])
+                    sources["shipper.flush_ms"] = "file"
+                if "fallback_scan_secs" in shipper_data:
+                    config.shipper.fallback_scan_secs = int(shipper_data["fallback_scan_secs"])
+                    sources["shipper.fallback_scan_secs"] = "file"
 
         except Exception as e:
             # Log but don't fail on config file errors
@@ -124,22 +124,21 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
         except ValueError:
             import logging
 
-            logging.getLogger(__name__).warning(f"Invalid LONGHOUSE_PORT value: {os.environ['LONGHOUSE_PORT']!r}, ignoring")
-    if os.getenv("LONGHOUSE_SHIPPER_MODE"):
-        config.shipper.mode = os.environ["LONGHOUSE_SHIPPER_MODE"]
-        sources["shipper.mode"] = "env"
+            logging.getLogger(__name__).warning(
+                f"Invalid LONGHOUSE_PORT value: {os.environ['LONGHOUSE_PORT']!r}, ignoring"
+            )
     if os.getenv("LONGHOUSE_API_URL"):
         config.shipper.api_url = os.environ["LONGHOUSE_API_URL"]
         sources["shipper.api_url"] = "env"
-    if os.getenv("LONGHOUSE_SHIPPER_INTERVAL"):
+    if os.getenv("LONGHOUSE_FLUSH_MS"):
         try:
-            config.shipper.interval = int(os.environ["LONGHOUSE_SHIPPER_INTERVAL"])
-            sources["shipper.interval"] = "env"
+            config.shipper.flush_ms = int(os.environ["LONGHOUSE_FLUSH_MS"])
+            sources["shipper.flush_ms"] = "env"
         except ValueError:
             import logging
 
             logging.getLogger(__name__).warning(
-                f"Invalid LONGHOUSE_SHIPPER_INTERVAL value: {os.environ['LONGHOUSE_SHIPPER_INTERVAL']!r}, ignoring"
+                f"Invalid LONGHOUSE_FLUSH_MS value: {os.environ['LONGHOUSE_FLUSH_MS']!r}, ignoring"
             )
 
     config._sources = sources
@@ -201,8 +200,12 @@ def get_effective_config_display(config: LonghouseConfig) -> list[tuple[str, str
     entries = [
         ("server.host", config.server.host, config._sources.get("server.host", "default")),
         ("server.port", str(config.server.port), config._sources.get("server.port", "default")),
-        ("shipper.mode", config.shipper.mode, config._sources.get("shipper.mode", "default")),
         ("shipper.api_url", config.shipper.api_url, config._sources.get("shipper.api_url", "default")),
-        ("shipper.interval", str(config.shipper.interval), config._sources.get("shipper.interval", "default")),
+        ("shipper.flush_ms", str(config.shipper.flush_ms), config._sources.get("shipper.flush_ms", "default")),
+        (
+            "shipper.fallback_scan_secs",
+            str(config.shipper.fallback_scan_secs),
+            config._sources.get("shipper.fallback_scan_secs", "default"),
+        ),
     ]
     return entries
