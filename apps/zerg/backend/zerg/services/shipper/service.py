@@ -79,6 +79,7 @@ class ServiceConfig:
     fallback_scan_secs: int = 300
     spool_replay_secs: int = 30
     log_dir: str | None = None
+    compression: str = "zstd"
 
 
 def detect_platform() -> Platform:
@@ -209,6 +210,8 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
         str(config.spool_replay_secs),
         "--log-dir",
         str(log_dir),
+        "--compression",
+        config.compression,
     ]
 
     program_args = "\n".join(f"        <string>{arg}</string>" for arg in args)
@@ -263,6 +266,7 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
         f" --fallback-scan-secs {config.fallback_scan_secs}"
         f" --spool-replay-secs {config.spool_replay_secs}"
         f" --log-dir {log_dir}"
+        f" --compression {config.compression}"
     )
 
     return f"""[Unit]
@@ -291,6 +295,7 @@ def install_service(
     fallback_scan_secs: int = 300,
     spool_replay_secs: int = 30,
     log_dir: str | None = None,
+    compression: str = "zstd",
     # Legacy params accepted but ignored (kept for backwards compat during transition)
     _poll_mode: bool = False,
     _interval: int = 30,
@@ -318,6 +323,7 @@ def install_service(
         fallback_scan_secs=fallback_scan_secs,
         spool_replay_secs=spool_replay_secs,
         log_dir=log_dir,
+        compression=compression,
     )
 
     # Ensure log directory exists
