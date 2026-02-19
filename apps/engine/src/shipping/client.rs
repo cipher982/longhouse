@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
 
 use crate::config::ShipperConfig;
@@ -123,12 +124,16 @@ impl ShipperClient {
                             }
 
                             // Check Retry-After header
-                            let wait = response
+                            let base_wait = response
                                 .headers()
                                 .get("Retry-After")
                                 .and_then(|v| v.to_str().ok())
                                 .and_then(|s| s.parse::<f64>().ok())
                                 .unwrap_or(backoff);
+
+                            // Add jitter (50%–100% of base_wait) and cap at 30s
+                            let jitter_factor = 0.5 + rand::thread_rng().gen::<f64>() * 0.5;
+                            let wait = (base_wait * jitter_factor).min(30.0);
 
                             tracing::info!(
                                 "Rate limited (429), retry {}/{}, waiting {:.1}s",
@@ -163,6 +168,23 @@ impl ShipperClient {
         }
     }
 
+    /// POST a small JSON payload (non-compressed). Used for heartbeat.
+    pub async fn post_json(&self, path_suffix: &str, body: Vec<u8>) -> Result<()> {
+        let url = self
+            .ingest_url
+            .replace("/api/agents/ingest", path_suffix);
+        self.client
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            // Remove Content-Encoding for uncompressed requests
+            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .body(body)
+            .send()
+            .await
+            .context("heartbeat POST failed")?;
+        Ok(())
+    }
+
     /// Get the ingest URL (for logging).
     pub fn ingest_url(&self) -> &str {
         &self.ingest_url
@@ -193,5 +215,40 @@ pub fn has_valid_config() -> bool {
             !config.api_url.is_empty() && config.api_token.is_some()
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::Rng;
+
+    #[test]
+    fn test_429_jitter_in_range() {
+        // Verify the jitter formula produces values in [0.5 * base, base] and <= 30s
+        let base_wait = 20.0_f64;
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..1000 {
+            let jitter_factor = 0.5 + rng.gen::<f64>() * 0.5;
+            let wait = (base_wait * jitter_factor).min(30.0);
+
+            assert!(
+                wait >= base_wait * 0.5,
+                "wait {:.2} should be >= {:.2}",
+                wait,
+                base_wait * 0.5
+            );
+            assert!(
+                wait <= 30.0,
+                "wait {:.2} should be capped at 30s",
+                wait
+            );
+        }
+
+        // Also verify cap works for large base_wait
+        let large_base = 100.0_f64;
+        let jitter_factor = 0.5 + rng.gen::<f64>() * 0.5;
+        let wait = (large_base * jitter_factor).min(30.0);
+        assert_eq!(wait, 30.0, "Large base_wait should be capped at 30s");
     }
 }

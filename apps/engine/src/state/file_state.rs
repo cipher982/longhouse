@@ -189,6 +189,30 @@ impl<'a> FileState<'a> {
             .query_row("SELECT COUNT(*) FROM file_state", [], |row| row.get(0))?;
         Ok(count as usize)
     }
+
+    /// Remove entries for files that no longer exist on disk and haven't been updated recently.
+    ///
+    /// Deletes rows where `last_updated < N days ago AND path not found on disk`.
+    /// Returns the number of rows removed.
+    pub fn prune_stale(&self, days: u64) -> Result<usize> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT path FROM file_state WHERE last_updated < ?",
+        )?;
+        let paths: Vec<String> = stmt
+            .query_map([&cutoff], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut pruned = 0usize;
+        for path in &paths {
+            if !std::path::Path::new(path).exists() {
+                self.conn.execute("DELETE FROM file_state WHERE path = ?", [path])?;
+                pruned += 1;
+            }
+        }
+        Ok(pruned)
+    }
 }
 
 #[cfg(test)]
@@ -282,5 +306,33 @@ mod tests {
         assert_eq!(session.provider, "claude");
         assert_eq!(session.acked_offset, 500);
         assert_eq!(session.session_id, Some("s1".to_string()));
+    }
+
+    #[test]
+    fn test_file_state_prune_removes_old() {
+        let (_tmp, conn) = setup();
+        let fs = FileState::new(&conn);
+
+        // Insert a file state entry with an old last_updated timestamp
+        let old_date = (chrono::Utc::now() - chrono::Duration::days(35)).to_rfc3339();
+        conn.execute(
+            "INSERT OR REPLACE INTO file_state (path, acked_offset, queued_offset, provider, last_updated)
+             VALUES ('/vanished/old.jsonl', 500, 500, 'claude', ?1)",
+            [&old_date],
+        ).unwrap();
+
+        // Insert a recent file state entry
+        fs.set_offset("/recent/new.jsonl", 100, "s2", "ps2", "claude").unwrap();
+
+        // Prune entries >30 days where path doesn't exist on disk
+        // Both paths don't exist on disk, but only the old one is outside the window
+        let pruned = fs.prune_stale(30).unwrap();
+        assert_eq!(pruned, 1, "Should prune exactly 1 stale entry");
+
+        // Old entry is gone
+        assert_eq!(fs.get_offset("/vanished/old.jsonl").unwrap(), 0, "Pruned entry should return default 0");
+
+        // Recent entry is kept
+        assert_eq!(fs.get_offset("/recent/new.jsonl").unwrap(), 100, "Recent entry should survive pruning");
     }
 }
