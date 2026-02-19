@@ -107,6 +107,7 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
             {
                 "type": "command",
                 "command": ship_path,
+                "async": True,
                 "timeout": 30,
             }
         ],
