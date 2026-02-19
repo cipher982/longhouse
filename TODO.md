@@ -161,13 +161,13 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 **Subtasks:**
 - [x] Write implementation spec for Python shipper removal (apps/zerg/backend/docs/specs/python-shipper-removal.md)
-- [ ] Migrate `service.py` install/uninstall/status to manage Rust engine binary
-- [ ] Update `cli/connect.py` `--install` path to use migrated service.py
-- [ ] Delete shipper.py, watcher.py, spool.py, state.py, providers/
-- [ ] Update `__init__.py` exports
-- [ ] Remove dead ShipperConfig fields
-- [ ] Remove zstd dead code from agents.py ingest
-- [ ] `make test` + `make test-e2e` pass
+- [x] Migrate `service.py` install/uninstall/status to manage Rust engine binary
+- [x] Update `cli/connect.py` `--install` path to use migrated service.py
+- [x] Delete shipper.py, watcher.py, spool.py, state.py, providers/
+- [x] Update `__init__.py` exports
+- [x] Remove dead ShipperConfig fields
+- [x] Remove zstd dead code from agents.py ingest
+- [x] `make test` + `make test-e2e` pass
 
 ---
 

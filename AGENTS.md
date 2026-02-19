@@ -125,7 +125,8 @@ Import from `../components/ui`. **Check here before building custom UI.**
 5. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
 6. **Master task list:** `TODO.md` — update before/after work.
 7. **Backend README required** — pyproject.toml needs it; don't delete `apps/zerg/backend/README.md`.
-8. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
+8. **Stripe key rotation** — Use `~/git/me/mytech/scripts/update-stripe-key.sh sk_live_...`. It validates against Stripe before touching anything, then updates Coolify and redeploys.
+9. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
 9. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `apps/zerg/backend/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
 10. **Deploy requires GHCR build** — Push triggers `runtime-image.yml` (path-filtered). Must wait for build before pulling on zerg. Use `gh run watch <id>` to wait. Marketing + control plane pull the same image via Coolify.
 11. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
