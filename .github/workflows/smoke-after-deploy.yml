@@ -53,6 +53,16 @@ jobs:
           chmod +x scripts/smoke-prod.sh
           ./scripts/smoke-prod.sh
 
+      - name: Check control plane credentials
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.CONTROL_PLANE_STRIPE_SECRET_KEY }}
+          CONTROL_PLANE_INSTANCE_AWS_SES_ACCESS_KEY_ID: ${{ secrets.CONTROL_PLANE_SES_ACCESS_KEY_ID }}
+          CONTROL_PLANE_INSTANCE_AWS_SES_SECRET_ACCESS_KEY: ${{ secrets.CONTROL_PLANE_SES_SECRET_KEY }}
+          CONTROL_PLANE_INSTANCE_AWS_SES_REGION: us-east-1
+        run: |
+          chmod +x scripts/check-cp-credentials.sh
+          ./scripts/check-cp-credentials.sh
+
       - name: Summary
         if: always()
         run: |
