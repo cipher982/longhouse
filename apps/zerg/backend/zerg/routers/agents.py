@@ -57,6 +57,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.demo_sessions import build_demo_agent_sessions
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +199,7 @@ def require_single_tenant(db: Session = Depends(get_db)) -> None:
 # ---------------------------------------------------------------------------
 
 
-class SessionResponse(BaseModel):
+class SessionResponse(UTCBaseModel):
     """Response for a single session."""
 
     id: str = Field(..., description="Session UUID")
@@ -222,7 +223,7 @@ class SessionResponse(BaseModel):
     match_role: Optional[str] = Field(None, description="Role for matching event")
 
 
-class SessionSummaryResponse(BaseModel):
+class SessionSummaryResponse(UTCBaseModel):
     """Response for session summaries (picker UI)."""
 
     id: str = Field(..., description="Session UUID")
@@ -252,7 +253,7 @@ class SessionsListResponse(BaseModel):
     total: int
 
 
-class SessionPreviewMessage(BaseModel):
+class SessionPreviewMessage(UTCBaseModel):
     """Preview message entry for session picker."""
 
     role: str = Field(..., description="Message role")
@@ -268,7 +269,7 @@ class SessionPreviewResponse(BaseModel):
     total_messages: int = Field(..., description="Total message count")
 
 
-class ActiveSessionResponse(BaseModel):
+class ActiveSessionResponse(UTCBaseModel):
     """Response for active session summary (Forum UI)."""
 
     id: str = Field(..., description="Session UUID")
@@ -288,7 +289,7 @@ class ActiveSessionResponse(BaseModel):
     tool_calls: int = Field(..., description="Tool call count")
 
 
-class ActiveSessionsResponse(BaseModel):
+class ActiveSessionsResponse(UTCBaseModel):
     """Response for active session list."""
 
     sessions: List[ActiveSessionResponse]
@@ -296,7 +297,7 @@ class ActiveSessionsResponse(BaseModel):
     last_refresh: datetime
 
 
-class EventResponse(BaseModel):
+class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
     id: int = Field(..., description="Event ID")
@@ -1989,7 +1990,7 @@ class ReflectRequest(BaseModel):
     window_hours: int = Field(24, ge=1, le=168, description="Hours to look back")
 
 
-class ReflectionRunResponse(BaseModel):
+class ReflectionRunResponse(UTCBaseModel):
     """Response for a single reflection run."""
 
     run_id: str

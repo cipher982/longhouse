@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import datetime
+from datetime import timezone
 from typing import Any
 from typing import Dict
 from typing import List
@@ -25,13 +26,14 @@ from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
 from zerg.models.run_event import RunEvent
 from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["oikos"])
 
 
-class OikosRunSummary(BaseModel):
+class OikosRunSummary(UTCBaseModel):
     """Minimal run summary for Oikos Task Inbox."""
 
     id: int
@@ -289,7 +291,7 @@ def _truncate_signal(signal: Optional[str], max_length: int) -> Optional[str]:
     return normalized[: max_length - 1].rstrip() + "…"
 
 
-class RunStatusResponse(BaseModel):
+class RunStatusResponse(UTCBaseModel):
     """Detailed status of a specific run."""
 
     run_id: int
@@ -494,7 +496,7 @@ async def attach_to_run_stream(
                     {
                         "type": event_type,
                         "payload": payload,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                 ),
             }
@@ -502,7 +504,7 @@ async def attach_to_run_stream(
         return EventSourceResponse(completed_stream())
 
 
-class RunEventRecord(BaseModel):
+class RunEventRecord(UTCBaseModel):
     """Single event from a run."""
 
     id: int

@@ -10,10 +10,11 @@ import {
   getSessionDisplayTitle,
   getSessionRoomLabel,
 } from "../forum/session-mapper";
+import { parseUTC } from "../lib/dateUtils";
 import "../styles/forum.css";
 
 function formatRelativeTime(timestamp: string): string {
-  const ts = new Date(timestamp).getTime();
+  const ts = parseUTC(timestamp).getTime();
   if (!Number.isFinite(ts)) return "unknown";
   const diffMs = Date.now() - ts;
   const minutes = Math.floor(diffMs / 60000);
@@ -46,7 +47,7 @@ export default function ForumPage() {
   const sessions = useMemo(() => {
     const list = sessionsData?.sessions ?? [];
     return [...list].sort(
-      (a, b) => new Date(b.last_activity_at).getTime() - new Date(a.last_activity_at).getTime(),
+      (a, b) => parseUTC(b.last_activity_at).getTime() - parseUTC(a.last_activity_at).getTime(),
     );
   }, [sessionsData]);
 

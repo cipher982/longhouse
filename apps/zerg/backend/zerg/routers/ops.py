@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from datetime import timezone
 from typing import Any
 
 from fastapi import APIRouter
@@ -36,7 +37,7 @@ async def error_beacon(request: Request):
     """Capture frontend errors from anonymous users. No auth required."""
     try:
         data = await request.json()
-        data["ts"] = datetime.utcnow().isoformat()
+        data["ts"] = datetime.now(timezone.utc).isoformat()
         data["ip"] = request.client.host if request.client else None
         _frontend_errors.append(data)
         if len(_frontend_errors) > 500:

@@ -22,6 +22,7 @@ import {
 } from "../hooks/useJobSecrets";
 import type { JobInfo } from "../services/api/jobSecrets";
 import { ApiError } from "../services/api/base";
+import { parseUTC } from "../lib/dateUtils";
 
 // ---------------------------------------------------------------------------
 // Secret form (inline add/edit)
@@ -412,7 +413,7 @@ export default function JobSecretsPage() {
                           </Table.Cell>
                           <Table.Cell>
                             <span className="text-muted">
-                              {new Date(secret.updated_at).toLocaleDateString()}
+                              {parseUTC(secret.updated_at).toLocaleDateString()}
                             </span>
                           </Table.Cell>
                           <Table.Cell>

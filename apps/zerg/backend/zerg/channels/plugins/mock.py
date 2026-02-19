@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from datetime import datetime
+from datetime import timezone
 from typing import Any
 from uuid import uuid4
 
@@ -272,7 +273,7 @@ class MockChannel(ChannelPlugin):
             media=media,
             thread_id=thread_id,
             reply_to_id=reply_to_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             edited=False,
             is_bot=False,
             raw=raw or {},

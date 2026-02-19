@@ -111,7 +111,7 @@ class LLMAuditLogger:
         """Log an LLM request. Returns correlation ID for response matching."""
         self.ensure_started()
 
-        correlation_id = f"{datetime.utcnow().isoformat()}_{phase}_{id(messages)}"
+        correlation_id = f"{datetime.now(timezone.utc).isoformat()}_{phase}_{id(messages)}"
         # Generate a unique span_id for this LLM call
         span_id = str(uuid.uuid4())
 
@@ -131,7 +131,7 @@ class LLMAuditLogger:
                 "model": model,
                 "messages": serialized_messages,
                 "message_count": len(messages),
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc),
             }
 
             # Non-blocking put with maxsize protection

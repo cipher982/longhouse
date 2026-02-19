@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Badge, Button, Card, EmptyState, PageShell, SectionHeader, Spinner } from "../components/ui";
 import { request } from "../services/api";
+import { parseUTC } from "../lib/dateUtils";
 import "../styles/swarm-ops.css";
 
 type AttentionLevel = "auto" | "soft" | "needs" | "hard";
@@ -78,7 +79,7 @@ const STATUS_BADGE_VARIANT: Record<string, "neutral" | "success" | "warning" | "
 };
 
 function formatRelativeTime(timestamp: string): string {
-  const date = new Date(timestamp);
+  const date = parseUTC(timestamp);
   if (Number.isNaN(date.getTime())) return "";
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
@@ -208,7 +209,7 @@ export default function SwarmOpsPage() {
     return [...runs].sort((a, b) => {
       const levelDiff = LEVEL_ORDER[a.attention] - LEVEL_ORDER[b.attention];
       if (levelDiff !== 0) return levelDiff;
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      return parseUTC(b.created_at).getTime() - parseUTC(a.created_at).getTime();
     });
   }, [runs]);
 

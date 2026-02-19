@@ -12,6 +12,7 @@ import {
   Badge,
   PageShell
 } from "../components/ui";
+import { parseUTC } from "../lib/dateUtils";
 
 // Types for trace data
 interface TraceListItem {
@@ -125,7 +126,7 @@ function TimelineEventRow({ event, isLast }: { event: TimelineEvent; isLast: boo
   };
 
   const formatTime = (timestamp: string) => {
-    return new Date(timestamp).toLocaleTimeString("en-US", {
+    return parseUTC(timestamp).toLocaleTimeString("en-US", {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -258,7 +259,7 @@ function TraceDetailView({
                 </span>
               </div>
               <div className="trace-detail-meta">
-                <span>{detail.started_at ? new Date(detail.started_at).toLocaleString() : "N/A"}</span>
+                <span>{detail.started_at ? parseUTC(detail.started_at).toLocaleString() : "N/A"}</span>
                 <span className="trace-detail-meta-dot">•</span>
                 <span className="trace-detail-duration">{detail.duration_seconds.toFixed(2)}s</span>
               </div>
@@ -453,7 +454,7 @@ export default function TraceExplorerPage() {
                         </Table.Cell>
                         <Table.Cell>{trace.model || "-"}</Table.Cell>
                         <Table.Cell>
-                          {trace.started_at ? new Date(trace.started_at).toLocaleString() : "-"}
+                          {trace.started_at ? parseUTC(trace.started_at).toLocaleString() : "-"}
                         </Table.Cell>
                         <Table.Cell>{formatDuration(trace.duration_ms)}</Table.Cell>
                       </Table.Row>

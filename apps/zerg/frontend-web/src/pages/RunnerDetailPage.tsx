@@ -10,6 +10,7 @@ import {
   SectionHeader,
   Spinner
 } from "../components/ui";
+import { parseUTC } from "../lib/dateUtils";
 import "../styles/runner-detail.css";
 
 export default function RunnerDetailPage() {
@@ -136,7 +137,7 @@ export default function RunnerDetailPage() {
   const formatTimestamp = (timestamp: string | null | undefined) => {
     if (!timestamp) return "Never";
 
-    const date = new Date(timestamp);
+    const date = parseUTC(timestamp);
     return date.toLocaleString();
   };
 

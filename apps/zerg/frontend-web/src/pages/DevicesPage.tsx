@@ -15,11 +15,12 @@ import {
 import type { DeviceTokenCreated } from "../services/api/devices";
 import { SectionHeader, EmptyState, Button, Badge, PageShell, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
+import { parseUTC } from "../lib/dateUtils";
 import "./DevicesPage.css";
 
 function formatDate(iso: string | null): string {
   if (!iso) return "Never";
-  const d = new Date(iso);
+  const d = parseUTC(iso);
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();
   const diffMins = Math.floor(diffMs / 60000);

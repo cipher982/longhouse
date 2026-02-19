@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from datetime import timezone
 from typing import Any
 from uuid import uuid4
 
@@ -763,7 +764,7 @@ class TelegramChannel(WebhookChannel):
                 "chat_id": chat.id,
                 "date": message.date.isoformat() if message.date else None,
             },
-            timestamp=message.date or datetime.utcnow(),
+            timestamp=message.date or datetime.now(timezone.utc),
             edited=edited,
             is_bot=sender.is_bot if sender else False,
         )

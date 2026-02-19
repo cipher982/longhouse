@@ -13,6 +13,8 @@ import {
   Spinner
 } from "../components/ui";
 
+import { parseUTC } from "../lib/dateUtils";
+
 // Types for reliability data
 interface SystemHealthResponse {
   commis: Record<string, number>;
@@ -324,7 +326,7 @@ export default function ReliabilityPage() {
                               <span className="reliability-small-text">{err.error || "Unknown error"}</span>
                             </Table.Cell>
                             <Table.Cell>
-                              {err.created_at ? new Date(err.created_at).toLocaleString() : "-"}
+                              {err.created_at ? parseUTC(err.created_at).toLocaleString() : "-"}
                             </Table.Cell>
                             <Table.Cell>
                               {err.trace_id ? (
@@ -363,7 +365,7 @@ export default function ReliabilityPage() {
                               <span className="reliability-small-text">{err.error || "Unknown error"}</span>
                             </Table.Cell>
                             <Table.Cell>
-                              {err.created_at ? new Date(err.created_at).toLocaleString() : "-"}
+                              {err.created_at ? parseUTC(err.created_at).toLocaleString() : "-"}
                             </Table.Cell>
                           </Table.Row>
                         ))}
@@ -400,7 +402,7 @@ export default function ReliabilityPage() {
                         <span className="reliability-small-text">{commis.task || "-"}</span>
                       </Table.Cell>
                       <Table.Cell>
-                        {commis.started_at ? new Date(commis.started_at).toLocaleString() : "-"}
+                        {commis.started_at ? parseUTC(commis.started_at).toLocaleString() : "-"}
                       </Table.Cell>
                       <Table.Cell>
                         <code className="reliability-code">{commis.commis_id || "-"}</code>
@@ -445,7 +447,7 @@ export default function ReliabilityPage() {
                         </Badge>
                       </Table.Cell>
                       <Table.Cell>
-                        {runner.last_seen_at ? new Date(runner.last_seen_at).toLocaleString() : "Never"}
+                        {runner.last_seen_at ? parseUTC(runner.last_seen_at).toLocaleString() : "Never"}
                       </Table.Cell>
                       <Table.Cell>
                         <span className="reliability-small-text">

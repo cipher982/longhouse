@@ -57,6 +57,7 @@ from zerg.routers import oikos_runs
 from zerg.routers import oikos_tts
 from zerg.routers.oikos_auth import _is_tool_enabled
 from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.utils.time import UTCBaseModel
 from zerg.voice import router as oikos_voice
 
 logger = logging.getLogger(__name__)
@@ -253,7 +254,7 @@ class ToolCallInfo(BaseModel):
     commis: Optional[CommisInfo] = None
 
 
-class OikosChatMessage(BaseModel):
+class OikosChatMessage(UTCBaseModel):
     """Single chat message in history."""
 
     role: str = Field(..., description="Message role: user or assistant")

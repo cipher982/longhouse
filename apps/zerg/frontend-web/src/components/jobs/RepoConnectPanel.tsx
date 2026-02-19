@@ -12,6 +12,7 @@ import {
   useVerifyRepoConfig,
   useDeleteRepoConfig,
 } from "../../hooks/useJobSecrets";
+import { parseUTC } from "../../lib/dateUtils";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -19,7 +20,7 @@ import {
 
 function relativeTime(iso: string): string {
   const now = Date.now();
-  const then = new Date(iso).getTime();
+  const then = parseUTC(iso).getTime();
   const diffMs = now - then;
   const diffSec = Math.floor(diffMs / 1000);
   if (diffSec < 60) return "just now";

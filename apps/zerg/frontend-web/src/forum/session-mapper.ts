@@ -10,6 +10,7 @@ import type {
   ForumRoom,
 } from "./types";
 import { createForumState, type ForumMapState } from "./state";
+import { parseUTC } from "../lib/dateUtils";
 
 const ROOM_SIZE = 8; // Grid units per room
 const ROOM_PADDING = 3;
@@ -162,7 +163,7 @@ export function mapSessionsToEntities(
     if (!room) continue;
 
     const sorted = [...roomSessions].sort(
-      (a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime(),
+      (a, b) => parseUTC(a.started_at).getTime() - parseUTC(b.started_at).getTime(),
     );
 
     sorted.forEach((session, index) => {

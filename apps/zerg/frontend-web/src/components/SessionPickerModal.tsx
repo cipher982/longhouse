@@ -20,6 +20,7 @@ import type {
   AgentSessionSummaryFilters,
   AgentSessionPreviewMessage,
 } from "../services/api";
+import { parseUTC } from "../lib/dateUtils";
 import "./SessionPickerModal.css";
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ interface SessionPickerModalProps {
 // ---------------------------------------------------------------------------
 
 function formatRelativeTime(dateStr: string): string {
-  const date = new Date(dateStr);
+  const date = parseUTC(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);

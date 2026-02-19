@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
+from datetime import timezone
 from typing import Any
 from typing import Callable
 from uuid import uuid4
@@ -136,7 +137,7 @@ class ChannelRouter:
                 channel_id=event.get("channel_id", channel.meta["id"]),
                 direction="inbound",
                 message=event,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
             self._message_history.append(routed)
 
@@ -178,7 +179,7 @@ class ChannelRouter:
             )
 
         conversation = self._conversations[conv_key]
-        conversation.last_message_at = datetime.utcnow()
+        conversation.last_message_at = datetime.now(timezone.utc)
         return conversation
 
     # --- Sending Messages ---
@@ -265,7 +266,7 @@ class ChannelRouter:
                 channel_id=channel_id,
                 direction="outbound",
                 message=message,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 delivery_result=result,
             )
             self._message_history.append(routed)

@@ -30,6 +30,7 @@ from zerg.models.work import FileReservation
 from zerg.routers.agents import require_single_tenant
 from zerg.routers.agents import verify_agents_read_access
 from zerg.routers.agents import verify_agents_token
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class ReservationCreateRequest(BaseModel):
     duration_minutes: int = Field(60, ge=1, le=1440, description="Reservation duration in minutes")
 
 
-class ReservationResponse(BaseModel):
+class ReservationResponse(UTCBaseModel):
     """Response for a single reservation."""
 
     id: str = Field(..., description="Reservation UUID")

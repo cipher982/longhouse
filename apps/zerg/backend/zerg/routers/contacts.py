@@ -23,6 +23,7 @@ from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import UserEmailContact
 from zerg.models.models import UserPhoneContact
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ class EmailContactUpdate(BaseModel):
     notes: Optional[str] = Field(None, max_length=500)
 
 
-class EmailContactOut(BaseModel):
+class EmailContactOut(UTCBaseModel):
     """Schema for email contact response."""
 
     id: int
@@ -127,7 +128,7 @@ class PhoneContactUpdate(BaseModel):
     notes: Optional[str] = Field(None, max_length=500)
 
 
-class PhoneContactOut(BaseModel):
+class PhoneContactOut(UTCBaseModel):
     """Schema for phone contact response."""
 
     id: int

@@ -285,18 +285,30 @@ async def sync_jobs_repo(
 # ---------------------------------------------------------------------------
 
 
+def _isoformat_utc(dt: object) -> str | None:
+    """Format a datetime as ISO string with Z suffix for naive UTC datetimes."""
+    if dt is None:
+        return None
+    from datetime import datetime as _dt
+
+    if isinstance(dt, _dt):
+        iso = dt.isoformat()
+        return (iso + "Z") if dt.tzinfo is None else iso
+    return None
+
+
 def _job_run_to_info(run: JobRun) -> JobRunHistoryInfo:
     """Convert a JobRun ORM instance to a JobRunHistoryInfo schema."""
     return JobRunHistoryInfo(
         id=run.id,
         job_id=run.job_id,
         status=run.status,
-        started_at=run.started_at.isoformat() if run.started_at else None,
-        finished_at=run.finished_at.isoformat() if run.finished_at else None,
+        started_at=_isoformat_utc(run.started_at),
+        finished_at=_isoformat_utc(run.finished_at),
         duration_ms=run.duration_ms,
         error_message=run.error_message,
         error_type=getattr(run, "error_type", None),
-        created_at=run.created_at.isoformat() if run.created_at else "",
+        created_at=_isoformat_utc(run.created_at) or "",
     )
 
 
@@ -577,13 +589,13 @@ async def get_queue_state(
                 id=str(row["id"]),
                 job_id=row["job_id"],
                 status=row["status"],
-                scheduled_for=row["scheduled_for"].isoformat() if row["scheduled_for"] else "",
+                scheduled_for=_isoformat_utc(row["scheduled_for"]) or "",
                 attempts=row["attempts"],
                 max_attempts=row["max_attempts"],
                 lease_owner=row["lease_owner"],
                 last_error=row["last_error"],
-                created_at=row["created_at"].isoformat() if row["created_at"] else "",
-                finished_at=row["finished_at"].isoformat() if row["finished_at"] else None,
+                created_at=_isoformat_utc(row["created_at"]) or "",
+                finished_at=_isoformat_utc(row["finished_at"]),
             )
             for row in rows
         ]

@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { PageShell, SectionHeader, EmptyState, Button, Badge, Spinner } from "../components/ui";
 import { useProposals, useApproveProposal, useDeclineProposal } from "../hooks/useProposals";
 import type { ActionProposal } from "../services/api/proposals";
+import { parseUTC } from "../lib/dateUtils";
 import "./ProposalsPage.css";
 
 const STATUS_TABS = ["pending", "approved", "declined"] as const;
 
 function formatDate(iso: string | null): string {
   if (!iso) return "";
-  const d = new Date(iso);
+  const d = parseUTC(iso);
   const now = new Date();
   const diffMins = Math.floor((now.getTime() - d.getTime()) / 60000);
   if (diffMins < 1) return "Just now";
