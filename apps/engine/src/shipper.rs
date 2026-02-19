@@ -103,13 +103,15 @@ pub fn prepare_file(
 /// On transient failure, advance queued_offset and enqueue to spool.
 /// On client error (4xx), skip (advance offsets to avoid re-processing).
 ///
-/// Returns the number of events shipped (0 on failure).
+/// Returns (events_shipped, is_connect_error).
+/// is_connect_error is true when the server was unreachable — callers
+/// should enter offline mode and stop shipping until connectivity recovers.
 pub async fn ship_and_record(
     item: ShipItem,
     client: &ShipperClient,
     conn: &Connection,
     tracker: Option<&ConsecutiveErrorTracker>,
-) -> Result<usize> {
+) -> Result<(usize, bool)> {
     let file_state = FileState::new(conn);
     let result = client.ship(item.compressed).await;
 
@@ -137,7 +139,7 @@ pub async fn ship_and_record(
                 item.event_count,
                 item.new_offset - item.offset
             );
-            Ok(item.event_count)
+            Ok((item.event_count, false))
         }
         ShipResult::RateLimited | ShipResult::ServerError(_, _) | ShipResult::ConnectError(_) => {
             let err_msg = match &result {
@@ -188,7 +190,9 @@ pub async fn ship_and_record(
                     item.path_str
                 );
             }
-            Ok(0)
+            // Signal ConnectError to caller so it can enter offline mode
+            let is_connect_error = matches!(result, ShipResult::ConnectError(_));
+            Ok((0, is_connect_error))
         }
         ShipResult::ClientError(code, body) => {
             tracing::error!(
@@ -205,7 +209,7 @@ pub async fn ship_and_record(
                 &item.session_id,
                 &item.provider,
             )?;
-            Ok(0)
+            Ok((0, false))
         }
     }
 }
@@ -331,7 +335,7 @@ pub async fn full_scan(
     for (path, provider_name) in &all_files {
         match prepare_file(path, provider_name, algo, conn) {
             Ok(Some(item)) => {
-                let events = ship_and_record(item, client, conn, tracker).await?;
+                let (events, _is_connect_err) = ship_and_record(item, client, conn, tracker).await?;
                 if events > 0 {
                     files_shipped += 1;
                     events_shipped += events;
