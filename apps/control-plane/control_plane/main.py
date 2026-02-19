@@ -87,11 +87,14 @@ def _check_ses_credentials() -> None:
     if not settings.instance_aws_ses_access_key_id or not settings.instance_aws_ses_secret_access_key:
         return
     try:
+        from botocore.config import Config as _BotocoreConfig
+
         client = boto3.client(
             "ses",
             region_name=settings.instance_aws_ses_region or "us-east-1",
             aws_access_key_id=settings.instance_aws_ses_access_key_id,
             aws_secret_access_key=settings.instance_aws_ses_secret_access_key,
+            config=_BotocoreConfig(connect_timeout=5, read_timeout=5, retries={"max_attempts": 1}),
         )
         quota = client.get_send_quota()
         if quota.get("Max24HourSend", 0) > 0:

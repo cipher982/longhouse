@@ -40,7 +40,7 @@ def test_login_valid_credentials(page: Page, base_url: str, db_session) -> None:
 
 
 def test_login_bad_password_shows_error(page: Page, base_url: str, db_session) -> None:  # type: ignore[no-untyped-def]
-    """Wrong password → stays on login page and shows an error message."""
+    """Wrong password → redirects back to login with an error query param."""
     email = "login-bad-pw@example.com"
     create_user(db_session, email=email, password="CorrectPass123", verified=True)
 
@@ -49,12 +49,7 @@ def test_login_bad_password_shows_error(page: Page, base_url: str, db_session) -
     page.fill("input[type='password']", "WrongPassword!")
     page.click("button[type='submit']")
 
-    # Should stay on / (or show error), not redirect to /dashboard
-    page.wait_for_timeout(1000)
+    # auth.py redirects to /?error=Invalid+email+or+password on bad credentials
+    page.wait_for_url(re.compile(r"\?error="), timeout=5000)
     assert "/dashboard" not in page.url, "Should not reach dashboard with wrong password"
-
-    # Some error indication must be visible
-    page_text = page.content().lower()
-    assert any(kw in page_text for kw in ("invalid", "incorrect", "error", "wrong")), (
-        "No error message shown after bad password"
-    )
+    expect(page.locator("body")).to_contain_text("Invalid")

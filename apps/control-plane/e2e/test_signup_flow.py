@@ -91,5 +91,4 @@ def test_full_signup_verify_dashboard(page: Page, base_url: str, email_capture: 
 
     # 4. Dashboard must render without a 500
     expect(page.locator("body")).to_be_visible()
-    page_text = page.content()
-    assert "500" not in page_text or "Internal Server Error" not in page_text
+    expect(page.locator("body")).not_to_contain_text("Internal Server Error")

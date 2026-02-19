@@ -38,7 +38,7 @@ os.environ["CONTROL_PLANE_DATABASE_URL"] = f"sqlite:///{_DB_PATH}"
 # Now safe to import control_plane
 from control_plane.db import Base, SessionLocal, engine  # noqa: E402
 from control_plane.main import app  # noqa: E402
-from control_plane.models import User  # noqa: E402
+from control_plane.models import Instance, User  # noqa: E402
 from control_plane.routers.auth import _hash_password, _issue_session_token  # noqa: E402
 
 
@@ -178,12 +178,23 @@ def base_url(cp_server: str) -> str:  # type: ignore[return]
 
 @pytest.fixture()
 def db_session(cp_server):  # noqa: ARG001 — ensures server is up before we touch the DB
-    """Yield a SQLAlchemy session connected to the test database."""
+    """Yield a SQLAlchemy session; truncate the users table after each test for isolation."""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+        # Truncate user-related tables so tests don't bleed state into each other.
+        # Session-scoped server means rows persist across tests without this.
+        cleanup = SessionLocal()
+        try:
+            cleanup.query(Instance).delete()
+            cleanup.query(User).delete()
+            cleanup.commit()
+        except Exception:
+            cleanup.rollback()
+        finally:
+            cleanup.close()
 
 
 def create_user(

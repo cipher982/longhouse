@@ -71,6 +71,7 @@ check_stripe() {
     echo "Checking Stripe key..."
     local http_status
     http_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        --max-time 10 \
         -H "Authorization: Bearer ${key}" \
         https://api.stripe.com/v1/balance)
 
@@ -109,7 +110,8 @@ check_ses() {
     if quota=$(AWS_ACCESS_KEY_ID="$access_key" \
                AWS_SECRET_ACCESS_KEY="$secret_key" \
                AWS_DEFAULT_REGION="$region" \
-               aws ses get-send-quota --output text 2>&1); then
+               aws ses get-send-quota --output text \
+                   --cli-connect-timeout 5 --cli-read-timeout 5 2>&1); then
         ok "SES credentials valid — quota: ${quota}"
         PASS=$((PASS + 1))
     else
