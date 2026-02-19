@@ -522,17 +522,88 @@ class AgentsStore:
         session_id: UUID,
         *,
         roles: Optional[List[str]] = None,
+        tool_name: Optional[str] = None,
+        query: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> List[AgentEvent]:
-        """Get events for a session."""
+        """Get events for a session with optional filtering."""
         stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp)
 
         if roles:
             stmt = stmt.where(AgentEvent.role.in_(roles))
 
+        # tool_name: exact ORM match (NOT FTS — underscores get stripped by _fts_query)
+        if tool_name:
+            stmt = stmt.where(AgentEvent.tool_name == tool_name)
+
+        # query: FTS5 within-session content search with LIKE fallback
+        if query:
+            if self._fts_available():
+                try:
+                    rows = self.db.execute(
+                        text(
+                            "SELECT e.id FROM events_fts "
+                            "JOIN events e ON e.id = events_fts.rowid "
+                            "WHERE events_fts MATCH :q AND e.session_id = :sid"
+                        ),
+                        {"q": self._fts_query(query), "sid": str(session_id)},
+                    ).fetchall()
+                    matching_ids = [r[0] for r in rows]
+                    if not matching_ids:
+                        return []
+                    stmt = stmt.where(AgentEvent.id.in_(matching_ids))
+                except Exception as exc:
+                    logger.warning("FTS5 within-session search failed, falling back to LIKE: %s", exc)
+                    stmt = stmt.where(AgentEvent.content_text.ilike(f"%{query}%"))
+            else:
+                stmt = stmt.where(AgentEvent.content_text.ilike(f"%{query}%"))
+
         stmt = stmt.limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())
+
+    def count_session_events(
+        self,
+        session_id: UUID,
+        *,
+        roles: Optional[List[str]] = None,
+        tool_name: Optional[str] = None,
+        query: Optional[str] = None,
+    ) -> int:
+        """Count events for a session with the same filters as get_session_events."""
+        from sqlalchemy import func
+
+        stmt = select(func.count()).select_from(AgentEvent).where(AgentEvent.session_id == session_id)
+
+        if roles:
+            stmt = stmt.where(AgentEvent.role.in_(roles))
+
+        if tool_name:
+            stmt = stmt.where(AgentEvent.tool_name == tool_name)
+
+        if query:
+            if self._fts_available():
+                try:
+                    rows = self.db.execute(
+                        text(
+                            "SELECT e.id FROM events_fts "
+                            "JOIN events e ON e.id = events_fts.rowid "
+                            "WHERE events_fts MATCH :q AND e.session_id = :sid"
+                        ),
+                        {"q": self._fts_query(query), "sid": str(session_id)},
+                    ).fetchall()
+                    matching_ids = [r[0] for r in rows]
+                    if not matching_ids:
+                        return 0
+                    stmt = stmt.where(AgentEvent.id.in_(matching_ids))
+                except Exception as exc:
+                    logger.warning("FTS5 count failed, falling back to LIKE: %s", exc)
+                    stmt = stmt.where(AgentEvent.content_text.ilike(f"%{query}%"))
+            else:
+                stmt = stmt.where(AgentEvent.content_text.ilike(f"%{query}%"))
+
+        result = self.db.execute(stmt).scalar()
+        return result or 0
 
     def get_distinct_filters(self, days_back: int = 90) -> dict[str, list[str]]:
         """Get distinct values for filter dropdowns.
