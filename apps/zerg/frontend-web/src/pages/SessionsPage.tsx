@@ -633,11 +633,28 @@ export default function SessionsPage() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="sessions-search-input"
             />
-            <div className="sessions-search-mode" role="radiogroup" aria-label="Search mode">
+            <div
+              className="sessions-search-mode"
+              role="radiogroup"
+              aria-label="Search mode"
+              onKeyDown={(e) => {
+                if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                  e.preventDefault();
+                  setSemanticMode((prev) => !prev);
+                  // Move focus to the newly active button
+                  const group = e.currentTarget;
+                  requestAnimationFrame(() => {
+                    const active = group.querySelector<HTMLButtonElement>('[aria-checked="true"]');
+                    active?.focus();
+                  });
+                }
+              }}
+            >
               <button
                 type="button"
                 role="radio"
                 aria-checked={!semanticMode}
+                tabIndex={!semanticMode ? 0 : -1}
                 className={`sessions-mode-btn${!semanticMode ? " sessions-mode-btn--active" : ""}`}
                 onClick={() => setSemanticMode(false)}
               >
@@ -647,6 +664,7 @@ export default function SessionsPage() {
                 type="button"
                 role="radio"
                 aria-checked={semanticMode}
+                tabIndex={semanticMode ? 0 : -1}
                 className={`sessions-mode-btn${semanticMode ? " sessions-mode-btn--active" : ""}`}
                 onClick={() => setSemanticMode(true)}
                 title="AI-powered similarity search using embeddings"
