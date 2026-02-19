@@ -181,6 +181,34 @@ jobs:
           apps/zerg/e2e/test-results
           apps/zerg/e2e/playwright-report
 
+  control-plane-e2e:
+    runs-on: ubuntu-latest
+    # No dependency on other jobs — runs in parallel with sqlite-tests
+    name: "🎭 control-plane-e2e--signup-login-gates"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Install build tools
+      run: sudo apt-get update && sudo apt-get install -y make
+
+    - name: Install control plane deps
+      run: cd apps/control-plane && uv sync --extra dev --frozen
+
+    - name: Install Playwright browsers
+      run: cd apps/control-plane && uv run --extra dev playwright install chromium --with-deps
+
+    - name: Run control plane E2E tests
+      run: make test-e2e-cp
+
   oss-qa:
     runs-on: ubuntu-latest
     # No dependency on validate - can run immediately on GitHub-hosted runners

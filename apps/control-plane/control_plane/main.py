@@ -4,6 +4,8 @@ import logging
 from datetime import datetime
 from datetime import timezone
 
+import boto3
+import httpx
 from sqlalchemy import text
 
 from fastapi import FastAPI
@@ -11,6 +13,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from control_plane.config import settings
 from control_plane.db import Base
 from control_plane.db import engine
 from control_plane.db import SessionLocal
@@ -52,6 +55,51 @@ def _startup():
 
     # Crash recovery: clean up stale deploy states from interrupted deploys
     _recover_stale_deploys()
+
+    # Credential health checks — log errors immediately so bad keys don't ship silently
+    _check_stripe_credentials()
+    _check_ses_credentials()
+
+
+def _check_stripe_credentials() -> None:
+    """Validate Stripe key at startup. Logs an error if key is invalid — does not crash startup."""
+    if not settings.stripe_secret_key:
+        return
+    try:
+        resp = httpx.get(
+            "https://api.stripe.com/v1/balance",
+            headers={"Authorization": f"Bearer {settings.stripe_secret_key}"},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            logger.info("Stripe key valid")
+        else:
+            logger.error(
+                "Stripe key invalid or expired (HTTP %s) — billing will fail",
+                resp.status_code,
+            )
+    except Exception as exc:
+        logger.error("Stripe credential check failed: %s", exc)
+
+
+def _check_ses_credentials() -> None:
+    """Validate SES credentials at startup. Logs an error if invalid — does not crash startup."""
+    if not settings.instance_aws_ses_access_key_id or not settings.instance_aws_ses_secret_access_key:
+        return
+    try:
+        client = boto3.client(
+            "ses",
+            region_name=settings.instance_aws_ses_region or "us-east-1",
+            aws_access_key_id=settings.instance_aws_ses_access_key_id,
+            aws_secret_access_key=settings.instance_aws_ses_secret_access_key,
+        )
+        quota = client.get_send_quota()
+        if quota.get("Max24HourSend", 0) > 0:
+            logger.info("SES credentials valid")
+        else:
+            logger.warning("SES: max 24h send quota is 0 — account may still be in sandbox")
+    except Exception as exc:
+        logger.error("SES credential check failed — email will fail: %s", exc)
 
 
 def _recover_stale_deploys():
