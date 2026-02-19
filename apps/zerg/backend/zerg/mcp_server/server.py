@@ -22,6 +22,26 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 logger = logging.getLogger(__name__)
 
+
+def _truncate_event(event: dict, max_chars: int, include_tool_output: bool) -> dict:
+    """Truncate large content fields in an event dict.
+
+    Fields longer than max_chars are truncated and annotated with
+    _<field>_truncated=True and _<field>_full_chars=N so callers
+    know content was cut and can re-request with a larger limit.
+    """
+    result = dict(event)
+    if not include_tool_output:
+        result.pop("tool_output_text", None)
+    for field in ("content_text", "tool_output_text"):
+        val = result.get(field)
+        if val and isinstance(val, str) and len(val) > max_chars:
+            result[field] = val[:max_chars]
+            result[f"_{field}_truncated"] = True
+            result[f"_{field}_full_chars"] = len(val)
+    return result
+
+
 # Local file-based memory store (pragmatic shortcut; upgrade to API later)
 _MEMORY_PATH = Path.home() / ".claude" / "longhouse-memory.json"
 
@@ -88,9 +108,9 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     ) -> str:
         """Search past agent sessions by content.
 
-        Queries the Longhouse API for sessions matching a text search.
-        Returns session metadata including dates, providers, projects,
-        message counts, and matching snippets.
+        Returns session metadata (dates, provider, message counts, snippet) — not event content.
+        Use for session discovery: "which sessions touched project X?" or "did anyone work on Y?"
+        NOT for reading event content → use recall for that.
 
         Args:
             query: Text to search for in session content.
@@ -132,16 +152,26 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     @server.tool()
     async def get_session_detail(
         session_id: str,
-        max_events: int = 50,
+        max_events: int = 20,
+        roles: str | None = None,
+        include_tool_output: bool = True,
+        max_content_chars: int = 400,
     ) -> str:
-        """Get detailed events from a specific session.
+        """Full ordered replay of a session. Loads complete event stream in sequence.
 
-        Retrieves the event log (user messages, assistant responses,
-        tool calls) for a single session.
+        EXPENSIVE — each event can be hundreds to thousands of chars.
+        - NOT for content search → use recall (fuzzy) or query_agents (exact SQL)
+        - NOT for finding events by tool name → use get_session_events
+
+        Use this only to understand session flow or debug tool-call sequences.
 
         Args:
             session_id: UUID of the session to retrieve.
-            max_events: Maximum number of events to return (default 50).
+            max_events: Max events to load (default 20). Keep low — each event can be large.
+            roles: Comma-separated role filter, e.g. "assistant,tool" (optional).
+            include_tool_output: Set False to omit tool_output_text entirely (saves tokens).
+            max_content_chars: Truncate content_text and tool_output_text at this length.
+                Truncated fields get _<field>_truncated=True and _<field>_full_chars=N added.
         """
         # Validate session_id to prevent path injection
         if not _UUID_RE.match(session_id):
@@ -154,21 +184,90 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 return json.dumps({"error": f"Session not found: {meta_resp.status_code}"})
 
             # Fetch session events
+            params: dict = {"limit": max_events}
+            if roles:
+                params["roles"] = roles
             events_resp = await client.get(
                 f"/api/agents/sessions/{session_id}/events",
-                params={"limit": max_events},
+                params=params,
             )
             if events_resp.status_code != 200:
                 return json.dumps({"error": f"Events fetch failed: {events_resp.status_code}"})
 
             session = meta_resp.json()
             events_data = events_resp.json()
+            events = [_truncate_event(e, max_content_chars, include_tool_output) for e in events_data.get("events", [])]
 
             return json.dumps(
                 {
                     "session": session,
-                    "events": events_data.get("events", []),
+                    "events": events,
                     "total_events": events_data.get("total", 0),
+                }
+            )
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
+    # ------------------------------------------------------------------
+    # Tool: get_session_events
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def get_session_events(
+        session_id: str,
+        query: str | None = None,
+        tool_name: str | None = None,
+        roles: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        max_content_chars: int = 400,
+    ) -> str:
+        """Surgical event search within a known session.
+
+        Use when you have a session ID and need specific events.
+        - Filter by tool name: tool_name="Bash"
+        - Search content: query="sk_live"
+        - Combine filters: tool_name="Bash", query="grep"
+        - Paginate: offset=20 to get next page
+
+        NOT for cross-session search → use recall or search_sessions instead.
+        NOT for full session replay → use get_session_detail instead.
+
+        Args:
+            session_id: UUID of the session to search within.
+            query: Content search string (searches content_text and tool_output_text).
+            tool_name: Filter by exact tool name, e.g. "Bash", "Edit", "Read".
+            roles: Comma-separated role filter, e.g. "tool" for tool results only.
+            limit: Max events to return (default 20).
+            offset: Pagination offset (default 0).
+            max_content_chars: Truncate content fields at this length (default 400).
+        """
+        if not _UUID_RE.match(session_id):
+            return json.dumps({"error": "Invalid session_id format. Expected a UUID."})
+
+        try:
+            params: dict = {"limit": limit, "offset": offset}
+            if query:
+                params["query"] = query
+            if tool_name:
+                params["tool_name"] = tool_name
+            if roles:
+                params["roles"] = roles
+
+            events_resp = await client.get(
+                f"/api/agents/sessions/{session_id}/events",
+                params=params,
+            )
+            if events_resp.status_code != 200:
+                return json.dumps({"error": f"API returned {events_resp.status_code}", "detail": events_resp.text[:500]})
+
+            data = events_resp.json()
+            events = [_truncate_event(e, max_content_chars, True) for e in data.get("events", [])]
+            return json.dumps(
+                {
+                    "events": events,
+                    "total": data.get("total", 0),
+                    "returned": len(events),
+                    "offset": offset,
                 }
             )
         except Exception as exc:
@@ -463,9 +562,10 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     ) -> str:
         """Retrieve knowledge from past AI sessions by searching conversation content.
 
-        Unlike search_sessions (which returns session metadata), recall returns the actual
-        conversation content around the most relevant turns. Use this when you need to
-        extract specific knowledge, decisions, or solutions from past work.
+        Semantic/fuzzy search — returns actual conversation content around relevant turns.
+        Use when you don't know the exact phrase but know the concept: "what was decided about auth?"
+        NOT for exact string match → use query_agents SQL with ILIKE for that.
+        NOT for session discovery → use search_sessions for that.
 
         Args:
             query: Natural language description of what you are looking for.

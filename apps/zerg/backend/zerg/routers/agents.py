@@ -1890,6 +1890,8 @@ async def get_session(
 async def get_session_events(
     session_id: UUID,
     roles: Optional[str] = Query(None, description="Comma-separated roles to filter"),
+    tool_name: Optional[str] = Query(None, description="Exact tool name filter, e.g. Bash"),
+    query: Optional[str] = Query(None, description="Content search within session events"),
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
@@ -1913,12 +1915,18 @@ async def get_session_events(
     events = store.get_session_events(
         session_id,
         roles=role_list,
+        tool_name=tool_name,
+        query=query,
         limit=limit,
         offset=offset,
     )
 
-    # Get total count (approximate)
-    total = session.user_messages + session.assistant_messages
+    total = store.count_session_events(
+        session_id,
+        roles=role_list,
+        tool_name=tool_name,
+        query=query,
+    )
 
     return EventsListResponse(
         events=[
