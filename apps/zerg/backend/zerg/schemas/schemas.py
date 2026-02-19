@@ -160,7 +160,7 @@ class ThreadUpdate(BaseModel):
     thread_type: Optional[str] = None
 
 
-class Thread(ThreadBase):
+class Thread(UTCBaseModel, ThreadBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -170,7 +170,7 @@ class Thread(ThreadBase):
     messages: List[ThreadMessageResponse] = []
 
 
-class ThreadSummary(ThreadBase):
+class ThreadSummary(UTCBaseModel, ThreadBase):
     """Thread summary for list endpoints (no messages payload)."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -181,7 +181,7 @@ class ThreadSummary(ThreadBase):
     updated_at: datetime
 
 
-class Fiche(FicheBase):
+class Fiche(UTCBaseModel, FicheBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -227,7 +227,7 @@ class MessageCreate(BaseModel):
     content: str
 
 
-class MessageResponse(BaseModel):
+class MessageResponse(UTCBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -255,7 +255,7 @@ class TriggerCreate(TriggerBase):
     pass
 
 
-class Trigger(TriggerBase):
+class Trigger(UTCBaseModel, TriggerBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -271,7 +271,7 @@ class Trigger(TriggerBase):
 # RunStatus moved to models.enums for single source of truth
 
 
-class RunOut(BaseModel):
+class RunOut(UTCBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -299,7 +299,7 @@ class RunBundle(BaseModel):
     runs: List[RunOut] = []
 
 
-class DashboardSnapshot(BaseModel):
+class DashboardSnapshot(UTCBaseModel):
     scope: str
     fetched_at: datetime
     runs_limit: int
@@ -329,7 +329,7 @@ class KnowledgeSourceUpdate(BaseModel):
     sync_schedule: Optional[str] = None
 
 
-class KnowledgeSource(KnowledgeSourceBase):
+class KnowledgeSource(UTCBaseModel, KnowledgeSourceBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -349,7 +349,7 @@ class KnowledgeDocumentBase(BaseModel):
     doc_metadata: Optional[Dict[str, Any]] = None
 
 
-class KnowledgeDocument(KnowledgeDocumentBase):
+class KnowledgeDocument(UTCBaseModel, KnowledgeDocumentBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int

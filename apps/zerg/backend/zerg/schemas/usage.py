@@ -10,6 +10,8 @@ from typing import Optional
 from pydantic import BaseModel
 from pydantic import Field
 
+from zerg.utils.time import UTCBaseModel
+
 
 class TokenBreakdown(BaseModel):
     """Breakdown of token usage by type."""
@@ -62,7 +64,7 @@ class UserUsageSummary(BaseModel):
     thirty_days: PeriodUsage
 
 
-class AdminUserRow(BaseModel):
+class AdminUserRow(UTCBaseModel):
     """User row with usage stats for admin list view."""
 
     id: int
