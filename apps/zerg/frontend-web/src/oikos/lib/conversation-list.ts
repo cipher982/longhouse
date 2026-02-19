@@ -1,3 +1,5 @@
+import { parseUTC } from '../../lib/dateUtils'
+
 export interface RawConversation {
   id: string
   name: string
@@ -13,7 +15,7 @@ export interface SidebarConversation {
 }
 
 function formatMeta(updatedAt: Date | string): string {
-  const date = typeof updatedAt === 'string' ? new Date(updatedAt) : updatedAt
+  const date = typeof updatedAt === 'string' ? parseUTC(updatedAt) : updatedAt
   if (Number.isNaN(date.getTime())) return 'Updated recently'
 
   const now = new Date()
