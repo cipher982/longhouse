@@ -45,6 +45,11 @@
     color: var(--color-text-primary);
   }
 
+  .ui-button:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
+  }
+
   .ui-button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -208,6 +213,16 @@
     border-color: var(--border-glass-1);
   }
 
+  /* Interactive card (clickable) — keyboard accessible */
+  .ui-card--interactive {
+    cursor: pointer;
+  }
+
+  .ui-card--interactive:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
+  }
+
   .ui-card__header {
     padding: var(--space-4) var(--space-5);
     border-bottom: 1px solid var(--border-glass-1);
@@ -274,6 +289,11 @@
     outline: none;
     border-color: var(--color-brand-primary);
     box-shadow: 0 0 0 1px var(--color-brand-primary), 0 0 15px rgba(201, 166, 107, 0.1);
+  }
+
+  .ui-input:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 1px;
   }
 
   .ui-input::placeholder {
@@ -355,8 +375,7 @@
   .ui-empty-state__icon {
     font-size: 48px;
     margin-bottom: var(--space-4);
-    color: var(--color-text-muted);
-    opacity: 0.5;
+    color: var(--color-text-secondary);
   }
 
   .ui-empty-state__title {

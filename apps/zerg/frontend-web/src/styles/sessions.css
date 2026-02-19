@@ -79,11 +79,16 @@
     background: transparent;
     border: 1px solid var(--border-glass-1);
     border-radius: var(--radius-md);
-    color: var(--color-text-tertiary);
+    color: var(--color-text-secondary);
     cursor: pointer;
     font-size: var(--font-size-xs);
     white-space: nowrap;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .sessions-semantic-toggle:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
   }
 
   .sessions-semantic-toggle:hover {
@@ -191,6 +196,11 @@
   .sessions-filter-select:focus {
     outline: none;
     border-color: var(--color-brand-primary);
+  }
+
+  .sessions-filter-select:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 1px;
   }
 
   /* ---------------------------------------------------------------------------
@@ -387,12 +397,18 @@
     align-items: center;
     justify-content: center;
     color: var(--color-brand-accent);
-    opacity: 0;
+    opacity: 0.5;
     transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .session-card:hover .session-card-resume-hint {
-    opacity: 1;
+  /* On hover-capable devices, hide by default and reveal on hover */
+  @media (hover: hover) {
+    .session-card-resume-hint {
+      opacity: 0;
+    }
+    .session-card:hover .session-card-resume-hint {
+      opacity: 1;
+    }
   }
 
   .session-card-arrow {
