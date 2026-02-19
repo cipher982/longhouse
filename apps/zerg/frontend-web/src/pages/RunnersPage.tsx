@@ -14,6 +14,7 @@ import {
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import { useConfirm } from "../components/confirm";
+import { parseUTC } from "../lib/dateUtils";
 import "../styles/runners.css";
 
 export default function RunnersPage() {
@@ -59,7 +60,7 @@ export default function RunnersPage() {
   const formatTimestamp = (timestamp: string | null | undefined) => {
     if (!timestamp) return "Never";
 
-    const date = new Date(timestamp);
+    const date = parseUTC(timestamp);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);

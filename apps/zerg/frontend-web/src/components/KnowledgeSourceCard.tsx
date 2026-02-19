@@ -1,5 +1,6 @@
 import React from "react";
 import type { KnowledgeSource } from "../services/api";
+import { parseUTC } from "../lib/dateUtils";
 import { Button } from "./ui";
 
 interface KnowledgeSourceCardProps {
@@ -65,7 +66,7 @@ export function KnowledgeSourceCard({
 
   const formatDate = (dateString: string | null | undefined) => {
     if (!dateString) return "Never";
-    const date = new Date(dateString);
+    const date = parseUTC(dateString);
     return date.toLocaleDateString() + " " + date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 

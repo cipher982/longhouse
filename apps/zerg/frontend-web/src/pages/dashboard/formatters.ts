@@ -1,4 +1,5 @@
 import type { Run } from "../../services/api";
+import { parseUTC } from "../../lib/dateUtils";
 
 const NBSP = "\u00A0";
 
@@ -7,7 +8,7 @@ export function formatDateTimeShort(iso: string | null | undefined): string {
     return "-";
   }
 
-  const date = new Date(iso);
+  const date = parseUTC(iso);
   if (Number.isNaN(date.getTime())) {
     return "-";
   }

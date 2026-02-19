@@ -10,6 +10,7 @@ import json
 import logging
 import secrets
 from datetime import datetime
+from datetime import timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -247,7 +248,7 @@ def github_callback(
         existing.encrypted_value = encrypted
         existing.display_name = f"@{github_login}"
         existing.test_status = "success"
-        existing.last_tested_at = datetime.utcnow()
+        existing.last_tested_at = datetime.now(timezone.utc)
         existing.connector_metadata = metadata
         logger.info("Updated GitHub credentials for user %d via OAuth", user_id)
     else:
@@ -257,7 +258,7 @@ def github_callback(
             encrypted_value=encrypted,
             display_name=f"@{github_login}",
             test_status="success",
-            last_tested_at=datetime.utcnow(),
+            last_tested_at=datetime.now(timezone.utc),
             connector_metadata=metadata,
         )
         db.add(cred)

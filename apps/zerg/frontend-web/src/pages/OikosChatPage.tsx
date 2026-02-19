@@ -21,6 +21,7 @@ import App from '../oikos/app/App';
 
 // Import tool store for hydration
 import { oikosToolStore, type OikosToolCall } from '../oikos/lib/oikos-tool-store';
+import { parseUTC } from '../lib/dateUtils';
 
 // API functions
 import { fetchThreadByTitle, fetchThreadMessages, request, fetchSystemCapabilities } from '../services/api';
@@ -199,8 +200,8 @@ export default function OikosChatPage() {
                   toolName: tc.name,
                   status: 'completed', // Historical tools are always completed
                   runId: syntheticRunId,
-                  startedAt: m.sent_at ? new Date(m.sent_at).getTime() : Date.now(),
-                  completedAt: m.sent_at ? new Date(m.sent_at).getTime() : Date.now(),
+                  startedAt: m.sent_at ? parseUTC(m.sent_at).getTime() : Date.now(),
+                  completedAt: m.sent_at ? parseUTC(m.sent_at).getTime() : Date.now(),
                   argsPreview: JSON.stringify(tc.args).slice(0, 100),
                   args: tc.args,
                   logs: [],
@@ -212,7 +213,7 @@ export default function OikosChatPage() {
               id: String(m.id),
               role: m.role as 'user' | 'assistant',
               content: m.content || '',
-              timestamp: m.sent_at ? new Date(m.sent_at) : new Date(),
+              timestamp: m.sent_at ? parseUTC(m.sent_at) : new Date(),
               skipAnimation: true, // Don't animate pre-loaded messages
               runId: syntheticRunId,
               toolCalls,

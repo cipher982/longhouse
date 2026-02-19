@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useCreateEnrollToken } from "../hooks/useRunners";
+import { parseUTC } from "../lib/dateUtils";
 import { Button, Spinner } from "./ui";
 
 interface AddRunnerModalProps {
@@ -29,7 +30,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
   };
 
   const formatExpiry = (expiresAt: string) => {
-    const expiry = new Date(expiresAt);
+    const expiry = parseUTC(expiresAt);
     const now = new Date();
     const diffMs = expiry.getTime() - now.getTime();
     const diffMins = Math.floor(diffMs / 60000);

@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { fetchRunners, type Runner } from "../../services/api";
 import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
 import { CheckCircleIcon, MonitorIcon, ClipboardIcon, AlertTriangleIcon, ChevronRightIcon, ChevronDownIcon } from "../icons";
+import { parseUTC } from "../../lib/dateUtils";
 
 interface RunnerSetupData {
   enroll_token: string;
@@ -64,7 +65,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
 
   // Calculate time remaining
   const updateTimeRemaining = useCallback(() => {
-    const expiry = new Date(data.expires_at);
+    const expiry = parseUTC(data.expires_at);
     const now = new Date();
     const diffMs = expiry.getTime() - now.getTime();
 
@@ -118,7 +119,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
           if (baselineRunnerIds.has(r.id)) return false;
 
           // Verify runner was created after token generation
-          const runnerCreatedAt = new Date(r.created_at);
+          const runnerCreatedAt = parseUTC(r.created_at);
           if (runnerCreatedAt < tokenCreatedAt.current) return false;
 
           return true;

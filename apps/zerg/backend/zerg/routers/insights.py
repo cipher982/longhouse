@@ -29,6 +29,7 @@ from zerg.models.work import Insight
 from zerg.routers.agents import require_single_tenant
 from zerg.routers.agents import verify_agents_read_access
 from zerg.routers.agents import verify_agents_token
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ class InsightCreateRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Source session UUID")
 
 
-class InsightResponse(BaseModel):
+class InsightResponse(UTCBaseModel):
     """Response for a single insight."""
 
     id: str = Field(..., description="Insight UUID")

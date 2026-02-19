@@ -12,6 +12,8 @@ import {
   Spinner
 } from "../components/ui";
 
+import { parseUTC } from "../lib/dateUtils";
+
 interface UserUpdatePayload {
   display_name?: string | null;
   avatar_url?: string | null;
@@ -266,14 +268,14 @@ export default function ProfilePage() {
                 <div className="info-item">
                   <span className="info-label">Member Since:</span>
                   <span className="info-value">
-                    {new Date(user.created_at).toLocaleDateString()}
+                    {parseUTC(user.created_at).toLocaleDateString()}
                   </span>
                 </div>
                 <div className="info-item">
                   <span className="info-label">Last Login:</span>
                   <span className="info-value">
                     {user.last_login
-                      ? new Date(user.last_login).toLocaleString()
+                      ? parseUTC(user.last_login).toLocaleString()
                       : "Never"
                     }
                   </span>

@@ -19,6 +19,7 @@ import {
   useLastJobRuns,
 } from "../hooks/useJobSecrets";
 import { ApiError } from "../services/api/base";
+import { parseUTC } from "../lib/dateUtils";
 import RepoConnectPanel from "../components/jobs/RepoConnectPanel";
 
 function runStatusVariant(status: string): "success" | "error" | "warning" | "neutral" {
@@ -37,7 +38,7 @@ function runStatusVariant(status: string): "success" | "error" | "warning" | "ne
 
 function relativeTime(iso: string | null): string {
   if (!iso) return "";
-  const diff = Date.now() - new Date(iso).getTime();
+  const diff = Date.now() - parseUTC(iso).getTime();
   const seconds = Math.floor(diff / 1000);
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);

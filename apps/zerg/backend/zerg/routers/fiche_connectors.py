@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from datetime import timezone
 from typing import Any
 
 from fastapi import APIRouter
@@ -276,7 +277,7 @@ def test_configured_connector(
 
     # Update test status
     cred.test_status = "success" if result["success"] else "failed"
-    cred.last_tested_at = datetime.utcnow()
+    cred.last_tested_at = datetime.now(timezone.utc)
 
     # Always update metadata: if test failed or returned no metadata, clear it.
     # This prevents "zombie" metadata from persisting after a credential breaks.

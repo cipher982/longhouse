@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.device_token import DeviceToken
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class CreateTokenRequest(BaseModel):
     device_id: str = Field(..., min_length=1, max_length=255, description="Device identifier (hostname or custom name)")
 
 
-class CreateTokenResponse(BaseModel):
+class CreateTokenResponse(UTCBaseModel):
     """Response containing the newly created token.
 
     NOTE: The plain token is only returned once during creation.
@@ -75,7 +76,7 @@ class CreateTokenResponse(BaseModel):
     created_at: datetime = Field(..., description="When the token was created")
 
 
-class TokenResponse(BaseModel):
+class TokenResponse(UTCBaseModel):
     """Response for a single device token (without the plain token)."""
 
     id: str = Field(..., description="Token UUID")

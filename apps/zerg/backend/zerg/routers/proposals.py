@@ -25,6 +25,7 @@ from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
 from zerg.routers.agents import require_single_tenant
 from zerg.routers.agents import verify_agents_read_access
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ router = APIRouter(prefix="/proposals", tags=["proposals"])
 # ---------------------------------------------------------------------------
 
 
-class ProposalResponse(BaseModel):
+class ProposalResponse(UTCBaseModel):
     """Response for a single action proposal."""
 
     id: str

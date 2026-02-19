@@ -12,6 +12,7 @@ import logging
 from abc import abstractmethod
 from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 from typing import Any
 
 from zerg.channels.plugin import ChannelPlugin
@@ -223,21 +224,21 @@ class BaseChannel(ChannelPlugin):
     def _is_rate_limited(self) -> bool:
         """Check if currently rate limited."""
         if self._rate_limit_remaining is not None and self._rate_limit_remaining <= 0:
-            if self._rate_limit_reset and datetime.utcnow() < self._rate_limit_reset:
+            if self._rate_limit_reset and datetime.now(timezone.utc) < self._rate_limit_reset:
                 return True
         return False
 
     def _get_rate_limit_wait(self) -> float:
         """Get seconds to wait before rate limit resets."""
         if self._rate_limit_reset:
-            wait = (self._rate_limit_reset - datetime.utcnow()).total_seconds()
+            wait = (self._rate_limit_reset - datetime.now(timezone.utc)).total_seconds()
             return max(0, wait)
         return 0
 
     def _update_rate_limit(self, retry_after: int) -> None:
         """Update rate limit state."""
         self._rate_limit_remaining = 0
-        self._rate_limit_reset = datetime.utcnow() + timedelta(seconds=retry_after)
+        self._rate_limit_reset = datetime.now(timezone.utc) + timedelta(seconds=retry_after)
 
 
 class PollingChannel(BaseChannel):
@@ -456,7 +457,7 @@ def create_message_event(
         chat_id=chat_id or sender_id,
         chat_type=kwargs.pop("chat_type", "dm"),
         text=text,
-        timestamp=kwargs.pop("timestamp", datetime.utcnow()),
+        timestamp=kwargs.pop("timestamp", datetime.now(timezone.utc)),
         edited=kwargs.pop("edited", False),
         is_bot=kwargs.pop("is_bot", False),
         **kwargs,

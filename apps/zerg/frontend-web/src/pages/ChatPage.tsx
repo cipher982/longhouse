@@ -14,6 +14,7 @@ import { useChatData } from "../hooks/chat/useChatData";
 import { useChatActions } from "../hooks/chat/useChatActions";
 import { useThreadStreaming } from "../hooks/chat/useThreadStreaming";
 import { createThread, type Thread, type ThreadMessage } from "../services/api";
+import { parseUTC } from "../lib/dateUtils";
 
 function useRequiredNumber(param?: string): number | null {
   if (!param) return null;
@@ -226,7 +227,7 @@ export default function ChatPage() {
     const chatHistory = messages
       .filter(msg => msg.role !== "system")
       .map(msg => {
-        const timestamp = new Date(msg.created_at || "").toLocaleString();
+        const timestamp = msg.created_at ? parseUTC(msg.created_at).toLocaleString() : "";
         return `[${timestamp}] ${msg.role.toUpperCase()}: ${msg.content}`;
       })
       .join("\n\n");

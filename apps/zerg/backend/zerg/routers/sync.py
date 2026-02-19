@@ -7,6 +7,7 @@ conversation synchronization.
 
 import logging
 from datetime import datetime
+from datetime import timezone
 from typing import List
 
 from fastapi import APIRouter
@@ -110,7 +111,7 @@ def push_sync_operations(
                 ts = datetime.fromisoformat(op.ts.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 # Fallback to current time if timestamp invalid
-                ts = datetime.utcnow()
+                ts = datetime.now(timezone.utc)
 
             # Create sync operation
             sync_op = SyncOperation(

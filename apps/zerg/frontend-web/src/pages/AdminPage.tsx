@@ -15,6 +15,7 @@ import {
   PageShell,
   Spinner
 } from "../components/ui";
+import { parseUTC } from "../lib/dateUtils";
 
 // Types for admin user usage data
 interface UserPeriodUsage {
@@ -529,7 +530,7 @@ function UsersTable({
             <Table.Cell className="admin-table-cell--numeric">{formatCost(user.usage.thirty_days.cost_usd)}</Table.Cell>
             <Table.Cell>
               {user.created_at
-                ? new Date(user.created_at).toLocaleDateString()
+                ? parseUTC(user.created_at).toLocaleDateString()
                 : "-"}
             </Table.Cell>
           </Table.Row>
