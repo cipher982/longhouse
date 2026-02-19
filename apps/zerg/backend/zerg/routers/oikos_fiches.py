@@ -7,19 +7,19 @@ from typing import Optional
 
 from fastapi import APIRouter
 from fastapi import Depends
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["oikos"])
 
 
-class OikosFicheSummary(BaseModel):
+class OikosFicheSummary(UTCBaseModel):
     """Minimal fiche summary for Oikos UI."""
 
     id: int

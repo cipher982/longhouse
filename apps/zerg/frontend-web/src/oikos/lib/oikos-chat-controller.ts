@@ -19,6 +19,7 @@ import { conversationController } from './conversation-controller';
 import { CONFIG, toAbsoluteUrl } from './config';
 import { eventBus } from './event-bus';
 import { commisProgressStore } from './commis-progress-store';
+import { parseUTC } from '../../lib/dateUtils';
 import {
   SSE_EVENT_TYPES,
   type SSEEventType,
@@ -141,7 +142,7 @@ export class OikosChatController {
       const messages: OikosChatMessage[] = (data.messages || []).map((msg: any) => ({
         role: msg.role,
         content: msg.content,
-        timestamp: new Date(msg.timestamp),
+        timestamp: parseUTC(msg.timestamp),
         usage: msg.usage || undefined,
         tool_calls: msg.tool_calls || undefined,
       }));

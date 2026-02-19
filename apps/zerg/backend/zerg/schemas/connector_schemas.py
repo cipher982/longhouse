@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from zerg.utils.time import UTCBaseModel
+
 # ---------------------------------------------------------------------------
 # Credential Field Definition (used in connector metadata)
 # ---------------------------------------------------------------------------
@@ -34,7 +36,7 @@ class CredentialFieldSchema(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ConnectorStatusResponse(BaseModel):
+class ConnectorStatusResponse(UTCBaseModel):
     """Status of a connector type for an fiche.
 
     Used in the list endpoint to show all available connectors
@@ -55,7 +57,7 @@ class ConnectorStatusResponse(BaseModel):
     metadata: Optional[dict[str, Any]] = Field(None, description="Metadata from last successful test")
 
 
-class AccountConnectorStatusResponse(BaseModel):
+class AccountConnectorStatusResponse(UTCBaseModel):
     """Status of a connector type at account level.
 
     Similar to ConnectorStatusResponse but for account-level credentials
