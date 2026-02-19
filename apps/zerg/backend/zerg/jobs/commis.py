@@ -264,6 +264,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
 
     status = "success"
     error_text = None
+    error_type = None
 
     try:
         # Execute the job function with timeout, dispatching via signature
@@ -275,10 +276,14 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
     except asyncio.TimeoutError:
         status = "failure"
         error_text = f"Job timed out after {timeout_seconds}s"
+        error_type = "TimeoutError"
         logger.error("Job %s timed out", queue_job.job_id)
     except Exception as e:
         status = "failure"
         error_text = str(e)
+        error_type = type(e).__name__
+        if isinstance(e, RuntimeError) and "not available for job" in str(e):
+            error_type = "MissingSecret"
         logger.exception("Job %s failed: %s", queue_job.job_id, e)
     finally:
         stop_heartbeat.set()
@@ -297,6 +302,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
             ended_at=ended_at,
             duration_ms=duration_ms,
             error_message=error_text,
+            error_type=error_type,
             tags=tags,
             project=project,
             scheduler=scheduler_name,

@@ -317,6 +317,9 @@ class JobRegistry:
                 status = "failure"
                 error = f"{str(e)[:5000]} (attempt {attempts}/{max_attempts})"
                 error_type = type(e).__name__
+                # Tag missing-secret failures distinctly
+                if isinstance(e, RuntimeError) and "not available for job" in str(e):
+                    error_type = "MissingSecret"
                 logger.exception("Job %s failed (attempt %d/%d): %s", job_id, attempts, max_attempts, e)
 
             # If we haven't exhausted retries and failed, wait before retry

@@ -86,6 +86,7 @@ class JobRunHistoryInfo(BaseModel):
     finished_at: str | None
     duration_ms: int | None
     error_message: str | None
+    error_type: str | None = None
     created_at: str
 
 
@@ -294,6 +295,7 @@ def _job_run_to_info(run: JobRun) -> JobRunHistoryInfo:
         finished_at=run.finished_at.isoformat() if run.finished_at else None,
         duration_ms=run.duration_ms,
         error_message=run.error_message,
+        error_type=getattr(run, "error_type", None),
         created_at=run.created_at.isoformat() if run.created_at else "",
     )
 

@@ -80,6 +80,7 @@ export interface JobRunHistoryInfo {
   finished_at: string | null;
   duration_ms: number | null;
   error_message: string | null;
+  error_type: string | null;
   created_at: string;
 }
 

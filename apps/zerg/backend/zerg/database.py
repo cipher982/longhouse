@@ -463,6 +463,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
+    # job_runs table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(job_runs)"))}
+            if columns and "error_type" not in columns:
+                conn.execute(text("ALTER TABLE job_runs ADD COLUMN error_type VARCHAR(50)"))
+                conn.commit()
+    except Exception:
+        logger.debug("job_runs table migration skipped (table may not exist yet)", exc_info=True)
+
 
 def _ensure_agents_fts(engine: Engine) -> None:
     """Ensure FTS5 index and triggers exist for agent events (SQLite only)."""

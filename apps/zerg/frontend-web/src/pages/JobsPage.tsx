@@ -258,12 +258,21 @@ export default function JobsPage() {
                           const lastRun = lastRunByJob[job.id];
                           if (!lastRun) return "—";
                           return (
-                            <span>
-                              <Badge variant={runStatusVariant(lastRun.status)}>
-                                {lastRun.status}
-                              </Badge>{" "}
-                              <span className="text-muted">{relativeTime(lastRun.started_at)}</span>
-                            </span>
+                            <div>
+                              <span>
+                                <Badge variant={runStatusVariant(lastRun.status)}>
+                                  {lastRun.status}
+                                </Badge>{" "}
+                                <span className="text-muted">{relativeTime(lastRun.started_at)}</span>
+                              </span>
+                              {lastRun.error_type && (
+                                <div className="text-muted" style={{ fontSize: "0.8em", marginTop: "2px" }}>
+                                  {lastRun.error_type === "MissingSecret"
+                                    ? "Missing secrets"
+                                    : lastRun.error_type}
+                                </div>
+                              )}
+                            </div>
                           );
                         })()}
                       </Table.Cell>
@@ -330,11 +339,18 @@ export default function JobsPage() {
                       <Table.Cell>{formatDuration(run.duration_ms)}</Table.Cell>
                       <Table.Cell>
                         {run.error_message ? (
-                          <span className="text-muted" title={run.error_message}>
-                            {run.error_message.length > 60
-                              ? `${run.error_message.slice(0, 60)}...`
-                              : run.error_message}
-                          </span>
+                          <div>
+                            {run.error_type && (
+                              <Badge variant={run.error_type === "MissingSecret" ? "warning" : "error"}>
+                                {run.error_type}
+                              </Badge>
+                            )}{" "}
+                            <span className="text-muted" title={run.error_message}>
+                              {run.error_message.length > 60
+                                ? `${run.error_message.slice(0, 60)}...`
+                                : run.error_message}
+                            </span>
+                          </div>
                         ) : (
                           "—"
                         )}
