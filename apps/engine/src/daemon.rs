@@ -307,17 +307,17 @@ async fn ship_batch(
         match shipper::prepare_file(path, provider, algo, conn) {
             Ok(Some(item)) => {
                 match shipper::ship_and_record(item, client, conn, Some(tracker)).await {
-                    Ok(e) => {
-                        if e > 0 {
+                    Ok((e, is_connect_err)) => {
+                        if is_connect_err {
+                            had_connect_error = true;
+                        } else if e > 0 {
                             shipped += 1;
                             events += e;
                         }
                     }
                     Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("ConnectError") || msg.contains("connect") {
-                            had_connect_error = true;
-                        } else if tracker.record_error() {
+                        // Unexpected error (not a ShipResult variant)
+                        if tracker.record_error() {
                             tracing::warn!("Error shipping {}: {}", path.display(), e);
                         }
                     }

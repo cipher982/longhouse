@@ -168,7 +168,14 @@ fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
     if let Ok(entries) = std::fs::read_dir(log_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("log") {
+            // tracing_appender rolling::daily creates files named "engine.log.YYYY-MM-DD"
+            // Match by file_name prefix rather than extension
+            let is_engine_log = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("engine.log"))
+                .unwrap_or(false);
+            if is_engine_log {
                 if let Ok(meta) = std::fs::metadata(&path) {
                     if let Ok(modified) = meta.modified() {
                         if modified < cutoff {
