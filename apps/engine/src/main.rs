@@ -131,6 +131,14 @@ enum Commands {
         #[arg(long)]
         db: Option<PathBuf>,
 
+        /// Ship a single file instead of scanning all providers
+        #[arg(long)]
+        file: Option<PathBuf>,
+
+        /// Provider name override when using --file (claude, codex, gemini)
+        #[arg(long)]
+        provider: Option<String>,
+
         /// Number of parallel workers (default: num_cpus)
         #[arg(long, default_value = "0")]
         workers: usize,
@@ -279,6 +287,8 @@ fn main() -> anyhow::Result<()> {
             url,
             token,
             db,
+            file,
+            provider,
             workers,
             dry_run,
             json,
@@ -287,15 +297,28 @@ fn main() -> anyhow::Result<()> {
             let algo = parse_compression_algo(&compression)?;
             // Build tokio runtime for async HTTP
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(cmd_ship(
-                url.as_deref(),
-                token.as_deref(),
-                db.as_deref(),
-                workers,
-                dry_run,
-                json,
-                algo,
-            ))?;
+            if let Some(path) = file.as_ref() {
+                rt.block_on(cmd_ship_file(
+                    path,
+                    provider.as_deref(),
+                    url.as_deref(),
+                    token.as_deref(),
+                    db.as_deref(),
+                    dry_run,
+                    json,
+                    algo,
+                ))?;
+            } else {
+                rt.block_on(cmd_ship(
+                    url.as_deref(),
+                    token.as_deref(),
+                    db.as_deref(),
+                    workers,
+                    dry_run,
+                    json,
+                    algo,
+                ))?;
+            }
         }
     }
 
@@ -745,6 +768,114 @@ async fn cmd_ship(
                 bytes_shipped as f64 / 1_048_576.0 / total_elapsed.as_secs_f64()
             );
         }
+    }
+
+    Ok(())
+}
+
+fn detect_provider_for_file(
+    path: &std::path::Path,
+    provider_override: Option<&str>,
+) -> anyhow::Result<String> {
+    if let Some(p) = provider_override {
+        return Ok(p.to_lowercase());
+    }
+
+    let providers = discovery::get_providers();
+    if let Some(p) = discovery::provider_for_path(path, &providers) {
+        return Ok(p.to_string());
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    match ext.as_deref() {
+        Some("jsonl") => Ok("claude".to_string()),
+        Some("json") => Ok("gemini".to_string()),
+        _ => anyhow::bail!(
+            "Unable to determine provider for {} (use --provider)",
+            path.display()
+        ),
+    }
+}
+
+async fn cmd_ship_file(
+    path: &std::path::Path,
+    provider_override: Option<&str>,
+    url: Option<&str>,
+    token: Option<&str>,
+    db_path: Option<&std::path::Path>,
+    dry_run: bool,
+    json_output: bool,
+    algo: CompressionAlgo,
+) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!("File not found: {}", path.display());
+    }
+
+    let provider = detect_provider_for_file(path, provider_override)?;
+
+    let config = ShipperConfig::from_env()?.with_overrides(url, token, db_path, None);
+
+    if !json_output {
+        eprintln!("Shipping file: {}", path.display());
+        eprintln!("Provider: {}", provider);
+        if dry_run {
+            eprintln!("DRY RUN — will parse and compress but not POST");
+        }
+    }
+
+    let conn = open_db(config.db_path.as_deref())?;
+
+    let prepared = shipper::prepare_file(path, &provider, algo, &conn)?;
+    let item = match prepared {
+        Some(item) => item,
+        None => {
+            println!("No new events");
+            return Ok(());
+        }
+    };
+
+    if dry_run {
+        let file_state = FileState::new(&conn);
+        file_state.set_offset(
+            &item.path_str,
+            item.new_offset,
+            &item.session_id,
+            &item.session_id,
+            &item.provider,
+        )?;
+
+        if json_output {
+            let summary = serde_json::json!({
+                "status": "ok",
+                "file": item.path_str,
+                "events_shipped": item.event_count,
+                "dry_run": true,
+            });
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        } else {
+            println!("Shipped {} events", item.event_count);
+        }
+        return Ok(());
+    }
+
+    let client = ShipperClient::with_compression(&config, algo)?;
+    let (events_shipped, _is_connect_err) =
+        shipper::ship_and_record(item, &client, &conn, None).await?;
+
+    if json_output {
+        let summary = serde_json::json!({
+            "status": "ok",
+            "file": path.display().to_string(),
+            "events_shipped": events_shipped,
+            "dry_run": false,
+        });
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("Shipped {} events", events_shipped);
     }
 
     Ok(())
