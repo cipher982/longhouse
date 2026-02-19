@@ -54,8 +54,8 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### In Progress
 | Section | Status | Notes |
 |---------|--------|-------|
-| Pre-flight Job Validation | ~70% | Phase 1-2 done (backend 409 + force param + frontend enable guard). Phase 3 still open |
-| Semantic Search / Recall UI | ~50% | Backend + MCP complete; frontend not wired |
+| Pre-flight Job Validation | 100% | Phase 1-3 done (backend 409 + force param + frontend enable guard + error_type tracking) |
+| Semantic Search / Recall UI | 100% | Backend + MCP + frontend toggle all complete |
 
 ### Done (move to archive when convenient)
 | Section | Status | Notes |
@@ -78,9 +78,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 1. ~~**HN Launch Prep**~~ — ✅ Done.
 2. ~~**Public Launch Checklist**~~ — ✅ Done.
 3. ~~**Full Signup Flow**~~ — ✅ Done (100%). OAuth + Stripe + provisioning + SSO + live E2E + rate limiting + password reset.
-4. **Semantic Search / Recall UI** — Wire backend semantic search + recall into Timeline UI. Backend + MCP done; needs frontend. [Details](#phase-4-agent-infrastructure-consolidation-8)
-5. **Seed david010 job secrets** — 4 API calls to unblock sauron-jobs on the instance.
-6. **Pre-flight Job Validation Phase 3** — Failure tagging + job list summary. [Details](#product-pre-flight-job-validation-3)
+4. ~~**Semantic Search / Recall UI**~~ — ✅ Done. Semantic toggle on Timeline, hooks + API functions, Codex-reviewed.
+5. ~~**Seed david010 job secrets**~~ — ✅ Done. 4 secrets seeded via PUT API (LLM_BENCH_MONGODB_URI, LIFE_HUB_DB_URL, LIFE_HUB_API_KEY, GITHUB_TOKEN).
+6. ~~**Pre-flight Job Validation Phase 3**~~ — ✅ Done. error_type tracking through full pipeline + frontend badges, Codex-reviewed.
 7. **Forum Discovery UX** — Explicit presence signals for sessions. 0% done, large scope. [Details](#product-forum-discovery-ux--explicit-presence-signals-7)
 8. **Oikos Dispatch Contract + Compaction** — Deferred; implement when usage demands it. [Details](#product-harness-simplification--commis-to-timeline-8)
 
@@ -647,10 +647,13 @@ Update screenshots to show Timeline, not old dashboard.
 
 ### Phase 3: Job History Context (1)
 
-- [ ] When a job fails due to `RuntimeError` from `require_secret()`, tag the failure
-  - Parse error_type in job run result — if `RuntimeError` and message matches "Secret .* not found", mark as `missing_secret` failure type
-  - Show distinct UI treatment in job history: "Failed: missing secret KEY" with link to configure
-- [ ] Add "last failure reason" summary to job list view — helps users see at a glance which jobs need attention
+- [x] When a job fails due to `RuntimeError` from `require_secret()`, tag the failure
+  - `error_type` column on JobRun model, tracked in both direct (registry.py) and queue (commis.py) paths
+  - `MissingSecret` type tagged when RuntimeError message matches "not available for job"
+  - SQLite migration adds column to existing tables at startup
+- [x] Add "last failure reason" summary to job list view — helps users see at a glance which jobs need attention
+  - Last Run column shows error_type below status badge (e.g., "Missing secrets")
+  - Recent Runs Error column shows error_type as colored badge (warning for MissingSecret, error for others)
 
 **Files:** `apps/zerg/backend/zerg/routers/jobs.py`, `apps/zerg/backend/zerg/jobs/commis.py`, frontend job components
 
