@@ -54,6 +54,19 @@ ServiceStatus = Literal["running", "stopped", "not-installed"]
 LAUNCHD_LABEL = "com.longhouse.shipper"
 SYSTEMD_UNIT = "longhouse-shipper"
 
+# Legacy service names that were installed directly (before longhouse connect
+# --install managed the engine). Detected and superseded on install.
+_LEGACY_ENGINE_PLIST_NAME = "com.longhouse.engine.plist"
+_LEGACY_SYSTEMD_UNIT_NAME = "longhouse-engine.service"
+
+
+def _get_legacy_engine_plist_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / _LEGACY_ENGINE_PLIST_NAME
+
+
+def _get_legacy_systemd_unit_path() -> Path:
+    return Path.home() / ".config" / "systemd" / "user" / _LEGACY_SYSTEMD_UNIT_NAME
+
 
 @dataclass
 class ServiceConfig:
@@ -323,6 +336,18 @@ def _install_launchd(config: ServiceConfig) -> dict:
     plist_path = _get_launchd_plist_path()
     plist_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Supersede the legacy engine plist (com.longhouse.engine) if present.
+    # It was installed directly before longhouse connect --install managed
+    # the engine. Unload and remove it so only one engine runs.
+    legacy_plist = _get_legacy_engine_plist_path()
+    if legacy_plist.exists():
+        try:
+            subprocess.run(["launchctl", "unload", str(legacy_plist)], capture_output=True, check=False)
+            legacy_plist.unlink()
+            logger.info(f"Superseded legacy engine plist at {legacy_plist}")
+        except Exception as e:
+            logger.warning(f"Failed to remove legacy engine plist: {e}")
+
     if plist_path.exists():
         try:
             subprocess.run(
@@ -361,6 +386,17 @@ def _install_systemd(config: ServiceConfig) -> dict:
     """Install systemd user service on Linux."""
     unit_path = _get_systemd_unit_path()
     unit_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Supersede the legacy engine unit (longhouse-engine.service) if present.
+    legacy_unit = _get_legacy_systemd_unit_path()
+    if legacy_unit.exists():
+        try:
+            subprocess.run(["systemctl", "--user", "stop", "longhouse-engine"], capture_output=True, check=False)
+            subprocess.run(["systemctl", "--user", "disable", "longhouse-engine"], capture_output=True, check=False)
+            legacy_unit.unlink()
+            logger.info(f"Superseded legacy engine unit at {legacy_unit}")
+        except Exception as e:
+            logger.warning(f"Failed to remove legacy engine unit: {e}")
 
     subprocess.run(
         ["systemctl", "--user", "stop", SYSTEMD_UNIT],
