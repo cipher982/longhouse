@@ -633,28 +633,32 @@ export default function SessionsPage() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="sessions-search-input"
             />
-            <button
-              type="button"
-              className={`sessions-semantic-toggle${semanticMode ? " sessions-semantic-toggle--active" : ""}`}
-              onClick={() => setSemanticMode((v) => !v)}
-              aria-pressed={semanticMode}
-              aria-label="Semantic search"
-              title={semanticMode ? "Switch to keyword search" : "Switch to semantic search (AI-powered)"}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
-                <path d="M2 12h20" />
-              </svg>
-              <span>Semantic</span>
-            </button>
+            <div className="sessions-search-mode" role="radiogroup" aria-label="Search mode">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!semanticMode}
+                className={`sessions-mode-btn${!semanticMode ? " sessions-mode-btn--active" : ""}`}
+                onClick={() => setSemanticMode(false)}
+              >
+                Keyword
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={semanticMode}
+                className={`sessions-mode-btn${semanticMode ? " sessions-mode-btn--active" : ""}`}
+                onClick={() => setSemanticMode(true)}
+                title="AI-powered similarity search using embeddings"
+              >
+                Semantic
+              </button>
+            </div>
           </div>
           <div className="sessions-toolbar-actions">
-            {hasFilters && (
-              <Button variant="ghost" size="sm" onClick={handleClearFilters}>
-                Clear
-              </Button>
-            )}
+            <Button variant="ghost" size="sm" onClick={handleClearFilters} disabled={!hasFilters}>
+              Clear
+            </Button>
             <button
               type="button"
               className={`sessions-filter-toggle${filtersOpen ? " sessions-filter-toggle--open" : ""}`}

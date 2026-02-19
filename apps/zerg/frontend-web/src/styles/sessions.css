@@ -71,38 +71,44 @@
     flex: 1;
   }
 
-  .sessions-semantic-toggle {
+  /* Segmented search mode control (Keyword | Semantic) */
+  .sessions-search-mode {
     display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: var(--space-1) var(--space-2);
-    background: transparent;
     border: 1px solid var(--border-glass-1);
     border-radius: var(--radius-md);
-    color: var(--color-text-secondary);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .sessions-mode-btn {
+    padding: var(--space-1) var(--space-2);
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    font-family: var(--font-family-base);
     white-space: nowrap;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .sessions-semantic-toggle:focus-visible {
+  .sessions-mode-btn:focus-visible {
     outline: 2px solid var(--color-brand-primary);
-    outline-offset: 2px;
+    outline-offset: -2px;
   }
 
-  .sessions-semantic-toggle:hover {
-    border-color: var(--color-border-primary);
+  .sessions-mode-btn:hover {
     color: var(--color-text-secondary);
+    background: var(--surface-glass-2);
   }
 
-  .sessions-semantic-toggle--active {
+  .sessions-mode-btn--active {
     background: var(--color-brand-accent-subtle, rgba(255, 149, 0, 0.12));
-    border-color: var(--color-brand-accent);
     color: var(--color-brand-accent);
   }
 
-  .sessions-semantic-toggle--active:hover {
+  .sessions-mode-btn--active:hover {
     background: var(--color-brand-accent-subtle, rgba(255, 149, 0, 0.18));
   }
 
@@ -900,7 +906,9 @@
     background: transparent;
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    width: 220px;
+    flex: 1;
+    min-width: 120px;
+    max-width: 480px;
     transition: border-color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
@@ -915,6 +923,11 @@
   .event-search-input:focus {
     outline: none;
     border-color: var(--color-brand-primary);
+  }
+
+  .event-search-input:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 1px;
   }
 
   .event-search-count {
@@ -1058,8 +1071,9 @@
       flex: 1 1 100%;
     }
 
-    .sessions-semantic-toggle span {
-      display: none; /* Icon only on mobile */
+    .sessions-mode-btn {
+      font-size: 11px;
+      padding: var(--space-1) var(--space-1);
     }
 
     .sessions-filter-panel {
