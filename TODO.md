@@ -160,6 +160,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 - Note: keep zstd decompression in `routers/agents.py` — Rust engine supports zstd as a non-default option (`CompressionAlgo::Zstd`), so this is not dead code
 
 **Subtasks:**
+- [x] Write implementation spec for Python shipper removal (apps/zerg/backend/docs/specs/python-shipper-removal.md)
 - [ ] Migrate `service.py` install/uninstall/status to manage Rust engine binary
 - [ ] Update `cli/connect.py` `--install` path to use migrated service.py
 - [ ] Delete shipper.py, watcher.py, spool.py, state.py, providers/
