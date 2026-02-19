@@ -13,6 +13,7 @@ from pydantic import ConfigDict
 from zerg.models.enums import FicheStatus
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
+from zerg.utils.time import UTCBaseModel
 
 
 # Fiche schemas
@@ -63,7 +64,7 @@ for _m in [FicheCreate]:
         pass
 
 
-class FicheMessage(BaseModel):
+class FicheMessage(UTCBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -78,7 +79,7 @@ class FicheMessage(BaseModel):
 # ------------------------------------------------------------
 
 
-class UserOut(BaseModel):
+class UserOut(UTCBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -125,7 +126,7 @@ class ThreadMessageCreate(ThreadMessageBase):
     sent_at: Optional[datetime] = None  # Client can provide send timestamp; server validates ±5min, or uses server time
 
 
-class ThreadMessageResponse(ThreadMessageBase):
+class ThreadMessageResponse(UTCBaseModel, ThreadMessageBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int

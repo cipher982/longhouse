@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from zerg.utils.time import UTCBaseModel
+
 # ---------------------------------------------------------------------------
 # Runner Enrollment
 # ---------------------------------------------------------------------------
@@ -25,7 +27,7 @@ class EnrollTokenCreate(BaseModel):
     pass  # No parameters needed for v1
 
 
-class EnrollTokenResponse(BaseModel):
+class EnrollTokenResponse(UTCBaseModel):
     """Response containing enrollment token and setup instructions."""
 
     enroll_token: str = Field(..., description="One-time enrollment token")
@@ -57,7 +59,7 @@ class RunnerRegisterResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class RunnerResponse(BaseModel):
+class RunnerResponse(UTCBaseModel):
     """Response model for a single runner."""
 
     model_config = ConfigDict(from_attributes=True)
