@@ -1,6 +1,6 @@
-"""Service installation for shipper daemon.
+"""Service installation for the Longhouse engine daemon.
 
-Provides cross-platform service management for running the shipper
+Provides cross-platform service management for running longhouse-engine
 as a background daemon that starts on boot.
 
 Supports:
@@ -50,28 +50,26 @@ class Platform(Enum):
 ServiceStatus = Literal["running", "stopped", "not-installed"]
 
 
-# Service identifiers
+# Service identifiers — kept stable so --uninstall works on existing installs
 LAUNCHD_LABEL = "com.longhouse.shipper"
 SYSTEMD_UNIT = "longhouse-shipper"
 
 
 @dataclass
 class ServiceConfig:
-    """Configuration for the installed service."""
+    """Configuration for the installed engine service."""
 
     url: str
     token: str | None = None
     claude_dir: str | None = None
-    poll_mode: bool = False
-    interval: int = 30
+    flush_ms: int = 500
+    fallback_scan_secs: int = 300
+    spool_replay_secs: int = 30
+    log_dir: str | None = None
 
 
 def detect_platform() -> Platform:
-    """Detect the current platform.
-
-    Returns:
-        Platform enum value
-    """
+    """Detect the current platform."""
     if sys.platform == "darwin":
         return Platform.MACOS
     elif sys.platform.startswith("linux"):
@@ -99,26 +97,61 @@ def _find_project_root() -> Path | None:
     return None
 
 
+def get_engine_executable() -> str:
+    """Get the absolute path to the longhouse-engine binary.
+
+    Resolution order:
+    1. shutil.which("longhouse-engine")  — installed on PATH
+    2. ~/.local/bin/longhouse-engine     — pipx / uv tool install
+    3. ~/.claude/bin/longhouse-engine    — Longhouse-managed install
+    4. Repo dev builds (release then debug)
+
+    Raises:
+        RuntimeError: If the binary cannot be found anywhere.
+    """
+    # 1. PATH
+    found = shutil.which("longhouse-engine")
+    if found:
+        return found
+
+    # 2. ~/.local/bin
+    local_bin = Path.home() / ".local" / "bin" / "longhouse-engine"
+    if local_bin.exists():
+        return str(local_bin)
+
+    # 3. ~/.claude/bin
+    claude_bin = Path.home() / ".claude" / "bin" / "longhouse-engine"
+    if claude_bin.exists():
+        return str(claude_bin)
+
+    # 4. Repo dev builds
+    project_root = _find_project_root()
+    if project_root:
+        engine_dir = project_root.parent.parent / "apps" / "engine"
+        for profile in ("release", "debug"):
+            candidate = engine_dir / "target" / profile / "longhouse-engine"
+            if candidate.exists():
+                return str(candidate)
+
+    raise RuntimeError(
+        "longhouse-engine not found. " "Install it from https://longhouse.ai/install or build apps/engine (cargo build --release)."
+    )
+
+
 def get_zerg_executable() -> str:
-    """Get the path to the Longhouse CLI executable.
+    """Get the path to the Longhouse CLI executable (legacy — for non-engine CLI use).
 
     Prefers the installed ``longhouse`` command, then falls back to
     legacy ``zerg`` if present, and finally uses ``uv run`` in dev.
-
-    Returns:
-        Path or command to run the CLI
     """
-    # Prefer 'longhouse' in PATH
     longhouse_path = shutil.which("longhouse")
     if longhouse_path:
         return longhouse_path
 
-    # Legacy fallback: 'zerg' in PATH
     zerg_path = shutil.which("zerg")
     if zerg_path:
         return zerg_path
 
-    # Check if we're in a uv environment
     uv_path = shutil.which("uv")
     if uv_path:
         project_root = _find_project_root()
@@ -126,56 +159,43 @@ def get_zerg_executable() -> str:
             return f"{uv_path} run --project {project_root} longhouse"
         return f"{uv_path} run longhouse"
 
-    # Fallback: assume longhouse is installed
     return "longhouse"
 
 
 def _get_launchd_plist_path() -> Path:
-    """Get the path to the launchd plist file."""
     return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
 
 
 def _get_systemd_unit_path() -> Path:
-    """Get the path to the systemd unit file."""
     return Path.home() / ".config" / "systemd" / "user" / f"{SYSTEMD_UNIT}.service"
 
 
+def _resolve_log_dir(config: ServiceConfig) -> Path:
+    if config.log_dir:
+        return Path(config.log_dir)
+    return _resolve_claude_dir(config.claude_dir) / "logs"
+
+
 def _generate_launchd_plist(config: ServiceConfig) -> str:
-    """Generate launchd plist content for macOS.
+    """Generate launchd plist calling longhouse-engine connect."""
+    engine = get_engine_executable()
+    log_dir = _resolve_log_dir(config)
+    claude_dir = _resolve_claude_dir(config.claude_dir)
 
-    Args:
-        config: Service configuration
+    args = [
+        engine,
+        "connect",
+        "--flush-ms",
+        str(config.flush_ms),
+        "--fallback-scan-secs",
+        str(config.fallback_scan_secs),
+        "--spool-replay-secs",
+        str(config.spool_replay_secs),
+        "--log-dir",
+        str(log_dir),
+    ]
 
-    Returns:
-        Plist XML content
-    """
-    zerg_cmd = get_zerg_executable()
-
-    # Build command arguments
-    args = ["connect", "--url", config.url]
-    if config.poll_mode:
-        args.extend(["--poll", "--interval", str(config.interval)])
-    if config.claude_dir:
-        args.extend(["--claude-dir", config.claude_dir])
-
-    # Build ProgramArguments
-    if " " in zerg_cmd:
-        # uv run zerg case - split into parts
-        parts = zerg_cmd.split() + args
-    else:
-        parts = [zerg_cmd] + args
-
-    program_args = "\n".join(f"        <string>{arg}</string>" for arg in parts)
-    log_path = _resolve_claude_dir(config.claude_dir) / "shipper.log"
-
-    # Build environment variables
-    env_dict = ""
-    if config.token:
-        env_dict = f"""    <key>EnvironmentVariables</key>
-    <dict>
-        <key>AGENTS_API_TOKEN</key>
-        <string>{config.token}</string>
-    </dict>"""
+    program_args = "\n".join(f"        <string>{arg}</string>" for arg in args)
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -187,51 +207,50 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     <array>
 {program_args}
     </array>
-{env_dict}
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CLAUDE_CONFIG_DIR</key>
+        <string>{claude_dir}</string>
+        <key>LONGHOUSE_LOG_DIR</key>
+        <string>{log_dir}</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{log_path}</string>
+    <string>{log_dir}/engine.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>{log_path}</string>
+    <string>{log_dir}/engine.stdout.log</string>
     <key>ProcessType</key>
     <string>Background</string>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
 </dict>
 </plist>
 """
 
 
 def _generate_systemd_unit(config: ServiceConfig) -> str:
-    """Generate systemd unit file content for Linux.
+    """Generate systemd unit calling longhouse-engine connect."""
+    engine = get_engine_executable()
+    log_dir = _resolve_log_dir(config)
+    claude_dir = _resolve_claude_dir(config.claude_dir)
 
-    Args:
-        config: Service configuration
-
-    Returns:
-        Systemd unit file content
-    """
-    zerg_cmd = get_zerg_executable()
-
-    # Build command arguments
-    args = ["connect", "--url", config.url]
-    if config.poll_mode:
-        args.extend(["--poll", "--interval", str(config.interval)])
-    if config.claude_dir:
-        args.extend(["--claude-dir", config.claude_dir])
-
-    exec_start = f"{zerg_cmd} {' '.join(args)}"
-
-    # Build environment
-    environment = ""
-    if config.token:
-        environment = f'Environment="AGENTS_API_TOKEN={config.token}"'
-
-    log_path = _resolve_claude_dir(config.claude_dir) / "shipper.log"
+    exec_start = (
+        f"{engine} connect"
+        f" --flush-ms {config.flush_ms}"
+        f" --fallback-scan-secs {config.fallback_scan_secs}"
+        f" --spool-replay-secs {config.spool_replay_secs}"
+        f" --log-dir {log_dir}"
+    )
 
     return f"""[Unit]
-Description=Longhouse Shipper - Claude Code Session Sync
+Description=Longhouse Engine - Session Sync
 After=network-online.target
 Wants=network-online.target
 
@@ -240,11 +259,8 @@ Type=simple
 ExecStart={exec_start}
 Restart=on-failure
 RestartSec=10
-{environment}
-
-# Logging
-StandardOutput=append:{log_path}
-StandardError=append:{log_path}
+Environment="CLAUDE_CONFIG_DIR={claude_dir}"
+Environment="LONGHOUSE_LOG_DIR={log_dir}"
 
 [Install]
 WantedBy=default.target
@@ -255,39 +271,41 @@ def install_service(
     url: str,
     token: str | None = None,
     claude_dir: str | None = None,
-    poll_mode: bool = False,
-    interval: int = 30,
+    flush_ms: int = 500,
+    fallback_scan_secs: int = 300,
+    spool_replay_secs: int = 30,
+    log_dir: str | None = None,
+    # Legacy params accepted but ignored (kept for backwards compat during transition)
+    _poll_mode: bool = False,
+    _interval: int = 30,
 ) -> dict:
-    """Install and start the shipper as a system service.
-
-    Creates the appropriate service definition for the current platform
-    and starts the service.
+    """Install and start longhouse-engine as a system service.
 
     Args:
-        url: Zerg API URL
-        token: API token for authentication
-        claude_dir: Claude config directory (optional)
-        poll_mode: Use polling instead of file watching
-        interval: Polling interval in seconds
+        url: Longhouse API URL (persisted to token file before this is called)
+        token: API token (persisted to token file before this is called)
+        claude_dir: Claude config directory override
+        flush_ms: Milliseconds to flush batched events
+        fallback_scan_secs: Seconds between fallback directory scans
+        spool_replay_secs: Seconds between spool replay attempts
+        log_dir: Override for engine log directory
 
     Returns:
         Dict with success status and message
-
-    Raises:
-        RuntimeError: If platform is unsupported or installation fails
     """
     platform = detect_platform()
     config = ServiceConfig(
         url=url,
         token=token,
         claude_dir=claude_dir,
-        poll_mode=poll_mode,
-        interval=interval,
+        flush_ms=flush_ms,
+        fallback_scan_secs=fallback_scan_secs,
+        spool_replay_secs=spool_replay_secs,
+        log_dir=log_dir,
     )
 
     # Ensure log directory exists
-    log_dir = Path.home() / ".claude"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    _resolve_log_dir(config).mkdir(parents=True, exist_ok=True)
 
     if platform == Platform.MACOS:
         return _install_launchd(config)
@@ -300,27 +318,22 @@ def install_service(
 def _install_launchd(config: ServiceConfig) -> dict:
     """Install launchd service on macOS."""
     plist_path = _get_launchd_plist_path()
-
-    # Ensure LaunchAgents directory exists
     plist_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Stop existing service if running
     if plist_path.exists():
         try:
             subprocess.run(
                 ["launchctl", "unload", str(plist_path)],
                 capture_output=True,
-                check=False,  # Don't fail if not loaded
+                check=False,
             )
         except Exception as e:
             logger.warning(f"Failed to unload existing service: {e}")
 
-    # Write plist
     plist_content = _generate_launchd_plist(config)
     plist_path.write_text(plist_content)
     logger.info(f"Created launchd plist at {plist_path}")
 
-    # Load and start service
     result = subprocess.run(
         ["launchctl", "load", str(plist_path)],
         capture_output=True,
@@ -331,81 +344,67 @@ def _install_launchd(config: ServiceConfig) -> dict:
         error_msg = result.stderr or result.stdout or "Unknown error"
         raise RuntimeError(f"Failed to load launchd service: {error_msg}")
 
+    log_dir = _resolve_log_dir(config)
     return {
         "success": True,
         "platform": "macos",
         "service": LAUNCHD_LABEL,
         "plist_path": str(plist_path),
-        "message": f"Service installed and started. Logs at {_resolve_claude_dir(config.claude_dir) / 'shipper.log'}",
+        "message": f"Engine service installed and started. Logs at {log_dir}/engine.log.*",
     }
 
 
 def _install_systemd(config: ServiceConfig) -> dict:
     """Install systemd user service on Linux."""
     unit_path = _get_systemd_unit_path()
-
-    # Ensure systemd user directory exists
     unit_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Stop existing service if running
     subprocess.run(
         ["systemctl", "--user", "stop", SYSTEMD_UNIT],
         capture_output=True,
-        check=False,  # Don't fail if not running
+        check=False,
     )
 
-    # Write unit file
     unit_content = _generate_systemd_unit(config)
     unit_path.write_text(unit_content)
     logger.info(f"Created systemd unit at {unit_path}")
 
-    # Reload systemd daemon
     subprocess.run(
         ["systemctl", "--user", "daemon-reload"],
         capture_output=True,
         check=True,
     )
 
-    # Enable service (auto-start on boot)
     result = subprocess.run(
         ["systemctl", "--user", "enable", SYSTEMD_UNIT],
         capture_output=True,
         text=True,
     )
-
     if result.returncode != 0:
         error_msg = result.stderr or result.stdout or "Unknown error"
         raise RuntimeError(f"Failed to enable systemd service: {error_msg}")
 
-    # Start service
     result = subprocess.run(
         ["systemctl", "--user", "start", SYSTEMD_UNIT],
         capture_output=True,
         text=True,
     )
-
     if result.returncode != 0:
         error_msg = result.stderr or result.stdout or "Unknown error"
         raise RuntimeError(f"Failed to start systemd service: {error_msg}")
 
+    log_dir = _resolve_log_dir(config)
     return {
         "success": True,
         "platform": "linux",
         "service": SYSTEMD_UNIT,
         "unit_path": str(unit_path),
-        "message": f"Service installed and started. Logs at {_resolve_claude_dir(config.claude_dir) / 'shipper.log'}",
+        "message": f"Engine service installed and started. Logs at {log_dir}/engine.log.*",
     }
 
 
 def uninstall_service() -> dict:
-    """Stop and remove the shipper service.
-
-    Returns:
-        Dict with success status and message
-
-    Raises:
-        RuntimeError: If platform is unsupported or uninstallation fails
-    """
+    """Stop and remove the engine service."""
     platform = detect_platform()
 
     if platform == Platform.MACOS:
@@ -417,87 +416,46 @@ def uninstall_service() -> dict:
 
 
 def _uninstall_launchd() -> dict:
-    """Uninstall launchd service on macOS."""
     plist_path = _get_launchd_plist_path()
 
     if not plist_path.exists():
-        return {
-            "success": True,
-            "platform": "macos",
-            "message": "Service was not installed",
-        }
+        return {"success": True, "platform": "macos", "message": "Service was not installed"}
 
-    # Unload service
     subprocess.run(
         ["launchctl", "unload", str(plist_path)],
         capture_output=True,
         text=True,
     )
 
-    # Remove plist file
     try:
         plist_path.unlink()
     except OSError as e:
         raise RuntimeError(f"Failed to remove plist file: {e}")
 
-    return {
-        "success": True,
-        "platform": "macos",
-        "message": "Service stopped and removed",
-    }
+    return {"success": True, "platform": "macos", "message": "Service stopped and removed"}
 
 
 def _uninstall_systemd() -> dict:
-    """Uninstall systemd user service on Linux."""
     unit_path = _get_systemd_unit_path()
 
     if not unit_path.exists():
-        return {
-            "success": True,
-            "platform": "linux",
-            "message": "Service was not installed",
-        }
+        return {"success": True, "platform": "linux", "message": "Service was not installed"}
 
-    # Stop service
-    subprocess.run(
-        ["systemctl", "--user", "stop", SYSTEMD_UNIT],
-        capture_output=True,
-        check=False,
-    )
+    subprocess.run(["systemctl", "--user", "stop", SYSTEMD_UNIT], capture_output=True, check=False)
+    subprocess.run(["systemctl", "--user", "disable", SYSTEMD_UNIT], capture_output=True, check=False)
 
-    # Disable service
-    subprocess.run(
-        ["systemctl", "--user", "disable", SYSTEMD_UNIT],
-        capture_output=True,
-        check=False,
-    )
-
-    # Remove unit file
     try:
         unit_path.unlink()
     except OSError as e:
         raise RuntimeError(f"Failed to remove unit file: {e}")
 
-    # Reload daemon
-    subprocess.run(
-        ["systemctl", "--user", "daemon-reload"],
-        capture_output=True,
-        check=False,
-    )
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, check=False)
 
-    return {
-        "success": True,
-        "platform": "linux",
-        "message": "Service stopped and removed",
-    }
+    return {"success": True, "platform": "linux", "message": "Service stopped and removed"}
 
 
 def get_service_status() -> ServiceStatus:
-    """Get the current status of the shipper service.
-
-    Returns:
-        "running", "stopped", or "not-installed"
-    """
+    """Get the current status of the engine service."""
     platform = detect_platform()
 
     if platform == Platform.MACOS:
@@ -509,22 +467,12 @@ def get_service_status() -> ServiceStatus:
 
 
 def _get_launchd_status() -> ServiceStatus:
-    """Get launchd service status on macOS.
-
-    Uses `launchctl print gui/<uid>/<label>` for reliable status detection.
-    Falls back to checking if the plist file exists and service is listed.
-    """
     plist_path = _get_launchd_plist_path()
 
     if not plist_path.exists():
         return "not-installed"
 
-    # Get current user's UID for launchctl print command
-    import os
-
     uid = os.getuid()
-
-    # Use launchctl print for more reliable status detection
     result = subprocess.run(
         ["launchctl", "print", f"gui/{uid}/{LAUNCHD_LABEL}"],
         capture_output=True,
@@ -532,18 +480,12 @@ def _get_launchd_status() -> ServiceStatus:
     )
 
     if result.returncode != 0:
-        # Service not loaded in launchd
         return "stopped"
 
-    # Parse output to check if service is actually running
-    # Look for "state = running" or "pid = <number>" in output
     output = result.stdout.lower()
-
-    # Check for running state
     if "state = running" in output:
         return "running"
 
-    # Check for active PID (pid = <number> where number > 0)
     for line in output.split("\n"):
         line = line.strip()
         if line.startswith("pid ="):
@@ -554,44 +496,34 @@ def _get_launchd_status() -> ServiceStatus:
             except (IndexError, ValueError):
                 pass
 
-    # Service is loaded but not running
     return "stopped"
 
 
 def _get_systemd_status() -> ServiceStatus:
-    """Get systemd service status on Linux."""
     unit_path = _get_systemd_unit_path()
 
     if not unit_path.exists():
         return "not-installed"
 
-    # Check if service is running
     result = subprocess.run(
         ["systemctl", "--user", "is-active", SYSTEMD_UNIT],
         capture_output=True,
         text=True,
     )
 
-    status = result.stdout.strip()
-    if status == "active":
-        return "running"
-    else:
-        return "stopped"
+    return "running" if result.stdout.strip() == "active" else "stopped"
 
 
 def get_service_info() -> dict:
-    """Get detailed information about the service.
-
-    Returns:
-        Dict with platform, status, paths, and configuration
-    """
+    """Get detailed information about the engine service."""
     platform = detect_platform()
     status = get_service_status()
+    log_dir = _resolve_claude_dir(None) / "logs"
 
     info = {
         "platform": platform.value,
         "status": status,
-        "log_path": str(_resolve_claude_dir(None) / "shipper.log"),
+        "log_path": str(log_dir / "engine.log.*"),
     }
 
     if platform == Platform.MACOS:

@@ -838,17 +838,14 @@ def _handle_install(
     interval: int,
 ) -> None:
     """Handle --install flag."""
-    typer.echo("Installing shipper service...")
+    typer.echo("Installing engine service...")
     typer.echo(f"  URL: {url}")
-    typer.echo(f"  Mode: {'polling' if poll else 'watch'}")
 
     try:
         result = install_service(
             url=url,
             token=token,
             claude_dir=claude_dir,
-            poll_mode=poll,
-            interval=interval,
         )
         typer.echo("")
         typer.secho(f"[OK] {result['message']}", fg=typer.colors.GREEN)
