@@ -82,7 +82,7 @@ function groupSessionsByDay(sessions: AgentSession[]): Map<string, AgentSession[
   const groups = new Map<string, AgentSession[]>();
 
   for (const session of sessions) {
-    const key = getDateKey(session.started_at);
+    const key = getDateKey(session.last_activity_at || session.started_at);
     const existing = groups.get(key) || [];
     existing.push(session);
     groups.set(key, existing);
@@ -263,7 +263,7 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
             <span className="session-active-indicator">In progress</span>
           )}
         </div>
-        <span className="session-card-time">{formatRelativeTime(session.started_at)}</span>
+        <span className="session-card-time">{formatRelativeTime(session.last_activity_at || session.started_at)}</span>
       </div>
 
       <div className="session-card-body">
@@ -300,6 +300,8 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
               <span className="session-stat">{formatDuration(session.started_at, session.ended_at)}</span>
             </>
           )}
+          <span className="session-stat-separator">&middot;</span>
+          <span className="session-stat session-stat--secondary">Started {formatRelativeTime(session.started_at)}</span>
         </div>
         <div className="session-card-actions">
           {session.provider === "claude" && (
