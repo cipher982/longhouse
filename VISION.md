@@ -627,13 +627,15 @@ The shipper daemon for providers without hook support (Codex, Gemini, Cursor):
 - Falls back to periodic scan to catch missed events/rotations
 - Spools locally when offline, syncs on reconnect
 
-**Current State (as of 2026-02-15):**
+**Current State (as of 2026-02-18):**
 - **Rust engine daemon** (`apps/engine/`) replaces the Python watcher daemon for always-on background shipping. Resource profile: 27 MB RSS idle (vs 835 MB Python), 0% CPU idle, 3 threads, <1s wake-to-ship latency. Uses FSEvents (macOS) / inotify (Linux) via `notify` crate, tokio single-threaded runtime, zstd compression (12x faster than gzip).
 - `longhouse-engine connect --url URL --compression zstd` is the new daemon command. Watches Claude, Codex, and Gemini directories. SQLite state tracking with dual-offset model (queued vs acked) and pointer-based spool for offline resilience.
 - **Python `longhouse connect`** remains for `--install` (hooks, MCP server registration, launchd/systemd setup) and `longhouse auth` (device-token flow). The watch loop is still Python unless users run `longhouse-engine connect`; Rust is available as the replacement daemon.
 - Hook-based push still works: Stop hook ships session on Claude Code response completion; SessionStart hook shows recent sessions.
+- **Hardened (2026-02-18):** Rate-limited warn! via `error_tracker` (warn on first failure and every 100th; recovery log on resume). Daily rolling log files via `tracing-appender` to `~/.claude/logs/`; old logs pruned at startup. Watcher channel bounded (2048 cap, silent drop with counter). `raw_line` capped at 32KB. Spool backpressure enforced (ignored `enqueue()` bool was a bug — now offset only advances on successful enqueue). Offline mode: `ConnectError` sets offline flag, skips parse/compress/ship, runs health-check every 60s, resumes on reconnect. File-state pruning: old entries for gone files purged on startup + daily. Spool: pending entries >7 days marked `dead` (not deleted); hard-delete only for dead entries >30 days. 429 backoff with jitter (±50%) and 30s cap. Launchd plist hardened: `ThrottleInterval=30`, `Nice=10`, `LowPriorityIO`, `HardResourceLimits.NumberOfFiles=4096`, stdout/stderr → `/dev/null`; `--token` arg removed (token read from `~/.claude/longhouse-device-token`).
+- **Heartbeat:** Engine POSTs to `POST /api/agents/heartbeat` every 5 minutes with version, PID, spool_pending, parse_error_count_1h, consecutive_failures, disk_free_bytes, is_offline. Also writes `~/.claude/engine-status.json` for local debugging. Server: `AgentHeartbeat` model + ingest endpoint (30-day history per device). Stale agent detection job (`check_stale_agents`) runs hourly and emits a Longhouse `failure` insight when a device hasn't checked in for >30 minutes.
 
-**Testing:** Shipper smoke test (`make test-shipper-smoke`) validates the end-to-end ingest path: file parse → API post → session appears in timeline. Rust engine: 26 unit tests covering parser, compressor, state, spool, discovery.
+**Testing:** Shipper smoke test (`make test-shipper-smoke`) validates the end-to-end ingest path: file parse → API post → session appears in timeline. Rust engine: 45+ unit tests covering parser, compressor, state, spool, discovery, watcher, file_state, client (jitter), heartbeat, shipper (backpressure). Python: heartbeat endpoint tests + stale agent job tests in `tests_lite/`.
 
 **Magic moment:** user types in Claude Code -> hook fires on stop -> session appears in Longhouse before they switch tabs.
 
@@ -648,9 +650,10 @@ The shipper-to-Longhouse ingest must be robust:
 - Gzip compress payload
 - Single HTTP POST per batch
 
-**Current State (as of 2026-02-15):**
-- Rust engine streams JSON directly into compressor (gzip or zstd) — full JSON never materialized in memory. Posts per parsed file chunk.
+**Current State (as of 2026-02-18):**
+- Rust engine streams JSON directly into compressor (gzip or zstd) — full JSON never materialized in memory. Posts per parsed file chunk. `raw_line` capped at 32KB to prevent single-line bloat.
 - Offline spool replay relies on DB dedupe (`source_path`, `source_offset`, `event_hash`) rather than explicit idempotency headers.
+- Offline mode active: when `ConnectError` is detected, engine skips all parse/compress/ship and runs a connectivity health-check every 60s instead of hammering a downed server.
 
 **Offline resilience target:**
 - Local SQLite spool when Longhouse unreachable
