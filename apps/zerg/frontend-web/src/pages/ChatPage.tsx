@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import clsx from "clsx";
 import { useShelf } from "../lib/useShelfState";
+import { Button, EmptyState, Spinner } from "../components/ui";
 import { SettingsIcon, SidebarIcon } from "../components/icons";
 import FicheSettingsDrawer from "../components/fiche-settings/FicheSettingsDrawer";
 import { ChatThreadList } from "../components/chat/ChatThreadList";
@@ -254,7 +255,16 @@ export default function ChatPage() {
   }, [fiche]);
 
   if (ficheId == null) {
-    return <div>Missing fiche context.</div>;
+    return (
+      <div className="chat-view-container" data-testid="chat-page">
+        <EmptyState
+          variant="error"
+          title="Missing fiche context"
+          description="Navigate to a fiche from the dashboard to start chatting."
+          action={<Button variant="primary" onClick={() => navigate("/dashboard")}>Go to Dashboard</Button>}
+        />
+      </div>
+    );
   }
 
   const handleCreateThread = async () => {
@@ -273,11 +283,28 @@ export default function ChatPage() {
   };
 
   if (isLoading) {
-    return <div>Loading chat…</div>;
+    return (
+      <div className="chat-view-container" data-testid="chat-page">
+        <EmptyState
+          icon={<Spinner size="lg" />}
+          title="Loading chat..."
+          description="Fetching your conversation."
+        />
+      </div>
+    );
   }
 
   if (hasError) {
-    return <div>Unable to load chat view.</div>;
+    return (
+      <div className="chat-view-container" data-testid="chat-page">
+        <EmptyState
+          variant="error"
+          title="Unable to load chat"
+          description="Something went wrong loading the conversation."
+          action={<Button variant="primary" onClick={() => navigate("/dashboard")}>Back to Dashboard</Button>}
+        />
+      </div>
+    );
   }
 
   return (
