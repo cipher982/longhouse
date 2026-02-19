@@ -214,6 +214,7 @@ class SessionResponse(BaseModel):
     user_messages: int = Field(..., description="User message count")
     assistant_messages: int = Field(..., description="Assistant message count")
     tool_calls: int = Field(..., description="Tool call count")
+    last_activity_at: Optional[datetime] = Field(None, description="Most recent event timestamp")
     summary: Optional[str] = Field(None, description="Session summary")
     summary_title: Optional[str] = Field(None, description="Short session title")
     match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
@@ -1557,31 +1558,42 @@ async def list_sessions(
             offset=offset,
         )
 
-        match_map = store.get_session_matches([s.id for s in sessions], query) if query else {}
+        session_ids = [s.id for s in sessions]
+        match_map = store.get_session_matches(session_ids, query) if query else {}
+        activity_map = store.get_last_activity_map(session_ids)
+
+        response_sessions = [
+            SessionResponse(
+                id=str(s.id),
+                provider=s.provider,
+                project=s.project,
+                device_id=s.device_id,
+                cwd=s.cwd,
+                git_repo=s.git_repo,
+                git_branch=s.git_branch,
+                started_at=s.started_at,
+                ended_at=s.ended_at,
+                last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
+                user_messages=s.user_messages or 0,
+                assistant_messages=s.assistant_messages or 0,
+                tool_calls=s.tool_calls or 0,
+                summary=s.summary,
+                summary_title=s.summary_title,
+                match_event_id=(match_map.get(s.id) or {}).get("event_id"),
+                match_snippet=(match_map.get(s.id) or {}).get("snippet"),
+                match_role=(match_map.get(s.id) or {}).get("role"),
+            )
+            for s in sessions
+        ]
+
+        # Sort by last activity (most recent first) instead of started_at
+        response_sessions.sort(
+            key=lambda r: r.last_activity_at or r.started_at,
+            reverse=True,
+        )
 
         return SessionsListResponse(
-            sessions=[
-                SessionResponse(
-                    id=str(s.id),
-                    provider=s.provider,
-                    project=s.project,
-                    device_id=s.device_id,
-                    cwd=s.cwd,
-                    git_repo=s.git_repo,
-                    git_branch=s.git_branch,
-                    started_at=s.started_at,
-                    ended_at=s.ended_at,
-                    user_messages=s.user_messages or 0,
-                    assistant_messages=s.assistant_messages or 0,
-                    tool_calls=s.tool_calls or 0,
-                    summary=s.summary,
-                    summary_title=s.summary_title,
-                    match_event_id=(match_map.get(s.id) or {}).get("event_id"),
-                    match_snippet=(match_map.get(s.id) or {}).get("snippet"),
-                    match_role=(match_map.get(s.id) or {}).get("role"),
-                )
-                for s in sessions
-            ],
+            sessions=response_sessions,
             total=total,
         )
 

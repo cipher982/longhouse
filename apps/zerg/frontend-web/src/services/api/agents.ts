@@ -22,6 +22,7 @@ export interface AgentSession {
   git_branch: string | null;
   started_at: string;
   ended_at: string | null;
+  last_activity_at: string | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;

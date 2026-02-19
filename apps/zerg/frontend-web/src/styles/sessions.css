@@ -388,6 +388,10 @@
     color: var(--color-text-secondary);
   }
 
+  .session-stat--secondary {
+    color: var(--color-text-muted);
+  }
+
   .session-stat-separator {
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
