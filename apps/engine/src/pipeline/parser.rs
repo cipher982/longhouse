@@ -259,7 +259,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         let obj: RawLine = match serde_json::from_slice(trimmed) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!(offset = line_offset, error = %e, "Failed to parse JSON line");
+                tracing::debug!(offset = line_offset, error = %e, "Failed to parse JSON line");
                 // Still advance — the line is complete, just malformed
                 last_good_offset = after_line;
                 continue;
@@ -344,7 +344,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
         let obj: RawLine = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!(offset = line_offset, error = %e, "Failed to parse JSON line");
+                tracing::debug!(offset = line_offset, error = %e, "Failed to parse JSON line");
                 continue;
             }
         };
