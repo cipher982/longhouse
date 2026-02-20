@@ -37,6 +37,7 @@ export interface AgentSession {
 export interface AgentSessionsListResponse {
   sessions: AgentSession[];
   total: number;
+  has_real_sessions: boolean;
 }
 
 export interface AgentSessionSummary {
@@ -287,6 +288,7 @@ export interface SemanticSearchFilters {
 export interface SemanticSearchResponse {
   sessions: AgentSession[];
   total: number;
+  has_real_sessions: boolean;
 }
 
 export interface RecallMatch {

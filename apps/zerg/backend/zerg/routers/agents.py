@@ -253,6 +253,10 @@ class SessionsListResponse(BaseModel):
 
     sessions: List[SessionResponse]
     total: int
+    has_real_sessions: bool = Field(
+        True,
+        description="True if any non-demo sessions exist (device_id != 'demo-mac'). " "False means only demo-seeded data is present.",
+    )
 
 
 class SessionPreviewMessage(UTCBaseModel):
@@ -1383,6 +1387,7 @@ class SemanticSearchResponse(BaseModel):
 
     sessions: List[SessionResponse]
     total: int
+    has_real_sessions: bool = True
 
 
 class RecallMatch(BaseModel):
@@ -1637,9 +1642,27 @@ async def list_sessions(
             reverse=True,
         )
 
+        # Detect demo-only state: a real session is one with device_id != 'demo-mac' (or NULL).
+        # If no sessions exist at all, default to True so no banner is shown.
+        from sqlalchemy import or_
+
+        has_real = total == 0 or (
+            db.query(AgentSession.id)
+            .filter(
+                or_(
+                    AgentSession.device_id != "demo-mac",
+                    AgentSession.device_id.is_(None),
+                )
+            )
+            .limit(1)
+            .first()
+            is not None
+        )
+
         return SessionsListResponse(
             sessions=response_sessions,
             total=total,
+            has_real_sessions=has_real,
         )
 
     except Exception:

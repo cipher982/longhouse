@@ -16,6 +16,16 @@
   }
 
   /* LLM hint banner */
+  .sessions-demo-banner {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    background: color-mix(in srgb, var(--color-brand-primary) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
+    border-radius: var(--radius-sm, 4px);
+    margin-bottom: var(--space-2);
+  }
+
   .sessions-llm-hint {
     font-size: 13px;
     color: var(--text-secondary);
