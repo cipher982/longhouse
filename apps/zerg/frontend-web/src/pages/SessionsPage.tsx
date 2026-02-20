@@ -468,6 +468,7 @@ export default function SessionsPage() {
 
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;
+  const hasRealSessions = data?.has_real_sessions ?? true;
   const hasMore = !useSemanticQuery && sessions.length < total;
 
   // Group sessions by day
@@ -624,6 +625,15 @@ export default function SessionsPage() {
           title="Timeline"
           actions={total > 0 ? <span className="sessions-header-count">{total} sessions</span> : undefined}
         />
+
+        {!hasRealSessions && sessions.length > 0 && !hasFilters && (
+          <div className="sessions-demo-banner">
+            <span>These are demo sessions.</span>{" "}
+            <span>
+              Start Claude Code, Codex, or Gemini — your real sessions will appear here automatically.
+            </span>
+          </div>
+        )}
 
         {!config.llmAvailable && sessions.length > 0 && (
           <div className="sessions-llm-hint">
