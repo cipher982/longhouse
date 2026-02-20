@@ -427,6 +427,9 @@ export default function SessionDetailPage() {
         last_assistant_message: null,
         message_count: session.user_messages + session.assistant_messages,
         tool_calls: session.tool_calls,
+        presence_state: null,
+        presence_tool: null,
+        presence_updated_at: null,
       }
     : null;
 

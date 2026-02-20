@@ -32,7 +32,7 @@ export function useActiveSessions(options: UseActiveSessionsOptions = {}) {
     attention,
     status,
     limit = 50,
-    pollInterval = 10000,
+    pollInterval = 2000,
     enabled = true,
     days_back,
   } = options;

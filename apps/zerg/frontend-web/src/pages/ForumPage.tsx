@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../components/ui";
+import { PresenceBadge, PresenceHero } from "../components/PresenceBadge";
 import { SessionChat } from "../components/SessionChat";
 import { ForumCanvas } from "../forum/ForumCanvas";
 import { useActiveSessions } from "../hooks/useActiveSessions";
@@ -39,7 +40,7 @@ export default function ForumPage() {
   const [chatMode, setChatMode] = useState(false);
 
   const { data: sessionsData, isLoading: sessionsLoading } = useActiveSessions({
-    pollInterval: 5000,
+    pollInterval: 2000,
     limit: 50,
     days_back: 7,
   });
@@ -140,6 +141,12 @@ export default function ForumPage() {
                     {getSessionRoomLabel(session)} | {session.provider} |{" "}
                     {formatRelativeTime(session.last_activity_at)}
                   </div>
+                  <div style={{ marginTop: 4 }}>
+                    <PresenceBadge
+                      state={session.presence_state}
+                      tool={session.presence_tool}
+                    />
+                  </div>
                 </button>
               ))
             )}
@@ -181,6 +188,10 @@ export default function ForumPage() {
               <div className="forum-selection">
                 {selectedSession ? (
                   <>
+                    <PresenceHero
+                      state={selectedSession.presence_state}
+                      tool={selectedSession.presence_tool}
+                    />
                     <div className="forum-selection-title">
                       {getSessionDisplayTitle(selectedSession)}
                     </div>

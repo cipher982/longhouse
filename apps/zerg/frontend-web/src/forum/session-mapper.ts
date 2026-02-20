@@ -172,17 +172,29 @@ export function mapSessionsToEntities(
       const subtitleParts = [session.provider, session.git_branch].filter(Boolean) as string[];
       const subtitle = subtitleParts.join(" | ");
 
+      // Map real presence state to canvas entity status
+      let entityStatus: ForumEntity["status"] = "idle";
+      if (session.ended_at) {
+        entityStatus = "disabled";
+      } else if (session.presence_state === "running") {
+        entityStatus = "working";
+      } else if (session.presence_state === "thinking") {
+        entityStatus = "moving"; // visual: in-motion/active
+      }
+
       entities.set(session.id, {
         id: session.id,
         type: "commis",
         roomId: room.id,
         position,
-        status: session.ended_at ? "disabled" : "idle",
+        status: entityStatus,
         label,
         meta: {
           provider: session.provider,
           room: room.name,
           subtitle: subtitle || undefined,
+          presence_state: session.presence_state,
+          presence_tool: session.presence_tool,
         },
       });
     });

@@ -73,6 +73,8 @@ export interface AgentSessionPreview {
 export type AgentSessionStatus = "working" | "thinking" | "idle" | "completed" | "active";
 export type AgentAttentionLevel = "hard" | "needs" | "soft" | "auto";
 
+export type PresenceState = "thinking" | "running" | "idle";
+
 export interface AgentActiveSession {
   id: string;
   project: string | null;
@@ -90,6 +92,10 @@ export interface AgentActiveSession {
   last_assistant_message: string | null;
   message_count: number;
   tool_calls: number;
+  // Real-time presence (null when no hook signal received yet)
+  presence_state: PresenceState | null;
+  presence_tool: string | null;
+  presence_updated_at: string | null;
 }
 
 export interface AgentActiveSessionsResponse {
