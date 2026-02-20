@@ -283,6 +283,31 @@
     padding: var(--space-8);
   }
 
+  .secrets-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+  }
+
+  .secrets-skeleton__row {
+    height: 40px;
+    border-radius: var(--radius-sm, 4px);
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--text-primary) 6%, transparent) 25%,
+      color-mix(in srgb, var(--text-primary) 10%, transparent) 50%,
+      color-mix(in srgb, var(--text-primary) 6%, transparent) 75%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s ease infinite;
+  }
+
+  @keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
   .delete-confirm {
     display: flex;
     align-items: center;

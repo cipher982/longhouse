@@ -32,6 +32,7 @@ function SecretForm({
   initialKey,
   initialDescription,
   isPrefill,
+  fieldInfo,
   onSubmit,
   onCancel,
   isPending,
@@ -39,6 +40,7 @@ function SecretForm({
   initialKey?: string;
   initialDescription?: string;
   isPrefill?: boolean;
+  fieldInfo?: import("../services/api/jobSecrets").SecretFieldInfo | null;
   onSubmit: (key: string, value: string, description: string) => void;
   onCancel: () => void;
   isPending: boolean;
@@ -47,6 +49,10 @@ function SecretForm({
   const [key, setKey] = useState(initialKey ?? "");
   const [value, setValue] = useState("");
   const [description, setDescription] = useState(initialDescription ?? "");
+
+  const valueInputType = fieldInfo?.type === "text" || fieldInfo?.type === "url" ? fieldInfo.type : "password";
+  const valuePlaceholder = (fieldInfo?.placeholder) || "Enter secret value";
+  const valueHint = (fieldInfo?.description) || "Encrypted at rest. Never displayed after saving.";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,13 +90,13 @@ function SecretForm({
           <label htmlFor="secret-value">{isEdit ? "New Value" : "Value"}</label>
           <Input
             id="secret-value"
-            type="password"
+            type={valueInputType}
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            placeholder="Enter secret value"
+            placeholder={valuePlaceholder}
             autoFocus={isEdit}
           />
-          <small>Encrypted at rest. Never displayed after saving.</small>
+          <small>{valueHint}</small>
         </div>
         <div className="form-group">
           <label htmlFor="secret-desc">Description <span className="text-muted">(optional)</span></label>
@@ -288,6 +294,7 @@ export default function JobSecretsPage() {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [prefillKey, setPrefillKey] = useState<string | null>(null);
+  const [prefillField, setPrefillField] = useState<import("../services/api/jobSecrets").SecretFieldInfo | null>(null);
 
   const handleAdd = (key: string, value: string, description: string) => {
     upsertMutation.mutate(
@@ -308,12 +315,17 @@ export default function JobSecretsPage() {
   };
 
   const handleConfigureSecret = (key: string) => {
+    // Find matching SecretFieldInfo from any job for richer form UX
+    const allFields = (jobs ?? []).flatMap((j) => j.secrets ?? []);
+    const field = allFields.find((f) => f.key === key) ?? null;
+
     // If the secret already exists, edit it. Otherwise, add it with key pre-filled.
     const exists = secrets?.some((s) => s.key === key);
     if (exists) {
       setEditingKey(key);
     } else {
       setPrefillKey(key);
+      setPrefillField(field);
       setShowAddForm(true);
     }
     // Scroll to secrets section
@@ -349,16 +361,19 @@ export default function JobSecretsPage() {
                 <SecretForm
                   initialKey={prefillKey ?? undefined}
                   isPrefill={!!prefillKey}
+                  fieldInfo={prefillField}
                   onSubmit={handleAdd}
-                  onCancel={() => { setShowAddForm(false); setPrefillKey(null); }}
+                  onCancel={() => { setShowAddForm(false); setPrefillKey(null); setPrefillField(null); }}
                   isPending={upsertMutation.isPending}
                 />
               </div>
             )}
 
             {secretsLoading ? (
-              <div className="secrets-loading">
-                <Spinner size="md" />
+              <div className="secrets-skeleton">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="secrets-skeleton__row" />
+                ))}
               </div>
             ) : secretsError ? (
               <EmptyState
