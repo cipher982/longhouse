@@ -21,6 +21,12 @@ export interface PresenceBadgeProps {
    * shows that this session is considered working by the status heuristic.
    */
   heuristicActive?: boolean;
+  /**
+   * showUnknown=true — when state is null and heuristicActive is false,
+   * show a dim gray dot with label "Unknown" instead of rendering nothing.
+   * Use this for active sessions that have never emitted a presence signal.
+   */
+  showUnknown?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,14 +169,52 @@ function TypingDots() {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function PresenceBadge({ state, tool, compact = false, className, heuristicActive = false }: PresenceBadgeProps) {
+export function PresenceBadge({ state, tool, compact = false, className, heuristicActive = false, showUnknown = false }: PresenceBadgeProps) {
   useEffect(() => {
     ensureStyles();
   }, []);
 
-  // null/no signal — fall back to heuristic active indicator if requested
+  // null/no signal — fall back to heuristic active or unknown indicator
   if (state === null || state === undefined) {
-    if (!heuristicActive) return null;
+    if (!heuristicActive) {
+      if (!showUnknown) return null;
+
+      // Unknown state: dim gray dot — session appears active but has never emitted signals
+      const unknownDotStyle: React.CSSProperties = {
+        display: "inline-block",
+        width: compact ? 8 : 10,
+        height: compact ? 8 : 10,
+        borderRadius: "50%",
+        flexShrink: 0,
+        background: "var(--text-tertiary, #6b7280)",
+        opacity: 0.5,
+      };
+
+      if (compact) {
+        return (
+          <span className={className} title="Unknown" style={{ display: "inline-flex", alignItems: "center" }}>
+            <span style={unknownDotStyle} />
+          </span>
+        );
+      }
+
+      return (
+        <span
+          className={className}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 12,
+            fontFamily: "var(--font-mono, 'JetBrains Mono', 'Fira Code', monospace)",
+            userSelect: "none",
+          }}
+        >
+          <span style={unknownDotStyle} />
+          <span style={{ color: "var(--text-tertiary, #6b7280)", fontWeight: 400 }}>Unknown</span>
+        </span>
+      );
+    }
 
     // Dim pulsing green dot — weaker signal than real presence
     const heuristicDotStyle: React.CSSProperties = {
