@@ -1932,6 +1932,30 @@ async def seed_demo_sessions(
     return DemoSeedResponse(seeded=True, sessions_created=len(sessions))
 
 
+@router.delete("/demo", response_model=DemoSeedResponse)
+async def reset_demo_sessions(
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> DemoSeedResponse:
+    """Delete all demo-seeded sessions (device_id='demo-mac').
+
+    Only available when AUTH_DISABLED=1. Used by the zerg-ui skill to set up
+    a clean empty state before screenshot capture (SCENE=empty).
+    """
+    _settings = get_settings()
+    if not _settings.auth_disabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo reset only available in dev mode (AUTH_DISABLED=1)",
+        )
+
+    deleted = db.query(AgentSession).filter(AgentSession.device_id == "demo-mac").delete(synchronize_session=False)
+    db.commit()
+
+    return DemoSeedResponse(seeded=True, sessions_created=deleted)
+
+
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: UUID,
