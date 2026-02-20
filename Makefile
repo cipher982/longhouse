@@ -685,6 +685,9 @@ verify-prod: ## Full prod validation: API + browser tests (~80s, requires SMOKE_
 	@./scripts/check-cp-credentials.sh
 	@echo "✅ Production verified"
 
+qa-live: ## Run live QA against production instance (david010.longhouse.ai, ~60s)
+	@./scripts/qa-live.sh
+
 test-ci: ## @internal CI-ready tests (unit + build + contracts)
 	@./scripts/run-ci-tests.sh
 
