@@ -413,24 +413,6 @@
     gap: var(--space-2);
   }
 
-  .session-card-resume-hint {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--color-brand-accent);
-    opacity: 0.5;
-    transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  /* On hover-capable devices, hide by default and reveal on hover */
-  @media (hover: hover) {
-    .session-card-resume-hint {
-      opacity: 0;
-    }
-    .session-card:hover .session-card-resume-hint {
-      opacity: 1;
-    }
-  }
 
   .session-card-arrow {
     color: var(--color-text-muted);
