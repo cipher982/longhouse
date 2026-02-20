@@ -1783,7 +1783,14 @@ async def list_active_sessions(
                 last_activity_at = now
 
             presence = presence_map.get(str(s.id))
-            presence_fresh = presence is not None and (now - presence.updated_at) < presence_stale_threshold
+            if presence is not None:
+                # updated_at may be naive (SQLite + func.now()) — normalize to UTC
+                updated_at = presence.updated_at
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+                presence_fresh = (now - updated_at) < presence_stale_threshold
+            else:
+                presence_fresh = False
 
             if s.ended_at:
                 derived_status = "completed"
