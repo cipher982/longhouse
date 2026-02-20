@@ -209,6 +209,19 @@
     color: rgba(134, 198, 155, 0.8);
   }
 
+  /* ── Active session snippet ─────────────────────────────────────────── */
+  .forum-session-snippet {
+    font-size: 0.68rem;
+    font-family: var(--font-mono, "Menlo", "Monaco", "Courier New", monospace);
+    font-style: italic;
+    color: rgba(134, 198, 155, 0.55);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-left: 2px;
+    line-height: 1.4;
+  }
+
   /* ── Active header count ────────────────────────────────────────────── */
   .forum-active-count {
     display: inline-flex;
@@ -376,6 +389,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    flex: 1;
   }
 
   .forum-selection-title {
@@ -399,6 +413,31 @@
     color: rgba(138, 122, 100, 0.7);
     font-size: var(--font-size-sm);
     line-height: 1.5;
+  }
+
+  .forum-selection-empty--prompt {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: var(--space-2);
+    text-align: center;
+    padding: var(--space-6) var(--space-4);
+    color: rgba(181, 164, 142, 0.75);
+    font-size: var(--font-size-md);
+    line-height: 1.7;
+  }
+
+  .forum-selection-empty-line {
+    display: block;
+  }
+
+  .forum-selection-empty-line--action {
+    color: rgba(201, 166, 107, 0.85);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.02em;
+    margin-top: var(--space-1);
   }
 
 
