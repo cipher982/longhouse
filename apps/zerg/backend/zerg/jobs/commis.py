@@ -126,6 +126,40 @@ async def enqueue_missed_runs(now: datetime | None = None) -> None:
                 logger.info(f"Backfilled 1 run for {job.id} (scheduled: {most_recent})")
 
 
+def _has_missing_required_secrets(job_id: str) -> bool:
+    """Return True if required secrets are missing, skipping enqueue to reduce noise.
+
+    Uses owner_id=1 (single-tenant default). Checks DB first, then env var fallback.
+    """
+    import os
+
+    from zerg.database import get_session_factory
+    from zerg.jobs.registry import _normalize_secret_fields
+    from zerg.models.work import JobSecret
+
+    config = job_registry.get(job_id)
+    if not config:
+        return False
+
+    normalized = _normalize_secret_fields(config.secrets)
+    required_keys = [sf["key"] for sf in normalized if sf.get("required", True)]
+    if not required_keys:
+        return False
+
+    factory = get_session_factory()
+    db = factory()
+    try:
+        db_keys = {row.key for row in db.query(JobSecret.key).filter(JobSecret.owner_id == 1, JobSecret.key.in_(required_keys)).all()}
+    finally:
+        db.close()
+
+    missing = [k for k in required_keys if k not in db_keys and not os.environ.get(k)]
+    if missing:
+        logger.warning("Skipping enqueue for %s: missing required secrets %s", job_id, missing)
+        return True
+    return False
+
+
 async def enqueue_scheduled_run(job_id: str, scheduled_at: datetime | None = None) -> None:
     """Enqueue a scheduled job run.
 
@@ -135,6 +169,9 @@ async def enqueue_scheduled_run(job_id: str, scheduled_at: datetime | None = Non
     job = job_registry.get(job_id)
     if not job:
         logger.error(f"enqueue_scheduled_run: unknown job {job_id}")
+        return
+
+    if _has_missing_required_secrets(job_id):
         return
 
     now = datetime.now(UTC)
