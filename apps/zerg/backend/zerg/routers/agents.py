@@ -53,6 +53,7 @@ from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPresence
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
@@ -287,6 +288,10 @@ class ActiveSessionResponse(UTCBaseModel):
     last_assistant_message: Optional[str] = Field(None, description="Last assistant message (truncated)")
     message_count: int = Field(..., description="Total user + assistant messages")
     tool_calls: int = Field(..., description="Tool call count")
+    # Real-time presence fields (populated when hook signals are available)
+    presence_state: Optional[str] = Field(None, description="Real-time state: thinking|running|idle")
+    presence_tool: Optional[str] = Field(None, description="Tool currently executing (when state=running)")
+    presence_updated_at: Optional[datetime] = Field(None, description="When presence was last signalled")
 
 
 class ActiveSessionsResponse(UTCBaseModel):
@@ -1708,6 +1713,11 @@ async def list_active_sessions(
         last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
 
+        # Load real-time presence signals (one row per session, may be absent)
+        presence_rows = (db.query(SessionPresence).filter(SessionPresence.session_id.in_(session_ids)).all()) if session_ids else []
+        presence_map = {p.session_id: p for p in presence_rows}
+        presence_stale_threshold = timedelta(minutes=10)
+
         now = datetime.now(timezone.utc)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
@@ -1715,8 +1725,14 @@ async def list_active_sessions(
             if not last_activity_at:
                 last_activity_at = now
 
+            presence = presence_map.get(str(s.id))
+            presence_fresh = presence is not None and (now - presence.updated_at) < presence_stale_threshold
+
             if s.ended_at:
                 derived_status = "completed"
+            elif presence_fresh:
+                # Map presence state to legacy status field for backwards compat
+                derived_status = "working" if presence.state in ("thinking", "running") else "idle"
             else:
                 idle_for = now - last_activity_at
                 derived_status = "working" if idle_for <= timedelta(minutes=5) else "idle"
@@ -1749,6 +1765,9 @@ async def list_active_sessions(
                     last_assistant_message=last_ai.get(s.id),
                     message_count=message_count,
                     tool_calls=s.tool_calls or 0,
+                    presence_state=presence.state if presence_fresh else None,
+                    presence_tool=presence.tool_name if presence_fresh else None,
+                    presence_updated_at=presence.updated_at if presence_fresh else None,
                 )
             )
 

@@ -51,6 +51,43 @@ fi
 exec __ENGINE_PATH__ ship --file "$TRANSCRIPT" --quiet 2>/dev/null
 """
 
+PRESENCE_HOOK_SCRIPT = """\
+#!/bin/bash
+# Longhouse presence hook — emits real-time session state on each lifecycle event
+# Installed by: longhouse connect --install
+# Registered on: UserPromptSubmit, PreToolUse, PostToolUse, Stop
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // empty')
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
+TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
+
+[ -z "$SESSION_ID" ] && exit 0
+
+# Map event → presence state
+case "$EVENT" in
+  UserPromptSubmit) STATE="thinking" ;;
+  PreToolUse)       STATE="running" ;;
+  PostToolUse|PostToolUseFailure) STATE="thinking" ;;
+  Stop)             STATE="idle" ;;
+  *) exit 0 ;;
+esac
+
+TOKEN_FILE="$HOME/.claude/longhouse-device-token"
+URL_FILE="$HOME/.claude/longhouse-url"
+[ ! -f "$TOKEN_FILE" ] || [ ! -f "$URL_FILE" ] && exit 0
+TOKEN=$(cat "$TOKEN_FILE" | tr -d '[:space:]')
+URL=$(cat "$URL_FILE" | tr -d '[:space:]')
+[ -z "$TOKEN" ] || [ -z "$URL" ] && exit 0
+
+curl -sf -X POST --max-time 2 \\
+  -H "X-Agents-Token: $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d "{\\"session_id\\":\\"$SESSION_ID\\",\\"state\\":\\"$STATE\\",\\"tool_name\\":\\"$TOOL\\",\\"cwd\\":\\"$CWD\\"}" \\
+  "${URL}/api/agents/presence" 2>/dev/null
+exit 0
+"""
+
 SESSION_START_HOOK_SCRIPT = """\
 #!/bin/bash
 # Longhouse SessionStart hook — shows recent sessions on new session
@@ -93,23 +130,17 @@ exit 0
 _HOOK_MARKER = "longhouse-"
 
 
-def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
-    """Build hook entry dicts with resolved script paths.
-
-    Using absolute paths ensures consistency when ``--claude-dir`` overrides
-    the default ``~/.claude`` location.
-    """
+def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict, dict]:
+    """Build hook entry dicts with resolved script paths."""
     ship_path = str(hooks_dir / "longhouse-ship.sh")
     session_start_path = str(hooks_dir / "longhouse-session-start.sh")
+    presence_path = str(hooks_dir / "longhouse-presence.sh")
 
+    # Stop: ship transcript AND signal presence=idle, both async
     stop_entry = {
         "hooks": [
-            {
-                "type": "command",
-                "command": ship_path,
-                "async": True,
-                "timeout": 30,
-            }
+            {"type": "command", "command": ship_path, "async": True, "timeout": 30},
+            {"type": "command", "command": presence_path, "async": True, "timeout": 5},
         ],
     }
     session_start_entry = {
@@ -122,7 +153,18 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
             }
         ],
     }
-    return stop_entry, session_start_entry
+    # Presence-only entry for non-Stop events (ship is not needed there)
+    presence_entry = {
+        "hooks": [
+            {
+                "type": "command",
+                "command": presence_path,
+                "async": True,
+                "timeout": 5,
+            }
+        ],
+    }
+    return stop_entry, session_start_entry, presence_entry
 
 
 # ---------------------------------------------------------------------------
@@ -280,16 +322,25 @@ def install_hooks(
         "$HOME/.claude/",
         f"{resolved_dir}/",
     )
+    presence_script_content = PRESENCE_HOOK_SCRIPT.replace(
+        "$HOME/.claude/",
+        f"{resolved_dir}/",
+    )
 
     ship_script = hooks_dir / "longhouse-ship.sh"
     ship_script.write_text(ship_script_content)
-    ship_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 0o755
+    ship_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
     actions.append(f"Wrote {ship_script}")
 
     session_start_script = hooks_dir / "longhouse-session-start.sh"
     session_start_script.write_text(session_start_script_content)
-    session_start_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 0o755
+    session_start_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
     actions.append(f"Wrote {session_start_script}")
+
+    presence_script = hooks_dir / "longhouse-presence.sh"
+    presence_script.write_text(presence_script_content)
+    presence_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    actions.append(f"Wrote {presence_script}")
 
     # ------------------------------------------------------------------
     # 3. Read existing settings
@@ -299,22 +350,29 @@ def install_hooks(
     # ------------------------------------------------------------------
     # 4. Merge hook entries (using resolved absolute paths)
     # ------------------------------------------------------------------
-    stop_entry, session_start_entry = _make_hook_entries(hooks_dir)
+    stop_entry, session_start_entry, presence_entry = _make_hook_entries(hooks_dir)
     hooks_obj = settings.setdefault("hooks", {})
 
-    # Stop hook
+    # Stop hook (ships transcript)
     stop_list = hooks_obj.get("Stop", [])
     hooks_obj["Stop"] = _merge_hooks_for_event(stop_list, stop_entry)
 
-    # SessionStart hook
+    # SessionStart hook (shows recent sessions)
     session_start_list = hooks_obj.get("SessionStart", [])
     hooks_obj["SessionStart"] = _merge_hooks_for_event(session_start_list, session_start_entry)
+
+    # Presence-only hooks on the non-Stop events (Stop already has presence via stop_entry)
+    for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse"):
+        raw = hooks_obj.get(event, [])
+        # Normalize: older Claude Code versions or manual edits may store a dict instead of list
+        event_list = raw if isinstance(raw, list) else []
+        hooks_obj[event] = _merge_hooks_for_event(event_list, presence_entry)
 
     # ------------------------------------------------------------------
     # 5. Write settings back
     # ------------------------------------------------------------------
     _write_settings(settings_path, settings)
-    actions.append(f"Updated {settings_path} with Stop and SessionStart hooks")
+    actions.append(f"Updated {settings_path} with Stop, SessionStart, and presence hooks")
 
     logger.info("Installed Longhouse hooks in %s", config_dir)
     return actions
