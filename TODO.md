@@ -67,7 +67,7 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 ### Not Started
 | Section | Status | Notes |
 |---------|--------|-------|
-| Forum Discovery UX | 0% | No presence events, no bucket UI |
+| Forum Discovery UX | 40% | Presence events + storage + UI done; bucket actions (Park/Snooze/Archive) and extended state model not started |
 
 > Changelogs archived. See git log for session details.
 
@@ -81,7 +81,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 4. ~~**Semantic Search / Recall UI**~~ — ✅ Done. Semantic toggle on Timeline, hooks + API functions, Codex-reviewed.
 5. ~~**Seed david010 job secrets**~~ — ✅ Done. 4 secrets seeded via PUT API (LLM_BENCH_MONGODB_URI, LIFE_HUB_DB_URL, LIFE_HUB_API_KEY, GITHUB_TOKEN).
 6. ~~**Pre-flight Job Validation Phase 3**~~ — ✅ Done. error_type tracking through full pipeline + frontend badges, Codex-reviewed.
-7. **Forum Discovery UX** — Explicit presence signals for sessions. 0% done, large scope. [Details](#product-forum-discovery-ux--explicit-presence-signals-7)
+7. **Forum Discovery UX** — Presence signals wired (thinking/running/idle), Forum UI shows live state. Remaining: bucket actions (Park/Snooze/Archive), extended state model. [Details](#product-forum-discovery-ux--explicit-presence-signals-7)
+8. **Session titles without LLM configured** — biggest UX gap. Without a provider, all sessions say "Claude session". Needs a fallback title strategy (project + branch + first user message, no LLM required). Low effort, high value.
+9. **First-session proof point** — After `longhouse connect --install`, user has no confirmation their sessions will actually ship. Add "Waiting for your first real session..." state on Timeline (distinct from demo data). Small effort, fixes the biggest onboarding confusion.
 8. **Oikos Dispatch Contract + Compaction** — Deferred; implement when usage demands it. [Details](#product-harness-simplification--commis-to-timeline-8)
 
 ---
@@ -786,12 +788,36 @@ Make the Forum the canonical discovery UI for sessions, with **explicit** state 
 
 **Deliverables:** "Active/Needs You/Parked/Completed/Unknown" are driven by emitted events, not inference.
 
-- [ ] Define a session presence/state event model (`session_started`, `heartbeat`, `session_ended`, `needs_user`, `blocked`, `completed`, `parked`, `resumed`) and document it.
-- [ ] Add ingestion + storage for presence events in the agents schema (SQLite-safe).
-- [ ] Update the Forum UI to group by explicit buckets and remove heuristic "idle/working" logic.
-- [ ] Add user actions in Forum: Park, Snooze, Resume, Archive (emit explicit events).
-- [ ] Wire wrappers to emit `session_started`/`heartbeat`/`session_ended` (Claude/Codex first).
+**Status (2026-02-20):** Core presence infrastructure complete. Hooks emit thinking/running/idle on every response. `session_presence` table stores state. Forum UI shows live glow/pulse. Remaining: extended state model + bucket actions.
+
+- [x] Add ingestion + storage for presence events in the agents schema (SQLite-safe). — `session_presence` table, `POST /api/agents/presence`, upsert per session_id.
+- [x] Wire wrappers to emit presence state (Claude first). — `UserPromptSubmit→thinking`, `PreToolUse→running`, `PostToolUse→thinking`, `Stop→idle`.
+- [x] Update Forum UI with real state (not heuristics when signals available). — Active rows glow green, inactive fade, canvas entities pulse.
+- [ ] Define extended state model: `needs_user`, `blocked`, `parked`, `resumed` — beyond thinking/running/idle.
+- [ ] Add user actions in Forum: Park, Snooze, Archive (emit explicit events, change display state).
 - [ ] Add a single "Unknown" state in UI for sessions without signals (no pretending).
+
+---
+
+## [Product] Session Titles Without LLM (1)
+
+**Problem:** Without an LLM provider configured, every session is titled "Claude session" / "Codex session" — the timeline is useless as a searchable archive. This is the single biggest UX gap for new self-hosted users.
+
+**Fix:** Generate a fallback title from structured data (no LLM required): `{project} · {branch} · {first 40 chars of first user message}`. Already have all three fields on `AgentSession`. Apply in `getSessionTitle()` in `SessionsPage.tsx` and in the summarization pipeline when LLM is unavailable.
+
+- [ ] Backend: emit a `summary_title` from structured fields when LLM is unavailable (project + branch + first message truncated)
+- [ ] Frontend: update `getSessionTitle()` fallback chain to use first user message if no generated title and no project/branch
+
+---
+
+## [Product] First-Session Proof Point (1)
+
+**Problem:** After `longhouse connect --install`, users see demo data and assume setup is done. They have no confirmation their own sessions will actually ship. Many don't discover the hook is broken (wrong PATH, expired token) until they try to search for something days later.
+
+**Fix:** Distinguish demo-only state from "has real sessions" state. Show a visible "Waiting for your first real session..." indicator when the timeline contains ONLY demo-seeded sessions.
+
+- [ ] Backend: add `is_demo` flag to sessions (or detect via source/device_id)
+- [ ] Frontend: when all sessions are demo, show persistent "Waiting for your first session — use Claude Code, then come back" banner alongside demo cards
 
 ---
 
