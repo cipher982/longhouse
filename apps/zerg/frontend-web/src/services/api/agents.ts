@@ -28,6 +28,7 @@ export interface AgentSession {
   tool_calls: number;
   summary: string | null;
   summary_title: string | null;
+  first_user_message: string | null;
   match_event_id?: number | null;
   match_snippet?: string | null;
   match_role?: string | null;

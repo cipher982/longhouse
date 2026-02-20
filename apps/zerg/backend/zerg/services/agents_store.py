@@ -441,6 +441,51 @@ class AgentsStore:
         sessions = list(self.db.execute(stmt).scalars().all())
         return sessions, total
 
+    def get_first_message_map(
+        self,
+        session_ids: List[UUID],
+        *,
+        role: str,
+        max_len: int | None = None,
+    ) -> dict[UUID, str]:
+        """Return first message per session for a given role."""
+        if not session_ids:
+            return {}
+
+        rn = (
+            func.row_number()
+            .over(
+                partition_by=AgentEvent.session_id,
+                order_by=AgentEvent.timestamp.asc(),
+            )
+            .label("rn")
+        )
+
+        subq = (
+            select(
+                AgentEvent.session_id.label("session_id"),
+                AgentEvent.content_text.label("content_text"),
+                rn,
+            )
+            .where(AgentEvent.session_id.in_(session_ids))
+            .where(AgentEvent.role == role)
+            .where(AgentEvent.content_text.isnot(None))
+            .subquery()
+        )
+
+        stmt = select(subq.c.session_id, subq.c.content_text).where(subq.c.rn == 1)
+        rows = self.db.execute(stmt).fetchall()
+
+        result: dict[UUID, str] = {}
+        for session_id, content in rows:
+            if not content:
+                continue
+            if max_len is not None:
+                content = content[:max_len]
+            result[session_id] = content
+
+        return result
+
     def get_last_message_map(
         self,
         session_ids: List[UUID],

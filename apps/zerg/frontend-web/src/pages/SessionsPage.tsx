@@ -128,6 +128,12 @@ function getSessionTitle(session: AgentSession): string {
     if (isValidTitle(folder)) return folder;
   }
 
+  // Try first user message snippet
+  if (session.first_user_message) {
+    const snippet = session.first_user_message.trim().slice(0, 60);
+    if (snippet) return snippet;
+  }
+
   // Fallback: "Claude session" (capitalized provider)
   return `${session.provider.charAt(0).toUpperCase() + session.provider.slice(1)} session`;
 }
