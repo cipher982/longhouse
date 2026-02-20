@@ -15,6 +15,12 @@ export interface PresenceBadgeProps {
   /** compact=true renders only the animated dot, no text label */
   compact?: boolean;
   className?: string;
+  /**
+   * heuristicActive=true — when state is null, show a dim pulsing green dot
+   * with label "Active". Weaker signal than a real presence state but still
+   * shows that this session is considered working by the status heuristic.
+   */
+  heuristicActive?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,13 +163,57 @@ function TypingDots() {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function PresenceBadge({ state, tool, compact = false, className }: PresenceBadgeProps) {
+export function PresenceBadge({ state, tool, compact = false, className, heuristicActive = false }: PresenceBadgeProps) {
   useEffect(() => {
     ensureStyles();
   }, []);
 
-  // null/no signal — render nothing
-  if (state === null || state === undefined) return null;
+  // null/no signal — fall back to heuristic active indicator if requested
+  if (state === null || state === undefined) {
+    if (!heuristicActive) return null;
+
+    // Dim pulsing green dot — weaker signal than real presence
+    const heuristicDotStyle: React.CSSProperties = {
+      display: "inline-block",
+      width: compact ? 8 : 10,
+      height: compact ? 8 : 10,
+      borderRadius: "50%",
+      flexShrink: 0,
+      background: "radial-gradient(circle, #4ade80 30%, #22c55e 100%)",
+      opacity: 0.7,
+      animation: "presence-pulse 2s ease-in-out infinite",
+      ["--presence-glow" as string]: "rgba(74, 222, 128, 0.4)",
+    };
+
+    if (compact) {
+      return (
+        <span
+          className={className}
+          title="Active"
+          style={{ display: "inline-flex", alignItems: "center" }}
+        >
+          <span style={heuristicDotStyle} />
+        </span>
+      );
+    }
+
+    return (
+      <span
+        className={className}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          fontFamily: "var(--font-mono, 'JetBrains Mono', 'Fira Code', monospace)",
+          userSelect: "none",
+        }}
+      >
+        <span style={heuristicDotStyle} />
+        <span style={{ color: "#4ade80", fontWeight: 400, opacity: 0.8 }}>Active</span>
+      </span>
+    );
+  }
 
   const dotSize = compact ? 8 : 10;
 

@@ -337,13 +337,25 @@ function drawEntities(
   entities.forEach((entity) => {
     const iso = gridToIso(entity.position, layout);
     const isDisabled = entity.status === "disabled";
+    const isActive = entity.status === "working" || entity.status === "moving";
     const color = isDisabled ? "rgba(138, 122, 100, 0.35)" : ENTITY_COLORS[entity.type] || "#9e7c5a";
     const deskX = iso.x - DESK_WIDTH / 2;
     const deskY = iso.y - DESK_HEIGHT / 2;
 
-    ctx.fillStyle = color;
-    ctx.strokeStyle = "rgba(18, 11, 9, 0.7)";
-    ctx.lineWidth = 2;
+    // Glow layer for active entities — drawn before the fill so it sits underneath
+    if (isActive) {
+      ctx.save();
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = "#4ade80";
+      ctx.fillStyle = "rgba(74, 222, 128, 0.18)";
+      beginRoundedRect(ctx, deskX - 3, deskY - 3, DESK_WIDTH + 6, DESK_HEIGHT + 6, 6);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.fillStyle = isActive ? lightenColor(color) : color;
+    ctx.strokeStyle = isActive ? "rgba(74, 222, 128, 0.6)" : "rgba(18, 11, 9, 0.7)";
+    ctx.lineWidth = isActive ? 1.5 : 2;
     beginRoundedRect(ctx, deskX, deskY, DESK_WIDTH, DESK_HEIGHT, 4);
     ctx.fill();
     ctx.stroke();
@@ -480,6 +492,23 @@ function pickEntityAtPoint(
     }
   });
   return closest ?? null;
+}
+
+/**
+ * Lighten a hex color by blending it toward white.
+ * Used to make active entity desks pop slightly brighter than their base color.
+ */
+function lightenColor(hex: string): string {
+  const clean = hex.replace("#", "");
+  if (clean.length !== 6) return hex;
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  const factor = 0.35;
+  const lr = Math.round(r + (255 - r) * factor);
+  const lg = Math.round(g + (255 - g) * factor);
+  const lb = Math.round(b + (255 - b) * factor);
+  return `rgb(${lr}, ${lg}, ${lb})`;
 }
 
 function beginRoundedRect(
