@@ -157,31 +157,50 @@ mod tests {
     // for unit tests we verify file-level behavior only (no HTTP).
     // HTTP behavior (delete-on-success, keep-on-failure) is validated in E2E.
 
-    #[test]
-    fn test_skips_tmp_files() {
-        let dir = make_outbox();
-        // Write a tmp file (in-progress atomic write)
-        let tmp = dir.path().join(".tmp.XXXXXX");
-        fs::write(&tmp, b"{}").unwrap();
-        // Write a regular presence file
-        write_presence(dir.path(), "a.json", "sess-1", "thinking");
-
-        // Can't call drain_outbox without a client, but we can verify our
-        // filtering logic directly by checking what the iterator would see.
-        let entries: Vec<_> = fs::read_dir(dir.path())
+    fn filter_ready(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        fs::read_dir(dir)
             .unwrap()
             .flatten()
             .map(|e| e.path())
-            .collect();
-        let ready: Vec<_> = entries
-            .iter()
             .filter(|p| {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 name.ends_with(".json") && !name.starts_with('.')
             })
-            .collect();
-        assert_eq!(ready.len(), 1, "tmp file must be filtered out");
-        assert!(ready[0].file_name().unwrap().to_str().unwrap() == "a.json");
+            .collect()
+    }
+
+    #[test]
+    fn test_skips_tmp_files() {
+        let dir = make_outbox();
+        // In-progress atomic write — starts with '.'
+        let tmp = dir.path().join(".tmp.ABC123");
+        fs::write(&tmp, b"{}").unwrap();
+        // Also the old-style final name that was the bug: .tmp.ABC123.json
+        let old_bad = dir.path().join(".tmp.ABC123.json");
+        fs::write(&old_bad, b"{}").unwrap();
+        // Correct final name from hook: prs.ABC123.json (no leading dot)
+        write_presence(dir.path(), "prs.ABC123.json", "sess-1", "thinking");
+
+        let ready = filter_ready(dir.path());
+        assert_eq!(ready.len(), 1, "only prs.*.json should be ready, not .tmp.* files");
+        assert_eq!(ready[0].file_name().unwrap().to_str().unwrap(), "prs.ABC123.json");
+    }
+
+    #[test]
+    fn test_hook_filename_pattern_is_picked_up() {
+        // Verify the exact rename pattern the hook uses:
+        //   mv "$TMPFILE" "${TMPFILE/\/.tmp\./\/prs.}.json"
+        // which turns .tmp.XXXXXX → prs.XXXXXX.json
+        let dir = make_outbox();
+        let tmp_name = ".tmp.Zakvof";
+        // Simulate the bash rename: replace /.tmp. with /prs. then append .json
+        let final_name = tmp_name.replace(".tmp.", "prs.").to_owned() + ".json";
+        assert_eq!(final_name, "prs.Zakvof.json");
+        assert!(!final_name.starts_with('.'), "final name must not start with dot");
+
+        write_presence(dir.path(), &final_name, "sess-hook", "idle");
+        let ready = filter_ready(dir.path());
+        assert_eq!(ready.len(), 1, "hook-produced filename must be picked up by drain");
     }
 
     #[test]
@@ -200,29 +219,25 @@ mod tests {
     }
 
     #[test]
-    fn test_deletes_stale_files() {
+    fn test_fresh_files_not_considered_stale() {
+        // A freshly written file must NOT be treated as stale.
+        // (We can't backdate mtime without adding a crate; this at least
+        // verifies the stale threshold constant and that fresh files pass.)
         let dir = make_outbox();
-        let path = dir.path().join("stale.json");
-        write_presence(dir.path(), "stale.json", "sess-stale", "running");
+        write_presence(dir.path(), "prs.fresh.json", "sess-fresh", "running");
 
-        // Backdate mtime by 20 minutes using filetime.
-        // Without the filetime crate we simulate by checking the logic:
-        // if age > STALE_SECS → remove.
-        let stale_age = Duration::from_secs(STALE_SECS + 1);
-        let now = SystemTime::now();
+        let path = dir.path().join("prs.fresh.json");
         let meta = fs::metadata(&path).unwrap();
         let modified = meta.modified().unwrap();
-        let age = now.duration_since(modified).unwrap_or_default();
-        // File was just written so age is tiny — verify the stale path would delete
-        assert!(age <= stale_age, "freshly written file should not be stale");
-        // Simulate stale: pretend age > STALE_SECS
-        let is_stale = stale_age > Duration::from_secs(STALE_SECS);
-        assert!(is_stale, "simulated stale check passes");
-        // Real stale deletion: simulate what drain_outbox does
-        if is_stale {
-            let _ = fs::remove_file(&path);
-        }
-        assert!(!path.exists(), "stale file deleted");
+        let age = SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or_default();
+
+        assert!(
+            age < Duration::from_secs(STALE_SECS),
+            "freshly written file (age={age:?}) must be below STALE_SECS={STALE_SECS}s"
+        );
+        assert!(path.exists(), "fresh file must not be deleted");
     }
 
     #[test]

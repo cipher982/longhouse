@@ -78,15 +78,16 @@ case "$EVENT" in
   *)                              exit 0 ;;
 esac
 
-# Write presence to outbox (atomic: write to .tmp, rename to .json)
-# Daemon drains outbox every 1s and POSTs to /api/agents/presence.
+# Write presence to outbox (atomic: write to .tmp.* then rename to prs.*.json)
+# Temp file starts with '.' so the daemon skips it during the write.
+# Final file starts with 'prs.' — daemon picks it up, POSTs, deletes.
 OUTBOX="$HOME/.claude/outbox"
 [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
 TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
 jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
       --arg tool "$TOOL" --arg cwd "$CWD" \\
   '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}' > "$TMPFILE"
-mv "$TMPFILE" "${TMPFILE}.json"
+mv "$TMPFILE" "${TMPFILE/\/.tmp\./\/prs.}.json"
 
 # Stop: also ship the session transcript via engine binary.
 # Done AFTER the outbox write so idle state is always recorded.
@@ -368,7 +369,7 @@ def install_hooks(
     hooks_obj["Stop"] = _merge_hooks_for_event(stop_list, stop_entry)
 
     # Lifecycle events: sync (outbox write <2ms, silent)
-    for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse"):
+    for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure"):
         raw = hooks_obj.get(event, [])
         event_list = raw if isinstance(raw, list) else []
         hooks_obj[event] = _merge_hooks_for_event(event_list, lifecycle_entry)
