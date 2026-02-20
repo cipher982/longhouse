@@ -86,6 +86,8 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 | File reservations | `POST /api/agents/reservations` | — | `reserve_file` | Prevent concurrent edits |
 | Action proposals | `GET/POST /api/proposals` | ProposalsPage | — | Review queue for reflection insights with approve/decline; approved proposals show in briefings |
 | Runner daemon | WebSocket from runner binary | — | — | Remote command execution on user infra |
+| **Session presence** | `POST /api/agents/presence` + `GET /api/agents/sessions/active` | ForumPage | — | Real-time state (thinking/running/idle) via Claude Code hooks; `session_presence` table, stale after 10min |
+| **Forum / live view** | `GET /api/agents/sessions/active` | ForumPage | — | Active session map; active rows glow green, canvas entities pulse; polls at 2s |
 
 ## Conventions
 
@@ -197,13 +199,13 @@ coolify app logs longhouse-control-plane               # Control plane
 ```
 
 ### Checklist for Agents
-1. `make test` + `make test-e2e` pass locally
-2. Push to main (triggers GHCR build if code changed)
-3. Wait for GHCR build: `gh run watch <id> --exit-status`
-4. Deploy marketing + control plane (Coolify)
-5. Reprovision user instances via control plane admin API
-6. Verify: health checks on all endpoints
-7. If deploy fails, check logs, fix, and redeploy — don't ask the user
+1. `make test` pass locally
+2. `make qa-live` pass (5 Playwright tests against live instance, ~5s) — `/zerg-ship` skill has full details
+3. Push to main (triggers GHCR build if code changed)
+4. Wait for GHCR build: `gh run watch <id> --exit-status`
+5. Deploy marketing + control plane (Coolify)
+6. Reprovision user instances via control plane admin API
+7. `make qa-live` again to verify post-deploy
 8. Brief summary only at end (what shipped, what to manually verify if needed)
 
 ## apps/sauron - Scheduler (Folded In)
@@ -257,14 +259,13 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (High-Signal Only)
 
 <!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, add TODO work and remove it after the fix lands. -->
-- (2026-02-04) [arch] Runtime image (`docker/runtime.dockerfile`) bundles frontend+backend; backend serves built frontend from `/app/frontend-web/dist`.
 - (2026-02-05) [db] Alembic migrations are deprecated for core app work; `apps/zerg/backend/alembic/versions` is intentionally empty. New models use `AgentsBase.metadata.create_all()` auto-creation.
 - (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
-- (2026-02-06) [arch] App mode contract is `APP_MODE` > `DEMO_MODE` > `AUTH_DISABLED/TESTING`; frontend reads runtime mode from backend-served `/config.js`.
 - (2026-02-12) [arch] Agent infra models use `AgentsBase` (not `Base`), live in `models/agents.py` and `models/work.py`. Schema `agents.` gets translate-mapped to `None` for SQLite.
 - (2026-02-12) [frontend] Frontend API errors: `ApiError` class has `status`, `url`, `body` (already-parsed object, not string). FastAPI wraps HTTPException detail in `{detail: ...}`, so structured error data is at `body.detail.field`.
-- (2026-02-13) [arch] Reflection produces **action proposals** alongside insights when `action_blurb` is present (high-confidence, concrete actions). Users review at `/proposals`. Approved proposals appear in agent briefings under "Approved actions (pending execution)." Model: `ActionProposal` in `models/work.py`, API: `routers/proposals.py`.
 - (2026-02-14) [ops] **Reprovisioning an instance** = stop+remove container, then re-create with current env vars. Data is safe — SQLite lives on a host bind mount (`/var/lib/docker/data/longhouse/<subdomain>`), not inside the container. Use the admin API: `POST /api/instances/{id}/reprovision`. If secrets change on the control plane, instances must be reprovisioned to pick them up.
-- (2026-02-14) [security] SSO tokens include `instance` claim binding them to a specific subdomain. `accept_token` validates this (soft — only when both claim and `INSTANCE_ID` env var present). CP's own `jwt_secret` is never sent to instances.
 - (2026-02-16) [ops] Instances route LLM calls through LiteLLM proxy (`llm.drose.io`). All OpenAI SDK calls must pass `extra_body={"metadata": {"source": "longhouse:component"}}` or the proxy rejects with 400. Proxy allowlist: `~/git/litellm-proxy/config.yaml` + `hooks/model_hints.py` (keep in sync).
 - (2026-02-16) [ops] `get_llm_client_with_db_fallback()` checks DB `LlmProviderConfig` table before env vars. Stale DB rows with wrong API keys silently override env config → 401s. Delete stale rows: `db.query(LlmProviderConfig).filter(...).delete()`.
+- (2026-02-20) [arch] **Python shipper is deleted.** Rust engine (`longhouse-engine`) owns all session shipping. `longhouse connect` manages the service only. Stop hook: `exec /abs/path/to/longhouse-engine ship --file "$TRANSCRIPT"` — absolute path baked at install time, no Python overhead.
+- (2026-02-20) [auth] **Two auth systems — don't mix.** Browser pages: password-login JWT → `longhouse_session` cookie. `/api/agents/*` endpoints: device token → `X-Agents-Token` header (reads `~/.claude/longhouse-device-token`). Using JWT Bearer on agents endpoints gets 403.
+- (2026-02-20) [frontend] **ForumCanvas viewport snaps on poll** if ResizeObserver effect depends on `state.layout` (object ref). Must depend on `state.layout.grid.cols/rows` (primitives) — object ref changes every 2s poll causing viewport re-center while user pans.
