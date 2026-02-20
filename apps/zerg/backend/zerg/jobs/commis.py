@@ -115,6 +115,8 @@ async def enqueue_missed_runs(now: datetime | None = None) -> None:
 
         # Only enqueue the most recent missed run
         if most_recent:
+            if _has_missing_required_secrets(job.id):
+                continue
             dedupe_key = make_dedupe_key(job.id, most_recent)
             queue_id = await enqueue_job(
                 job_id=job.id,
@@ -135,7 +137,7 @@ def _has_missing_required_secrets(job_id: str) -> bool:
 
     from zerg.database import get_session_factory
     from zerg.jobs.registry import _normalize_secret_fields
-    from zerg.models.work import JobSecret
+    from zerg.models.models import JobSecret
 
     config = job_registry.get(job_id)
     if not config:

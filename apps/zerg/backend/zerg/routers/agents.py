@@ -521,7 +521,16 @@ async def _set_structured_title_if_empty(session_id: str) -> None:
         if not parts:
             return
         title = " · ".join(parts)
-        db.execute(sa_update(AgentSession).where(AgentSession.id == session_id).values(summary_title=title))
+        # WHERE summary_title IS NULL prevents overwriting a concurrently-set LLM title
+        result = db.execute(
+            sa_update(AgentSession)
+            .where(AgentSession.id == session_id)
+            .where(AgentSession.summary_title.is_(None))
+            .values(summary_title=title)
+        )
+        if result.rowcount == 0:
+            logger.debug("Structured title skipped for session %s (title set concurrently)", session_id)
+            return
         db.commit()
         logger.debug("Set structured title %r for session %s", title, session_id)
     except Exception:
