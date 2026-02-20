@@ -27,6 +27,20 @@ function formatRelativeTime(timestamp: string): string {
   return `${days}d ago`;
 }
 
+function formatDuration(startedAt: string, endedAt: string | null): string {
+  const start = parseUTC(startedAt).getTime();
+  if (!Number.isFinite(start)) return "unknown";
+  const end = endedAt ? parseUTC(endedAt).getTime() : Date.now();
+  const diffMs = end - start;
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "< 1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remMins = minutes % 60;
+  if (remMins === 0) return `${hours}h`;
+  return `${hours}h ${remMins}m`;
+}
+
 function sessionSortKey(status: string): number {
   if (status === "working") return 0;
   if (status === "idle") return 1;
@@ -243,32 +257,39 @@ export default function ForumPage() {
                     <div className="forum-selection-title">
                       {getSessionDisplayTitle(selectedSession)}
                     </div>
-                    <div className="forum-selection-meta">
-                      Room: {getSessionRoomLabel(selectedSession)}
-                    </div>
-                    <div className="forum-selection-meta">Provider: {selectedSession.provider}</div>
-                    {selectedSession.git_branch && (
-                      <div className="forum-selection-meta">
-                        Branch: {selectedSession.git_branch}
-                      </div>
-                    )}
-                    {selectedSession.cwd && (
-                      <div className="forum-selection-meta">CWD: {selectedSession.cwd}</div>
-                    )}
-                    <div className="forum-selection-meta">
-                      Last active: {formatRelativeTime(selectedSession.last_activity_at)}
-                    </div>
-                    <div className="forum-selection-meta">
-                      Messages: {selectedSession.message_count}
+                    <div className="forum-selection-pills">
+                      <span className={`forum-duration-pill${selectedSession.ended_at == null && (selectedSession.status === "working" || selectedSession.presence_state != null) ? " forum-duration-pill--active" : ""}`}>
+                        {formatDuration(selectedSession.started_at, selectedSession.ended_at)}
+                      </span>
+                      <span className="forum-turns-pill">
+                        {selectedSession.message_count} turns · {selectedSession.tool_calls} tools
+                      </span>
                     </div>
                     {selectedSession.last_assistant_message && (
                       <div className="forum-selection-preview">
-                        <div className="forum-selection-preview-label">Last message:</div>
-                        <div className="forum-selection-preview-text">
+                        <div className="forum-selection-preview-label">Last message</div>
+                        <div className="forum-selection-preview-text forum-selection-preview-text--terminal">
                           {selectedSession.last_assistant_message}
                         </div>
                       </div>
                     )}
+                    <div className="forum-selection-divider" />
+                    <div className="forum-selection-meta">
+                      <span className="forum-selection-meta-label">Provider</span> {selectedSession.provider}
+                    </div>
+                    {selectedSession.git_branch && (
+                      <div className="forum-selection-meta">
+                        <span className="forum-selection-meta-label">Branch</span> {selectedSession.git_branch}
+                      </div>
+                    )}
+                    {selectedSession.cwd && (
+                      <div className="forum-selection-meta">
+                        <span className="forum-selection-meta-label">CWD</span> {selectedSession.cwd}
+                      </div>
+                    )}
+                    <div className="forum-selection-meta forum-selection-meta--time">
+                      {formatRelativeTime(selectedSession.last_activity_at)}
+                    </div>
                     <div className="forum-selection-actions">
                       <Button size="sm" variant="primary" onClick={handleFocus}>
                         {focusEntityId === selectedSession.id ? "Unfocus" : "Focus"}
@@ -284,14 +305,19 @@ export default function ForumPage() {
                   <div className="forum-selection-empty">Select a session desk to inspect.</div>
                 )}
               </div>
-              <div className="forum-legend">
-                <div className="forum-legend-title">Legend</div>
-                <div className="forum-legend-grid">
-                  <div className="forum-legend-item">
-                    <span className="forum-legend-swatch forum-legend-swatch--commis" />
-                    Desk
-                  </div>
-                </div>
+              <div className="forum-stats-bar">
+                <span className="forum-stats-active">
+                  <span className="forum-stats-dot" />
+                  {sessions.filter(s => s.status === "working" || s.presence_state === "thinking" || s.presence_state === "running").length} active
+                </span>
+                <span className="forum-stats-sep">·</span>
+                <span className="forum-stats-idle">
+                  {sessions.filter(s => s.status === "idle").length} idle
+                </span>
+                <span className="forum-stats-sep">·</span>
+                <span className="forum-stats-total">
+                  {sessions.length} total
+                </span>
               </div>
             </>
           )}
