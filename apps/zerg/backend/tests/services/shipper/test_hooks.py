@@ -181,12 +181,15 @@ class TestInstallHooks:
         assert not (hooks_dir / "longhouse-presence.sh").exists(), "deprecated presence.sh must be removed"
 
     def test_registers_all_events(self, tmp_path: Path) -> None:
-        """Stop, UserPromptSubmit, PreToolUse, PostToolUse, and SessionStart are all registered."""
+        """All lifecycle events including PostToolUseFailure are registered."""
         install_hooks(url="https://example.longhouse.ai", claude_dir=str(tmp_path))
 
         settings = json.loads((tmp_path / "settings.json").read_text())
         hooks = settings.get("hooks", {})
-        for event in ("Stop", "UserPromptSubmit", "PreToolUse", "PostToolUse", "SessionStart"):
+        for event in (
+            "Stop", "UserPromptSubmit", "PreToolUse",
+            "PostToolUse", "PostToolUseFailure", "SessionStart",
+        ):
             assert event in hooks, f"{event} must be registered"
             assert len(hooks[event]) > 0, f"{event} must have at least one entry"
 
@@ -206,12 +209,14 @@ class TestInstallHooks:
                         )
 
     def test_hook_script_uses_outbox(self, tmp_path: Path) -> None:
-        """The unified hook script writes to outbox, not curl."""
+        """The unified hook script writes to outbox with correct filename pattern."""
         install_hooks(url="https://example.longhouse.ai", claude_dir=str(tmp_path))
 
         hook_content = (tmp_path / "hooks" / "longhouse-hook.sh").read_text()
         assert "outbox" in hook_content, "hook must write to outbox directory"
         assert "curl" not in hook_content, "hook must not make direct HTTP calls"
+        # Final filename must use prs. prefix (not .tmp.*.json) so daemon picks it up
+        assert "prs." in hook_content, "final outbox filename must use prs. prefix (not dot-prefixed)"
 
     def test_engine_path_baked_in(self, tmp_path: Path) -> None:
         """Custom engine path is baked into the hook script."""
