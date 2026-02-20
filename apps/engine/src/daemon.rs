@@ -15,6 +15,7 @@ use crate::config::ShipperConfig;
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::heartbeat;
+use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
@@ -151,6 +152,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
     heartbeat_timer.tick().await; // consume first immediate tick
 
+    let mut outbox_timer = tokio::time::interval(Duration::from_secs(1));
+    outbox_timer.tick().await; // consume first immediate tick
+
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
 
@@ -162,6 +166,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             .unwrap_or_else(|_| std::path::PathBuf::from(home).join(".claude"));
         base
     };
+    let outbox_dir = claude_dir.join("outbox");
 
     loop {
         tokio::select! {
@@ -243,6 +248,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Err(e) => tracing::warn!("Spool replay error: {}", e),
+                }
+            }
+
+            // Outbox drain: presence events written by hooks (every 1s, skip when offline)
+            _ = outbox_timer.tick(), if !offline.is_offline => {
+                let (sent, kept) = outbox::drain_outbox(&outbox_dir, &client).await;
+                if sent > 0 || kept > 0 {
+                    tracing::debug!("Outbox drain: {} sent, {} pending", sent, kept);
                 }
             }
 
