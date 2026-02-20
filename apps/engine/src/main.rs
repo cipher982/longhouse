@@ -4,6 +4,7 @@ mod daemon;
 mod discovery;
 mod error_tracker;
 mod heartbeat;
+mod outbox;
 mod pipeline;
 mod shipper;
 mod shipping;
