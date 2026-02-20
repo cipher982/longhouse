@@ -15,11 +15,12 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **Forum Discovery UX** — Presence signals wired, Forum UI shows live state. Remaining: bucket actions (Park/Snooze/Archive), extended state model. [Details](#product-forum-discovery-ux--explicit-presence-signals-7)
-2. **Session titles without LLM configured** — Without a provider, all sessions say "Claude session". Needs a fallback title strategy (project + branch + first user message, no LLM required). Low effort, high value.
-3. **First-session proof point** — After `longhouse connect --install`, user has no confirmation their sessions will actually ship. Add "Waiting for your first real session..." state distinct from demo data.
-4. **Oikos Dispatch Contract + Compaction** — Deferred; implement when usage demands it. [Details](#product-harness-simplification--oikos-dispatch-contract-deferred)
-5. **Hook Presence Spool via Daemon** — Eliminate noisy async hook banners + fix 2s timeout edge case. [Details](#infra-hook-presence-spool-via-daemon-3)
+1. **Forum Discovery UX** — 3 open items: Unknown state (easy), extended state model, bucket actions. [Details](#product-forum-discovery-ux--explicit-presence-signals-7)
+2. **Ingest Pipeline: consolidate title_generator.py** — `summarize_events()` already returns a title; `title_generator.py` is a separate pipeline that bypasses `models_config`. Easy consolidation. [Details](#tech-debt-ingest-pipeline-reliability--efficiency-3)
+3. **Ingest Pipeline: SQLite task queue** — Replace fire-and-forget `BackgroundTasks` with a durable queue. Higher effort, higher value.
+4. **Hook Presence Spool via Daemon** — Rust engine Unix socket listener. Eliminates async hook noise. [Details](#infra-hook-presence-spool-via-daemon-3)
+5. **README Test CI** — Not started, well-scoped. [Details](#qatest-readme-test-ci-5)
+6. **Oikos Dispatch Contract + Compaction** — Deferred until usage demands it.
 
 ---
 
@@ -60,38 +61,35 @@ Hook (`~/.claude/hooks/longhouse-presence.sh`):
 **Goal:** Fix reliability and efficiency gaps in the post-ingest LLM/embedding pipeline.
 
 **Background task reliability (highest priority):**
-- FastAPI `BackgroundTasks` are fire-and-forget — lost on process crash, no retry, no persistence (`routers/agents.py:792-798`)
+- FastAPI `BackgroundTasks` are fire-and-forget — lost on process crash, no retry, no persistence (`routers/agents.py`)
 - Replace with a lightweight SQLite-backed task queue (pending/running/done rows) polled by a background worker
 
 **Summary is not truly incremental:**
-- `_generate_summary_impl` loads *all* events every run, slices in Python (`agents.py:537-607`)
+- `_generate_summary_impl` loads *all* events every run, slices in Python
 - Fix: store `last_summarized_event_id` on the session; only load events after that cursor
 
 **Embeddings lack per-event cursor:**
-- Session-level `needs_embedding` flag, no per-event cursor (`agents.py:663-677`)
+- Session-level `needs_embedding` flag, no per-event cursor
 - Fix: per-event `embedded` bool or a high-water mark like summary cursor
 
-**Duplicate title/summary pipelines:**
-- `title_generator.py` bypasses `models_config` and DB fallback (`title_generator.py:94-156`)
-- `summarize_events()` already produces a title — consolidate and drop `title_generator.py`
+**Note on title_generator.py:** Investigated — it's for Oikos *chat thread* titles (the `/conversation/title` endpoint), NOT a duplicate of the session summary pipeline. `_generate_summary_impl` already sets `summary_title` via `summarize_events()`. Leave `title_generator.py` alone.
 
 **Subtasks:**
 - [ ] Design SQLite task queue schema (session_id, task_type, status, attempts, error)
 - [ ] Replace BackgroundTasks calls with task queue inserts + polling worker
 - [ ] Add `last_summarized_event_id` cursor to sessions table; update summary logic
 - [ ] Add per-event embedding cursor or high-water mark
-- [ ] Consolidate title generation into summarize_events() output; delete title_generator.py
 - [ ] `make test` + `make test-e2e` pass
 
 ---
 
 ## [Product] Harness Simplification — Oikos Dispatch Contract (Deferred)
 
-Phases 1–3h are 100% complete (Commis→Timeline, deprecated Standard mode, Slim Oikos, MCP server, quality gates, multi-provider research). See git history.
+Phases 1–3h are 100% complete. See git history.
 
 **Remaining deferred items (implement when usage demands):**
-- [ ] Implement Oikos dispatch contract: direct vs quick-tool vs CLI delegation, with explicit backend intent routing (Claude/Codex/Gemini) and repo-vs-scratch delegation modes
-- [ ] Use Claude Compaction API (server-side) or custom summarizer for "infinite thread" context management
+- [ ] Oikos dispatch contract: direct vs quick-tool vs CLI delegation, explicit backend intent routing
+- [ ] Claude Compaction API (server-side) or custom summarizer for infinite thread context management
 
 Research doc: `docs/specs/3a-deferred-research.md` (commit `16c531e6`)
 
@@ -106,45 +104,9 @@ Make the Forum the canonical discovery UI for sessions, with **explicit** state 
 - [x] Presence ingestion + storage — `session_presence` table, `POST /api/agents/presence`, upsert per session_id.
 - [x] Presence emission — `UserPromptSubmit→thinking`, `PreToolUse→running`, `PostToolUse→thinking`, `Stop→idle`.
 - [x] Forum UI with real state — active rows glow green, inactive fade, canvas entities pulse.
+- [ ] Add "Unknown" state in UI for sessions without presence signals — currently they silently fall through; show a distinct "Unknown" badge instead of pretending they're idle.
 - [ ] Define extended state model: `needs_user`, `blocked`, `parked`, `resumed` — beyond thinking/running/idle.
 - [ ] Add user actions in Forum: Park, Snooze, Archive (emit explicit events, change display state).
-- [ ] Add a single "Unknown" state in UI for sessions without signals (no pretending).
-
----
-
-## [Product] ✅ Session Titles Without LLM
-
-Done. `_set_structured_title_if_empty()` runs when LLM is misconfigured, emitting `project · branch` as `summary_title`. `first_user_message` added to `SessionResponse` + `AgentsStore` + `getSessionTitle()` fallback chain. (commit `95361824`)
-
----
-
-## [Product] First-Session Proof Point (1)
-
-**Problem:** After `longhouse connect --install`, users see demo data and assume setup is done. No confirmation their sessions will actually ship until they search days later and find nothing.
-
-**Fix:** Distinguish demo-only state from "has real sessions" state. Show a visible "Waiting for your first real session..." indicator when the timeline contains ONLY demo-seeded sessions.
-
-- [ ] Backend: demo sessions already use `device_id="demo-mac"` — can detect without a new column. Add `GET /api/agents/sessions/has-real` (or a field on the sessions list response) that returns whether any non-demo sessions exist
-- [ ] Frontend: when all sessions are demo (`device_id == "demo-mac"`), show persistent "Waiting for your first session — use Claude Code, then come back" banner alongside demo cards
-
----
-
-## [Product] Job Secrets UI — Remaining Polish (1)
-
-Phases 1–2 complete (secrets CRUD, job status, enable/disable, pre-flight UI on `/settings/secrets`). Minor remaining items:
-
-- [ ] Form rendering based on SecretField metadata: `type: "password"/"text"/"url"`, `placeholder`, `description`, `required` validation — backend `SecretField` TypedDict has `type` field but frontend only renders `type="password"` for all secrets
-- [x] Keyboard shortcuts: Escape cancels form (commit `95361824`)
-- [ ] Loading skeletons while fetching — spinners exist (`<Spinner>`), but no skeleton placeholder layout
-- [x] Mobile-responsive layout — confirmed done; `settings.css` has `@media` query switching `.secret-form__fields` to 1 column at ≤768px
-
-**Files:** `apps/zerg/frontend-web/src/pages/JobSecretsPage.tsx`
-
----
-
-## [Product] ✅ Pre-flight Job Validation — Queue Admission
-
-Done. `_has_missing_required_secrets()` in `commis.py` checks DB + env before `enqueue_scheduled_run()`. Jobs with unconfigured required secrets log a warning and skip instead of failing mid-run. (commit `82e1e213`)
 
 ---
 
@@ -160,30 +122,14 @@ Automate README command verification with explicit, opt-in contracts. Use cube A
 
 ---
 
-## [QA/Test] UI QA Screenshot Capture System (1)
-
-**Mostly done.** `scripts/capture_marketing.py` is a full capture CLI (manifest-driven, Playwright, `--name`/`--list`/`--validate` modes). The `zerg-ui` skill at `.agents/skills/zerg-ui/` is the agent-friendly capture path with stable output (PNG, a11y snapshot, trace.zip, console.log, manifest.json). Only remaining gap:
-
-- [ ] Add SCENE=empty backend reset endpoint (or CLI flag) to clear sessions before capture; currently `SCENE=empty` in the skill is frontend-only and has no reliable way to reset DB state
-
----
-
 ## [Docs/Drift] Open Items
 
 - DB size claim stale; prod DB reset 2026-02-05 (no users). Update once real user data exists.
-- PyPI version likely lags repo; verify `longhouse` version on PyPI before making release claims.
+- PyPI version lags repo: `pyproject.toml` is `0.1.2`, PyPI has `0.1.1`. Publish when ready.
 
 ---
 
 ## [Tech Debt] Stable Abstractions (Don't Delete)
 
-Reviewed and intentionally kept — not dead code:
-
-- [ID 41] Legacy modal pattern CSS — 7+ components use `.modal-*` classes, 58 class definitions in `styles/css/modal.css`. Evidence: `ideas/evidence/48_evidence_modal_css_legacy.sh`
-- [ID 43] Legacy token aliases — legacy aliases present in `styles/tokens.css`, actively referenced in component CSS. Evidence: `ideas/evidence/50_evidence_tokens_css_legacy_aliases.sh`
-
----
-
-## [Infra] Life Hub Archive
-
-Longhouse agents schema is fully self-contained. Only remaining Life Hub link: `session_continuity.py` has two backward compat aliases (`fetch_session_from_life_hub`, `ship_session_to_life_hub`) pointing to Zerg equivalents — these are harmless but could be cleaned up when convenient. Smart home + tasks remain active on Life Hub (separate concern, not Longhouse code).
+- [ID 41] Legacy modal pattern CSS — 7+ components use `.modal-*` classes, 58 definitions in `styles/css/modal.css`. Evidence: `ideas/evidence/48_evidence_modal_css_legacy.sh`
+- [ID 43] Legacy token aliases — present in `styles/tokens.css`, actively referenced in component CSS. Evidence: `ideas/evidence/50_evidence_tokens_css_legacy_aliases.sh`
