@@ -49,7 +49,7 @@ curl -s -H "X-Admin-Token: $ADMIN_TOKEN" https://control.longhouse.ai/api/instan
 curl -s -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://control.longhouse.ai/api/instances/<id>/reprovision
 
 # Verify health
-sleep 15 && curl -s https://david010.longhouse.ai/api/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"
+sleep 15 && curl -s https://david010.longhouse.ai/api/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"  # healthy
 ```
 
 Data survives reprovision — SQLite at `/var/lib/docker/data/longhouse/<subdomain>/longhouse.db` (host bind mount).
@@ -57,11 +57,7 @@ Data survives reprovision — SQLite at `/var/lib/docker/data/longhouse/<subdoma
 ## Wait for GHCR Build
 
 ```bash
-# Find the runtime image build specifically
-gh run list --workflow runtime-image.yml --limit 3 --json status,name,databaseId
-
-# Wait for it
-gh run watch <databaseId> --exit-status
+gh run watch $(gh run list --workflow runtime-image.yml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status
 ```
 
 Path filters: build only triggers if `apps/zerg/backend/`, `apps/zerg/frontend-web/`, or `docker/` changed. Docs-only pushes skip it.
@@ -82,8 +78,8 @@ tail -f ~/.claude/logs/engine.log.$(date +%Y-%m-%d)
 
 ## Definition of Done
 
-- [ ] `make test` 96 passed
+- [ ] `make test` passes (no failures)
 - [ ] `make qa-live` 5/5 passed
 - [ ] `gh run watch` GHCR build success
-- [ ] `curl -s https://david010.longhouse.ai/api/health | jq .status` → "healthy"
+- [ ] `curl -s https://david010.longhouse.ai/api/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"` → `healthy`
 - [ ] Commit message references what shipped
