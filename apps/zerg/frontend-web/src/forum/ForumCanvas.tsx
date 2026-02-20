@@ -38,8 +38,8 @@ const ENTITY_COLORS: Record<ForumEntity["type"], string> = {
   task_node: "#5D9B4A",
 };
 
-const DESK_WIDTH = 28;
-const DESK_HEIGHT = 16;
+const DESK_WIDTH = 40;
+const DESK_HEIGHT = 22;
 const DESK_HIT_PADDING = 8;
 
 const ALERT_COLORS: Record<ForumAlert["level"], string> = {
@@ -265,9 +265,9 @@ function drawCanvas(
   ctx.translate(viewport.offsetX, viewport.offsetY);
   ctx.scale(viewport.scale, viewport.scale);
 
-  drawRooms(ctx, state.rooms, state.layout);
+  drawRooms(ctx, state.rooms, state.entities, state.layout);
   drawGrid(ctx, state.layout);
-  drawEntities(ctx, state.entities, state.layout, selectedEntityId ?? null);
+  drawEntities(ctx, state.entities, state.layout, selectedEntityId ?? null, viewport.scale);
   drawTasks(ctx, state.tasks, state.entities, state.rooms, state.layout);
   drawAlerts(ctx, state.alerts, state.entities, state.rooms, state.layout);
   drawMarkers(ctx, state.markers, state.layout, state.now);
@@ -296,7 +296,18 @@ function drawGrid(ctx: CanvasRenderingContext2D, layout: ForumMapLayout) {
   }
 }
 
-function drawRooms(ctx: CanvasRenderingContext2D, rooms: Map<string, ForumRoom>, layout: ForumMapLayout) {
+function drawRooms(
+  ctx: CanvasRenderingContext2D,
+  rooms: Map<string, ForumRoom>,
+  entities: Map<string, ForumEntity>,
+  layout: ForumMapLayout,
+) {
+  // Precompute entity count per room
+  const entityCountByRoom = new Map<string, number>();
+  entities.forEach((entity) => {
+    entityCountByRoom.set(entity.roomId, (entityCountByRoom.get(entity.roomId) ?? 0) + 1);
+  });
+
   let index = 0;
   rooms.forEach((room) => {
     const corners = [
@@ -317,13 +328,18 @@ function drawRooms(ctx: CanvasRenderingContext2D, rooms: Map<string, ForumRoom>,
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    const label = room.name || room.id;
-    const labelPoint = gridToIso(room.center, layout);
-    ctx.fillStyle = "rgba(243, 234, 217, 0.7)";
-    ctx.font = "12px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
+    // Room header label: "name (count)" drawn near the top edge of the room
+    const roomName = room.name || room.id;
+    const entityCount = entityCountByRoom.get(room.id) ?? 0;
+    const headerLabel = entityCount > 0 ? `${roomName} (${entityCount})` : roomName;
+    // Position label between the top-left and top-right corners
+    const headerX = (corners[0].x + corners[1].x) / 2;
+    const headerY = (corners[0].y + corners[1].y) / 2 + 14;
+    ctx.fillStyle = "rgba(243, 234, 217, 0.85)";
+    ctx.font = "bold 13px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(label, labelPoint.x, labelPoint.y - 24);
+    ctx.fillText(headerLabel, headerX, headerY);
     index += 1;
   });
 }
@@ -333,7 +349,10 @@ function drawEntities(
   entities: Map<string, ForumEntity>,
   layout: ForumMapLayout,
   selectedEntityId: string | null,
+  viewportScale: number,
 ) {
+  const showLabels = viewportScale > 0.6;
+
   entities.forEach((entity) => {
     const iso = gridToIso(entity.position, layout);
     const isDisabled = entity.status === "disabled";
@@ -342,15 +361,22 @@ function drawEntities(
     const deskX = iso.x - DESK_WIDTH / 2;
     const deskY = iso.y - DESK_HEIGHT / 2;
 
-    // Glow layer for active entities — drawn before the fill so it sits underneath
+    // Pulsing ring for active entities — a larger rect at low opacity, no shadow overhead
     if (isActive) {
-      ctx.save();
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = "#4ade80";
-      ctx.fillStyle = "rgba(74, 222, 128, 0.18)";
-      beginRoundedRect(ctx, deskX - 3, deskY - 3, DESK_WIDTH + 6, DESK_HEIGHT + 6, 6);
+      const ringPad = 6;
+      ctx.fillStyle = "rgba(74, 222, 128, 0.3)";
+      ctx.strokeStyle = "rgba(74, 222, 128, 0.45)";
+      ctx.lineWidth = 1.5;
+      beginRoundedRect(
+        ctx,
+        deskX - ringPad,
+        deskY - ringPad,
+        DESK_WIDTH + ringPad * 2,
+        DESK_HEIGHT + ringPad * 2,
+        8,
+      );
       ctx.fill();
-      ctx.restore();
+      ctx.stroke();
     }
 
     ctx.fillStyle = isActive ? lightenColor(color) : color;
@@ -360,18 +386,22 @@ function drawEntities(
     ctx.fill();
     ctx.stroke();
 
-    const label = entity.label ?? entity.id;
-    const subtitle = typeof entity.meta?.subtitle === "string" ? (entity.meta.subtitle as string) : null;
-    ctx.fillStyle = "rgba(243, 234, 217, 0.9)";
-    ctx.font = "11px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(label, iso.x, iso.y + DESK_HEIGHT / 2 + 12);
-
-    if (subtitle) {
-      ctx.fillStyle = "rgba(181, 164, 142, 0.7)";
+    if (showLabels) {
+      const rawLabel = entity.label ?? entity.id;
+      // Truncate to ~12 chars to keep labels tidy
+      const label = rawLabel.length > 12 ? rawLabel.slice(0, 11) + "…" : rawLabel;
+      const subtitle = typeof entity.meta?.subtitle === "string" ? (entity.meta.subtitle as string) : null;
+      ctx.fillStyle = "rgba(243, 234, 217, 0.85)";
       ctx.font = "9px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
-      ctx.fillText(subtitle, iso.x, iso.y + DESK_HEIGHT / 2 + 24);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, iso.x, iso.y + DESK_HEIGHT / 2 + 10);
+
+      if (subtitle) {
+        ctx.fillStyle = "rgba(181, 164, 142, 0.7)";
+        ctx.font = "8px \"Space Grotesk\", \"Helvetica Neue\", sans-serif";
+        ctx.fillText(subtitle, iso.x, iso.y + DESK_HEIGHT / 2 + 21);
+      }
     }
 
     if (selectedEntityId === entity.id) {
