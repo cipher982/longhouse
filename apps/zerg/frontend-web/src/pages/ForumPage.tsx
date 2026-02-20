@@ -211,6 +211,7 @@ export default function ForumPage() {
                         state={session.presence_state}
                         tool={session.presence_tool}
                         heuristicActive={session.status === "working" && session.ended_at == null}
+                        showUnknown={session.ended_at == null}
                       />
                     </div>
                   </button>
