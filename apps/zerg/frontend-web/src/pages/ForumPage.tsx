@@ -27,6 +27,12 @@ function formatRelativeTime(timestamp: string): string {
   return `${days}d ago`;
 }
 
+function sessionSortKey(status: string): number {
+  if (status === "working") return 0;
+  if (status === "idle") return 1;
+  return 2; // completed and everything else
+}
+
 export default function ForumPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -47,9 +53,11 @@ export default function ForumPage() {
 
   const sessions = useMemo(() => {
     const list = sessionsData?.sessions ?? [];
-    return [...list].sort(
-      (a, b) => parseUTC(b.last_activity_at).getTime() - parseUTC(a.last_activity_at).getTime(),
-    );
+    return [...list].sort((a, b) => {
+      const groupDiff = sessionSortKey(a.status) - sessionSortKey(b.status);
+      if (groupDiff !== 0) return groupDiff;
+      return parseUTC(b.last_activity_at).getTime() - parseUTC(a.last_activity_at).getTime();
+    });
   }, [sessionsData]);
 
   const canvasState = useMemo(() => buildForumStateFromSessions(sessions), [sessions]);
@@ -125,30 +133,48 @@ export default function ForumPage() {
                 {sessionsLoading ? "Loading sessions..." : "No sessions found in the last 7 days."}
               </div>
             ) : (
-              sessions.map((session) => (
-                <button
-                  key={session.id}
-                  className={`forum-session-row${
-                    session.id === selectedSessionId ? " forum-session-row--selected" : ""
-                  }`}
-                  type="button"
-                  onClick={() => {
-                    setSelectedSessionId(session.id);
-                  }}
-                >
-                  <div className="forum-session-title">{getSessionDisplayTitle(session)}</div>
-                  <div className="forum-session-meta">
-                    {getSessionRoomLabel(session)} | {session.provider} |{" "}
-                    {formatRelativeTime(session.last_activity_at)}
-                  </div>
-                  <div style={{ marginTop: 4 }}>
-                    <PresenceBadge
-                      state={session.presence_state}
-                      tool={session.presence_tool}
-                    />
-                  </div>
-                </button>
-              ))
+              sessions.map((session) => {
+                const isActive =
+                  session.status === "working" ||
+                  session.presence_state === "thinking" ||
+                  session.presence_state === "running";
+                const isInactive = !isActive && (session.status === "completed" || session.ended_at != null);
+                const rowClass = [
+                  "forum-session-row",
+                  session.id === selectedSessionId ? "forum-session-row--selected" : "",
+                  isActive ? "forum-session-row--active" : "",
+                  isInactive ? "forum-session-row--inactive" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ");
+
+                return (
+                  <button
+                    key={session.id}
+                    className={rowClass}
+                    type="button"
+                    onClick={() => {
+                      setSelectedSessionId(session.id);
+                    }}
+                  >
+                    <div className="forum-session-title">
+                      {isActive && <span className="forum-session-active-dot" />}
+                      {getSessionDisplayTitle(session)}
+                    </div>
+                    <div className="forum-session-meta">
+                      {getSessionRoomLabel(session)} | {session.provider} |{" "}
+                      {formatRelativeTime(session.last_activity_at)}
+                    </div>
+                    <div style={{ marginTop: 4 }}>
+                      <PresenceBadge
+                        state={session.presence_state}
+                        tool={session.presence_tool}
+                        heuristicActive={session.status === "working" && session.ended_at == null}
+                      />
+                    </div>
+                  </button>
+                );
+              })
             )}
           </div>
         </Card>
