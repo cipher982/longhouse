@@ -239,3 +239,35 @@ class SessionEmbedding(AgentsBase):
         Index("ix_session_emb_session", "session_id"),
         Index("ix_session_emb_kind", "kind", "chunk_index"),
     )
+
+
+class SessionPresence(AgentsBase):
+    """Real-time presence state for an active Claude Code session.
+
+    Written by the Stop/UserPromptSubmit/PreToolUse/PostToolUse hooks via
+    POST /api/agents/presence. Rows are upserted (one per session_id) so the
+    table stays small. Stale rows (updated_at > 10 min ago) are treated as
+    gone and can be pruned periodically.
+
+    States:
+        thinking  — UserPromptSubmit fired; LLM is generating tokens
+        running   — PreToolUse fired; a tool is actively executing
+        idle      — Stop fired; session complete, waiting for next prompt
+    """
+
+    __tablename__ = "session_presence"
+
+    session_id = Column(String(255), primary_key=True)
+    state = Column(String(32), nullable=False)  # thinking | running | idle
+    tool_name = Column(String(128), nullable=True)  # set when state=running
+    cwd = Column(String(512), nullable=True)
+    project = Column(String(255), nullable=True)  # basename(cwd)
+    provider = Column(String(64), nullable=False, default="claude")
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (Index("ix_presence_updated", "updated_at"),)
