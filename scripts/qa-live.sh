@@ -77,7 +77,8 @@ if [[ -z "${LONGHOUSE_PASSWORD:-}" ]]; then
   LONGHOUSE_PASSWORD="${LONGHOUSE_PASSWORD%\'}"
   LONGHOUSE_PASSWORD="${LONGHOUSE_PASSWORD#\"}"
   LONGHOUSE_PASSWORD="${LONGHOUSE_PASSWORD%\"}"
-  LONGHOUSE_PASSWORD="$(echo "$LONGHOUSE_PASSWORD" | tr -d '[:space:]')"
+  # Strip trailing newline/carriage-return only — not all whitespace (passwords can contain spaces)
+  LONGHOUSE_PASSWORD="$(echo "$LONGHOUSE_PASSWORD" | tr -d '\n\r')"
 fi
 
 if [[ -z "${LONGHOUSE_PASSWORD:-}" ]]; then

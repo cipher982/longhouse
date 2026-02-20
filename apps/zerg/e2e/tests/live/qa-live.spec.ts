@@ -132,7 +132,15 @@ const test = base.extend<QaFixtures>({
 // Shared error collectors
 // ---------------------------------------------------------------------------
 
-/** Attach console error + 500 response collectors to a page. */
+// Known benign console noise to suppress (browser extensions, HMR, etc.)
+const BENIGN_CONSOLE_PATTERNS = [
+  /Download the React DevTools/,
+  /\[HMR\]/,
+  /Failed to load resource.*favicon/i,
+  /Content Security Policy/,
+];
+
+/** Attach console error + 4xx/5xx response collectors to a page. */
 function attachErrorCollectors(page: Page): {
   consoleErrors: string[];
   serverErrors: string[];
@@ -143,13 +151,7 @@ function attachErrorCollectors(page: Page): {
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
       const text = msg.text();
-      // Filter out benign browser noise
-      if (
-        text.includes('TypeError') ||
-        text.includes('SyntaxError') ||
-        text.includes('ReferenceError') ||
-        text.includes('at ') // stack trace indicator
-      ) {
+      if (!BENIGN_CONSOLE_PATTERNS.some((p) => p.test(text))) {
         consoleErrors.push(text);
       }
     }
@@ -157,8 +159,10 @@ function attachErrorCollectors(page: Page): {
 
   page.on('response', (response) => {
     const url = response.url();
-    if (url.includes('/api/') && response.status() >= 500) {
-      serverErrors.push(`${response.status()} ${url}`);
+    const status = response.status();
+    // Catch 4xx (excluding 401 — handled separately) and all 5xx
+    if (url.includes('/api/') && (status >= 500 || (status >= 400 && status !== 401))) {
+      serverErrors.push(`${status} ${url}`);
     }
   });
 
@@ -284,6 +288,14 @@ test('forum page loads without auth errors', async ({ authedContext }) => {
 
   // The page title "The Forum" should be visible
   await expect(page.getByText('The Forum')).toBeVisible({ timeout: 8_000 });
+
+  // Wait for session rows to appear (loaded async after grid mounts)
+  await page.locator('.forum-session-row')
+    .first()
+    .waitFor({ timeout: 10_000 })
+    .catch(async () => {
+      await failWithScreenshot(page, 'forum-empty', 'Forum page shows no session rows — data not loading or active sessions endpoint broken.');
+    });
 
   await page.close();
 });
