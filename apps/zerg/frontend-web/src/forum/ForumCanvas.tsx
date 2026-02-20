@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -108,7 +109,10 @@ export function ForumCanvas({
     resize();
 
     return () => observer.disconnect();
-  }, [scheduleDraw, state.layout]);
+  // Stable key: only re-center when the grid dimensions actually change,
+  // not on every object reference churn from the 2s poll.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleDraw, state.layout.grid.cols, state.layout.grid.rows]);
 
   type PointerLike = { clientX: number; clientY: number; currentTarget: EventTarget & HTMLElement };
 
