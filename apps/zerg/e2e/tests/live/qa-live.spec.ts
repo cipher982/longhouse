@@ -8,6 +8,8 @@
  * Or:      make qa-live
  */
 
+import { readFileSync } from 'fs';
+import { homedir } from 'os';
 import { test as base, expect, type BrowserContext, type APIRequestContext, type Page } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
@@ -50,7 +52,8 @@ async function passwordLogin(
 type QaFixtures = {
   instanceUrl: string;
   password: string;
-  authToken: string;
+  authToken: string;       // browser JWT from password-login
+  deviceToken: string;     // device token for X-Agents-Token API calls
   authedRequest: APIRequestContext;
   authedContext: BrowserContext;
 };
@@ -76,10 +79,29 @@ const test = base.extend<QaFixtures>({
     }
   },
 
-  authedRequest: async ({ playwright, instanceUrl, authToken }, use) => {
+  deviceToken: async ({}, use) => {
+    // Device token for X-Agents-Token on /api/agents/* endpoints.
+    // CI: set LONGHOUSE_DEVICE_TOKEN env var.
+    // Dev: read from ~/.claude/longhouse-device-token (same file the engine uses).
+    const token =
+      process.env.LONGHOUSE_DEVICE_TOKEN ||
+      (() => {
+        try {
+          return readFileSync(homedir() + '/.claude/longhouse-device-token', 'utf8').trim();
+        } catch {
+          return '';
+        }
+      })();
+    await use(token);
+  },
+
+  authedRequest: async ({ playwright, instanceUrl, deviceToken }, use) => {
+    // /api/agents/* uses X-Agents-Token (device token), not the browser JWT
+    const headers: Record<string, string> = {};
+    if (deviceToken) headers['X-Agents-Token'] = deviceToken;
     const ctx = await playwright.request.newContext({
       baseURL: instanceUrl,
-      extraHTTPHeaders: { Authorization: `Bearer ${authToken}` },
+      extraHTTPHeaders: headers,
       timeout: 30_000,
     });
     await use(ctx);
