@@ -219,6 +219,7 @@ class SessionResponse(UTCBaseModel):
     last_activity_at: Optional[datetime] = Field(None, description="Most recent event timestamp")
     summary: Optional[str] = Field(None, description="Session summary")
     summary_title: Optional[str] = Field(None, description="Short session title")
+    first_user_message: Optional[str] = Field(None, description="First user message (truncated)")
     match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role for matching event")
@@ -504,6 +505,32 @@ async def _generate_summary_background(session_id: str) -> None:
         await _generate_summary_impl(session_id)
 
 
+async def _set_structured_title_if_empty(session_id: str) -> None:
+    """Set a structured fallback title from project/branch when no LLM title exists."""
+    from sqlalchemy import update as sa_update
+
+    from zerg.database import get_session_factory
+
+    factory = get_session_factory()
+    db = factory()
+    try:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if not session or session.summary_title:
+            return
+        parts = [p for p in [session.project, session.git_branch] if p]
+        if not parts:
+            return
+        title = " · ".join(parts)
+        db.execute(sa_update(AgentSession).where(AgentSession.id == session_id).values(summary_title=title))
+        db.commit()
+        logger.debug("Set structured title %r for session %s", title, session_id)
+    except Exception:
+        logger.exception("Failed to set structured title for session %s", session_id)
+        db.rollback()
+    finally:
+        db.close()
+
+
 async def _generate_summary_impl(session_id: str) -> None:
     from sqlalchemy import update
 
@@ -529,6 +556,7 @@ async def _generate_summary_impl(session_id: str) -> None:
                 client, model, _provider = get_llm_client_with_db_fallback("summarization", db=_config_db)
             except ValueError as e:
                 logger.warning("Summarization misconfigured — session %s will NOT be summarized: %s", session_id, e)
+                await _set_structured_title_if_empty(session_id)
                 return
     finally:
         _config_db.close()
@@ -1567,6 +1595,7 @@ async def list_sessions(
         session_ids = [s.id for s in sessions]
         match_map = store.get_session_matches(session_ids, query) if query else {}
         activity_map = store.get_last_activity_map(session_ids)
+        first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
 
         response_sessions = [
             SessionResponse(
@@ -1585,6 +1614,7 @@ async def list_sessions(
                 tool_calls=s.tool_calls or 0,
                 summary=s.summary,
                 summary_title=s.summary_title,
+                first_user_message=first_user_map.get(s.id),
                 match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                 match_snippet=(match_map.get(s.id) or {}).get("snippet"),
                 match_role=(match_map.get(s.id) or {}).get("role"),

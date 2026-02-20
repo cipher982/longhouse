@@ -125,12 +125,6 @@ async def fetch_session_from_zerg(session_id: str) -> tuple[bytes, str, str]:
         return response.content, cwd, provider_session_id
 
 
-# Backwards compatibility alias
-async def fetch_session_from_life_hub(session_id: str) -> tuple[bytes, str, str]:
-    """Alias for fetch_session_from_zerg for backwards compatibility."""
-    return await fetch_session_from_zerg(session_id)
-
-
 async def prepare_session_for_resume(
     session_id: str,
     workspace_path: Path,
@@ -298,23 +292,11 @@ async def ship_session_to_zerg(
         return None
 
 
-# Backwards compatibility alias
-async def ship_session_to_life_hub(
-    workspace_path: Path,
-    commis_id: str,
-    claude_config_dir: Path | None = None,
-) -> str | None:
-    """Alias for ship_session_to_zerg for backwards compatibility."""
-    return await ship_session_to_zerg(workspace_path, commis_id, claude_config_dir)
-
-
 __all__ = [
     "encode_cwd_for_claude",
     "fetch_session_from_zerg",
-    "fetch_session_from_life_hub",  # Backwards compatibility
     "prepare_session_for_resume",
     "ship_session_to_zerg",
-    "ship_session_to_life_hub",  # Backwards compatibility
     "SessionLockManager",
     "SessionLock",
     "WorkspaceResolver",

@@ -62,7 +62,11 @@ function SecretForm({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="secret-form">
+    <form
+      onSubmit={handleSubmit}
+      className="secret-form"
+      onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}
+    >
       <div className="secret-form__fields">
         <div className="form-group">
           <label htmlFor="secret-key">Key</label>
