@@ -48,7 +48,7 @@ Read(file_path="artifacts/ui-capture/<timestamp>/timeline-a11y.yml")
 | Scene | What it sets up |
 |-------|-----------------|
 | `demo` | Seeds 2 demo sessions (default) |
-| `empty` | No data, empty state UI |
+| `empty` | No data, empty state UI — calls `DELETE /api/agents/demo` to remove demo sessions (requires AUTH_DISABLED=1) |
 | `onboarding-modal` | Shows first-time setup modal |
 | `missing-api-key` | API key required modal visible |
 
