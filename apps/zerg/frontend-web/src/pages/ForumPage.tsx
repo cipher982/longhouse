@@ -120,7 +120,15 @@ export default function ForumPage() {
     <PageShell size="full" className="forum-map-page">
       <SectionHeader
         title="The Forum"
-        description="Live session desks across your repos"
+        description={
+          sessionsLoading
+            ? "Live session desks across your repos"
+            : activeCount > 0
+              ? <span style={{ color: "#4ade80", fontWeight: 600 }}>{activeCount} agent{activeCount !== 1 ? "s" : ""} working right now</span>
+              : sessions.length > 0
+                ? `All quiet — ${sessions.length} session${sessions.length !== 1 ? "s" : ""} in the last 7 days`
+                : "Live session desks across your repos"
+        }
         actions={
           <div className="forum-map-actions">
             <Button
@@ -193,6 +201,11 @@ export default function ForumPage() {
                       {getSessionRoomLabel(session)} | {session.provider} |{" "}
                       {formatRelativeTime(session.last_activity_at)}
                     </div>
+                    {isActive && session.last_assistant_message && (
+                      <div className="forum-session-snippet">
+                        &ldquo;{session.last_assistant_message.slice(0, 60)}{session.last_assistant_message.length > 60 ? "…" : ""}&rdquo;
+                      </div>
+                    )}
                     <div style={{ marginTop: 4 }}>
                       <PresenceBadge
                         state={session.presence_state}
@@ -302,7 +315,11 @@ export default function ForumPage() {
                     </div>
                   </>
                 ) : (
-                  <div className="forum-selection-empty">Select a session desk to inspect.</div>
+                  <div className="forum-selection-empty forum-selection-empty--prompt">
+                    <span className="forum-selection-empty-line">Click any session in the list</span>
+                    <span className="forum-selection-empty-line">or tap a desk on the map</span>
+                    <span className="forum-selection-empty-line forum-selection-empty-line--action">to drop in.</span>
+                  </div>
                 )}
               </div>
               <div className="forum-stats-bar">

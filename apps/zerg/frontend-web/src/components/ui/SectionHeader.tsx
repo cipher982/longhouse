@@ -3,7 +3,7 @@ import clsx from 'clsx';
 
 interface SectionHeaderProps {
   title: string;
-  description?: string;
+  description?: React.ReactNode;
   actions?: React.ReactNode;
   className?: string;
 }
