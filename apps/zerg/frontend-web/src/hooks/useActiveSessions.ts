@@ -48,7 +48,18 @@ export function useActiveSessions(options: UseActiveSessionsOptions = {}) {
         days_back,
       });
     },
-    refetchInterval: pollInterval,
+    // Stop polling on 401 — session expired; user needs to re-login
+    refetchInterval: (query) => {
+      if (query.state.error && (query.state.error as { status?: number }).status === 401) {
+        return false;
+      }
+      return pollInterval;
+    },
+    retry: (failureCount, error) => {
+      // Don't retry auth errors — show login prompt immediately
+      if ((error as { status?: number }).status === 401) return false;
+      return failureCount < 2;
+    },
     enabled,
     staleTime: 5000,
   });

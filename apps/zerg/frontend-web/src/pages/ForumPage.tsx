@@ -45,11 +45,13 @@ export default function ForumPage() {
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState(false);
 
-  const { data: sessionsData, isLoading: sessionsLoading } = useActiveSessions({
+  const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } = useActiveSessions({
     pollInterval: 2000,
     limit: 50,
     days_back: 7,
   });
+
+  const isAuthError = (sessionsError as { status?: number } | null)?.status === 401;
 
   const sessions = useMemo(() => {
     const list = sessionsData?.sessions ?? [];
@@ -192,7 +194,15 @@ export default function ForumPage() {
         </Card>
 
         <Card className="forum-map-panel forum-map-panel--center">
-          {sessionsLoading ? (
+          {isAuthError ? (
+            <div className="forum-canvas-loading">
+              <span style={{ color: "var(--color-intent-warning, #f59e0b)", fontSize: "1.5rem" }}>⚠</span>
+              <span>Session expired.</span>
+              <Button variant="primary" size="sm" onClick={() => window.location.reload()}>
+                Refresh to log in
+              </Button>
+            </div>
+          ) : sessionsLoading ? (
             <div className="forum-canvas-loading">
               <Spinner size="lg" />
               <span>Loading sessions...</span>
