@@ -60,6 +60,11 @@ export default function ForumPage() {
     });
   }, [sessionsData]);
 
+  const activeCount = useMemo(
+    () => sessions.filter(s => s.status === "working" || s.presence_state === "thinking" || s.presence_state === "running").length,
+    [sessions]
+  );
+
   const canvasState = useMemo(() => buildForumStateFromSessions(sessions), [sessions]);
 
   const selectedSession = selectedSessionId
@@ -123,9 +128,16 @@ export default function ForumPage() {
           <div className="forum-panel-header">
             <div>
               <div className="forum-panel-title">Sessions</div>
-              <div className="forum-panel-subtitle">{sessions.length} sessions</div>
+              <div className="forum-panel-subtitle">{sessions.length} total</div>
             </div>
-            <Badge variant="success">Live</Badge>
+            {activeCount > 0 ? (
+              <span className="forum-active-count">
+                <span className="forum-active-count-dot" />
+                {activeCount} live
+              </span>
+            ) : (
+              <Badge variant="neutral">Idle</Badge>
+            )}
           </div>
           <div className="forum-session-list">
             {sessions.length === 0 ? (
@@ -138,7 +150,7 @@ export default function ForumPage() {
                   session.status === "working" ||
                   session.presence_state === "thinking" ||
                   session.presence_state === "running";
-                const isInactive = !isActive && (session.status === "completed" || session.ended_at != null);
+                const isInactive = !isActive && (session.status === "completed" || session.ended_at != null || session.status === "idle");
                 const rowClass = [
                   "forum-session-row",
                   session.id === selectedSessionId ? "forum-session-row--selected" : "",
