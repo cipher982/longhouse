@@ -37,7 +37,6 @@ from uuid import UUID
 
 import zstandard
 from fastapi import APIRouter
-from fastapi import BackgroundTasks
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
@@ -781,7 +780,6 @@ async def decompress_if_gzipped(request: Request) -> bytes:
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_session(
     request: Request,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -835,16 +833,13 @@ async def ingest_session(
         store = AgentsStore(db)
         result = store.ingest_session(data)
 
-        # Trigger background summary generation (non-blocking, optional)
+        # Enqueue durable background tasks (summary + embedding).
+        # These survive process restarts; the ingest task worker picks them up.
         if result.events_inserted > 0:
-            background_tasks.add_task(
-                _generate_summary_background,
-                str(result.session_id),
-            )
-            background_tasks.add_task(
-                _generate_embeddings_background,
-                str(result.session_id),
-            )
+            from zerg.services.ingest_task_queue import enqueue_ingest_tasks
+
+            enqueue_ingest_tasks(db, str(result.session_id))
+            db.commit()
 
         return IngestResponse(
             session_id=str(result.session_id),

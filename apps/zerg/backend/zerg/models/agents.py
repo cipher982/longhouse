@@ -271,3 +271,42 @@ class SessionPresence(AgentsBase):
     )
 
     __table_args__ = (Index("ix_presence_updated", "updated_at"),)
+
+
+class SessionTask(AgentsBase):
+    """Durable task queue for post-ingest background work (summary + embeddings).
+
+    Replaces FastAPI BackgroundTasks for summary/embedding generation so tasks
+    survive process restarts. Worker polls this table and retries failures.
+
+    task_type: 'summary' | 'embedding'
+    status:    'pending' | 'running' | 'done' | 'failed'
+    """
+
+    __tablename__ = "session_tasks"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id = Column(String(36), nullable=False)
+    task_type = Column(String(32), nullable=False)  # summary | embedding
+    status = Column(String(16), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, server_default=text("0"))
+    max_attempts = Column(Integer, nullable=False, server_default=text("3"))
+    error = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        # Fast lookup of pending tasks ordered by creation time
+        Index("ix_session_tasks_status_created", "status", "created_at"),
+        # Index for dedup check: find existing active tasks per session
+        Index("ix_session_tasks_session_type_status", "session_id", "task_type", "status"),
+    )

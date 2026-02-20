@@ -550,6 +550,23 @@ async def lifespan(app: FastAPI):
                 failed.append(f"watch_renewal ({e})")
                 logger.exception("Failed to start watch_renewal_service")
 
+            # Ingest task worker (durable summary + embedding after session ingest)
+            try:
+                from zerg.database import get_session_factory
+                from zerg.services.ingest_task_queue import reset_stale_running_tasks
+                from zerg.services.ingest_task_queue import run_ingest_task_worker
+
+                _itq_db = get_session_factory()()
+                try:
+                    reset_stale_running_tasks(_itq_db)
+                finally:
+                    _itq_db.close()
+                asyncio.create_task(run_ingest_task_worker())
+                started.append("ingest_task_worker")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"ingest_task_worker ({e})")
+                logger.exception("Failed to start ingest_task_worker")
+
             # Commis job processor (critical for oikos commis)
             try:
                 from zerg.services.commis_job_processor import commis_job_processor
