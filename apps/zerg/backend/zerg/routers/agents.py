@@ -1770,8 +1770,11 @@ async def list_active_sessions(
         last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
 
-        # Load real-time presence signals (one row per session, may be absent)
-        presence_rows = (db.query(SessionPresence).filter(SessionPresence.session_id.in_(session_ids)).all()) if session_ids else []
+        # Load real-time presence signals (one row per session, may be absent).
+        # session_ids contains UUID objects; SessionPresence.session_id is String —
+        # convert to str so the IN comparison matches across types.
+        str_session_ids = [str(sid) for sid in session_ids]
+        presence_rows = (db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()) if str_session_ids else []
         presence_map = {p.session_id: p for p in presence_rows}
         presence_stale_threshold = timedelta(minutes=10)
 
