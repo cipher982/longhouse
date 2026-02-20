@@ -95,6 +95,10 @@ ENGINE="__ENGINE_PATH__"
 if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]; then
   "$ENGINE" ship --file "$TRANSCRIPT" --quiet 2>/dev/null
 fi
+
+# Always exit 0 — hook errors trigger Claude Code's "What should Claude do
+# instead?" prompt, which interrupts the session.
+exit 0
 """
 
 SESSION_START_HOOK_SCRIPT = """\
@@ -139,22 +143,28 @@ exit 0
 _HOOK_MARKER = "longhouse-"
 
 
-def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
+def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict, dict]:
     """Build hook entry dicts with resolved script paths.
 
-    Returns (hook_entry, session_start_entry):
-    - hook_entry: unified script for Stop/UserPromptSubmit/PreToolUse/PostToolUse
+    Returns (stop_entry, lifecycle_entry, session_start_entry):
+    - stop_entry: unified script for Stop (sync, collapsible note — not a banner)
+    - lifecycle_entry: unified script for UserPromptSubmit/PreToolUse/PostToolUse
+      (sync — outbox write is <2ms, silent)
     - session_start_entry: session-start script (sync network call, once per session)
     """
     hook_path = str(hooks_dir / "longhouse-hook.sh")
     session_start_path = str(hooks_dir / "longhouse-session-start.sh")
 
-    # Unified hook — writes to outbox (local, <2ms), no network. async: False is safe.
-    # Stop timeout is 30s to allow the transcript ship to complete.
-    # async must be explicitly False — omitting it may default to True in some Claude versions.
-    hook_entry = {
+    # Stop: sync with longer timeout to allow transcript ship to finish.
+    stop_entry = {
         "hooks": [
             {"type": "command", "command": hook_path, "async": False, "timeout": 30},
+        ],
+    }
+    # Lifecycle events: outbox write is <2ms, sync is safe and silent.
+    lifecycle_entry = {
+        "hooks": [
+            {"type": "command", "command": hook_path, "async": False, "timeout": 5},
         ],
     }
     session_start_entry = {
@@ -167,7 +177,7 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
             }
         ],
     }
-    return hook_entry, session_start_entry
+    return stop_entry, lifecycle_entry, session_start_entry
 
 
 # ---------------------------------------------------------------------------
@@ -350,14 +360,18 @@ def install_hooks(
     # ------------------------------------------------------------------
     # 4. Merge hook entries (using resolved absolute paths)
     # ------------------------------------------------------------------
-    hook_entry, session_start_entry = _make_hook_entries(hooks_dir)
+    stop_entry, lifecycle_entry, session_start_entry = _make_hook_entries(hooks_dir)
     hooks_obj = settings.setdefault("hooks", {})
 
-    # Unified hook on all lifecycle events (outbox write + transcript ship on Stop)
-    for event in ("Stop", "UserPromptSubmit", "PreToolUse", "PostToolUse"):
+    # Stop: async (ship is long-running; sync Stop hooks always show "hook feedback" in Claude)
+    stop_list = hooks_obj.get("Stop", [])
+    hooks_obj["Stop"] = _merge_hooks_for_event(stop_list, stop_entry)
+
+    # Lifecycle events: sync (outbox write <2ms, silent)
+    for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse"):
         raw = hooks_obj.get(event, [])
         event_list = raw if isinstance(raw, list) else []
-        hooks_obj[event] = _merge_hooks_for_event(event_list, hook_entry)
+        hooks_obj[event] = _merge_hooks_for_event(event_list, lifecycle_entry)
 
     # SessionStart hook (shows recent sessions — sync network call, once per session)
     session_start_list = hooks_obj.get("SessionStart", [])
