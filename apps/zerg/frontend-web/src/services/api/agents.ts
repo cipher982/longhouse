@@ -98,7 +98,11 @@ export interface AgentActiveSession {
   presence_state: PresenceState | null;
   presence_tool: string | null;
   presence_updated_at: string | null;
+  // User-driven bucket
+  user_state: "active" | "parked" | "snoozed" | "archived";
 }
+
+export type UserStateAction = "park" | "snooze" | "archive" | "resume";
 
 export interface AgentActiveSessionsResponse {
   sessions: AgentActiveSession[];
@@ -375,4 +379,17 @@ export interface DemoSeedResponse {
  */
 export async function seedDemoSessions(): Promise<DemoSeedResponse> {
   return request<DemoSeedResponse>("/agents/demo", { method: "POST" });
+}
+
+/**
+ * Set user-driven bucket state for a session (park/snooze/archive/resume).
+ */
+export async function setSessionAction(
+  sessionId: string,
+  action: UserStateAction
+): Promise<{ session_id: string; user_state: string }> {
+  return request(`/agents/sessions/${sessionId}/action`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
 }

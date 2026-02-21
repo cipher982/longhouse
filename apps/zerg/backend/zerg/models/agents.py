@@ -91,6 +91,11 @@ class AgentSession(AgentsBase):
     # Embedding tracking (1 = needs embedding, 0 = done; SQLite has no bool)
     needs_embedding = Column(Integer, server_default=text("1"))
 
+    # User-driven bucket classification (set via POST /sessions/{id}/action)
+    # active (default) | parked | snoozed | archived
+    user_state = Column(String(20), nullable=False, server_default=text("'active'"))
+    user_state_at = Column(DateTime(timezone=True), nullable=True)
+
     # Reflection tracking — stamped when session has been analyzed by reflection service
     reflected_at = Column(DateTime(timezone=True), nullable=True)
 
