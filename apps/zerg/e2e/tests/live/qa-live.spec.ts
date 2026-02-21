@@ -235,7 +235,9 @@ test('auth + timeline loads with session rows', async ({ authedContext, instance
 // ---------------------------------------------------------------------------
 
 test('forum page loads without auth errors', async ({ authedContext }) => {
-  test.setTimeout(20_000);
+  // Generous budget: container wait(5s) + title(5s) + row data(20s) + overhead
+  // The active sessions endpoint needs DB warmup time on fresh reprovision.
+  test.setTimeout(45_000);
 
   const page = await authedContext.newPage();
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
@@ -249,11 +251,11 @@ test('forum page loads without auth errors', async ({ authedContext }) => {
 
   await page.goto('/forum', { waitUntil: 'domcontentloaded' });
 
-  // Wait for the forum grid or session list to be present
+  // Wait for the forum container (appears quickly once React mounts)
   await page
     .locator('.forum-map-grid, .forum-session-list, .forum-map-page')
     .first()
-    .waitFor({ timeout: 12_000 })
+    .waitFor({ timeout: 5_000 })
     .catch(async () => {
       // Fallback: just wait for the spinner to clear
       await page.waitForFunction(
@@ -287,12 +289,13 @@ test('forum page loads without auth errors', async ({ authedContext }) => {
   }
 
   // The page title "The Forum" should be visible
-  await expect(page.getByText('The Forum')).toBeVisible({ timeout: 8_000 });
+  await expect(page.getByText('The Forum')).toBeVisible({ timeout: 5_000 });
 
-  // Wait for session rows to appear (loaded async after grid mounts)
+  // Wait for session rows — active sessions endpoint may need a few seconds
+  // after fresh instance start to warm up the DB connection pool.
   await page.locator('.forum-session-row')
     .first()
-    .waitFor({ timeout: 10_000 })
+    .waitFor({ timeout: 20_000 })
     .catch(async () => {
       await failWithScreenshot(page, 'forum-empty', 'Forum page shows no session rows — data not loading or active sessions endpoint broken.');
     });
