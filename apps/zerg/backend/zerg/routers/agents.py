@@ -492,6 +492,9 @@ async def _summarize_and_persist(
     session.summary = summary.summary
     session.summary_title = summary.title
     session.summary_event_count = len(events)
+    # Advance ID cursor so incremental summaries skip already-processed events
+    if events:
+        session.last_summarized_event_id = events[-1].id
     db.commit()
     return summary
 
@@ -581,14 +584,16 @@ async def _generate_summary_impl(session_id: str) -> None:
             logger.warning("Session %s not found for summary generation", session_id)
             return
 
-        all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
-        if not all_events:
-            logger.debug("No events for session %s, skipping summary", session_id)
-            return
-
-        old_count = session.summary_event_count or 0
-        new_events = all_events[old_count:]
-        total_count = len(all_events)
+        # Use ID cursor when available (efficient); fall back to count-based for legacy rows
+        cursor_id = session.last_summarized_event_id
+        if cursor_id is not None:
+            new_events = (
+                db.query(AgentEvent).filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id).order_by(AgentEvent.id).all()
+            )
+        else:
+            old_count = session.summary_event_count or 0
+            all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+            new_events = all_events[old_count:]
 
         if not new_events:
             logger.debug("No new events for session %s, skipping summary", session_id)
@@ -601,6 +606,9 @@ async def _generate_summary_impl(session_id: str) -> None:
         if meaningful_count < 2:
             logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
             return
+
+        # Track the last event ID processed — becomes the new cursor
+        new_last_event_id = new_events[-1].id
 
         summary = await incremental_summary(
             session_id=str(session.id),
@@ -616,20 +624,22 @@ async def _generate_summary_impl(session_id: str) -> None:
             },
         )
 
-        # CAS update: only write if summary_event_count hasn't changed.
+        # CAS update: guard on last_summarized_event_id (or summary_event_count for legacy rows).
         # On conflict, retry once with fresh state (handles back-to-back ingests).
         for _attempt in range(2):
-            values = {"summary_event_count": total_count}
+            values: dict = {"last_summarized_event_id": new_last_event_id}
             if summary:
                 values["summary"] = summary.summary
                 values["summary_title"] = summary.title
 
-            result = db.execute(
-                update(AgentSession)
-                .where(AgentSession.id == session_id)
-                .where(AgentSession.summary_event_count == old_count)
-                .values(**values)
-            )
+            stmt = update(AgentSession).where(AgentSession.id == session_id)
+            if cursor_id is not None:
+                stmt = stmt.where(AgentSession.last_summarized_event_id == cursor_id)
+            else:
+                # Legacy: guard on count for sessions that haven't migrated to ID cursor yet
+                stmt = stmt.where(AgentSession.summary_event_count == (session.summary_event_count or 0))
+
+            result = db.execute(stmt.values(**values))
             if result.rowcount > 0:
                 db.commit()
                 if summary:
@@ -638,17 +648,26 @@ async def _generate_summary_impl(session_id: str) -> None:
                     logger.debug("No meaningful content for session %s, advanced cursor only", session_id)
                 break
 
-            # CAS conflict — re-read and retry with current state
+            # CAS conflict — re-read and retry with fresh cursor state
             db.rollback()
             session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
             if not session:
                 return
-            old_count = session.summary_event_count or 0
-            all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
-            total_count = len(all_events)
-            new_events = all_events[old_count:]
+            cursor_id = session.last_summarized_event_id
+            if cursor_id is not None:
+                new_events = (
+                    db.query(AgentEvent)
+                    .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
+                    .order_by(AgentEvent.id)
+                    .all()
+                )
+            else:
+                old_count = session.summary_event_count or 0
+                all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+                new_events = all_events[old_count:]
             if not new_events:
                 return
+            new_last_event_id = new_events[-1].id
             new_event_dicts = _events_to_dicts(new_events)
             # Re-run summarization with fresh data
             summary = await incremental_summary(
@@ -1958,7 +1977,7 @@ async def reset_demo_sessions(
     deleted = db.query(AgentSession).filter(AgentSession.device_id == "demo-mac").delete(synchronize_session=False)
     db.commit()
 
-    return DemoSeedResponse(seeded=True, sessions_created=deleted)
+    return DemoSeedResponse(seeded=False, sessions_created=deleted)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)

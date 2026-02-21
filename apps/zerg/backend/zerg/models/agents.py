@@ -81,7 +81,8 @@ class AgentSession(AgentsBase):
     # Pre-computed summary (generated async after ingest)
     summary = Column(Text, nullable=True)  # 2-4 sentence quick summary
     summary_title = Column(String(200), nullable=True)  # Short title for briefing
-    summary_event_count = Column(Integer, server_default=text("0"))  # Events covered by current summary
+    summary_event_count = Column(Integer, server_default=text("0"))  # Events covered by current summary (legacy count-based cursor)
+    last_summarized_event_id = Column(Integer, nullable=True)  # ID of last AgentEvent included in summary (efficient cursor)
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
