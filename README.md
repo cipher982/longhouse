@@ -67,6 +67,34 @@ git clone https://github.com/cipher982/longhouse
 cd longhouse && make dev
 ```
 
+<!-- readme-test: verifies install from source and health endpoint -->
+```readme-test
+{
+  "name": "longhouse-serve-health",
+  "mode": "smoke",
+  "workdir": ".",
+  "timeout": 90,
+  "env": {
+    "AUTH_DISABLED": "1",
+    "SKIP_DEMO_SEED": "1"
+  },
+  "steps": [
+    "uv venv .tmp-readme-serve-venv --python 3.12 -q",
+    ". .tmp-readme-serve-venv/bin/activate",
+    "uv pip install -e apps/zerg/backend -q",
+    "DATABASE_URL=sqlite:///$(mktemp -d)/test.db longhouse serve --port 47398 &",
+    "SERVER_PID=$!",
+    "sleep 4",
+    "curl -sf http://localhost:47398/api/health",
+    "kill $SERVER_PID 2>/dev/null || true"
+  ],
+  "cleanup": [
+    "pkill -f 'longhouse serve.*47398' 2>/dev/null || true",
+    "rm -rf .tmp-readme-serve-venv"
+  ]
+}
+```
+
 ## Configuration
 
 Set `LONGHOUSE_PASSWORD` (plaintext) or `LONGHOUSE_PASSWORD_HASH` (recommended) for remote access authentication.

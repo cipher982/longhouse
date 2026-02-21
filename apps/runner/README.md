@@ -31,3 +31,17 @@ docker run -d --name longhouse-runner \
 - `RUNNER_SECRET`
 
 Optional: `RUNNER_CAPABILITIES`, `HEARTBEAT_INTERVAL_MS`.
+
+<!-- readme-test: verifies bun install and TypeScript type-check -->
+```readme-test
+{
+  "name": "runner-install-typecheck",
+  "mode": "smoke",
+  "workdir": "apps/runner",
+  "timeout": 120,
+  "steps": [
+    "bun install --frozen-lockfile",
+    "bunx tsc --noEmit"
+  ]
+}
+```
