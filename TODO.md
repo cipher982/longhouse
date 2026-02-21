@@ -15,11 +15,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **Forum extended state + bucket actions** — `needs_user`, `parked`, `resumed` states; Park/Snooze/Archive actions in Forum. [Details](#product-forum-discovery-ux--explicit-presence-signals-7)
-2. **Ingest: embedding cursor** — session-level `needs_embedding` flag still loads all events; switch to per-event high-water mark. [Details](#tech-debt-ingest-pipeline-reliability--efficiency)
-3. **README Test CI** — Not started, well-scoped. [Details](#qatest-readme-test-ci-5)
-4. **Hook Presence Spool** — ✅ DONE. Hook writes to `~/.claude/outbox/`, daemon drains every 1s. See `apps/engine/src/outbox.rs`.
-5. **Oikos Dispatch Contract** — Deferred until usage demands it.
+1. **README Test CI** — Not started, well-scoped. [Details](#qatest-readme-test-ci-5)
+2. **Forum extended state model** — `needs_user`, `blocked` beyond the bucket actions already shipped. Requires hook support that doesn't exist yet — defer unless hooks add it.
+3. **Oikos Dispatch Contract** — Deferred until usage demands it.
 
 ---
 
@@ -27,14 +25,14 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 Make the Forum the canonical discovery UI for sessions, with **explicit** state signals.
 
-**Status (2026-02-21):** Core presence + Unknown badge complete. Remaining: extended state model + bucket actions.
+**Status (2026-02-21):** All core items complete.
 
 - [x] Presence ingestion + storage — `session_presence` table, `POST /api/agents/presence`.
 - [x] Presence emission — `UserPromptSubmit→thinking`, `PreToolUse→running`, `Stop→idle`.
 - [x] Forum UI with real state — active rows glow green, inactive fade, canvas entities pulse.
 - [x] Unknown state — `showUnknown` prop on `PresenceBadge`; live sessions without signals show dim gray "Unknown".
-- [ ] Define extended state model: `needs_user`, `blocked`, `parked`, `resumed` — beyond thinking/running/idle.
-- [ ] Add user actions: Park, Snooze, Archive (emit explicit events, change display state).
+- [x] User bucket actions — Park/Snooze/Archive/Resume via `POST /agents/sessions/{id}/action`; `user_state` column on `AgentSession`; parked rows dimmed in Forum; archived excluded from list.
+- [ ] Extended hook states (`needs_user`, `blocked`) — deferred until hooks support emitting them.
 
 ---
 
@@ -43,7 +41,7 @@ Make the Forum the canonical discovery UI for sessions, with **explicit** state 
 **Status (2026-02-21):**
 - ✅ Durable task queue: `SessionTask` model + polling worker (`ingest_task_queue.py`). Replaces BackgroundTasks.
 - ✅ Summary cursor: `last_summarized_event_id` on `AgentSession`. `_generate_summary_impl` now loads only new events (id > cursor) instead of all events. Legacy count-based fallback for old rows.
-- [ ] Embedding cursor: session-level `needs_embedding=0/1` still has no per-event high-water mark. New events after initial embedding never get re-embedded. Fix: add `last_embedded_event_id` column (same pattern as summary cursor).
+- [x] Embedding cursor: `ingest_session()` now resets `needs_embedding=1` when new events are inserted; `embed_session()` deduplicates via `content_hash` so no redundant work. (commit `e7d561f2`)
 
 **Note on title_generator.py:** Serves Oikos *chat thread* titles (`/conversation/title` endpoint). Not a duplicate of session summary — leave it.
 
