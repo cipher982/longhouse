@@ -358,12 +358,15 @@ class AgentsStore:
             else:
                 events_skipped += 1
 
-        # Update session counts
+        # Update session counts; reset needs_embedding when new events arrive so
+        # incremental embedding picks up events added after the initial pass.
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if session_obj:
             session_obj.user_messages = (session_obj.user_messages or 0) + user_count
             session_obj.assistant_messages = (session_obj.assistant_messages or 0) + assistant_count
             session_obj.tool_calls = (session_obj.tool_calls or 0) + tool_count
+            if events_inserted > 0:
+                session_obj.needs_embedding = 1  # Re-embed; embed_session deduplicates via content_hash
 
         self.db.commit()
 
