@@ -214,7 +214,7 @@ def configure_gemini(
     prompt: str,
     ctx: ExecutionContext | None = None,
     *,
-    model: str = "gemini-3-flash-preview",
+    model: str = "gemini-3-pro-preview",
     **_: Any,
 ) -> BackendConfig:
     """Configure Gemini backend (Google Gemini CLI).
