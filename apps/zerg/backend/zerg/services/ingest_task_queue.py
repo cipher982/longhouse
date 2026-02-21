@@ -172,8 +172,8 @@ def _mark_status(task_id: str, final_status: str, error: str | None, retry: bool
             task.status = final_status
             if retry:
                 logger.warning("Task %s exhausted %d attempts → failed", task_id, task.max_attempts)
-        if error is not None:
-            task.error = error[:1000]
+        # Always overwrite error: clears stale error on success, records new on failure
+        task.error = error[:1000] if error is not None else None
         task.updated_at = datetime.now(timezone.utc)
         db.commit()
     except Exception:
