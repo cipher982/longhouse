@@ -22,4 +22,9 @@ export TESTING=1
 # Always use in-memory SQLite for lite tests — zero disk I/O
 export DATABASE_URL="sqlite://"
 
+# Required by zerg/utils/crypto.py at import time (module-level Fernet init).
+# Tests that use crypto functionality (e.g. test_email_config.py) will fail
+# to collect without this, causing pytest INTERNALERROR (SystemExit during import).
+export FERNET_SECRET="${FERNET_SECRET:-Mj7MFJspDPjiFBGHZJ5hnx70XAFJ_En6ofIEhn3BoXw=}"
+
 uv run --extra dev pytest tests_lite/ -p no:warnings --tb=short "$@"
