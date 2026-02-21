@@ -1,0 +1,36 @@
+name: README Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "packages/*/README.md"
+      - "apps/*/README.md"
+      - "scripts/run-readme-tests.py"
+  schedule:
+    # Nightly at 6am UTC — catches silent drift even without README changes
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Test mode (smoke or full)"
+        default: "smoke"
+        required: false
+
+jobs:
+  readme-smoke:
+    name: README smoke tests
+    runs-on: cube
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run readme-test blocks
+        run: make test-readmes MODE=${{ github.event.inputs.mode || 'smoke' }}
