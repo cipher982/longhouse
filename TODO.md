@@ -15,9 +15,9 @@ Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/
 
 ## What's Next (Priority Order)
 
-1. **README Test CI** — Not started, well-scoped. [Details](#qatest-readme-test-ci-5)
-2. **Forum extended state model** — `needs_user`, `blocked` beyond the bucket actions already shipped. Requires hook support that doesn't exist yet — defer unless hooks add it.
-3. **Oikos Dispatch Contract** — Deferred until usage demands it.
+1. **Forum extended state model** — `needs_user`, `blocked` beyond bucket actions. Requires hooks that don't exist yet — defer.
+2. **Oikos Dispatch Contract** — Deferred until usage demands it.
+3. **README Test CI** — ✅ Done. `scripts/run-readme-tests.py` + `make test-readmes` + `.github/workflows/readme-tests.yml` + 3 smoke blocks. (commit `d14b3588`)
 
 ---
 
@@ -62,13 +62,15 @@ Research doc: `docs/specs/3a-deferred-research.md` (commit `16c531e6`)
 
 ---
 
-## [QA/Test] README Test CI (5)
+## [QA/Test] ✅ README Test CI
 
-- [ ] Define `readme-test` JSON block spec (steps, workdir, env, mode, timeout, cleanup).
-- [ ] Implement `scripts/run-readme-tests.sh` (extract + run in temp clone, fail fast, save logs).
-- [ ] Add `make test-readmes` target (smoke vs full mode flags).
-- [ ] Add GitHub Actions workflow using `runs-on: cube` for PR smoke and nightly full.
-- [ ] Add `readme-test` blocks to root README + runner/sauron/hatch-agent READMEs.
+Done. (commit `d14b3588`)
+
+- [x] JSON block spec: ` ```readme-test ` fenced blocks with `name/mode/workdir/timeout/env/steps/cleanup`.
+- [x] `scripts/run-readme-tests.py` — Python extractor (state machine) + runner; fail-fast, streams output.
+- [x] `make test-readmes [MODE=smoke|full]` Makefile target.
+- [x] `.github/workflows/readme-tests.yml` — push (path-filtered), nightly 6am UTC, workflow_dispatch; `runs-on: cube`.
+- [x] Smoke blocks: root README (install+serve+health), hatch-agent (install+help), runner (bun install+tsc).
 
 ---
 
