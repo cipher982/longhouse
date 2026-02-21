@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { setSessionAction } from "../services/api/agents";
+import type { UserStateAction } from "../services/api/agents";
 import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../components/ui";
 import { PresenceBadge, PresenceHero } from "../components/PresenceBadge";
 import { SessionChat } from "../components/SessionChat";
@@ -116,6 +118,20 @@ export default function ForumPage() {
     setFocusEntityId((prev) => (prev === selectedSessionId ? null : selectedSessionId));
   };
 
+  const handleSessionAction = useCallback(async (action: UserStateAction) => {
+    if (!selectedSessionId) return;
+    try {
+      await setSessionAction(selectedSessionId, action);
+      queryClient.invalidateQueries({ queryKey: ["active-sessions"] });
+      if (action === "archive" || action === "snooze") {
+        // Session disappears from Forum after archiving/snoozing
+        setSelectedSessionId(null);
+      }
+    } catch (e) {
+      console.error("Session action failed", e);
+    }
+  }, [selectedSessionId, queryClient]);
+
   return (
     <PageShell size="full" className="forum-map-page">
       <SectionHeader
@@ -174,12 +190,14 @@ export default function ForumPage() {
                   session.status === "working" ||
                   session.presence_state === "thinking" ||
                   session.presence_state === "running";
+                const isParked = session.user_state === "parked";
                 const isInactive = !isActive && (session.status === "completed" || session.ended_at != null || session.status === "idle");
                 const rowClass = [
                   "forum-session-row",
                   session.id === selectedSessionId ? "forum-session-row--selected" : "",
                   isActive ? "forum-session-row--active" : "",
-                  isInactive ? "forum-session-row--inactive" : "",
+                  isInactive && !isParked ? "forum-session-row--inactive" : "",
+                  isParked ? "forum-session-row--parked" : "",
                 ]
                   .filter(Boolean)
                   .join(" ");
@@ -311,6 +329,26 @@ export default function ForumPage() {
                       {selectedSession.provider === "claude" && (
                         <Button size="sm" variant="secondary" onClick={() => setChatMode(true)}>
                           Chat
+                        </Button>
+                      )}
+                      {selectedSession.user_state === "active" && (
+                        <Button size="sm" variant="ghost" onClick={() => handleSessionAction("park")}>
+                          Park
+                        </Button>
+                      )}
+                      {selectedSession.user_state === "active" && (
+                        <Button size="sm" variant="ghost" onClick={() => handleSessionAction("snooze")}>
+                          Snooze
+                        </Button>
+                      )}
+                      {selectedSession.user_state !== "archived" && (
+                        <Button size="sm" variant="ghost" onClick={() => handleSessionAction("archive")}>
+                          Archive
+                        </Button>
+                      )}
+                      {selectedSession.user_state !== "active" && (
+                        <Button size="sm" variant="tertiary" onClick={() => handleSessionAction("resume")}>
+                          Resume
                         </Button>
                       )}
                     </div>

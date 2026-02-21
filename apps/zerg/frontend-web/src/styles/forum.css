@@ -171,6 +171,18 @@
     filter: saturate(0.7);
   }
 
+  /* ── Parked: visible but clearly deprioritised ──────────────────────── */
+  .forum-session-row--parked {
+    opacity: 0.45;
+    filter: saturate(0.3) brightness(0.85);
+    border-style: dashed;
+  }
+
+  .forum-session-row--parked:hover {
+    opacity: 0.65;
+    filter: saturate(0.5);
+  }
+
   /* ── Active dot ─────────────────────────────────────────────────────── */
   .forum-session-active-dot {
     display: inline-block;

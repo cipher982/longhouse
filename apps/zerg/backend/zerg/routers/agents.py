@@ -296,6 +296,8 @@ class ActiveSessionResponse(UTCBaseModel):
     presence_state: Optional[str] = Field(None, description="Real-time state: thinking|running|idle")
     presence_tool: Optional[str] = Field(None, description="Tool currently executing (when state=running)")
     presence_updated_at: Optional[datetime] = Field(None, description="When presence was last signalled")
+    # User-driven bucket
+    user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
 
 
 class ActiveSessionsResponse(UTCBaseModel):
@@ -1800,6 +1802,9 @@ async def list_active_sessions(
         now = datetime.now(timezone.utc)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
+            # Skip archived sessions from Forum by default
+            if getattr(s, "user_state", None) == "archived":
+                continue
             last_activity_at = last_activity.get(s.id) or s.ended_at or s.started_at
             if not last_activity_at:
                 last_activity_at = now
@@ -1854,6 +1859,7 @@ async def list_active_sessions(
                     presence_state=presence.state if presence_fresh else None,
                     presence_tool=presence.tool_name if presence_fresh else None,
                     presence_updated_at=presence.updated_at if presence_fresh else None,
+                    user_state=getattr(s, "user_state", None) or "active",
                 )
             )
 
@@ -1978,6 +1984,56 @@ async def reset_demo_sessions(
     db.commit()
 
     return DemoSeedResponse(seeded=False, sessions_created=deleted)
+
+
+# ---------------------------------------------------------------------------
+# Session bucket actions (Park / Snooze / Archive / Resume)
+# ---------------------------------------------------------------------------
+
+VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
+
+
+class SessionActionRequest(BaseModel):
+    action: str = Field(..., description="park | snooze | archive | resume")
+
+
+class SessionActionResponse(BaseModel):
+    session_id: str
+    user_state: str
+
+
+@router.post("/sessions/{session_id}/action", response_model=SessionActionResponse)
+async def set_session_action(
+    session_id: UUID,
+    body: SessionActionRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> SessionActionResponse:
+    """Set user-driven bucket state for a session (park/snooze/archive/resume).
+
+    - park: keep visible but visually dimmed; user is aware, not acting
+    - snooze: hide from Forum until the session signals again
+    - archive: hide from Forum permanently (still searchable)
+    - resume: return to active (un-park/snooze/archive)
+    """
+    action_to_state = {"park": "parked", "snooze": "snoozed", "archive": "archived", "resume": "active"}
+    if body.action not in action_to_state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid action '{body.action}'. Must be one of: {', '.join(sorted(action_to_state))}",
+        )
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    new_state = action_to_state[body.action]
+    session.user_state = new_state
+    session.user_state_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return SessionActionResponse(session_id=str(session_id), user_state=new_state)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)

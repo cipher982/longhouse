@@ -430,6 +430,7 @@ export default function SessionDetailPage() {
         presence_state: null,
         presence_tool: null,
         presence_updated_at: null,
+        user_state: "active",
       }
     : null;
 
