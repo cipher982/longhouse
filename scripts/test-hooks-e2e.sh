@@ -38,7 +38,9 @@ section "Prerequisites"
 command -v jq  >/dev/null 2>&1 && pass "jq available"      || { fail "jq not installed"; exit 1; }
 command -v curl >/dev/null 2>&1 && pass "curl available"    || { fail "curl not installed"; exit 1; }
 
-launchctl list | grep -q "com.longhouse.shipper" \
+# Use grep -c to avoid SIGPIPE with pipefail (grep -q exits early, breaking the pipe)
+DAEMON_RUNNING=$(launchctl list 2>/dev/null | grep -c "com.longhouse.shipper" || true)
+[ "$DAEMON_RUNNING" -gt 0 ] \
   && pass "daemon running (com.longhouse.shipper)" \
   || { fail "daemon not running — start with: longhouse connect"; exit 1; }
 
@@ -111,6 +113,21 @@ else
   # Clean up and fail
   rm -f "$FINALFILE"
   fail "outbox file not drained after 10s — daemon may not be posting to API"
+fi
+
+# Verify presence endpoint is reachable and accepts events (not just file-gone).
+# File deletion alone is a false positive — post_json used to return Ok() on any
+# HTTP status. This direct curl confirms the full auth+API path works.
+HTTP_STATUS="$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+  -H "X-Agents-Token: $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"session_id\":\"$SESSION_ID\",\"state\":\"thinking\",\"tool_name\":\"\",\"cwd\":\"$PWD\"}" \
+  "$API_URL/api/agents/presence" 2>/dev/null)"
+
+if [ "$HTTP_STATUS" = "204" ]; then
+  pass "presence endpoint reachable and authenticated (HTTP 204)"
+else
+  fail "presence endpoint returned HTTP $HTTP_STATUS — expected 204 (auth or routing issue)"
 fi
 
 # ---------------------------------------------------------------------------

@@ -49,7 +49,8 @@ HOOK_SCRIPT = """\
 # Longhouse unified hook — presence outbox write + transcript ship
 # Installed by: longhouse connect --install
 # Registered on: Stop, UserPromptSubmit, PreToolUse, PostToolUse
-# No network calls — writes to local outbox, daemon handles upload.
+# Presence: no network — writes to local outbox, daemon handles upload.
+# Stop also runs longhouse-engine ship (local binary, ships transcript).
 INPUT=$(cat)
 
 # Require jq — exit silently if missing (hook is best-effort)

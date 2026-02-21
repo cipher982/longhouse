@@ -168,12 +168,15 @@ impl ShipperClient {
         }
     }
 
-    /// POST a small JSON payload (non-compressed). Used for heartbeat.
+    /// POST a small JSON payload (non-compressed). Used for heartbeat and presence.
+    /// Returns Err on network errors AND on non-2xx HTTP status codes, so callers
+    /// can distinguish success from server-side rejection.
     pub async fn post_json(&self, path_suffix: &str, body: Vec<u8>) -> Result<()> {
         let url = self
             .ingest_url
             .replace("/api/agents/ingest", path_suffix);
-        self.client
+        let resp = self
+            .client
             .post(&url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             // Remove Content-Encoding for uncompressed requests
@@ -181,7 +184,9 @@ impl ShipperClient {
             .body(body)
             .send()
             .await
-            .context("heartbeat POST failed")?;
+            .context("POST failed")?;
+        resp.error_for_status()
+            .context("POST returned non-2xx")?;
         Ok(())
     }
 
