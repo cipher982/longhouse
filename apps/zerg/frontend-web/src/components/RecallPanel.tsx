@@ -37,7 +37,7 @@ function RecallCard({ match }: { match: RecallMatch }) {
     <div className="recall-card" data-testid="recall-card">
       <div className="recall-card-header">
         <Link
-          to={`/timeline/${match.session_id}`}
+          to={match.match_event_id ? `/timeline/${match.session_id}?event_id=${match.match_event_id}` : `/timeline/${match.session_id}`}
           className="recall-card-session-link"
           title="Open session"
         >
@@ -56,7 +56,10 @@ function RecallCard({ match }: { match: RecallMatch }) {
         ))}
       </div>
       <div className="recall-card-actions">
-        <Link to={`/timeline/${match.session_id}`} className="recall-card-open">
+        <Link
+          to={match.match_event_id ? `/timeline/${match.session_id}?event_id=${match.match_event_id}` : `/timeline/${match.session_id}`}
+          className="recall-card-open"
+        >
           Open session →
         </Link>
       </div>

@@ -122,10 +122,10 @@ function getSessionTitle(session: AgentSession): string {
   if (isValidTitle(session.project)) return session.project;
   if (isValidTitle(session.git_branch)) return session.git_branch;
 
-  // Try cwd folder
+  // Try cwd folder (relaxed check — any non-empty folder name beats "Claude session")
   if (session.cwd) {
     const folder = session.cwd.split("/").pop();
-    if (isValidTitle(folder)) return folder;
+    if (folder && folder.length >= 2) return folder;
   }
 
   // Try first user message snippet
@@ -134,8 +134,10 @@ function getSessionTitle(session: AgentSession): string {
     if (snippet) return snippet;
   }
 
-  // Fallback: "Claude session" (capitalized provider)
-  return `${session.provider.charAt(0).toUpperCase() + session.provider.slice(1)} session`;
+  // Fallback: include date so sessions are at least distinguishable
+  const date = session.started_at ? new Date(session.started_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+  const provider = session.provider.charAt(0).toUpperCase() + session.provider.slice(1);
+  return date ? `${provider} · ${date}` : `${provider} session`;
 }
 
 function escapeRegExp(value: string): string {

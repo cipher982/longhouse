@@ -307,6 +307,7 @@ export interface RecallMatch {
   event_index_end: number | null;
   total_events: number;
   context: RecallContextTurn[];
+  match_event_id: number | null;
 }
 
 export interface RecallContextTurn {
