@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     instance_aws_ses_region: str | None = None
     instance_from_email: str | None = None
 
+    # SSH — injected so jobs can SSH to infrastructure hosts
+    instance_ssh_private_key_b64: str | None = None
+
     class Config:
         env_prefix = "CONTROL_PLANE_"
 

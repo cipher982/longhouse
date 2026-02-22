@@ -125,6 +125,9 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
         if settings.instance_openai_base_url:
             env["OPENAI_BASE_URL"] = settings.instance_openai_base_url
 
+    if settings.instance_ssh_private_key_b64:
+        env["SSH_PRIVATE_KEY_B64"] = settings.instance_ssh_private_key_b64
+
     return env
 
 
@@ -201,6 +204,7 @@ class Provisioner:
             environment=env,
             volumes=volumes,
             ports=ports,
+            extra_hosts={"host.docker.internal": "host-gateway"},
         )
 
         self.ensure_network(container)
