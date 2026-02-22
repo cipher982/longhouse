@@ -235,7 +235,7 @@ class SessionSummaryResponse(UTCBaseModel):
     started_at: datetime = Field(..., description="Session start time")
     ended_at: Optional[datetime] = Field(None, description="Session end time")
     duration_minutes: Optional[int] = Field(None, description="Duration in minutes")
-    turn_count: int = Field(..., description="Total user + assistant messages")
+    turn_count: int = Field(..., description="Number of user messages (exchanges)")
     last_user_message: Optional[str] = Field(None, description="Last user message (truncated)")
     last_ai_message: Optional[str] = Field(None, description="Last assistant message (truncated)")
 
@@ -1947,7 +1947,7 @@ async def list_session_summaries(
         for s in sessions:
             end_time = s.ended_at or now
             duration_minutes = int((end_time - s.started_at).total_seconds() / 60) if s.started_at else None
-            turn_count = (s.user_messages or 0) + (s.assistant_messages or 0)
+            turn_count = s.user_messages or 0
 
             summaries.append(
                 SessionSummaryResponse(
