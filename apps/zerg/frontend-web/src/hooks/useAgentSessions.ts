@@ -4,7 +4,7 @@
  * Used by the Session Picker modal and other session UIs.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import {
   fetchAgentSessions,
   fetchAgentSession,
@@ -44,6 +44,7 @@ export function useAgentSessions(
     refetchInterval: options.refetchInterval,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 
