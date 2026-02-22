@@ -69,6 +69,8 @@ class AgentSession(AgentsBase):
     # Timing
     started_at = Column(DateTime(timezone=True), nullable=False, index=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
+    # NOTE: last_activity_at is NOT a column — it is computed at API time as
+    # max(AgentEvent.timestamp) per session. See agents_store.get_last_activity_map().
 
     # Counts (denormalized for fast queries)
     user_messages = Column(Integer, default=0)
