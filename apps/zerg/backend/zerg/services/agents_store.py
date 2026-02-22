@@ -396,6 +396,7 @@ class AgentsStore:
         query: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
+        exclude_user_states: Optional[list[str]] = None,
     ) -> tuple[List[AgentSession], int]:
         """List sessions with optional filters.
 
@@ -425,6 +426,11 @@ class AgentsStore:
             stmt = stmt.where(AgentSession.started_at >= since)
         if until:
             stmt = stmt.where(AgentSession.started_at <= until)
+
+        # Exclude sessions by user_state bucket (archived, snoozed, etc.)
+        # NULL user_state is treated as 'active' (legacy rows pre-dating the column).
+        if exclude_user_states:
+            stmt = stmt.where((AgentSession.user_state.notin_(exclude_user_states)) | (AgentSession.user_state.is_(None)))
 
         # Content search requires joining events
         if query:

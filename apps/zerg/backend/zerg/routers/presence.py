@@ -30,6 +30,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.routers.agents import verify_agents_token
 
@@ -91,5 +92,23 @@ async def upsert_presence(
         )
     )
     db.execute(stmt)
+
+    # Auto-resume snoozed sessions when they emit a new active signal.
+    # A snoozed session signaling again means the user is back — show it.
+    if payload.state in ("thinking", "running"):
+        try:
+            from uuid import UUID
+
+            session_uuid = UUID(payload.session_id)
+            db.query(AgentSession).filter(
+                AgentSession.id == session_uuid,
+                AgentSession.user_state == "snoozed",
+            ).update(
+                {"user_state": "active", "user_state_at": now},
+                synchronize_session=False,
+            )
+        except (ValueError, AttributeError):
+            pass  # session_id not a valid UUID — skip silently
+
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
