@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback } from "react";
+import "../styles/briefings.css";
 import { useBriefing } from "../hooks/useAgentSessions";
 import { useAgentFilters } from "../hooks/useAgentSessions";
 import {

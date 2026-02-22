@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from "react";
+import "../styles/recall-panel.css";
 import { Link } from "react-router-dom";
 import { useRecall } from "../hooks/useAgentSessions";
 import type { RecallMatch, RecallContextTurn, RecallFilters } from "../services/api/agents";
