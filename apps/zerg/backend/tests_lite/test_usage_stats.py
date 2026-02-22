@@ -1,111 +1,102 @@
-"""Unit tests for token daily stats rollup."""
-import asyncio
+"""Unit tests for usage-stats endpoint (live query against sessions table)."""
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import text
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from zerg.database import make_engine
+from zerg.main import api_app
+from zerg.database import get_db
 from zerg.models.agents import AgentsBase, AgentSession
 
 
 def _make_db(tmp_path):
-    engine = make_engine(f"sqlite:///{tmp_path}/test.db")
-    engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
-    Session = sessionmaker(bind=engine)
-    return Session()
+    engine = create_engine(f"sqlite:///{tmp_path}/test.db")
+    AgentsBase.metadata.create_all(engine)
+    return sessionmaker(bind=engine)
 
 
-def _add_session(db, provider, started_days_ago=0):
-    """Add a session. AgentSession has no model/approx_token_count columns yet."""
+def _add_session(db, provider, user_msgs=1, asst_msgs=1, tool_calls=0, started_days_ago=0):
     now = datetime.now(timezone.utc)
     s = AgentSession(
         provider=provider,
         environment="production",
         started_at=now - timedelta(days=started_days_ago, hours=1),
         ended_at=now - timedelta(days=started_days_ago),
-        user_messages=1,
-        assistant_messages=1,
-        tool_calls=0,
+        user_messages=user_msgs,
+        assistant_messages=asst_msgs,
+        tool_calls=tool_calls,
         needs_embedding=0,
-        user_state=None,
     )
     db.add(s)
     db.commit()
-    return s
 
 
-def _run_rollup(db):
-    """Run the token rollup synchronously for testing."""
-    from zerg.jobs import token_rollup
-    import unittest.mock as mock
-    from contextlib import contextmanager
+def _client(factory):
+    def override():
+        db = factory()
+        try:
+            yield db
+        finally:
+            db.close()
 
-    @contextmanager
-    def mock_db_session():
-        yield db
-
-    with mock.patch("zerg.jobs.token_rollup.db_session", mock_db_session):
-        return asyncio.run(token_rollup.run())
+    api_app.dependency_overrides[get_db] = override
+    return TestClient(api_app)
 
 
-def test_rollup_aggregates_sessions(tmp_path):
-    db = _make_db(tmp_path)
-    _add_session(db, "claude")
+def test_aggregates_by_provider(tmp_path):
+    factory = _make_db(tmp_path)
+    db = factory()
+    _add_session(db, "claude", user_msgs=2, asst_msgs=2, tool_calls=5)
+    _add_session(db, "claude", user_msgs=1, asst_msgs=1)
+    _add_session(db, "gemini", user_msgs=3, asst_msgs=3)
+
+    resp = _client(factory).get("/agents/usage-stats")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["total_sessions"] == 3
+    by_p = {r["provider"]: r for r in data["by_provider"]}
+    assert by_p["claude"]["sessions"] == 2
+    assert by_p["claude"]["messages"] == (2 + 2 + 5) + (1 + 1 + 0)
+    assert by_p["gemini"]["sessions"] == 1
+
+
+def test_multiple_providers_returned(tmp_path):
+    factory = _make_db(tmp_path)
+    db = factory()
     _add_session(db, "claude")
     _add_session(db, "gemini")
+    _add_session(db, "codex")
 
-    result = _run_rollup(db)
-    assert result["rows_written"] >= 2
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    rows = db.execute(
-        text("SELECT * FROM token_daily_stats WHERE date = :d"),
-        {"d": today}
-    ).fetchall()
-
-    claude_row = next((r for r in rows if r.provider == "claude"), None)
-    assert claude_row is not None
-    assert claude_row.session_count == 2
-
-    gemini_row = next((r for r in rows if r.provider == "gemini"), None)
-    assert gemini_row is not None
-    assert gemini_row.session_count == 1
+    resp = _client(factory).get("/agents/usage-stats")
+    assert resp.status_code == 200
+    providers = {r["provider"] for r in resp.json()["by_provider"]}
+    assert providers == {"claude", "gemini", "codex"}
 
 
-def test_rollup_idempotent(tmp_path):
-    db = _make_db(tmp_path)
-    _add_session(db, "claude")
+def test_days_param_filters_old_sessions(tmp_path):
+    factory = _make_db(tmp_path)
+    db = factory()
+    _add_session(db, "claude", started_days_ago=1)   # recent
+    _add_session(db, "claude", started_days_ago=60)  # too old
 
-    _run_rollup(db)
-    _run_rollup(db)  # Run twice
-
-    rows = db.execute(text("SELECT * FROM token_daily_stats WHERE provider = 'claude'")).fetchall()
-    assert len(rows) == 1  # No duplicates
-    assert rows[0].session_count == 1
-
-
-def test_rollup_total_tokens_always_zero(tmp_path):
-    """Until approx_token_count column exists, total_tokens is 0."""
-    db = _make_db(tmp_path)
-    _add_session(db, "claude")
-
-    _run_rollup(db)
-
-    rows = db.execute(text("SELECT * FROM token_daily_stats WHERE provider = 'claude'")).fetchall()
-    assert rows[0].total_tokens == 0
+    resp = _client(factory).get("/agents/usage-stats?days=30")
+    assert resp.status_code == 200
+    assert resp.json()["total_sessions"] == 1
 
 
-def test_rollup_multiple_days(tmp_path):
-    """Rollup covers last 7 days."""
-    db = _make_db(tmp_path)
-    _add_session(db, "claude", started_days_ago=0)
-    _add_session(db, "claude", started_days_ago=3)
+def test_days_over_365_returns_422(tmp_path):
+    factory = _make_db(tmp_path)
+    resp = _client(factory).get("/agents/usage-stats?days=366")
+    assert resp.status_code == 422
 
-    result = _run_rollup(db)
-    assert result["days_recomputed"] == 7
 
-    rows = db.execute(text("SELECT * FROM token_daily_stats WHERE provider = 'claude'")).fetchall()
-    # Two different dates → two rows
-    assert len(rows) == 2
+def test_empty_db_returns_zeros(tmp_path):
+    factory = _make_db(tmp_path)
+    resp = _client(factory).get("/agents/usage-stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_sessions"] == 0
+    assert data["total_messages"] == 0
+    assert data["by_provider"] == []
