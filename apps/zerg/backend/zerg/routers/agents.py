@@ -1607,27 +1607,17 @@ async def get_ingest_health(
     return IngestHealthResponse(**result)
 
 
-class UsageStatsByProviderModel(BaseModel):
+class UsageStatsByProvider(BaseModel):
     provider: str
-    model: str
     sessions: int
-    tokens: int
-
-
-class UsageDailyRow(BaseModel):
-    date: str
-    provider: str
-    model: str
-    sessions: int
-    tokens: int
+    messages: int  # sum of user + assistant + tool messages (token proxy)
 
 
 class UsageStatsResponse(BaseModel):
     total_sessions: int
-    total_tokens: int
+    total_messages: int
     date_range: Dict[str, str]
-    by_provider_model: List[UsageStatsByProviderModel]
-    daily: List[UsageDailyRow]
+    by_provider: List[UsageStatsByProvider]
 
 
 @router.get("/usage-stats", response_model=UsageStatsResponse)
@@ -1637,51 +1627,34 @@ async def get_usage_stats(
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
 ) -> UsageStatsResponse:
-    """Token usage statistics aggregated by provider and model."""
+    """Session activity statistics by provider, queried live from sessions table."""
     from sqlalchemy import text as sa_text
 
-    since_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since_date = since.strftime("%Y-%m-%d")
     to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    agg_rows = db.execute(
+    rows = db.execute(
         sa_text("""
-            SELECT provider, model, SUM(session_count) as sessions, SUM(total_tokens) as tokens
-            FROM token_daily_stats
-            WHERE date >= :since_date
-            GROUP BY provider, model
-            ORDER BY tokens DESC
+            SELECT
+                COALESCE(provider, 'unknown') AS provider,
+                COUNT(*) AS sessions,
+                SUM(COALESCE(user_messages, 0) + COALESCE(assistant_messages, 0) + COALESCE(tool_calls, 0)) AS messages
+            FROM sessions
+            WHERE started_at >= :since
+            GROUP BY COALESCE(provider, 'unknown')
+            ORDER BY sessions DESC
         """),
-        {"since_date": since_date},
+        {"since": since.isoformat()},
     ).fetchall()
 
-    by_pm = [
-        UsageStatsByProviderModel(provider=r.provider, model=r.model, sessions=r.sessions or 0, tokens=r.tokens or 0) for r in agg_rows
-    ]
-
-    total_sessions = sum(r.sessions for r in by_pm)
-    total_tokens = sum(r.tokens for r in by_pm)
-
-    daily_rows = db.execute(
-        sa_text("""
-            SELECT date, provider, model, session_count, total_tokens
-            FROM token_daily_stats
-            WHERE date >= :since_date
-            ORDER BY date DESC, provider, model
-        """),
-        {"since_date": since_date},
-    ).fetchall()
-
-    daily = [
-        UsageDailyRow(date=r.date, provider=r.provider, model=r.model, sessions=r.session_count or 0, tokens=r.total_tokens or 0)
-        for r in daily_rows
-    ]
+    by_provider = [UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0) for r in rows]
 
     return UsageStatsResponse(
-        total_sessions=total_sessions,
-        total_tokens=total_tokens,
+        total_sessions=sum(r.sessions for r in by_provider),
+        total_messages=sum(r.messages for r in by_provider),
         date_range={"from": since_date, "to": to_date},
-        by_provider_model=by_pm,
-        daily=daily,
+        by_provider=by_provider,
     )
 
 
