@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from sqlalchemy import JSON
 from sqlalchemy import BigInteger
+from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
@@ -18,6 +19,7 @@ from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import LargeBinary
 from sqlalchemy import MetaData
+from sqlalchemy import PrimaryKeyConstraint
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
@@ -315,4 +317,22 @@ class SessionTask(AgentsBase):
         Index("ix_session_tasks_status_created", "status", "created_at"),
         # Index for dedup check: find existing active tasks per session
         Index("ix_session_tasks_session_type_status", "session_id", "task_type", "status"),
+    )
+
+
+class TokenDailyStat(AgentsBase):
+    """Daily token usage rollup by provider and model."""
+
+    __tablename__ = "token_daily_stats"
+
+    date = Column(String(10), nullable=False)  # 'YYYY-MM-DD' UTC
+    provider = Column(String(64), nullable=False)  # 'claude', 'gemini', etc. or 'unknown'
+    model = Column(String(128), nullable=False)  # 'claude-sonnet-4-6' or 'unknown'
+    session_count = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("date", "provider", "model", name="pk_token_daily_stats"),
+        CheckConstraint("session_count >= 0", name="ck_tds_session_count"),
+        CheckConstraint("total_tokens >= 0", name="ck_tds_total_tokens"),
     )

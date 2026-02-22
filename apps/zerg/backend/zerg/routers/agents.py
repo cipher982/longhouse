@@ -1586,6 +1586,105 @@ async def recall_sessions(
     return RecallResponse(matches=matches, total=len(matches))
 
 
+class IngestHealthResponse(UTCBaseModel):
+    status: str  # "ok" | "stale" | "unknown"
+    last_session_at: Optional[datetime] = None
+    gap_hours: Optional[float] = None
+    threshold_hours: float
+    session_count: int
+
+
+@router.get("/ingest-health", response_model=IngestHealthResponse)
+async def get_ingest_health(
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> IngestHealthResponse:
+    """Check ingest freshness — detects if sessions have stopped shipping."""
+    from zerg.jobs.ingest_health import compute_ingest_health
+
+    result = compute_ingest_health(db)
+    return IngestHealthResponse(**result)
+
+
+class UsageStatsByProviderModel(BaseModel):
+    provider: str
+    model: str
+    sessions: int
+    tokens: int
+
+
+class UsageDailyRow(BaseModel):
+    date: str
+    provider: str
+    model: str
+    sessions: int
+    tokens: int
+
+
+class UsageStatsResponse(BaseModel):
+    total_sessions: int
+    total_tokens: int
+    date_range: Dict[str, str]
+    by_provider_model: List[UsageStatsByProviderModel]
+    daily: List[UsageDailyRow]
+
+
+@router.get("/usage-stats", response_model=UsageStatsResponse)
+async def get_usage_stats(
+    days: int = Query(30, ge=1, le=365, description="Days to look back (max 365)"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> UsageStatsResponse:
+    """Token usage statistics aggregated by provider and model."""
+    from sqlalchemy import text as sa_text
+
+    since_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    agg_rows = db.execute(
+        sa_text("""
+            SELECT provider, model, SUM(session_count) as sessions, SUM(total_tokens) as tokens
+            FROM token_daily_stats
+            WHERE date >= :since_date
+            GROUP BY provider, model
+            ORDER BY tokens DESC
+        """),
+        {"since_date": since_date},
+    ).fetchall()
+
+    by_pm = [
+        UsageStatsByProviderModel(provider=r.provider, model=r.model, sessions=r.sessions or 0, tokens=r.tokens or 0) for r in agg_rows
+    ]
+
+    total_sessions = sum(r.sessions for r in by_pm)
+    total_tokens = sum(r.tokens for r in by_pm)
+
+    daily_rows = db.execute(
+        sa_text("""
+            SELECT date, provider, model, session_count, total_tokens
+            FROM token_daily_stats
+            WHERE date >= :since_date
+            ORDER BY date DESC, provider, model
+        """),
+        {"since_date": since_date},
+    ).fetchall()
+
+    daily = [
+        UsageDailyRow(date=r.date, provider=r.provider, model=r.model, sessions=r.session_count or 0, tokens=r.total_tokens or 0)
+        for r in daily_rows
+    ]
+
+    return UsageStatsResponse(
+        total_sessions=total_sessions,
+        total_tokens=total_tokens,
+        date_range={"from": since_date, "to": to_date},
+        by_provider_model=by_pm,
+        daily=daily,
+    )
+
+
 @router.get("/sessions", response_model=SessionsListResponse)
 async def list_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
@@ -1597,6 +1696,10 @@ async def list_sessions(
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    sort: Optional[str] = Query(
+        None, description="Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present."
+    ),
+    mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
@@ -1607,6 +1710,132 @@ async def list_sessions(
     By default, test and e2e sessions are excluded.
     """
     try:
+        # Determine effective sort
+        effective_sort = sort
+        if effective_sort is None:
+            effective_sort = "relevance" if query else "recency"
+        elif effective_sort == "balanced" and not query:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="sort=balanced requires a search query (q param)",
+            )
+
+        # Hybrid mode: RRF fusion (does not use list_sessions below)
+        if mode == "hybrid":
+            if offset > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Pagination (offset) is not supported for mode=hybrid",
+                )
+            from sqlalchemy import or_
+
+            from zerg.models_config import get_embedding_config_with_db_fallback
+            from zerg.services.search import SessionFilters
+            from zerg.services.search import lexical_search
+            from zerg.services.search import rrf_fuse
+
+            _filters = SessionFilters(
+                project=project,
+                provider=provider,
+                environment=environment,
+                include_test=include_test,
+                device_id=device_id,
+                days_back=days_back,
+                exclude_user_states=["archived"],
+            )
+
+            lex_hits = lexical_search(query or "", db, _filters, limit, over_fetch=True)
+
+            config = get_embedding_config_with_db_fallback(db=db)
+            sem_hits: list[tuple[AgentSession, float]] = []
+            x_search_mode_header = None
+            if config and query:
+                from zerg.services.embedding_cache import EmbeddingCache
+                from zerg.services.session_processing.embeddings import generate_embedding
+
+                fetch_limit = min(limit * 3, 200)
+                query_vec = await generate_embedding(query, config)
+                cache = EmbeddingCache()
+                if not cache._session_loaded:
+                    cache.load_session_embeddings(db, config.model, config.dims)
+
+                since = datetime.now(timezone.utc) - timedelta(days=days_back)
+                filter_q = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
+                if project:
+                    filter_q = filter_q.filter(AgentSession.project == project)
+                if provider:
+                    filter_q = filter_q.filter(AgentSession.provider == provider)
+                if environment:
+                    filter_q = filter_q.filter(AgentSession.environment == environment)
+                valid_ids = {str(row[0]) for row in filter_q.all()}
+
+                sem_results = cache.search_sessions(query_vec, limit=fetch_limit, session_filter=valid_ids)
+                for sid, score in sem_results:
+                    session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+                    if session:
+                        sem_hits.append((session, score))
+            else:
+                x_search_mode_header = "lexical-fallback"
+
+            fused = rrf_fuse(lex_hits, sem_hits, limit)
+
+            # Build match_map for snippets (lexical hits only)
+            store = AgentsStore(db)
+            match_map = {}
+            if query and lex_hits:
+                try:
+                    match_map = store.get_session_matches([s.id for s in lex_hits], query)
+                except Exception:
+                    pass
+
+            activity_map = store.get_last_activity_map([s.id for s in fused])
+            first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
+
+            response_sessions = [
+                SessionResponse(
+                    id=str(s.id),
+                    provider=s.provider,
+                    project=s.project,
+                    device_id=s.device_id,
+                    cwd=s.cwd,
+                    git_repo=s.git_repo,
+                    git_branch=s.git_branch,
+                    started_at=s.started_at,
+                    ended_at=s.ended_at,
+                    last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
+                    user_messages=s.user_messages or 0,
+                    assistant_messages=s.assistant_messages or 0,
+                    tool_calls=s.tool_calls or 0,
+                    summary=s.summary,
+                    summary_title=s.summary_title,
+                    first_user_message=first_user_map.get(s.id),
+                    match_event_id=(match_map.get(s.id) or {}).get("event_id"),
+                    match_snippet=(match_map.get(s.id) or {}).get("snippet"),
+                    match_role=(match_map.get(s.id) or {}).get("role"),
+                )
+                for s in fused
+            ]
+
+            has_real = (
+                db.query(AgentSession.id)
+                .filter(
+                    or_(
+                        AgentSession.device_id != "demo-mac",
+                        AgentSession.device_id.is_(None),
+                    )
+                )
+                .limit(1)
+                .first()
+                is not None
+            )
+
+            response = SessionsListResponse(sessions=response_sessions, total=len(fused), has_real_sessions=has_real)
+            if x_search_mode_header:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(content=response.model_dump(), headers={"X-Search-Mode": x_search_mode_header})
+            return response
+
         store = AgentsStore(db)
         since = datetime.now(timezone.utc) - timedelta(days=days_back)
 
@@ -1621,6 +1850,13 @@ async def list_sessions(
             limit=limit,
             offset=offset,
         )
+
+        # Apply sort to lexical results
+        if query or effective_sort != "recency":
+            from zerg.services.search import apply_sort
+
+            bm25_order = [str(s.id) for s in sessions]
+            sessions = apply_sort(sessions, effective_sort, bm25_order=bm25_order)
 
         session_ids = [s.id for s in sessions]
         match_map = store.get_session_matches(session_ids, query) if query else {}
@@ -1652,11 +1888,12 @@ async def list_sessions(
             for s in sessions
         ]
 
-        # Sort by last activity (most recent first) instead of started_at
-        response_sessions.sort(
-            key=lambda r: r.last_activity_at or r.started_at,
-            reverse=True,
-        )
+        # For recency sort: order by last activity; for other sorts preserve apply_sort order
+        if effective_sort == "recency":
+            response_sessions.sort(
+                key=lambda r: r.last_activity_at or r.started_at,
+                reverse=True,
+            )
 
         # Detect demo-only state: a real session is one with device_id != 'demo-mac' (or NULL).
         # If no sessions exist at all, default to True so no banner is shown.
@@ -1681,6 +1918,8 @@ async def list_sessions(
             has_real_sessions=has_real,
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Failed to list sessions")
         raise HTTPException(
