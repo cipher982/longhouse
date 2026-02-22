@@ -259,7 +259,7 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (High-Signal Only)
 
 <!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, add TODO work and remove it after the fix lands. -->
-- (2026-02-05) [db] Alembic migrations are deprecated for core app work; `apps/zerg/backend/alembic/versions` is intentionally empty. New models use `AgentsBase.metadata.create_all()` auto-creation.
+- (2026-02-05) [db] Alembic migrations are deprecated for core app work; `apps/zerg/backend/alembic/versions` is intentionally empty. New models use `AgentsBase.metadata.create_all()` auto-creation. **New columns on existing models must also be added to `_migrate_agents_columns()` in `database.py`** — SQLite ignores new columns on existing tables and will 500 without the ALTER.
 - (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
 - (2026-02-12) [arch] Agent infra models use `AgentsBase` (not `Base`), live in `models/agents.py` and `models/work.py`. Schema `agents.` gets translate-mapped to `None` for SQLite.
 - (2026-02-12) [frontend] Frontend API errors: `ApiError` class has `status`, `url`, `body` (already-parsed object, not string). FastAPI wraps HTTPException detail in `{detail: ...}`, so structured error data is at `body.detail.field`.
