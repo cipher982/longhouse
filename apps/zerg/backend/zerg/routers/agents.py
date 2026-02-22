@@ -1416,6 +1416,7 @@ class RecallMatch(BaseModel):
     event_index_end: Optional[int] = None
     total_events: int = 0
     context: List[Dict[str, Any]] = Field(default_factory=list)
+    match_event_id: Optional[int] = None  # DB id of the first matched event, for deep linking
 
 
 class RecallResponse(BaseModel):
@@ -1473,7 +1474,6 @@ async def semantic_search_sessions(
 
     # Fetch full session objects
     session_ids = [sid for sid, _ in results]
-    score_map = {sid: score for sid, score in results}
 
     sessions = []
     for sid in session_ids:
@@ -1495,7 +1495,9 @@ async def semantic_search_sessions(
                     tool_calls=session.tool_calls or 0,
                     summary=session.summary,
                     summary_title=session.summary_title,
-                    match_snippet=f"Similarity: {score_map.get(str(session.id), 0):.3f}",
+                    # Use summary as the snippet — more useful than the raw similarity score.
+                    # Fall back to summary_title, then None (UI will hide the snippet field).
+                    match_snippet=session.summary or session.summary_title or None,
                 )
             )
 
@@ -1571,6 +1573,8 @@ async def recall_sessions(
                         }
                     )
 
+        match_event_id = all_events[event_start].id if event_start is not None and event_start < total_events else None
+
         matches.append(
             RecallMatch(
                 session_id=session_id,
@@ -1580,6 +1584,7 @@ async def recall_sessions(
                 event_index_end=event_end,
                 total_events=total_events,
                 context=context,
+                match_event_id=match_event_id,
             )
         )
 
@@ -2033,11 +2038,13 @@ async def list_active_sessions(
             if last_activity_at.tzinfo is None:
                 last_activity_at = last_activity_at.replace(tzinfo=timezone.utc)
 
-            if s.ended_at:
-                derived_status = "completed"
-            elif presence_fresh:
-                # Map presence state to legacy status field for backwards compat
+            # Fresh presence takes priority over ended_at — ended_at is set after every
+            # response (Stop hook ships transcript), so a session with fresh presence is
+            # actively in progress even though ended_at is non-null.
+            if presence_fresh:
                 derived_status = "working" if presence.state in ("thinking", "running") else "idle"
+            elif s.ended_at:
+                derived_status = "completed"
             else:
                 idle_for = now - last_activity_at
                 derived_status = "working" if idle_for <= timedelta(minutes=5) else "idle"
