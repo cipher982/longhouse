@@ -399,34 +399,32 @@ test('agents sessions API returns list', async ({ authedRequest }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 6: Smart search toggle — three modes visible
+// Test 6: AI search toggle — off by default, toggles on
 // ---------------------------------------------------------------------------
 
-test('timeline has Smart search toggle with three modes', async ({ authedContext }) => {
+test('timeline has AI search toggle', async ({ authedContext }) => {
   test.setTimeout(20_000);
 
   const page = await authedContext.newPage();
   await page.goto('/timeline', { waitUntil: 'domcontentloaded' });
 
   // Wait for the search toolbar to render
-  await page.locator('.sessions-search-mode').waitFor({ timeout: 10_000 });
+  await page.locator('.sessions-ai-toggle').waitFor({ timeout: 10_000 });
 
-  // All three mode buttons must be present
-  const modeGroup = page.locator('.sessions-search-mode');
-  await expect(modeGroup.getByRole('radio', { name: 'Keyword' })).toBeVisible();
-  await expect(modeGroup.getByRole('radio', { name: 'Semantic' })).toBeVisible();
-  await expect(modeGroup.getByRole('radio', { name: 'Smart' })).toBeVisible();
+  const toggle = page.locator('.sessions-ai-toggle');
 
-  // Keyword is active by default
-  await expect(
-    modeGroup.getByRole('radio', { name: 'Keyword' })
-  ).toHaveAttribute('aria-checked', 'true');
+  // AI off by default
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(toggle).not.toHaveClass(/sessions-ai-toggle--active/);
 
-  // Can switch to Smart mode
-  await modeGroup.getByRole('radio', { name: 'Smart' }).click();
-  await expect(
-    modeGroup.getByRole('radio', { name: 'Smart' })
-  ).toHaveAttribute('aria-checked', 'true');
+  // Click to enable AI search
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(toggle).toHaveClass(/sessions-ai-toggle--active/);
+
+  // Click again to disable
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
 
   await page.close();
 });
