@@ -59,9 +59,18 @@ def _make_factory(tmp_path, name):
 
 
 def _mock_trigger(fire_time):
-    """Return a mock CronTrigger that fires once at fire_time then stops."""
+    """Return a mock CronTrigger that fires once at fire_time then stops.
+
+    Uses a function side_effect (not a list) so it's safe when multiple jobs
+    share the same trigger mock — it won't exhaust a fixed-length list.
+    """
     t = MagicMock()
-    t.get_next_fire_time.side_effect = [fire_time, None]
+
+    def _fire(prev_fire_time, now):
+        # Fire once when there's no previous run; stop thereafter.
+        return fire_time if prev_fire_time is None else None
+
+    t.get_next_fire_time.side_effect = _fire
     return t
 
 
@@ -134,7 +143,10 @@ async def test_enqueue_missed_runs_skips_when_secrets_missing(tmp_path):
                                 from zerg.jobs.commis import enqueue_missed_runs
 
                                 await enqueue_missed_runs(now=datetime(2026, 1, 2, tzinfo=timezone.utc))
-                                mock_enqueue.assert_not_called()
+                                # Assert the test job (which has missing secrets) was NOT enqueued.
+                                # Other globally-registered jobs may fire — only check our job_id.
+                                called_ids = [c.kwargs.get("job_id") for c in mock_enqueue.call_args_list]
+                                assert job_id not in called_ids, f"Expected {job_id} not to be enqueued, got calls: {called_ids}"
     finally:
         _cleanup(job_id)
 
@@ -163,6 +175,9 @@ async def test_enqueue_missed_runs_proceeds_when_secrets_present(tmp_path):
                                     from zerg.jobs.commis import enqueue_missed_runs
 
                                     await enqueue_missed_runs(now=datetime(2026, 1, 2, tzinfo=timezone.utc))
-                                    mock_enqueue.assert_called_once()
+                                    # Assert the test job (which has the required secret) WAS enqueued.
+                                    # Other globally-registered jobs may also fire — only check our job_id.
+                                    called_ids = [c.kwargs.get("job_id") for c in mock_enqueue.call_args_list]
+                                    assert job_id in called_ids, f"Expected {job_id} to be enqueued, got calls: {called_ids}"
     finally:
         _cleanup(job_id)
