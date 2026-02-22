@@ -418,12 +418,46 @@ mod tests {
 
         let (sent, kept) = drain_outbox(dir.path(), &client).await;
 
+        let older_a = dir.path().join("prs.S1A.json");
+        let older_b = dir.path().join("prs.S1B.json");
+
         assert_eq!(sent, 1, "3 files for same session → 1 POST");
         assert_eq!(kept, 0);
         assert!(!latest.exists(), "latest file deleted after send");
+        assert!(!older_a.exists(), "older file S1A deleted during coalescing");
+        assert!(!older_b.exists(), "older file S1B deleted during coalescing");
 
         server.abort();
         let logged = paths.lock().unwrap().clone();
         assert_eq!(logged.len(), 1, "only 1 POST despite 3 files");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_drain_outbox_deletes_invalid_json() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        // Server that should NOT be called — malformed files get deleted, not POSTed.
+        let (addr, paths, server) = spawn_http_server(204).await;
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write a malformed JSON file using the prs.* naming (would be picked up)
+        let bad = dir.path().join("prs.bad.json");
+        fs::write(&bad, b"not valid json!!!").unwrap();
+
+        let url = format!("http://{}", addr);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let (sent, kept) = drain_outbox(dir.path(), &client).await;
+
+        assert_eq!(sent, 0, "malformed file must not be POSTed");
+        assert_eq!(kept, 0, "malformed file must not be kept for retry");
+        assert!(!bad.exists(), "malformed file must be deleted");
+
+        server.abort();
+        let logged = paths.lock().unwrap().clone();
+        assert_eq!(logged.len(), 0, "no POSTs for malformed file");
     }
 }
