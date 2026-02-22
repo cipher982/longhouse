@@ -14,11 +14,10 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useSearchParams, useLocation, Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { config } from "../lib/config";
-import { useAgentSessions, useAgentFilters, useSemanticSearch } from "../hooks/useAgentSessions";
+import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import {
   type AgentSession,
   type AgentSessionFilters,
-  type SemanticSearchFilters,
   seedDemoSessions,
 } from "../services/api/agents";
 import {
@@ -370,14 +369,22 @@ export default function SessionsPage() {
   );
   const [searchQuery, setSearchQuery] = useState(searchParams.get("query") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
-  // Search mode: 'keyword' | 'semantic' | 'smart'
-  // 'smart' runs keyword first and falls back to semantic when keyword returns 0 results.
-  // Backwards compat: ?semantic=1 maps to 'semantic'.
-  const [searchMode, setSearchMode] = useState<"keyword" | "semantic" | "smart">(() => {
+  // Search mode: 'keyword' | 'semantic' | 'hybrid'
+  // 'hybrid' sends both FTS and semantic to the backend (RRF fusion) in a single call.
+  // Backwards compat: old 'smart' URL param maps to 'hybrid'; ?semantic=1 maps to 'semantic'.
+  const [searchMode, setSearchMode] = useState<"keyword" | "semantic" | "hybrid">(() => {
     const m = searchParams.get("mode");
-    if (m === "semantic" || m === "smart" || m === "keyword") return m;
+    if (m === "semantic" || m === "hybrid" || m === "keyword") return m;
+    if (m === "smart") return "hybrid"; // migrate old URLs
     if (searchParams.get("semantic") === "1") return "semantic";
     return "keyword";
+  });
+
+  // Sort order — only meaningful when a query is present.
+  // Defaults to 'relevant' (best BM25/RRF match first).
+  const [sortOrder, setSortOrder] = useState<"relevant" | "recent">(() => {
+    const s = searchParams.get("sort");
+    return s === "recent" ? "recent" : "relevant";
   });
 
   // Collapsible filters — open by default if URL has active filters
@@ -415,15 +422,17 @@ export default function SessionsPage() {
     if (daysBack !== 14) params.set("days_back", String(daysBack));
     if (debouncedQuery) params.set("query", debouncedQuery);
     if (searchMode !== "keyword") params.set("mode", searchMode);
+    if (debouncedQuery && sortOrder !== "relevant") params.set("sort", sortOrder);
     setSearchParams(params, { replace: true });
-  }, [project, provider, environment, daysBack, debouncedQuery, searchMode, setSearchParams]);
+  }, [project, provider, environment, daysBack, debouncedQuery, searchMode, sortOrder, setSearchParams]);
 
   // Reset pagination when filters change
   useEffect(() => {
     setLimit(PAGE_SIZE);
   }, [project, provider, environment, daysBack, debouncedQuery]);
 
-  // Build filters
+  // Build filters — mode and sort are passed through to the backend.
+  // Hybrid mode sends a single request; the backend handles RRF fusion.
   const filters: AgentSessionFilters = useMemo(
     () => ({
       project: project || undefined,
@@ -432,50 +441,14 @@ export default function SessionsPage() {
       days_back: daysBack,
       query: debouncedQuery || undefined,
       limit,
+      mode: searchMode === "keyword" ? undefined : searchMode,
+      sort: debouncedQuery ? (sortOrder === "recent" ? "recency" : "relevance") : undefined,
     }),
-    [project, provider, environment, daysBack, debouncedQuery, limit]
+    [project, provider, environment, daysBack, debouncedQuery, limit, searchMode, sortOrder]
   );
 
-  // Semantic search filters (only used when semantic mode is on + query present)
-  const semanticFilters: SemanticSearchFilters = useMemo(
-    () => ({
-      query: debouncedQuery || "",
-      project: project || undefined,
-      provider: provider || undefined,
-      environment: environment || undefined,
-      days_back: daysBack,
-      limit: Math.min(limit, 50),
-    }),
-    [debouncedQuery, project, provider, environment, daysBack, limit]
-  );
-
-  const isSemanticMode = searchMode === "semantic";
-  const isSmartMode = searchMode === "smart";
-
-  // Keyword runs in all modes except pure semantic
-  const keywordResult = useAgentSessions(filters, {
-    refetchInterval: 30_000,
-    enabled: !isSemanticMode,
-  });
-
-  // Smart mode: fall back to semantic when keyword returns 0 results
-  const smartFallbackActive =
-    isSmartMode &&
-    !!debouncedQuery &&
-    !keywordResult.isLoading &&
-    (keywordResult.data?.total ?? 0) === 0;
-
-  const useSemanticQuery = (isSemanticMode || smartFallbackActive) && !!debouncedQuery;
-
-  // Semantic search (explicit semantic mode OR smart fallback)
-  const semanticResult = useSemanticSearch(semanticFilters, {
-    enabled: useSemanticQuery,
-  });
-
-  // Which result set to display
-  const activeResult = useSemanticQuery ? semanticResult : keywordResult;
-  // Flag to show "no keyword matches, showing semantic results" indicator
-  const showSmartFallbackBadge = smartFallbackActive && !semanticResult.isLoading;
+  // Single unified query — no dual-fetch fallback logic needed.
+  const activeResult = useAgentSessions(filters, { refetchInterval: 30_000 });
   const data = activeResult.data;
   const isLoading = activeResult.isLoading;
   const error = activeResult.error;
@@ -484,7 +457,7 @@ export default function SessionsPage() {
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
-  const hasMore = !useSemanticQuery && sessions.length < total;
+  const hasMore = searchMode !== "semantic" && sessions.length < total;
 
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
@@ -662,7 +635,11 @@ export default function SessionsPage() {
           <div className="sessions-search-row">
             <Input
               type="search"
-              placeholder={isSemanticMode ? "Semantic search..." : isSmartMode ? "Smart search..." : "Search timeline..."}
+              placeholder={
+                searchMode === "semantic" ? "Semantic search..." :
+                searchMode === "hybrid" ? "Hybrid search..." :
+                "Search timeline..."
+              }
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="sessions-search-input"
@@ -672,7 +649,7 @@ export default function SessionsPage() {
               role="radiogroup"
               aria-label="Search mode"
               onKeyDown={(e) => {
-                const modes: Array<"keyword" | "semantic" | "smart"> = ["keyword", "semantic", "smart"];
+                const modes: Array<"keyword" | "semantic" | "hybrid"> = ["keyword", "semantic", "hybrid"];
                 const idx = modes.indexOf(searchMode);
                 if (e.key === "ArrowLeft") { e.preventDefault(); setSearchMode(modes[(idx + 2) % 3]); }
                 if (e.key === "ArrowRight") { e.preventDefault(); setSearchMode(modes[(idx + 1) % 3]); }
@@ -689,6 +666,7 @@ export default function SessionsPage() {
                 tabIndex={searchMode === "keyword" ? 0 : -1}
                 className={`sessions-mode-btn${searchMode === "keyword" ? " sessions-mode-btn--active" : ""}`}
                 onClick={() => setSearchMode("keyword")}
+                title="Full-text search"
               >
                 Keyword
               </button>
@@ -706,15 +684,55 @@ export default function SessionsPage() {
               <button
                 type="button"
                 role="radio"
-                aria-checked={searchMode === "smart"}
-                tabIndex={searchMode === "smart" ? 0 : -1}
-                className={`sessions-mode-btn${searchMode === "smart" ? " sessions-mode-btn--active" : ""}`}
-                onClick={() => setSearchMode("smart")}
-                title="Keyword first, falls back to semantic if no results found"
+                aria-checked={searchMode === "hybrid"}
+                tabIndex={searchMode === "hybrid" ? 0 : -1}
+                className={`sessions-mode-btn${searchMode === "hybrid" ? " sessions-mode-btn--active" : ""}`}
+                onClick={() => setSearchMode("hybrid")}
+                title="Combines keyword and semantic search with RRF fusion for best results"
               >
-                Smart
+                Hybrid
               </button>
             </div>
+            {debouncedQuery && (
+              <div
+                className="sessions-search-mode sessions-sort-toggle"
+                role="radiogroup"
+                aria-label="Sort order"
+                onKeyDown={(e) => {
+                  const orders: Array<"relevant" | "recent"> = ["relevant", "recent"];
+                  const idx = orders.indexOf(sortOrder);
+                  if (e.key === "ArrowLeft") { e.preventDefault(); setSortOrder(orders[(idx + 1) % 2]); }
+                  if (e.key === "ArrowRight") { e.preventDefault(); setSortOrder(orders[(idx + 1) % 2]); }
+                  requestAnimationFrame(() => {
+                    const active = e.currentTarget.querySelector<HTMLButtonElement>('[aria-checked="true"]');
+                    active?.focus();
+                  });
+                }}
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={sortOrder === "relevant"}
+                  tabIndex={sortOrder === "relevant" ? 0 : -1}
+                  className={`sessions-mode-btn${sortOrder === "relevant" ? " sessions-mode-btn--active" : ""}`}
+                  onClick={() => setSortOrder("relevant")}
+                  title="Sort by relevance to your query"
+                >
+                  Relevant
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={sortOrder === "recent"}
+                  tabIndex={sortOrder === "recent" ? 0 : -1}
+                  className={`sessions-mode-btn${sortOrder === "recent" ? " sessions-mode-btn--active" : ""}`}
+                  onClick={() => setSortOrder("recent")}
+                  title="Sort by most recent activity"
+                >
+                  Recent
+                </button>
+              </div>
+            )}
           </div>
           <div className="sessions-toolbar-actions">
             <Button variant="ghost" size="sm" onClick={handleClearFilters} disabled={!hasFilters}>
@@ -790,13 +808,6 @@ export default function SessionsPage() {
           </div>
         )}
 
-        {/* Smart fallback indicator */}
-        {showSmartFallbackBadge && (
-          <div className="sessions-smart-fallback" role="status" aria-live="polite">
-            <Badge variant="neutral">No keyword matches — showing semantic results</Badge>
-          </div>
-        )}
-
         {/* Timeline List */}
         {sessions.length === 0 ? (
           <EmptyState
@@ -823,7 +834,7 @@ export default function SessionsPage() {
                 sessions={daySessions}
                 onSessionClick={handleSessionClick}
                 highlightQuery={debouncedQuery}
-                isSemanticResult={useSemanticQuery}
+                isSemanticResult={searchMode === "semantic"}
               />
             ))}
           </div>

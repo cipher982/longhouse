@@ -122,6 +122,13 @@
     background: var(--color-brand-accent-subtle, rgba(255, 149, 0, 0.18));
   }
 
+  /* Sort toggle has a subtle left border to visually separate from mode toggle */
+  .sessions-sort-toggle {
+    margin-left: var(--space-1);
+    border-color: var(--border-glass-1);
+    opacity: 0.85;
+  }
+
   .session-card-similarity {
     margin-top: var(--space-1);
   }

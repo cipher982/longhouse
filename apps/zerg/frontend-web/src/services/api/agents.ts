@@ -134,6 +134,8 @@ export interface AgentSessionFilters {
   query?: string;
   limit?: number;
   offset?: number;
+  mode?: "lexical" | "semantic" | "hybrid";
+  sort?: "relevance" | "recency";
 }
 
 export interface AgentSessionSummaryFilters {
@@ -179,6 +181,8 @@ export async function fetchAgentSessions(
   if (filters.query) params.set("query", filters.query);
   if (filters.limit) params.set("limit", String(filters.limit));
   if (filters.offset) params.set("offset", String(filters.offset));
+  if (filters.mode && filters.mode !== "lexical") params.set("mode", filters.mode);
+  if (filters.sort) params.set("sort", filters.sort);
 
   const queryString = params.toString();
   const path = `/agents/sessions${queryString ? `?${queryString}` : ""}`;
