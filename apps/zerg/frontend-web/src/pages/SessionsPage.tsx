@@ -32,6 +32,7 @@ import {
   Input,
 } from "../components/ui";
 import { parseUTC } from "../lib/dateUtils";
+import { RecallPanel } from "../components/RecallPanel";
 import "../styles/sessions.css";
 
 // ---------------------------------------------------------------------------
@@ -369,7 +370,15 @@ export default function SessionsPage() {
   );
   const [searchQuery, setSearchQuery] = useState(searchParams.get("query") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
-  const [semanticMode, setSemanticMode] = useState(searchParams.get("semantic") === "1");
+  // Search mode: 'keyword' | 'semantic' | 'smart'
+  // 'smart' runs keyword first and falls back to semantic when keyword returns 0 results.
+  // Backwards compat: ?semantic=1 maps to 'semantic'.
+  const [searchMode, setSearchMode] = useState<"keyword" | "semantic" | "smart">(() => {
+    const m = searchParams.get("mode");
+    if (m === "semantic" || m === "smart" || m === "keyword") return m;
+    if (searchParams.get("semantic") === "1") return "semantic";
+    return "keyword";
+  });
 
   // Collapsible filters — open by default if URL has active filters
   const hasUrlFilters = !!(
@@ -379,6 +388,7 @@ export default function SessionsPage() {
     (searchParams.get("days_back") && Number(searchParams.get("days_back")) !== 14)
   );
   const [filtersOpen, setFiltersOpen] = useState(hasUrlFilters);
+  const [recallOpen, setRecallOpen] = useState(false);
 
   // Pagination state
   const [limit, setLimit] = useState(PAGE_SIZE);
@@ -404,9 +414,9 @@ export default function SessionsPage() {
     if (environment) params.set("environment", environment);
     if (daysBack !== 14) params.set("days_back", String(daysBack));
     if (debouncedQuery) params.set("query", debouncedQuery);
-    if (semanticMode) params.set("semantic", "1");
+    if (searchMode !== "keyword") params.set("mode", searchMode);
     setSearchParams(params, { replace: true });
-  }, [project, provider, environment, daysBack, debouncedQuery, semanticMode, setSearchParams]);
+  }, [project, provider, environment, daysBack, debouncedQuery, searchMode, setSearchParams]);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -439,21 +449,33 @@ export default function SessionsPage() {
     [debouncedQuery, project, provider, environment, daysBack, limit]
   );
 
-  const useSemanticQuery = semanticMode && !!debouncedQuery;
+  const isSemanticMode = searchMode === "semantic";
+  const isSmartMode = searchMode === "smart";
 
-  // Keyword search (default)
+  // Keyword runs in all modes except pure semantic
   const keywordResult = useAgentSessions(filters, {
     refetchInterval: 30_000,
-    enabled: !useSemanticQuery,
+    enabled: !isSemanticMode,
   });
 
-  // Semantic search (when toggled on + query present)
+  // Smart mode: fall back to semantic when keyword returns 0 results
+  const smartFallbackActive =
+    isSmartMode &&
+    !!debouncedQuery &&
+    !keywordResult.isLoading &&
+    (keywordResult.data?.total ?? 0) === 0;
+
+  const useSemanticQuery = (isSemanticMode || smartFallbackActive) && !!debouncedQuery;
+
+  // Semantic search (explicit semantic mode OR smart fallback)
   const semanticResult = useSemanticSearch(semanticFilters, {
     enabled: useSemanticQuery,
   });
 
-  // Merge results based on mode
+  // Which result set to display
   const activeResult = useSemanticQuery ? semanticResult : keywordResult;
+  // Flag to show "no keyword matches, showing semantic results" indicator
+  const showSmartFallbackBadge = smartFallbackActive && !semanticResult.isLoading;
   const data = activeResult.data;
   const isLoading = activeResult.isLoading;
   const error = activeResult.error;
@@ -487,7 +509,7 @@ export default function SessionsPage() {
     setEnvironment("");
     setDaysBack(14);
     setSearchQuery("");
-    setSemanticMode(false);
+    setSearchMode("keyword");
     setFiltersOpen(false);
   }, []);
 
@@ -640,7 +662,7 @@ export default function SessionsPage() {
           <div className="sessions-search-row">
             <Input
               type="search"
-              placeholder={semanticMode ? "Semantic search..." : "Search timeline..."}
+              placeholder={isSemanticMode ? "Semantic search..." : isSmartMode ? "Smart search..." : "Search timeline..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="sessions-search-input"
@@ -650,38 +672,47 @@ export default function SessionsPage() {
               role="radiogroup"
               aria-label="Search mode"
               onKeyDown={(e) => {
-                if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-                  e.preventDefault();
-                  setSemanticMode((prev) => !prev);
-                  // Move focus to the newly active button
-                  const group = e.currentTarget;
-                  requestAnimationFrame(() => {
-                    const active = group.querySelector<HTMLButtonElement>('[aria-checked="true"]');
-                    active?.focus();
-                  });
-                }
+                const modes: Array<"keyword" | "semantic" | "smart"> = ["keyword", "semantic", "smart"];
+                const idx = modes.indexOf(searchMode);
+                if (e.key === "ArrowLeft") { e.preventDefault(); setSearchMode(modes[(idx + 2) % 3]); }
+                if (e.key === "ArrowRight") { e.preventDefault(); setSearchMode(modes[(idx + 1) % 3]); }
+                requestAnimationFrame(() => {
+                  const active = e.currentTarget.querySelector<HTMLButtonElement>('[aria-checked="true"]');
+                  active?.focus();
+                });
               }}
             >
               <button
                 type="button"
                 role="radio"
-                aria-checked={!semanticMode}
-                tabIndex={!semanticMode ? 0 : -1}
-                className={`sessions-mode-btn${!semanticMode ? " sessions-mode-btn--active" : ""}`}
-                onClick={() => setSemanticMode(false)}
+                aria-checked={searchMode === "keyword"}
+                tabIndex={searchMode === "keyword" ? 0 : -1}
+                className={`sessions-mode-btn${searchMode === "keyword" ? " sessions-mode-btn--active" : ""}`}
+                onClick={() => setSearchMode("keyword")}
               >
                 Keyword
               </button>
               <button
                 type="button"
                 role="radio"
-                aria-checked={semanticMode}
-                tabIndex={semanticMode ? 0 : -1}
-                className={`sessions-mode-btn${semanticMode ? " sessions-mode-btn--active" : ""}`}
-                onClick={() => setSemanticMode(true)}
+                aria-checked={searchMode === "semantic"}
+                tabIndex={searchMode === "semantic" ? 0 : -1}
+                className={`sessions-mode-btn${searchMode === "semantic" ? " sessions-mode-btn--active" : ""}`}
+                onClick={() => setSearchMode("semantic")}
                 title="AI-powered similarity search using embeddings"
               >
                 Semantic
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={searchMode === "smart"}
+                tabIndex={searchMode === "smart" ? 0 : -1}
+                className={`sessions-mode-btn${searchMode === "smart" ? " sessions-mode-btn--active" : ""}`}
+                onClick={() => setSearchMode("smart")}
+                title="Keyword first, falls back to semantic if no results found"
+              >
+                Smart
               </button>
             </div>
           </div>
@@ -689,6 +720,22 @@ export default function SessionsPage() {
             <Button variant="ghost" size="sm" onClick={handleClearFilters} disabled={!hasFilters}>
               Clear
             </Button>
+            <button
+              type="button"
+              className={`sessions-filter-toggle${recallOpen ? " sessions-filter-toggle--open" : ""}`}
+              onClick={() => setRecallOpen((v) => !v)}
+              aria-expanded={recallOpen}
+              aria-controls="recall-panel"
+              aria-label="Recall — search conversation turns by meaning"
+              title="Recall"
+              data-testid="recall-toggle"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <path d="M11 8v3l2 2" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </button>
             <button
               type="button"
               className={`sessions-filter-toggle${filtersOpen ? " sessions-filter-toggle--open" : ""}`}
@@ -733,6 +780,20 @@ export default function SessionsPage() {
               onChange={setEnvironment}
             />
             <DaysSelect value={daysBack} onChange={setDaysBack} />
+          </div>
+        )}
+
+        {/* Recall Panel */}
+        {recallOpen && (
+          <div id="recall-panel" role="region" aria-label="Recall search">
+            <RecallPanel project={project || undefined} />
+          </div>
+        )}
+
+        {/* Smart fallback indicator */}
+        {showSmartFallbackBadge && (
+          <div className="sessions-smart-fallback" role="status" aria-live="polite">
+            <Badge variant="neutral">No keyword matches — showing semantic results</Badge>
           </div>
         )}
 

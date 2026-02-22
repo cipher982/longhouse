@@ -14,6 +14,8 @@ import {
   fetchAgentFilters,
   fetchSemanticSearch,
   fetchRecall,
+  fetchAgentBriefing,
+  type BriefingResponse,
   type AgentSessionFilters,
   type AgentSessionsListResponse,
   type AgentSession,
@@ -152,5 +154,15 @@ export function useRecall(
     enabled: options.enabled !== false && !!filters.query,
     staleTime: 60_000,
     gcTime: 5 * 60_000,
+  });
+}
+
+export function useBriefing(project: string, limit: number = 5) {
+  return useQuery<BriefingResponse>({
+    queryKey: ["briefing", project, limit],
+    queryFn: () => fetchAgentBriefing(project, limit),
+    enabled: !!project,
+    staleTime: 2 * 60_000,
+    gcTime: 10 * 60_000,
   });
 }

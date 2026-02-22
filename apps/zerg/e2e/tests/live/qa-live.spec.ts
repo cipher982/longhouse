@@ -397,3 +397,97 @@ test('agents sessions API returns list', async ({ authedRequest }) => {
     `Expected sessions to be an array, got: ${JSON.stringify(body).slice(0, 200)}`,
   ).toBe(true);
 });
+
+// ---------------------------------------------------------------------------
+// Test 6: Smart search toggle — three modes visible
+// ---------------------------------------------------------------------------
+
+test('timeline has Smart search toggle with three modes', async ({ authedContext }) => {
+  test.setTimeout(20_000);
+
+  const page = await authedContext.newPage();
+  await page.goto('/timeline', { waitUntil: 'domcontentloaded' });
+
+  // Wait for the search toolbar to render
+  await page.locator('.sessions-search-mode').waitFor({ timeout: 10_000 });
+
+  // All three mode buttons must be present
+  const modeGroup = page.locator('.sessions-search-mode');
+  await expect(modeGroup.getByRole('radio', { name: 'Keyword' })).toBeVisible();
+  await expect(modeGroup.getByRole('radio', { name: 'Semantic' })).toBeVisible();
+  await expect(modeGroup.getByRole('radio', { name: 'Smart' })).toBeVisible();
+
+  // Keyword is active by default
+  await expect(
+    modeGroup.getByRole('radio', { name: 'Keyword' })
+  ).toHaveAttribute('aria-checked', 'true');
+
+  // Can switch to Smart mode
+  await modeGroup.getByRole('radio', { name: 'Smart' }).click();
+  await expect(
+    modeGroup.getByRole('radio', { name: 'Smart' })
+  ).toHaveAttribute('aria-checked', 'true');
+
+  await page.close();
+});
+
+// ---------------------------------------------------------------------------
+// Test 7: Recall panel opens and renders search input
+// ---------------------------------------------------------------------------
+
+test('recall panel opens and shows search input', async ({ authedContext }) => {
+  test.setTimeout(20_000);
+
+  const page = await authedContext.newPage();
+  await page.goto('/timeline', { waitUntil: 'domcontentloaded' });
+
+  // Wait for toolbar
+  await page.locator('.sessions-toolbar').waitFor({ timeout: 10_000 });
+
+  // Recall toggle button must exist
+  const recallToggle = page.getByTestId('recall-toggle');
+  await expect(recallToggle).toBeVisible();
+
+  // Open the recall panel
+  await recallToggle.click();
+
+  // Recall panel should appear with search input
+  const recallPanel = page.getByTestId('recall-panel');
+  await recallPanel.waitFor({ timeout: 5_000 });
+  await expect(recallPanel).toBeVisible();
+
+  // Search input must be present and focusable
+  const input = page.getByTestId('recall-search-input');
+  await expect(input).toBeVisible();
+  await expect(input).toBeEnabled();
+
+  await page.close();
+});
+
+// ---------------------------------------------------------------------------
+// Test 8: Briefings page loads with project selector
+// ---------------------------------------------------------------------------
+
+test('briefings page loads with project selector', async ({ authedContext }) => {
+  test.setTimeout(20_000);
+
+  const page = await authedContext.newPage();
+  await page.goto('/briefings', { waitUntil: 'domcontentloaded' });
+
+  // Should not 404 or throw
+  const url = page.url();
+  expect(url, 'Should be on briefings page, not redirected').toContain('/briefings');
+
+  // Controls area must render
+  await page.getByTestId('briefings-controls').waitFor({ timeout: 10_000 });
+
+  // Project selector must be present and empty by default
+  const select = page.getByTestId('briefings-project-select');
+  await expect(select).toBeVisible();
+
+  // Briefings nav item should be active
+  const navItem = page.getByTestId('global-briefings-tab');
+  await expect(navItem).toBeVisible();
+
+  await page.close();
+});
