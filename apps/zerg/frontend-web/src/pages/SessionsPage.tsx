@@ -242,7 +242,7 @@ interface SessionCardProps {
 }
 
 function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
-  const turnCount = session.user_messages + session.assistant_messages;
+  const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const isActive = !session.ended_at;
 

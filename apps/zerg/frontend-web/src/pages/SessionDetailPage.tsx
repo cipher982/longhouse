@@ -403,7 +403,7 @@ export default function SessionDetailPage() {
   const title = (session.summary_title && session.summary_title !== "Untitled Session")
     ? session.summary_title
     : session.project || session.git_branch || "Session";
-  const turnCount = session.user_messages + session.assistant_messages;
+  const turnCount = session.user_messages;
 
   // Resume is available for Claude-provider sessions (they support --resume)
   const canResume = session.provider === "claude";
