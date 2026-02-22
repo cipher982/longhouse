@@ -10,7 +10,7 @@
  * - Click to view session details
  */
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams, useLocation, Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { config } from "../lib/config";
@@ -371,16 +371,16 @@ export default function SessionsPage() {
   );
   const [searchQuery, setSearchQuery] = useState(searchParams.get("query") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
-  // Search mode: 'keyword' | 'semantic' | 'hybrid'
-  // 'hybrid' sends both FTS and semantic to the backend (RRF fusion) in a single call.
-  // Backwards compat: old 'smart' URL param maps to 'hybrid'; ?semantic=1 maps to 'semantic'.
-  const [searchMode, setSearchMode] = useState<"keyword" | "semantic" | "hybrid">(() => {
+  // AI search toggle: false = keyword (instant), true = hybrid (AI-powered, ~500ms–2s).
+  // Backwards compat: old mode=hybrid/semantic/smart URLs and ?semantic=1 all map to ai=true.
+  const [aiSearch, setAiSearch] = useState<boolean>(() => {
     const m = searchParams.get("mode");
-    if (m === "semantic" || m === "hybrid" || m === "keyword") return m;
-    if (m === "smart") return "hybrid"; // migrate old URLs
-    if (searchParams.get("semantic") === "1") return "semantic";
-    return "keyword";
+    if (m === "hybrid" || m === "semantic" || m === "smart") return true;
+    if (searchParams.get("semantic") === "1") return true;
+    return false;
   });
+  // Derived — kept for backend API compatibility
+  const searchMode = aiSearch ? "hybrid" : "keyword";
 
   // Sort order — only meaningful when a query is present.
   // Defaults to 'relevant' (best BM25/RRF match first).
@@ -407,13 +407,22 @@ export default function SessionsPage() {
   const projectOptions = filtersData?.projects || [];
   const providerOptions = filtersData?.providers || [];
 
-  // Debounce search query
+  // Debounce — longer when AI search is on to avoid hammering the embedding API per keystroke
+  const [aiSearchPending, setAiSearchPending] = useState(false);
+  const aiPendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
+    const delay = aiSearch ? 700 : 300;
+    if (aiSearch && searchQuery !== debouncedQuery) setAiSearchPending(true);
     const timer = setTimeout(() => {
       setDebouncedQuery(searchQuery);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
+      setAiSearchPending(false);
+    }, delay);
+    return () => {
+      clearTimeout(timer);
+      if (aiPendingTimer.current) clearTimeout(aiPendingTimer.current);
+    };
+  }, [searchQuery, aiSearch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update URL params when filters change
   useEffect(() => {
@@ -423,10 +432,10 @@ export default function SessionsPage() {
     if (environment) params.set("environment", environment);
     if (daysBack !== 14) params.set("days_back", String(daysBack));
     if (debouncedQuery) params.set("query", debouncedQuery);
-    if (searchMode !== "keyword") params.set("mode", searchMode);
+    if (aiSearch) params.set("mode", "hybrid");
     if (debouncedQuery && sortOrder !== "relevant") params.set("sort", sortOrder);
     setSearchParams(params, { replace: true });
-  }, [project, provider, environment, daysBack, debouncedQuery, searchMode, sortOrder, setSearchParams]);
+  }, [project, provider, environment, daysBack, debouncedQuery, aiSearch, sortOrder, setSearchParams]);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -446,7 +455,7 @@ export default function SessionsPage() {
       mode: searchMode === "keyword" ? undefined : searchMode,
       sort: debouncedQuery ? (sortOrder === "recent" ? "recency" : "relevance") : undefined,
     }),
-    [project, provider, environment, daysBack, debouncedQuery, limit, searchMode, sortOrder]
+    [project, provider, environment, daysBack, debouncedQuery, limit, aiSearch, sortOrder]
   );
 
   // Single unified query — no dual-fetch fallback logic needed.
@@ -459,7 +468,7 @@ export default function SessionsPage() {
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
-  const hasMore = searchMode !== "semantic" && sessions.length < total;
+  const hasMore = sessions.length < total;
 
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
@@ -484,7 +493,7 @@ export default function SessionsPage() {
     setEnvironment("");
     setDaysBack(14);
     setSearchQuery("");
-    setSearchMode("keyword");
+    setAiSearch(false);
     setFiltersOpen(false);
   }, []);
 
@@ -637,64 +646,43 @@ export default function SessionsPage() {
           <div className="sessions-search-row">
             <Input
               type="search"
-              placeholder={
-                searchMode === "semantic" ? "Semantic search..." :
-                searchMode === "hybrid" ? "Hybrid search..." :
-                "Search timeline..."
-              }
+              placeholder="Search sessions..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="sessions-search-input"
             />
-            <div
-              className="sessions-search-mode"
-              role="radiogroup"
-              aria-label="Search mode"
-              onKeyDown={(e) => {
-                const modes: Array<"keyword" | "semantic" | "hybrid"> = ["keyword", "semantic", "hybrid"];
-                const idx = modes.indexOf(searchMode);
-                if (e.key === "ArrowLeft") { e.preventDefault(); setSearchMode(modes[(idx + 2) % 3]); }
-                if (e.key === "ArrowRight") { e.preventDefault(); setSearchMode(modes[(idx + 1) % 3]); }
-                requestAnimationFrame(() => {
-                  const active = e.currentTarget.querySelector<HTMLButtonElement>('[aria-checked="true"]');
-                  active?.focus();
-                });
-              }}
+            <button
+              type="button"
+              className={`sessions-ai-toggle${aiSearch ? " sessions-ai-toggle--active" : ""}`}
+              onClick={() => setAiSearch((v) => !v)}
+              aria-pressed={aiSearch}
+              title={aiSearch ? "AI search on — finds by meaning (slower)" : "AI search — finds sessions by meaning"}
             >
-              <button
-                type="button"
-                role="radio"
-                aria-checked={searchMode === "keyword"}
-                tabIndex={searchMode === "keyword" ? 0 : -1}
-                className={`sessions-mode-btn${searchMode === "keyword" ? " sessions-mode-btn--active" : ""}`}
-                onClick={() => setSearchMode("keyword")}
-                title="Full-text search"
-              >
-                Keyword
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={searchMode === "semantic"}
-                tabIndex={searchMode === "semantic" ? 0 : -1}
-                className={`sessions-mode-btn${searchMode === "semantic" ? " sessions-mode-btn--active" : ""}`}
-                onClick={() => setSearchMode("semantic")}
-                title="AI-powered similarity search using embeddings"
-              >
-                Semantic
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={searchMode === "hybrid"}
-                tabIndex={searchMode === "hybrid" ? 0 : -1}
-                className={`sessions-mode-btn${searchMode === "hybrid" ? " sessions-mode-btn--active" : ""}`}
-                onClick={() => setSearchMode("hybrid")}
-                title="Combines keyword and semantic search with RRF fusion for best results"
-              >
-                Hybrid
-              </button>
-            </div>
+              {aiSearch && (isLoading || aiSearchPending) ? (
+                <Spinner size="sm" />
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  {/* Sparkles icon */}
+                  <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
+                  <path d="M20 3v4" />
+                  <path d="M22 5h-4" />
+                  <path d="M4 17v2" />
+                  <path d="M5 18H3" />
+                </svg>
+              )}
+              <span className="sessions-ai-toggle-label">AI</span>
+            </button>
             {debouncedQuery && (
               <div
                 className="sessions-search-mode sessions-sort-toggle"
@@ -836,7 +824,7 @@ export default function SessionsPage() {
                 sessions={daySessions}
                 onSessionClick={handleSessionClick}
                 highlightQuery={debouncedQuery}
-                isSemanticResult={searchMode === "semantic"}
+                isSemanticResult={aiSearch}
               />
             ))}
           </div>

@@ -81,48 +81,53 @@
     flex: 1;
   }
 
-  /* Segmented search mode control (Keyword | Semantic) */
-  .sessions-search-mode {
+  /* AI search toggle — icon + label pill next to the search input */
+  .sessions-ai-toggle {
     display: inline-flex;
-    border: 1px solid var(--border-glass-1);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-    flex-shrink: 0;
-  }
-
-  .sessions-mode-btn {
+    align-items: center;
+    gap: var(--space-1);
     padding: var(--space-1) var(--space-2);
     background: transparent;
-    border: none;
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-md);
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     font-family: var(--font-family-base);
     white-space: nowrap;
+    flex-shrink: 0;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .sessions-mode-btn:focus-visible {
-    outline: 2px solid var(--color-brand-primary);
-    outline-offset: -2px;
-  }
-
-  .sessions-mode-btn:hover {
+  .sessions-ai-toggle:hover {
     color: var(--color-text-secondary);
     background: var(--surface-glass-2);
+    border-color: var(--border-glass-2);
   }
 
-  .sessions-mode-btn--active {
+  .sessions-ai-toggle:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
+  }
+
+  .sessions-ai-toggle--active {
     background: var(--color-brand-accent-subtle, rgba(255, 149, 0, 0.12));
+    border-color: var(--color-brand-accent);
     color: var(--color-brand-accent);
   }
 
-  .sessions-mode-btn--active:hover {
+  .sessions-ai-toggle--active:hover {
     background: var(--color-brand-accent-subtle, rgba(255, 149, 0, 0.18));
   }
 
-  /* Sort toggle has a subtle left border to visually separate from mode toggle */
+  .sessions-ai-toggle-label {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.03em;
+  }
+
+  /* Sort toggle has a subtle left border to visually separate from AI toggle */
   .sessions-sort-toggle {
     margin-left: var(--space-1);
     border-color: var(--border-glass-1);
@@ -1096,11 +1101,6 @@
     .sessions-search-row {
       max-width: none;
       flex: 1 1 100%;
-    }
-
-    .sessions-mode-btn {
-      font-size: 11px;
-      padding: var(--space-1) var(--space-1);
     }
 
     .sessions-filter-panel {
