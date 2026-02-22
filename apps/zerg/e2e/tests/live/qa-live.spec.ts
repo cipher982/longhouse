@@ -417,14 +417,14 @@ test('timeline has AI search toggle', async ({ authedContext }) => {
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await expect(toggle).not.toHaveClass(/sessions-ai-toggle--active/);
 
-  // Click to enable AI search — URL updates (?mode=hybrid) so wait for re-render
+  // Click to enable AI search
   await toggle.click();
-  await page.locator('.sessions-ai-toggle[aria-pressed="true"]').waitFor({ timeout: 5_000 });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   await expect(toggle).toHaveClass(/sessions-ai-toggle--active/);
 
   // Click again to disable
   await toggle.click();
-  await page.locator('.sessions-ai-toggle[aria-pressed="false"]').waitFor({ timeout: 5_000 });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
 
   await page.close();
 });
