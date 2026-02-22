@@ -1,0 +1,154 @@
+/* Recall Panel — collapsible turn-level semantic search panel on the Timeline page. */
+
+.recall-panel {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 1.5rem;
+  margin-top: 1rem;
+}
+
+.recall-panel-header {
+  margin-bottom: 0.75rem;
+}
+
+.recall-panel-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.recall-panel-description {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.recall-panel-search {
+  margin-bottom: 1rem;
+}
+
+.recall-search-input {
+  width: 100%;
+}
+
+.recall-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  padding: 0.5rem 0;
+}
+
+.recall-results-header {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.recall-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.recall-card {
+  background: var(--bg-card, var(--bg-secondary));
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  transition: border-color 0.15s;
+}
+
+.recall-card:hover {
+  border-color: var(--border-default);
+}
+
+.recall-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.recall-card-session-link {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-decoration: none;
+  flex: 1;
+}
+
+.recall-card-session-link:hover {
+  color: var(--accent-primary, var(--text-accent));
+  text-decoration: underline;
+}
+
+.recall-card-meta {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+.recall-card-context {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-left: 2px solid var(--border-subtle);
+  padding-left: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.recall-turn {
+  display: flex;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.recall-turn--match {
+  background: color-mix(in srgb, var(--accent-primary, #4ade80) 8%, transparent);
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.25rem;
+  margin: 0 -0.25rem;
+}
+
+.recall-turn-role {
+  color: var(--text-secondary);
+  font-weight: 500;
+  min-width: 3rem;
+  flex-shrink: 0;
+}
+
+.recall-turn--user .recall-turn-role { color: var(--text-accent, #60a5fa); }
+.recall-turn--assistant .recall-turn-role { color: var(--text-secondary); }
+
+.recall-turn-content {
+  color: var(--text-primary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.recall-card-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.recall-card-open {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.recall-card-open:hover {
+  color: var(--text-primary);
+}
+
+/* Smart fallback indicator (lives here since it relates to the search experience) */
+.sessions-smart-fallback {
+  padding: 0.375rem 0;
+  margin-bottom: 0.5rem;
+}
