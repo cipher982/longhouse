@@ -25,6 +25,9 @@ export DATABASE_URL="sqlite://"
 # Required by zerg/utils/crypto.py at import time (module-level Fernet init).
 # Tests that use crypto functionality (e.g. test_email_config.py) will fail
 # to collect without this, causing pytest INTERNALERROR (SystemExit during import).
-export FERNET_SECRET="${FERNET_SECRET:-Mj7MFJspDPjiFBGHZJ5hnx70XAFJ_En6ofIEhn3BoXw=}"
+# FERNET_SECRET must be set in CI secrets — no hardcoded fallback.
+if [ -z "${FERNET_SECRET:-}" ]; then
+    export FERNET_SECRET="$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+fi
 
 uv run --extra dev pytest tests_lite/ -p no:warnings --tb=short "$@"
