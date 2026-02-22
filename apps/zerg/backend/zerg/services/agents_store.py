@@ -352,9 +352,11 @@ class AgentsStore:
                 if event_data.role == "user":
                     user_count += 1
                 elif event_data.role == "assistant":
-                    assistant_count += 1
                     if event_data.tool_name:
+                        # Tool-call events: count as tool, not as a conversation turn
                         tool_count += 1
+                    else:
+                        assistant_count += 1
             else:
                 events_skipped += 1
 
