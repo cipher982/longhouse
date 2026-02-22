@@ -172,14 +172,18 @@ export function mapSessionsToEntities(
       const subtitleParts = [session.provider, session.git_branch].filter(Boolean) as string[];
       const subtitle = subtitleParts.join(" | ");
 
-      // Map real presence state to canvas entity status
+      // Map real presence state (or heuristic status) to canvas entity status.
+      // Parked sessions render as disabled — user has intentionally deprioritised them.
       let entityStatus: ForumEntity["status"] = "idle";
-      if (session.ended_at) {
+      if (session.ended_at || session.user_state === "parked") {
         entityStatus = "disabled";
       } else if (session.presence_state === "running") {
         entityStatus = "working";
       } else if (session.presence_state === "thinking") {
         entityStatus = "moving"; // visual: in-motion/active
+      } else if (session.status === "working") {
+        // Heuristic fallback: no presence signal but status heuristic says working
+        entityStatus = "moving";
       }
 
       entities.set(session.id, {
