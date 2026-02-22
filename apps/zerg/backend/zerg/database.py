@@ -436,10 +436,14 @@ def initialize_database(engine: Engine = None) -> None:
 
 
 def _migrate_agents_columns(engine: Engine) -> None:
-    """Add columns to existing tables that create_all() won't ALTER in.
+    """Add columns to existing SQLite tables that create_all() cannot ALTER in.
 
     SQLite's CREATE TABLE IF NOT EXISTS is a no-op on existing tables, so new
-    columns must be added explicitly via ALTER TABLE.
+    model columns are invisible to existing deployments until added here.
+
+    IMPORTANT: When adding a new column to AgentSession or other agents models,
+    add a corresponding ALTER TABLE check in this function or existing instances
+    will get 500 errors querying those columns.
     """
     if engine.dialect.name != "sqlite":
         return
