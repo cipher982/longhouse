@@ -123,9 +123,12 @@ if [[ ! -f "$TOKEN_FILE" ]] || [[ ! -f "$URL_FILE" ]]; then exit 0; fi
 TOKEN=$(cat "$TOKEN_FILE" | tr -d '[:space:]')
 URL=$(cat "$URL_FILE" | tr -d '[:space:]')
 
+# URL-encode the project name so paths with spaces or special chars work.
+PROJECT_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null || printf '%s' "$PROJECT")
+
 RESPONSE=$(curl -sf --max-time 4 \\
   -H "X-Agents-Token: $TOKEN" \\
-  "${URL}/api/agents/sessions?project=${PROJECT}&limit=5&days_back=7" 2>/dev/null)
+  "${URL}/api/agents/sessions?project=${PROJECT_ENC}&limit=5&days_back=7" 2>/dev/null)
 if [[ $? -ne 0 ]] || [[ -z "$RESPONSE" ]]; then exit 0; fi
 
 TOTAL=$(echo "$RESPONSE" | jq -r '.total // 0')

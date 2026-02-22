@@ -1761,7 +1761,7 @@ async def list_session_summaries(
 @router.get("/sessions/active", response_model=ActiveSessionsResponse)
 async def list_active_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
-    status: Optional[str] = Query(None, description="Filter by status (working, idle, completed)"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, idle, completed)"),
     attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
@@ -1784,6 +1784,7 @@ async def list_active_sessions(
             query=None,
             limit=limit,
             offset=0,
+            exclude_user_states=["archived", "snoozed"],
         )
 
         session_ids = [s.id for s in sessions]
@@ -1802,9 +1803,6 @@ async def list_active_sessions(
         now = datetime.now(timezone.utc)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
-            # Skip archived sessions from Forum by default
-            if getattr(s, "user_state", None) == "archived":
-                continue
             last_activity_at = last_activity.get(s.id) or s.ended_at or s.started_at
             if not last_activity_at:
                 last_activity_at = now
@@ -1819,6 +1817,10 @@ async def list_active_sessions(
             else:
                 presence_fresh = False
 
+            # Normalize naive datetimes from SQLite to UTC for arithmetic
+            if last_activity_at.tzinfo is None:
+                last_activity_at = last_activity_at.replace(tzinfo=timezone.utc)
+
             if s.ended_at:
                 derived_status = "completed"
             elif presence_fresh:
@@ -1830,13 +1832,14 @@ async def list_active_sessions(
 
             attention_level = "auto"
 
-            if status and derived_status != status:
+            if status_filter and derived_status != status_filter:
                 continue
             if attention and attention_level != attention:
                 continue
 
+            _started = s.started_at.replace(tzinfo=timezone.utc) if s.started_at and s.started_at.tzinfo is None else s.started_at
             end_time = s.ended_at or now
-            duration_minutes = int((end_time - s.started_at).total_seconds() / 60) if s.started_at else 0
+            duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
             message_count = (s.user_messages or 0) + (s.assistant_messages or 0)
 
             items.append(
@@ -1859,7 +1862,7 @@ async def list_active_sessions(
                     presence_state=presence.state if presence_fresh else None,
                     presence_tool=presence.tool_name if presence_fresh else None,
                     presence_updated_at=presence.updated_at if presence_fresh else None,
-                    user_state=getattr(s, "user_state", None) or "active",
+                    user_state=s.user_state or "active",
                 )
             )
 
