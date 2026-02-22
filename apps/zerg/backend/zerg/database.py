@@ -459,6 +459,15 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("UPDATE sessions SET summary_event_count = 0 WHERE summary_event_count IS NULL"))
             if "reflected_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN reflected_at DATETIME"))
+            if "last_summarized_event_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_summarized_event_id INTEGER"))
+            if "user_state" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state VARCHAR(20) DEFAULT 'active' NOT NULL"))
+                conn.execute(text("UPDATE sessions SET user_state = 'active' WHERE user_state IS NULL"))
+            if "user_state_at" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state_at DATETIME"))
+            if "first_user_message" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN first_user_message TEXT"))
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
