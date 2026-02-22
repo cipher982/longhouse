@@ -186,6 +186,37 @@ def test_archived_filter_before_limit(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_active_sessions_handles_ended_session_datetime(tmp_path):
+    """list_active_sessions doesn't 500 when ended_at is naive (SQLite stores naive)."""
+    factory = _make_db(tmp_path, "ended_dt.db")
+    # Seed an ended session (ended_at set)
+    db = factory()
+    s = AgentSession(
+        provider="claude",
+        environment="production",
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),  # will be stored naive by SQLite
+        user_messages=3,
+        assistant_messages=3,
+        tool_calls=1,
+    )
+    db.add(s)
+    db.commit()
+    db.close()
+
+    client = _client(factory)
+    try:
+        resp = client.get("/agents/sessions/active", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200
+        # Verify duration_minutes is calculable (no 500)
+        sessions = resp.json()["sessions"]
+        assert len(sessions) == 1
+        assert sessions[0]["duration_minutes"] >= 0
+    finally:
+        from zerg.main import api_app
+        api_app.dependency_overrides.clear()
+
+
 def test_presence_auto_resumes_snoozed_on_thinking(tmp_path):
     """Presence thinking signal auto-resumes a snoozed session."""
     factory = _make_db(tmp_path, "auto_resume.db")

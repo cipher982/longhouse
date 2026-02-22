@@ -1838,7 +1838,8 @@ async def list_active_sessions(
                 continue
 
             _started = s.started_at.replace(tzinfo=timezone.utc) if s.started_at and s.started_at.tzinfo is None else s.started_at
-            end_time = s.ended_at or now
+            _ended = s.ended_at.replace(tzinfo=timezone.utc) if s.ended_at and s.ended_at.tzinfo is None else s.ended_at
+            end_time = _ended or now
             duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
             message_count = (s.user_messages or 0) + (s.assistant_messages or 0)
 
