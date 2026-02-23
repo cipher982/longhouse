@@ -51,10 +51,10 @@ def test_environment_filter_returns_commis_sessions(tmp_path):
         )
 
         # Filter by environment=commis should return the session
-        sessions, total = store.list_sessions(environment="commis")
+        sessions, total = store.list_sessions(environment="commis", hide_autonomous=False)
         assert total == 1
         assert sessions[0].environment == "commis"
 
         # Filter by environment=production should NOT return it
-        sessions, total = store.list_sessions(environment="production")
+        sessions, total = store.list_sessions(environment="production", hide_autonomous=False)
         assert total == 0

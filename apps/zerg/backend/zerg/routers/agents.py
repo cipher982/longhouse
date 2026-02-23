@@ -1669,6 +1669,7 @@ async def list_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
+    hide_autonomous: bool = Query(True, description="Hide sessions with no user messages (autonomous agent runs)"),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -1720,6 +1721,7 @@ async def list_sessions(
                 device_id=device_id,
                 days_back=days_back,
                 exclude_user_states=["archived"],
+                hide_autonomous=hide_autonomous,
             )
 
             lex_hits = lexical_search(query or "", db, _filters, limit, over_fetch=True)
@@ -1827,6 +1829,7 @@ async def list_sessions(
             query=query,
             limit=limit,
             offset=offset,
+            hide_autonomous=hide_autonomous,
         )
 
         # Apply sort to lexical results
@@ -1917,6 +1920,7 @@ async def list_session_summaries(
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    hide_autonomous: bool = Query(True, description="Hide sessions with no user messages (autonomous agent runs)"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
@@ -1936,6 +1940,7 @@ async def list_session_summaries(
             query=query,
             limit=limit,
             offset=offset,
+            hide_autonomous=hide_autonomous,
         )
 
         session_ids = [s.id for s in sessions]

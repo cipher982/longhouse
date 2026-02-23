@@ -32,6 +32,7 @@ class SessionFilters:
     device_id: Optional[str] = None
     days_back: int = 14
     exclude_user_states: list[str] = field(default_factory=list)
+    hide_autonomous: bool = True  # Exclude sessions with no user messages (autonomous agent runs)
 
 
 def lexical_search(
@@ -62,6 +63,7 @@ def lexical_search(
         limit=fetch_limit,
         offset=0,
         exclude_user_states=filters.exclude_user_states,
+        hide_autonomous=filters.hide_autonomous,
     )
     return sessions
 
