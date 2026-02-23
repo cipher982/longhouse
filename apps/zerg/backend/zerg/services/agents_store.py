@@ -399,6 +399,7 @@ class AgentsStore:
         limit: int = 20,
         offset: int = 0,
         exclude_user_states: Optional[list[str]] = None,
+        hide_autonomous: bool = True,
     ) -> tuple[List[AgentSession], int]:
         """List sessions with optional filters.
 
@@ -428,6 +429,10 @@ class AgentsStore:
             stmt = stmt.where(AgentSession.started_at >= since)
         if until:
             stmt = stmt.where(AgentSession.started_at <= until)
+
+        # Exclude autonomous agent runs (no user typed anything)
+        if hide_autonomous:
+            stmt = stmt.where(AgentSession.user_messages > 0)
 
         # Exclude sessions by user_state bucket (archived, snoozed, etc.)
         # NULL user_state is treated as 'active' (legacy rows pre-dating the column).
