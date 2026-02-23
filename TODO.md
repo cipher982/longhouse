@@ -9,79 +9,81 @@ Capture list for substantial work. Not quick fixes (do those live).
 - Check off subtasks as you go so next agent knows state
 - Add notes under tasks if you hit blockers or learn something
 
-Classification tags (use on section headers): [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tech Debt]
+Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tech Debt]
 
 ---
 
 ## What's Next (Priority Order)
 
-1. **Forum extended state model** — `needs_user`, `blocked` beyond bucket actions. Requires hooks that don't exist yet — defer.
-2. **Oikos Dispatch Contract** — Deferred until usage demands it.
-3. **README Test CI** — ✅ Done. `scripts/run-readme-tests.py` + `make test-readmes` + `.github/workflows/readme-tests.yml` + 3 smoke blocks. (commit `d14b3588`)
+1. **Extended hook states** (`needs_user`, `blocked`) — blocked on Claude Code hook support. Defer.
+2. **Oikos Dispatch Contract** — defer until usage demands it.
+3. **PyPI publish** — `pyproject.toml` is `0.1.2`, PyPI has `0.1.1`. Low priority but stale.
 
 ---
 
-## [Product] Forum Discovery UX + Explicit Presence Signals (7)
+## [Product] Search + Discovery
 
-Make the Forum the canonical discovery UI for sessions, with **explicit** state signals.
+**Status (2026-02-23):** Core shipped. Timeline search is fully functional.
 
-**Status (2026-02-21):** All core items complete.
-
-- [x] Presence ingestion + storage — `session_presence` table, `POST /api/agents/presence`.
-- [x] Presence emission — `UserPromptSubmit→thinking`, `PreToolUse→running`, `Stop→idle`.
-- [x] Forum UI with real state — active rows glow green, inactive fade, canvas entities pulse.
-- [x] Unknown state — `showUnknown` prop on `PresenceBadge`; live sessions without signals show dim gray "Unknown".
-- [x] User bucket actions — Park/Snooze/Archive/Resume via `POST /agents/sessions/{id}/action`; `user_state` column on `AgentSession`; parked rows dimmed in Forum; archived excluded from list.
-- [ ] Extended hook states (`needs_user`, `blocked`) — deferred until hooks support emitting them.
+- [x] Keyword search (FTS) — sessions page, instant
+- [x] Semantic search — AI toggle (✨ icon), hybrid RRF mode, sort by relevance/recency
+- [x] Recall panel — turn-level semantic search, `?event_id=X` anchoring to matched turn
+- [x] Session titles — LLM summary_title preferred, cwd/project/date fallbacks
+- [x] Smart search fallback — keyword→semantic auto-fallback when no keyword results
+- [ ] Semantic result display polish — summary shown as snippet (done), but score badge not shown for transparent ranking. Consider showing confidence.
 
 ---
 
-## [Tech Debt] Ingest Pipeline Reliability + Efficiency
+## [Product] Forum + Presence
 
-**Status (2026-02-21):**
-- ✅ Durable task queue: `SessionTask` model + polling worker (`ingest_task_queue.py`). Replaces BackgroundTasks.
-- ✅ Summary cursor: `last_summarized_event_id` on `AgentSession`. `_generate_summary_impl` now loads only new events (id > cursor) instead of all events. Legacy count-based fallback for old rows.
-- [x] Embedding cursor: `ingest_session()` now resets `needs_embedding=1` when new events are inserted; `embed_session()` deduplicates via `content_hash` so no redundant work. (commit `e7d561f2`)
+**Status (2026-02-23):** Fully working end-to-end on prod.
 
-**Note on title_generator.py:** Serves Oikos *chat thread* titles (`/conversation/title` endpoint). Not a duplicate of session summary — leave it.
-
----
-
-## [Infra] ✅ Hook Presence Spool via Daemon
-
-Done. `longhouse-hook.sh` writes presence events to `~/.claude/outbox/` via atomic rename (`.tmp.X` → `prs.X.json`). Rust engine daemon drains every 1s, coalesces by session_id, POSTs to `/api/agents/presence`. No network in hook critical path. Tests in `apps/engine/src/outbox.rs`. E2E script at `scripts/test-hooks-e2e.sh`.
+- [x] Presence ingestion — `session_presence` table, outbox pattern (no network in hooks)
+- [x] Real-time state — thinking/running/idle via Claude Code hooks → daemon → API
+- [x] Forum UI — active rows glow, canvas entities pulse, presence priority over ended_at
+- [x] Bucket actions — Park/Snooze/Archive/Resume
+- [ ] Extended hook states (`needs_user`, `blocked`) — deferred, hooks don't support it yet
 
 ---
 
-## [Product] Harness Simplification — Oikos Dispatch Contract (Deferred)
+## [Product] Briefings + AI Features
 
-- [ ] Oikos dispatch contract: direct vs quick-tool vs CLI delegation, explicit backend intent routing
+**Status (2026-02-23):** Core wired. Depends on LLM summarization running.
+
+- [x] Briefings page (`/briefings`) — project selector, session summaries + insights + proposals
+- [x] Reflection briefing endpoint — `GET /api/agents/briefing`
+- [ ] Summarization coverage gap — `AgentsStore.ingest_session()` used directly from multiple paths (demo seeds, commis_job_processor, CLI) without enqueuing summary tasks. Sessions via those paths get no `summary_title`. Fix: add enqueue call at those call sites or inside `ingest_session()` itself. Risk: demo seeds will trigger LLM calls.
+
+---
+
+## [Product] Harness — Oikos Dispatch Contract (Deferred)
+
+- [ ] Oikos dispatch contract: direct vs quick-tool vs CLI delegation
 - [ ] Claude Compaction API for infinite thread context management
 
-Research doc: `docs/specs/3a-deferred-research.md` (commit `16c531e6`)
+Research doc: `docs/specs/3a-deferred-research.md`
 
 ---
 
-## [QA/Test] ✅ README Test CI
+## [Tech Debt] Schema Migration
 
-Done. (commit `d14b3588`)
+**Resolved (2026-02-22):** `_migrate_agents_columns()` in `database.py` now covers all
+current columns. **Rule:** every new `Column` on an agents model must get a corresponding
+`ALTER TABLE` entry in that function — SQLite ignores new columns on existing tables.
 
-- [x] JSON block spec: ` ```readme-test ` fenced blocks with `name/mode/workdir/timeout/env/steps/cleanup`.
-- [x] `scripts/run-readme-tests.py` — Python extractor (state machine) + runner; fail-fast, streams output.
-- [x] `make test-readmes [MODE=smoke|full]` Makefile target.
-- [x] `.github/workflows/readme-tests.yml` — push (path-filtered), nightly 6am UTC, workflow_dispatch; `runs-on: cube`.
-- [x] Smoke blocks: root README (install+serve+health), hatch-agent (install+help), runner (bun install+tsc).
+- [x] `last_summarized_event_id`, `user_state`, `user_state_at` — added to migration
+- [ ] No current gaps known — watch for new columns added without migration entries
 
 ---
 
 ## [Docs/Drift] Open Items
 
-- DB size claim stale; prod DB reset 2026-02-05 (no users). Update once real user data exists.
-- PyPI version lags repo: `pyproject.toml` is `0.1.2`, PyPI has `0.1.1`. Publish when ready.
+- DB size claim stale in README (prod DB reset 2026-02-05, no real users yet). Update when data exists.
+- PyPI `0.1.1` lags repo `0.1.2`. Publish when ready.
 
 ---
 
 ## [Tech Debt] Stable Abstractions (Don't Delete)
 
-- [ID 41] Legacy modal pattern CSS — 7+ components use `.modal-*` classes, 58 definitions in `styles/css/modal.css`. Evidence: `ideas/evidence/48_evidence_modal_css_legacy.sh`
-- [ID 43] Legacy token aliases — present in `styles/tokens.css`, actively referenced in component CSS. Evidence: `ideas/evidence/50_evidence_tokens_css_legacy_aliases.sh`
+- [ID 41] Legacy modal pattern CSS — 7+ components use `.modal-*` classes, 58 definitions in `styles/css/modal.css`.
+- [ID 43] Legacy token aliases — present in `styles/tokens.css`, actively referenced in component CSS.
