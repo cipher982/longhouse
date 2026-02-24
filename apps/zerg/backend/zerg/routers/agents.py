@@ -1461,6 +1461,7 @@ async def semantic_search_sessions(
         filter_query = filter_query.filter(AgentSession.provider == provider)
     if environment:
         filter_query = filter_query.filter(AgentSession.environment == environment)
+    filter_query = filter_query.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
     valid_ids = {str(row[0]) for row in filter_query.all()}
 
     # Search
@@ -1741,6 +1742,8 @@ async def list_sessions(
                     filter_q = filter_q.filter(AgentSession.provider == provider)
                 if environment:
                     filter_q = filter_q.filter(AgentSession.environment == environment)
+                if hide_autonomous:
+                    filter_q = filter_q.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
                 valid_ids = {str(row[0]) for row in filter_q.all()}
 
                 sem_results = cache.search_sessions(query_vec, limit=fetch_limit, session_filter=valid_ids)

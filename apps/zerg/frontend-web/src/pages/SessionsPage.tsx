@@ -107,10 +107,11 @@ function getProviderColor(provider: string): string {
 
 function isValidTitle(name: string | null | undefined): name is string {
   if (!name) return false;
-  // Skip tmp folders, random hashes, and very short names
-  if (name.startsWith("tmp") || /^[a-z0-9]{8,}$/i.test(name) || name.length < 3) {
-    return false;
-  }
+  if (name.length < 3) return false;
+  if (name.startsWith("tmp")) return false;
+  // Skip git hashes and hex IDs (only hex chars 0-9a-f, 8+ chars)
+  // Uses [0-9a-f] not [a-z0-9] to avoid suppressing real names like "longhouse"
+  if (/^[0-9a-f]{8,}$/i.test(name)) return false;
   return true;
 }
 
