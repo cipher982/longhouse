@@ -1114,6 +1114,14 @@
     position: relative;
   }
 
+  .session-card-score {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--color-neon-cyan, #4dd9e0);
+    opacity: 0.75;
+    margin-top: 2px;
+  }
+
   .session-card-summary--pending {
     opacity: 0.45;
     font-style: italic;

@@ -312,6 +312,11 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
             {session.match_snippet}
           </div>
         )}
+        {isSemanticResult && session.match_score != null && session.match_score >= 0.5 && (
+          <div className="session-card-score" title={`Semantic similarity: ${Math.round(session.match_score * 100)}%`}>
+            {Math.round(session.match_score * 100)}% match
+          </div>
+        )}
       </div>
 
       <div className="session-card-footer">

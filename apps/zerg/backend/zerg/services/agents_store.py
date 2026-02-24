@@ -375,6 +375,13 @@ class AgentsStore:
             if events_inserted > 0:
                 session_obj.needs_embedding = 1  # Re-embed; embed_session deduplicates via content_hash
 
+        # Enqueue background summary + embedding tasks for any new events.
+        # Deduplication is handled inside enqueue_ingest_tasks; safe to call on every ingest.
+        if events_inserted > 0:
+            from zerg.services.ingest_task_queue import enqueue_ingest_tasks
+
+            enqueue_ingest_tasks(self.db, str(session_id))
+
         self.db.commit()
 
         logger.info(f"Ingested session {session_id}: {events_inserted} inserted, {events_skipped} skipped (duplicates)")
