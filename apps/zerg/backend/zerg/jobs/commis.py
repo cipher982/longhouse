@@ -204,6 +204,10 @@ async def enqueue_scheduled_run(job_id: str, scheduled_at: datetime | None = Non
 
     # Apply optional jitter: shift scheduled_for forward by a random amount so
     # jobs sharing the same cron time don't all execute simultaneously.
+    # NOTE: get_last_scheduled_for reads the jittered scheduled_for, so the
+    # backfill anchor drifts by up to jitter_minutes on restart. This is
+    # acceptable as long as jitter_minutes << cron interval (e.g. 5min jitter
+    # on a 24h job). Never set jitter_minutes >= cron interval.
     execution_time = scheduled_at
     if job.jitter_minutes > 0:
         jitter_seconds = random.randint(0, job.jitter_minutes * 60)

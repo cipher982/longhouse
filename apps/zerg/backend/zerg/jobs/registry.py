@@ -152,7 +152,11 @@ class JobConfig:
     description: str = ""
     queue_mode: bool = True  # Use durable queue (False = direct execution for debugging)
     secrets: list[str | SecretField] = field(default_factory=list)  # Declared secret keys (str or rich SecretField)
-    jitter_minutes: int = 0  # Random delay [0, jitter_minutes] added at enqueue time; 0 = no jitter
+    jitter_minutes: int = 0  # Random delay [0, jitter_minutes] added at enqueue time; 0 = no jitter. Must be < cron interval.
+
+    def __post_init__(self):
+        if self.jitter_minutes < 0:
+            raise ValueError(f"Job {self.id}: jitter_minutes must be >= 0, got {self.jitter_minutes}")
 
 
 @dataclass
