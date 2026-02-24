@@ -124,54 +124,6 @@ function normalizeApiBaseUrl(value: string): string {
   return `${url.origin}${normalizedPath}`;
 }
 
-/**
- * Check if we're on a user subdomain (e.g., david.longhouse.ai)
- * User subdomains need to redirect to main domain for OAuth.
- */
-export function isUserSubdomain(): boolean {
-  if (typeof window === "undefined") return false;
-  const host = window.location.hostname.toLowerCase();
-  // User subdomain pattern: {username}.longhouse.ai (not www, not api, etc.)
-  const match = host.match(/^([a-z0-9-]+)\.longhouse\.ai$/);
-  if (!match) return false;
-  const subdomain = match[1];
-  // Exclude known system subdomains (api-X pattern is deprecated)
-  const systemSubdomains = ["www", "api", "staging", "dev", "get"];
-  return !systemSubdomains.includes(subdomain);
-}
-
-/**
- * Get the user's subdomain (e.g., "david" from david.longhouse.ai)
- */
-export function getUserSubdomain(): string | null {
-  if (typeof window === "undefined") return null;
-  const host = window.location.hostname.toLowerCase();
-  const match = host.match(/^([a-z0-9-]+)\.longhouse\.ai$/);
-  if (!match) return null;
-  const subdomain = match[1];
-  const systemSubdomains = ["www", "api", "staging", "dev", "get"];
-  if (systemSubdomains.includes(subdomain)) return null;
-  return subdomain;
-}
-
-/**
- * Get the main auth domain URL (where OAuth happens)
- */
-export function getAuthDomain(): string {
-  return "https://longhouse.ai";
-}
-
-/**
- * Build the OAuth redirect URL for cross-subdomain auth.
- * User on david.longhouse.ai clicks "Sign In" -> redirect to longhouse.ai with return URL
- */
-export function buildAuthRedirectUrl(): string {
-  const subdomain = getUserSubdomain();
-  if (!subdomain) return "";
-  const returnUrl = encodeURIComponent(`https://${subdomain}.longhouse.ai`);
-  return `${getAuthDomain()}?auth_return=${returnUrl}`;
-}
-
 // Load configuration from environment variables
 function loadConfig(): AppConfig {
   const appMode = resolveAppMode();
