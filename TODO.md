@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 1. **Extended hook states** (`needs_user`, `blocked`) — blocked on Claude Code hook support. Defer.
 2. **Oikos Dispatch Contract** — defer until usage demands it.
-3. **PyPI publish** — `pyproject.toml` is `0.1.2`, PyPI has `0.1.1`. Low priority but stale.
+3. ~~**PyPI publish**~~ — shipped as v0.1.3 (2026-02-24).
 
 ---
 
@@ -30,7 +30,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 - [x] Recall panel — turn-level semantic search, `?event_id=X` anchoring to matched turn
 - [x] Session titles — LLM summary_title preferred, cwd/project/date fallbacks
 - [x] Smart search fallback — keyword→semantic auto-fallback when no keyword results
-- [ ] Semantic result display polish — summary shown as snippet (done), but score badge not shown for transparent ranking. Consider showing confidence.
+- [x] Semantic result display polish — score badge ("87% match") shown on AI search results when score ≥ 0.5.
 
 ---
 
@@ -52,7 +52,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 - [x] Briefings page (`/briefings`) — project selector, session summaries + insights + proposals
 - [x] Reflection briefing endpoint — `GET /api/agents/briefing`
-- [ ] Summarization coverage gap — `AgentsStore.ingest_session()` used directly from multiple paths (demo seeds, commis_job_processor, CLI) without enqueuing summary tasks. Sessions via those paths get no `summary_title`. Fix: add enqueue call at those call sites or inside `ingest_session()` itself. Risk: demo seeds will trigger LLM calls.
+- [x] Summarization coverage gap — fixed: `enqueue_ingest_tasks` now called inside `AgentsStore.ingest_session()` so all paths (demo seeds, commis_job_processor, CLI, router) enqueue summary + embedding tasks.
 
 ---
 
@@ -79,7 +79,7 @@ current columns. **Rule:** every new `Column` on an agents model must get a corr
 ## [Docs/Drift] Open Items
 
 - DB size claim stale in README (prod DB reset 2026-02-05, no real users yet). Update when data exists.
-- PyPI `0.1.1` lags repo `0.1.2`. Publish when ready.
+- ~~PyPI `0.1.1` lags repo `0.1.2`.~~ Published as v0.1.3 (2026-02-24).
 
 ---
 
