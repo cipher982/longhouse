@@ -196,37 +196,6 @@ def get_capabilities_for_connector(connector_type: ConnectorType) -> list[str]:
     return CONNECTOR_CAPABILITIES.get(connector_type, [])
 
 
-def get_unavailable_tools(
-    db: "Session",
-    owner_id: int,
-    fiche_id: int | None = None,
-) -> set[str]:
-    """Return tool names that require disconnected connectors.
-
-    Queries connector status and returns all tools that should be
-    filtered out because their required connector is not connected.
-
-    Args:
-        db: Database session
-        owner_id: User ID who owns the credentials
-        fiche_id: Optional fiche ID for fiche-level overrides
-
-    Returns:
-        Set of tool names to exclude from the fiche's available tools
-    """
-    status = build_connector_status(db, owner_id, fiche_id)
-    unavailable_tools: set[str] = set()
-
-    for connector_type in ConnectorType:
-        connector_status = status.get(connector_type.value, {})
-        # If not connected, exclude tools for this connector
-        if connector_status.get("status") != "connected":
-            tools = get_tools_for_connector(connector_type)
-            unavailable_tools.update(tools)
-
-    return unavailable_tools
-
-
 def build_connector_status(
     db: "Session",
     owner_id: int,
@@ -457,42 +426,3 @@ def build_fiche_context_parts(
         connector_status=connector_str,
         current_time=time_str,
     )
-
-
-def build_fiche_context(
-    db: "Session",
-    owner_id: int,
-    fiche_id: int | None = None,
-    *,
-    allowed_tools: list[str] | None = None,
-    compact_json: bool = True,
-) -> str:
-    """Build the full context injection string for a fiche turn.
-
-    This function creates the XML-formatted context block that gets injected
-    into every fiche conversation turn, providing:
-    - Current timestamp for temporal awareness
-    - Connector status with captured_at timestamp
-
-    .. note::
-        Prefer ``build_fiche_context_parts()`` for cache-optimized injection.
-        This function is kept for backward compatibility.
-
-    Args:
-        db: Database session
-        owner_id: User ID who owns the credentials
-        fiche_id: Optional fiche ID for fiche-level overrides
-        allowed_tools: Limit connectors to those relevant for these tools
-        compact_json: Use compact JSON formatting (default True)
-
-    Returns:
-        XML-formatted string with current_time and connector_status blocks
-    """
-    parts = build_fiche_context_parts(
-        db=db,
-        owner_id=owner_id,
-        fiche_id=fiche_id,
-        allowed_tools=allowed_tools,
-        compact_json=compact_json,
-    )
-    return f"{parts.current_time}\n\n{parts.connector_status}"
