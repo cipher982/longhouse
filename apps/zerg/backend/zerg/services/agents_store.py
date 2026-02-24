@@ -65,6 +65,7 @@ class SessionIngest(BaseModel):
     started_at: datetime = Field(..., description="Session start time")
     ended_at: Optional[datetime] = Field(None, description="Session end time")
     provider_session_id: Optional[str] = Field(None, description="Provider-specific session ID (e.g., Claude Code session UUID)")
+    is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (isSidechain:true in JSONL)")
     events: List[EventIngest] = Field(default_factory=list, description="Session events")
 
 
@@ -281,6 +282,7 @@ class AgentsStore:
         if existing:
             # Update existing session
             existing.ended_at = data.ended_at or existing.ended_at
+            existing.is_sidechain = 1 if data.is_sidechain else 0
             session_created = False
         else:
             # Create new session
@@ -299,6 +301,7 @@ class AgentsStore:
                 user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
+                is_sidechain=1 if data.is_sidechain else 0,
             )
             self.db.add(session)
             self.db.flush()  # Get the ID
@@ -430,9 +433,9 @@ class AgentsStore:
         if until:
             stmt = stmt.where(AgentSession.started_at <= until)
 
-        # Exclude autonomous agent runs (no user typed anything)
+        # Exclude autonomous agent runs (Task sub-agents and sessions with no user messages)
         if hide_autonomous:
-            stmt = stmt.where(AgentSession.user_messages > 0)
+            stmt = stmt.where(AgentSession.user_messages > 0).where(AgentSession.is_sidechain == 0)
 
         # Exclude sessions by user_state bucket (archived, snoozed, etc.)
         # NULL user_state is treated as 'active' (legacy rows pre-dating the column).

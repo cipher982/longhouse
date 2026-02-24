@@ -60,6 +60,7 @@ pub struct IngestPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
     pub provider_session_id: &'a str,
+    pub is_sidechain: bool,
     pub events: Vec<EventIngest<'a>>,
 }
 
@@ -160,6 +161,7 @@ pub fn build_payload<'a>(
         started_at,
         ended_at,
         provider_session_id: &metadata.session_id,
+        is_sidechain: metadata.is_sidechain,
         events: event_ingests,
     }
 }
