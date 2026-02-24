@@ -254,6 +254,7 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!session.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!session.match_snippet;
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
+  const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
 
   return (
     <Card className={`session-card${isActive ? " session-card--active" : ""}`} onClick={onClick}>
@@ -280,6 +281,11 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
         <div className="session-card-title">{title}</div>
         {showSummary && (
           <div className="session-card-summary">{session.summary}</div>
+        )}
+        {showGenerating && (
+          <div className="session-card-summary session-card-summary--pending">
+            Generating summary<span className="session-card-dots" aria-hidden="true" />
+          </div>
         )}
         {showKeywordSnippet && (
           <div className="session-card-snippet">
@@ -471,6 +477,14 @@ export default function SessionsPage() {
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
   const hasMore = sessions.length < total;
+
+  // Fast-poll while any visible session is still generating its summary
+  const hasPendingSessions = sessions.some((s) => !s.summary_title && !s.summary);
+  useEffect(() => {
+    if (!hasPendingSessions) return;
+    const id = setInterval(() => { refetch(); }, 3_000);
+    return () => clearInterval(id);
+  }, [hasPendingSessions, refetch]);
 
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);

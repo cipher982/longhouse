@@ -1068,6 +1068,23 @@
     position: relative;
   }
 
+  .session-card-summary--pending {
+    opacity: 0.45;
+    font-style: italic;
+  }
+
+  @keyframes dots {
+    0%   { content: ".";   }
+    33%  { content: "..";  }
+    66%  { content: "..."; }
+    100% { content: ".";   }
+  }
+
+  .session-card-dots::after {
+    content: ".";
+    animation: dots 1.2s steps(1, end) infinite;
+  }
+
   /* Gradient fade hint for truncated text */
   .session-card-summary::after {
     content: "";
