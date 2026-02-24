@@ -28,7 +28,7 @@ export function clampToBounds(point: ForumGridPoint, bounds: ForumBounds): Forum
   };
 }
 
-export function isPointInBounds(point: ForumGridPoint, bounds: ForumBounds): boolean {
+function isPointInBounds(point: ForumGridPoint, bounds: ForumBounds): boolean {
   return (
     point.col >= bounds.minCol &&
     point.col <= bounds.maxCol &&

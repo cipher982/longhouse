@@ -1051,6 +1051,9 @@ requires-dist = [
 ]
 provides-extras = ["dev"]
 
+[package.metadata.requires-dev]
+dev = []
+
 [[package]]
 name = "lxml"
 version = "6.0.2"
