@@ -59,6 +59,7 @@ pub struct SessionMetadata {
     pub session_id: String,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
+    pub git_repo: Option<String>,
     pub project: Option<String>,
     pub version: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
@@ -201,6 +202,74 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Git repo detection
+// ---------------------------------------------------------------------------
+
+/// Walk up from `cwd` to find the nearest `.git/` directory.
+/// Returns the path to the `.git` directory if found.
+fn find_git_dir(cwd: &Path) -> Option<std::path::PathBuf> {
+    let mut dir = cwd;
+    loop {
+        let candidate = dir.join(".git");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        dir = dir.parent()?;
+    }
+}
+
+/// Parse the `url` of the `[remote "origin"]` section from a `.git/config` file.
+fn read_git_remote_url(git_config: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(git_config).ok()?;
+    let mut in_origin = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_origin = trimmed == r#"[remote "origin"]"#;
+            continue;
+        }
+        if in_origin {
+            if let Some(rest) = trimmed.strip_prefix("url") {
+                if let Some(url) = rest.trim_start().strip_prefix('=') {
+                    return Some(url.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolve `git_repo` (remote origin URL) and the canonical `project` name
+/// (git root folder name) from a working directory path.
+///
+/// Returns `(project, git_repo)` — either may be `None`.
+fn resolve_git_info(cwd: &Path) -> (Option<String>, Option<String>) {
+    let git_dir = match find_git_dir(cwd) {
+        Some(d) => d,
+        None => {
+            // No git repo — fall back to cwd basename
+            let project = cwd
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string());
+            return (project, None);
+        }
+    };
+
+    // git root = parent of .git dir
+    let git_root = git_dir.parent().unwrap_or(cwd);
+    let project = git_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string());
+
+    // Read remote URL from .git/config
+    let git_repo = read_git_remote_url(&git_dir.join("config"));
+
+    (project, git_repo)
+}
+
+// ---------------------------------------------------------------------------
 // mmap-based parser (large files)
 // ---------------------------------------------------------------------------
 
@@ -289,10 +358,9 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     metadata.started_at = min_ts;
     metadata.ended_at = max_ts;
     if let Some(ref cwd) = metadata.cwd {
-        metadata.project = Path::new(cwd)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string());
+        let (project, git_repo) = resolve_git_info(Path::new(cwd));
+        metadata.project = project;
+        metadata.git_repo = git_repo;
     }
 
     Ok(ParseResult {
@@ -366,10 +434,9 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     metadata.started_at = min_ts;
     metadata.ended_at = max_ts;
     if let Some(ref cwd) = metadata.cwd {
-        metadata.project = Path::new(cwd)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string());
+        let (project, git_repo) = resolve_git_info(Path::new(cwd));
+        metadata.project = project;
+        metadata.git_repo = git_repo;
     }
 
     Ok(ParseResult {

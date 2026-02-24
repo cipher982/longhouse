@@ -158,7 +158,7 @@ pub fn build_payload<'a>(
         project: metadata.project.as_deref(),
         device_id: format!("shipper-{}", hostname),
         cwd: metadata.cwd.as_deref(),
-        git_repo: None,
+        git_repo: metadata.git_repo.as_deref(),
         git_branch: metadata.git_branch.as_deref(),
         started_at,
         ended_at,
