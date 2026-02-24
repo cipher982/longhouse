@@ -1,4 +1,3 @@
-import type { Run } from "../../services/api";
 import { parseUTC } from "../../lib/dateUtils";
 
 const NBSP = "\u00A0";
@@ -21,19 +20,6 @@ export function formatDateTimeShort(iso: string | null | undefined): string {
   return `${year}-${month}-${day}${NBSP}${hours}:${minutes}`;
 }
 
-function formatStatus(status: string): string {
-  switch (status) {
-    case "running":
-      return "● Running";
-    case "processing":
-      return "⏳ Processing";
-    case "error":
-      return "⚠ Error";
-    case "idle":
-    default:
-      return "○ Idle";
-  }
-}
 
 export function formatDuration(durationMs?: number | null): string {
   if (!durationMs) {
@@ -73,17 +59,4 @@ export function formatCost(cost?: number | null): string {
     return `$${cost.toFixed(3)}`;
   }
   return `$${cost.toFixed(4)}`;
-}
-
-function formatRunStatusIcon(status: Run["status"]): string {
-  switch (status) {
-    case "running":
-      return "▶";
-    case "success":
-      return "✔";
-    case "failed":
-      return "✖";
-    default:
-      return "●";
-  }
 }

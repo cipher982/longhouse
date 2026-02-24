@@ -61,7 +61,7 @@ export function usePerformanceMonitoring(componentName: string) {
 }
 
 // Simple memoization helper for React components
-export const memoize = React.memo;
+const memoize = React.memo;
 
 // Debounce hook for performance optimization
 export function useDebounce<T>(value: T, delay: number): T {
@@ -81,7 +81,7 @@ export function useDebounce<T>(value: T, delay: number): T {
 }
 
 // Memory usage monitoring (development only)
-export function useMemoryMonitoring(componentName: string) {
+function useMemoryMonitoring(componentName: string) {
   useEffect(() => {
     if (import.meta.env.MODE !== 'development') return;
 

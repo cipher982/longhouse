@@ -70,21 +70,3 @@ export type ConnectorType =
   | "traccar"
   | "whoop"
   | "obsidian";
-
-// Icon mapping for connectors (Lucide icon names)
-export const CONNECTOR_ICONS: Record<string, string> = {
-  openai: "zap",
-  anthropic: "bot",
-  slack: "slack",
-  discord: "discord",
-  email: "mail",
-  sms: "smartphone",
-  github: "github",
-  jira: "clipboard",
-  linear: "layout",
-  notion: "file-text",
-  imessage: "message-circle",
-  traccar: "map-pin",
-  whoop: "activity",
-  obsidian: "book-open",
-};
