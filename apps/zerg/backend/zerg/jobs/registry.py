@@ -152,6 +152,7 @@ class JobConfig:
     description: str = ""
     queue_mode: bool = True  # Use durable queue (False = direct execution for debugging)
     secrets: list[str | SecretField] = field(default_factory=list)  # Declared secret keys (str or rich SecretField)
+    jitter_minutes: int = 0  # Random delay [0, jitter_minutes] added at enqueue time; 0 = no jitter
 
 
 @dataclass
