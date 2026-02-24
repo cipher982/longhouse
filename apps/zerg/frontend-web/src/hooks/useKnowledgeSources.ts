@@ -30,15 +30,6 @@ export function useKnowledgeSources() {
     queryFn: fetchKnowledgeSources,
   });
 }
-
-export function useKnowledgeSource(id: number) {
-  return useQuery<KnowledgeSource>({
-    queryKey: ["knowledge-sources", id],
-    queryFn: () => fetchKnowledgeSource(id),
-    enabled: !!id,
-  });
-}
-
 export function useCreateKnowledgeSource() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -52,22 +43,6 @@ export function useCreateKnowledgeSource() {
     },
   });
 }
-
-export function useUpdateKnowledgeSource() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: KnowledgeSourceUpdate }) =>
-      updateKnowledgeSource(id, data),
-    onSuccess: () => {
-      toast.success("Knowledge source updated");
-      queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] });
-    },
-    onError: (error: Error) => {
-      toast.error(`Failed to update source: ${error.message}`);
-    },
-  });
-}
-
 export function useDeleteKnowledgeSource() {
   const queryClient = useQueryClient();
   return useMutation({

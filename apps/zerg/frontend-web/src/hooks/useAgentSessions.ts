@@ -12,7 +12,6 @@ import {
   fetchAgentSessionSummaries,
   fetchAgentSessionPreview,
   fetchAgentFilters,
-  fetchSemanticSearch,
   fetchRecall,
   fetchAgentBriefing,
   type BriefingResponse,
@@ -24,8 +23,6 @@ import {
   type AgentSessionSummaryListResponse,
   type AgentSessionPreview,
   type AgentFiltersResponse,
-  type SemanticSearchFilters,
-  type SemanticSearchResponse,
   type RecallFilters,
   type RecallResponse,
 } from "../services/api";
@@ -124,22 +121,6 @@ export function useAgentSessionFilters(daysBack: number = 90, enabled: boolean =
  */
 export function useAgentFilters(daysBack: number = 90, enabled: boolean = true) {
   return useAgentSessionFilters(daysBack, enabled);
-}
-
-/**
- * Hook for semantic search (embedding-based similarity).
- */
-export function useSemanticSearch(
-  filters: SemanticSearchFilters,
-  options: { enabled?: boolean } = {}
-) {
-  return useQuery<SemanticSearchResponse>({
-    queryKey: ["semantic-search", filters],
-    queryFn: () => fetchSemanticSearch(filters),
-    enabled: options.enabled !== false && !!filters.query,
-    staleTime: 60_000,
-    gcTime: 5 * 60_000,
-  });
 }
 
 /**

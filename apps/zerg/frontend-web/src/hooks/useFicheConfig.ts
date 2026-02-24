@@ -65,27 +65,6 @@ export function useMcpServers(ficheId: number | null) {
     enabled: ficheId != null,
   });
 }
-
-export function useUpdateAllowedTools(ficheId: number | null) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (allowedTools: string[] | null) => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
-      }
-      return updateFiche(ficheId, { allowed_tools: allowedTools ?? [] });
-    },
-    onSuccess: () => {
-      toast.success("Allowed tools updated");
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId] });
-    },
-    onError: (error: Error) => {
-      toast.error(`Failed to update tools: ${error.message}`);
-    },
-  });
-}
-
 export function useAddMcpServer(ficheId: number | null) {
   const queryClient = useQueryClient();
   return useMutation({
