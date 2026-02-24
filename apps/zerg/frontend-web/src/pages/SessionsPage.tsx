@@ -487,14 +487,15 @@ export default function SessionsPage() {
     return () => clearInterval(id);
   }, [hasPendingSessions, refetch]);
 
-  // Report API health to footer indicator
+  // Report API health to footer indicator; clear on recovery or unmount
   useEffect(() => {
     if (error) {
       reportApiError(error);
-    } else if (data) {
-      clearApiError();
+    } else {
+      clearApiError(); // clear as soon as error is gone, not waiting for data
     }
-  }, [error, data]);
+    return () => clearApiError(); // ensure footer clears if user navigates away
+  }, [error]);
 
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
