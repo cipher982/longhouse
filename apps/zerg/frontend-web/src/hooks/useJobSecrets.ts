@@ -123,14 +123,6 @@ export function useLastJobRuns() {
 }
 
 // Runs for a specific job
-export function useJobRuns(jobId: string | null, limit = 25) {
-  return useQuery<JobRunHistoryResponse>({
-    queryKey: ["job-runs", jobId],
-    queryFn: () => getJobRuns(jobId!, limit),
-    enabled: !!jobId,
-  });
-}
-
 // Delete a secret
 export function useDeleteJobSecret() {
   const queryClient = useQueryClient();
