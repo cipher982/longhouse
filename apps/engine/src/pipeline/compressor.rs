@@ -163,7 +163,10 @@ pub fn build_payload<'a>(
         started_at,
         ended_at,
         provider_session_id: &metadata.session_id,
-        is_sidechain: metadata.is_sidechain,
+        // Allow env var override: agent-mesh sets LONGHOUSE_IS_SIDECHAIN=1 before
+        // running sub-agents; the Stop hook inherits it, marking the session as automated.
+        is_sidechain: metadata.is_sidechain
+            || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1"),
         events: event_ingests,
     }
 }
