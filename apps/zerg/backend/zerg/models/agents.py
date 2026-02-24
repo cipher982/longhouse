@@ -101,6 +101,9 @@ class AgentSession(AgentsBase):
     # Reflection tracking — stamped when session has been analyzed by reflection service
     reflected_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Sidechain flag: True when session is a Task sub-agent (not a human-initiated session)
+    is_sidechain = Column(Integer, nullable=False, server_default=text("0"))
+
     # Relationships
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")
 

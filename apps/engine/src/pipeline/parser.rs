@@ -63,6 +63,7 @@ pub struct SessionMetadata {
     pub version: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
+    pub is_sidechain: bool,
 }
 
 pub struct ParseResult {
@@ -84,6 +85,8 @@ struct RawLine {
     #[serde(rename = "gitBranch")]
     git_branch: Option<String>,
     version: Option<String>,
+    #[serde(rename = "isSidechain")]
+    is_sidechain: Option<bool>,
     /// Claude format: `{message: {content: ...}}`
     message: Option<RawMessage>,
     /// Codex format: `{payload: {type: ..., role: ..., content: [...]}}`
@@ -423,6 +426,11 @@ fn collect_metadata(
                 }
             }
         }
+    }
+
+    // Once-true-stays-true: any line with isSidechain:true marks the whole session
+    if obj.is_sidechain == Some(true) {
+        meta.is_sidechain = true;
     }
 
     if let Some(ts) = obj.timestamp.as_deref().and_then(parse_timestamp) {

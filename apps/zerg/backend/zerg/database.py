@@ -470,6 +470,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("UPDATE sessions SET user_state = 'active' WHERE user_state IS NULL"))
             if "user_state_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state_at DATETIME"))
+            if "is_sidechain" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"))
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)

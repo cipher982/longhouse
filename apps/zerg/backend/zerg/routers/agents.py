@@ -222,6 +222,7 @@ class SessionResponse(UTCBaseModel):
     match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role for matching event")
+    is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
 
 
 class SessionSummaryResponse(UTCBaseModel):
@@ -1669,7 +1670,7 @@ async def list_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
-    hide_autonomous: bool = Query(True, description="Hide sessions with no user messages (autonomous agent runs)"),
+    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -1831,6 +1832,7 @@ async def list_sessions(
                     match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                     match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(s.id),
                     match_role=(match_map.get(s.id) or {}).get("role"),
+                    is_sidechain=bool(s.is_sidechain or False),
                 )
                 for s in fused
             ]
@@ -1904,6 +1906,7 @@ async def list_sessions(
                 match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                 match_snippet=(match_map.get(s.id) or {}).get("snippet"),
                 match_role=(match_map.get(s.id) or {}).get("role"),
+                is_sidechain=bool(s.is_sidechain or False),
             )
             for s in sessions
         ]
@@ -1959,7 +1962,7 @@ async def list_session_summaries(
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    hide_autonomous: bool = Query(True, description="Hide sessions with no user messages (autonomous agent runs)"),
+    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
