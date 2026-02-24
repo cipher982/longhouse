@@ -83,7 +83,7 @@ current columns. **Rule:** every new `Column` on an agents model must get a corr
 
 ---
 
-## [Tech Debt] Stable Abstractions (Don't Delete)
+## [Tech Debt] CSS Legacy Patterns
 
-- [ID 41] Legacy modal pattern CSS — 7+ components use `.modal-*` classes, 58 definitions in `styles/css/modal.css`.
-- [ID 43] Legacy token aliases — present in `styles/tokens.css`, actively referenced in component CSS.
+- Legacy modal pattern CSS — 7+ components use `.modal-*` classes, 58 definitions in `styles/css/modal.css`.
+- Legacy token aliases — present in `styles/tokens.css`, actively referenced in component CSS.
