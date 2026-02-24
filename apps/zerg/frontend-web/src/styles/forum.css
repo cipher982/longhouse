@@ -55,14 +55,6 @@
     margin-top: var(--space-1);
   }
 
-  .forum-task-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    padding: var(--space-3) var(--space-4) var(--space-4);
-    overflow-y: auto;
-  }
-
   .forum-session-list {
     display: flex;
     flex-direction: column;
@@ -259,88 +251,6 @@
     flex-shrink: 0;
   }
 
-  .forum-empty-actions {
-    margin-top: var(--space-3);
-    display: flex;
-    justify-content: center;
-  }
-
-  .forum-task-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border-radius: 12px;
-    background: rgba(26, 20, 16, 0.75);
-    border: 1px solid rgba(158, 124, 90, 0.2);
-    color: rgba(243, 234, 217, 0.9);
-    font-size: var(--font-size-sm);
-    text-align: left;
-    transition: transform 0.18s ease, border 0.18s ease;
-  }
-
-  .forum-task-row:hover {
-    border-color: rgba(201, 166, 107, 0.5);
-    transform: translateY(-1px);
-  }
-
-  .forum-task-row:focus-visible {
-    outline: 2px solid rgba(201, 166, 107, 0.75);
-    outline-offset: 2px;
-  }
-
-  .forum-task-title {
-    font-weight: var(--font-weight-medium);
-    flex: 1;
-  }
-
-  .forum-task-row--selected {
-    border-color: rgba(201, 166, 107, 0.7);
-    box-shadow: 0 0 0 1px rgba(201, 166, 107, 0.3), 0 8px 22px rgba(12, 8, 5, 0.45);
-  }
-
-  .forum-task-progress {
-    font-size: 0.68rem;
-    letter-spacing: 0.04em;
-    color: rgba(212, 168, 67, 0.9);
-    background: rgba(158, 124, 90, 0.25);
-    padding: 2px 8px;
-    border-radius: 999px;
-    min-width: 44px;
-    text-align: center;
-    flex-shrink: 0;
-  }
-
-  .forum-task-status {
-    text-transform: uppercase;
-    font-size: 0.68rem;
-    letter-spacing: 0.08em;
-    padding: 2px 8px;
-    border-radius: 999px;
-    flex-shrink: 0;
-  }
-
-  .forum-task-status--queued,
-  .forum-task-status--waiting {
-    background: rgba(158, 124, 90, 0.25);
-    color: rgba(243, 234, 217, 0.9);
-  }
-
-  .forum-task-status--running {
-    background: rgba(93, 155, 74, 0.2);
-    color: #5D9B4A;
-  }
-
-  .forum-task-status--success {
-    background: rgba(93, 155, 74, 0.2);
-    color: #7AB86A;
-  }
-
-  .forum-task-status--failed {
-    background: rgba(196, 80, 64, 0.2);
-    color: #C45040;
-  }
 
   .forum-task-empty {
     padding: var(--space-4);
@@ -630,13 +540,6 @@
   .forum-stats-idle,
   .forum-stats-total {
     color: rgba(138, 122, 100, 0.65);
-  }
-
-  /* Task panel in selection */
-  .forum-selection-task {
-    margin-top: var(--space-3);
-    padding-top: var(--space-3);
-    border-top: 1px solid rgba(158, 124, 90, 0.15);
   }
 
   /* Session Chat Component */

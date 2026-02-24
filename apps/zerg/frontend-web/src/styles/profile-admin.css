@@ -5,12 +5,6 @@
   .admin-page-container {
     width: 100%;
 
-    /* Profile Page */
-    .profile-container {
-      max-width: 800px;
-      margin: 0 auto;
-    }
-
   .profile-form {
     display: flex;
     flex-direction: column;
@@ -86,30 +80,6 @@
 
   .avatar-upload input[type="file"] {
     display: none;
-  }
-
-  .upload-button {
-    background: linear-gradient(135deg, var(--color-brand-primary) 0%, var(--color-brand-primary-hover) 100%);
-    color: var(--color-text-primary);
-    padding: 8px 16px;
-    border-radius: var(--radius-sm, 4px);
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-    text-align: center;
-    border: none;
-    display: inline-block;
-  }
-
-  .upload-button:hover {
-    background: linear-gradient(
-      135deg,
-      var(--color-brand-primary-hover) 0%,
-      color-mix(in srgb, var(--color-brand-primary) 70%, #120B09) 100%
-    );
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px color-mix(in srgb, var(--color-brand-primary) 30%, transparent);
   }
 
   .avatar-upload small {
@@ -213,22 +183,6 @@
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
-  }
-
-  .admin-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 32px;
-    border-bottom: 2px solid var(--border-color);
-    padding-bottom: 16px;
-  }
-
-  .admin-header h1 {
-    color: var(--text);
-    font-size: 28px;
-    font-weight: 600;
-    margin: 0;
   }
 
   .window-selector {
@@ -471,73 +425,12 @@
     color: var(--color-text-muted);
   }
 
-  /* Top Agents Table */
-  .top-agents-table {
-    max-height: 400px;
-    overflow: auto;
-  }
-
-  .top-agents-table table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  .top-agents-table th,
-  .top-agents-table td {
-    padding: 12px 16px;
-    text-align: left;
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .top-agents-table th {
-    position: sticky;
-    top: 0;
-    background: var(--dark-lighter);
-    color: var(--text-secondary);
-    font-size: 13px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    z-index: 1;
-  }
-
-  .top-agents-table td {
-    color: var(--text);
-    font-size: 14px;
-  }
-
   .agent-name {
     font-weight: 500;
     color: var(--primary);
   }
 
   .runs-count {
-    font-family: Monaco, Menlo, monospace;
-  }
-
-  .success-rate .rate {
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  .rate--good {
-    background: color-mix(in srgb, var(--color-intent-success) 20%, transparent);
-    color: var(--color-intent-success);
-  }
-
-  .rate--ok {
-    background: color-mix(in srgb, var(--color-intent-warning) 20%, transparent);
-    color: var(--color-intent-warning);
-  }
-
-  .rate--poor {
-    background: color-mix(in srgb, var(--color-intent-error) 20%, transparent);
-    color: var(--color-intent-error);
-  }
-
-  .avg-cost {
     font-family: Monaco, Menlo, monospace;
   }
 
@@ -584,7 +477,6 @@
 
   /* Responsive Design */
   @media (width <= 768px) {
-    .profile-container,
     .admin-page {
       padding: 16px;
     }
@@ -594,12 +486,6 @@
     }
 
     .avatar-section {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 16px;
-    }
-
-    .admin-header {
       flex-direction: column;
       align-items: flex-start;
       gap: 16px;
@@ -618,10 +504,6 @@
   /* Hover Effects */
   .metric-card:hover .metric-value {
     color: var(--primary);
-  }
-
-  .top-agents-table tr:hover {
-    background: #1E1812;
   }
 
   /* Admin Actions */
@@ -644,44 +526,6 @@
     font-size: 13px;
     margin: 0;
     line-height: 1.4;
-  }
-
-  .admin-demo-form {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-bottom: 16px;
-  }
-
-  .admin-demo-input {
-    min-width: 220px;
-    flex: 1;
-  }
-
-  .admin-demo-seed {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 16px;
-  }
-
-  .admin-demo-select {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 16px;
-  }
-
-  .admin-demo-select-input {
-    min-width: 240px;
-  }
-
-  .admin-demo-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
   }
 
   .user-demo-badge {
@@ -846,8 +690,7 @@
   }
 
   .metric-card,
-  .admin-section,
-  .form-section {
+  .admin-section {
     animation: fadeIn var(--motion-duration-normal) ease;
   }
 
@@ -856,12 +699,6 @@
     color: var(--text-secondary);
     font-size: 13px;
     margin: 0 0 16px;
-  }
-
-  /* Users Table */
-  .users-table-container {
-    overflow-x: auto;
-    margin-top: 8px;
   }
 
   .users-table {
