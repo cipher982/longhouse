@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth, getAuthMethods, type AuthMethods } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
+import { useApiHealth } from "../lib/apiHealth";
 import { useConfirm } from "./confirm";
 import { fetchRunnerStatus } from "../services/api";
 import "../styles/layout.css";
@@ -408,6 +409,28 @@ function RunnerStatusIndicator() {
   );
 }
 
+function ApiHealthIndicator() {
+  const apiError = useApiHealth();
+  if (!apiError) return null;
+
+  return (
+    <span
+      style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", opacity: 0.85 }}
+      title={apiError.message}
+    >
+      <span
+        style={{
+          width: "6px",
+          height: "6px",
+          borderRadius: "50%",
+          backgroundColor: "#D4A843", // warm amber — degraded, not fatal
+        }}
+      />
+      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>API degraded</span>
+    </span>
+  );
+}
+
 function StatusFooter() {
   // Use a background WebSocket connection for general status monitoring
   const { connectionStatus } = useWebSocket(true, {
@@ -420,6 +443,7 @@ function StatusFooter() {
     <footer className="status-bar" data-testid="status-footer" aria-live="polite">
       <div className="packet-counter" style={{ display: "flex", alignItems: "center" }}>
         <ConnectionStatusIndicator status={connectionStatus} />
+        <ApiHealthIndicator />
         <RunnerStatusIndicator />
       </div>
     </footer>

@@ -15,6 +15,30 @@
     gap: var(--space-6);
   }
 
+  /* Stale-data banner — shown when API errors but cached sessions are available */
+  .sessions-stale-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    background: color-mix(in srgb, var(--color-intent-warning) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-intent-warning) 25%, transparent);
+    border-radius: var(--radius-sm, 4px);
+    margin-bottom: var(--space-2);
+  }
+
+  .sessions-stale-retry {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--color-brand-primary);
+    padding: 0;
+    text-decoration: underline;
+  }
+
   /* LLM hint banner */
   .sessions-demo-banner {
     font-size: 13px;

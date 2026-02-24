@@ -31,6 +31,7 @@ import {
   Input,
 } from "../components/ui";
 import { parseUTC } from "../lib/dateUtils";
+import { reportApiError, clearApiError } from "../lib/apiHealth";
 import { RecallPanel } from "../components/RecallPanel";
 import "../styles/sessions.css";
 
@@ -486,6 +487,15 @@ export default function SessionsPage() {
     return () => clearInterval(id);
   }, [hasPendingSessions, refetch]);
 
+  // Report API health to footer indicator
+  useEffect(() => {
+    if (error) {
+      reportApiError(error);
+    } else if (data) {
+      clearApiError();
+    }
+  }, [error, data]);
+
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
 
@@ -570,8 +580,8 @@ export default function SessionsPage() {
     );
   }
 
-  // Error state
-  if (error) {
+  // Error state — full-page only when there's no cached data to fall back on
+  if (error && sessions.length === 0) {
     return (
       <PageShell size="wide" className="sessions-page-container">
         <EmptyState
@@ -640,6 +650,15 @@ export default function SessionsPage() {
           title="Timeline"
           actions={total > 0 ? <span className="sessions-header-count">{total} sessions</span> : undefined}
         />
+
+        {error && sessions.length > 0 && (
+          <div className="sessions-stale-banner" role="status">
+            <span>Unable to refresh — showing cached data.</span>
+            <button type="button" className="sessions-stale-retry" onClick={() => refetch()}>
+              Retry
+            </button>
+          </div>
+        )}
 
         {!hasRealSessions && sessions.length > 0 && !hasFilters && (
           <div className="sessions-demo-banner">
