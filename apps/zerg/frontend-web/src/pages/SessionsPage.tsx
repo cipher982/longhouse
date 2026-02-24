@@ -114,31 +114,31 @@ function isValidTitle(name: string | null | undefined): name is string {
   return true;
 }
 
-function getSessionTitle(session: AgentSession): string {
-  // Prefer LLM-generated title when available
-  if (session.summary_title && session.summary_title !== "Untitled Session") {
-    return session.summary_title;
-  }
-
+/** Primary identifier: what repo/project/directory is this session for? */
+function getProjectLabel(session: AgentSession): string {
   if (isValidTitle(session.project)) return session.project;
-  if (isValidTitle(session.git_branch)) return session.git_branch;
-
-  // Try cwd folder (relaxed check — any non-empty folder name beats "Claude session")
   if (session.cwd) {
     const folder = session.cwd.split("/").pop();
     if (folder && folder.length >= 2) return folder;
   }
+  if (session.git_repo) {
+    const name = session.git_repo.replace(/\.git$/, "").split("/").pop();
+    if (name) return name;
+  }
+  return session.provider;
+}
 
-  // Try first user message snippet
+/** Secondary: what was done in this session? */
+function getSessionTitle(session: AgentSession): string {
+  if (session.summary_title && session.summary_title !== "Untitled Session") {
+    return session.summary_title;
+  }
   if (session.first_user_message) {
-    const snippet = session.first_user_message.trim().slice(0, 60);
+    const snippet = session.first_user_message.trim().slice(0, 80);
     if (snippet) return snippet;
   }
-
-  // Fallback: include date so sessions are at least distinguishable
-  const date = session.started_at ? new Date(session.started_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
-  const provider = session.provider.charAt(0).toUpperCase() + session.provider.slice(1);
-  return date ? `${provider} · ${date}` : `${provider} session`;
+  if (isValidTitle(session.git_branch)) return session.git_branch!;
+  return "";
 }
 
 function escapeRegExp(value: string): string {
@@ -247,6 +247,7 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
   const toolCount = session.tool_calls;
   const isActive = !session.ended_at;
 
+  const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
 
   // Keyword: show FTS matched excerpt with word highlights
@@ -259,27 +260,40 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
 
   return (
     <Card className={`session-card${isActive ? " session-card--active" : ""}`} onClick={onClick}>
+      {/* Primary: project/repo identifier */}
       <div className="session-card-header">
-        <div className="session-card-provider">
+        <div className="session-card-project">{projectLabel}</div>
+        <span className="session-card-time">{formatRelativeTime(session.last_activity_at || session.started_at)}</span>
+      </div>
+
+      {/* Secondary: provider + branch metadata */}
+      <div className="session-card-meta">
+        <span className="session-card-provider-badge">
           <span
             className="provider-dot"
             style={{ backgroundColor: getProviderColor(session.provider) }}
           />
           <span className="provider-name">{session.provider}</span>
-          {session.environment && session.environment !== "production" && (
-            <span className={`environment-badge environment-badge--${session.environment}`}>
-              {session.environment}
-            </span>
-          )}
-          {isActive && (
-            <span className="session-active-indicator">In progress</span>
-          )}
-        </div>
-        <span className="session-card-time">{formatRelativeTime(session.last_activity_at || session.started_at)}</span>
+        </span>
+        {session.git_branch && (
+          <span className="session-card-branch-badge">
+            <span className="branch-icon">&#x2387;</span>
+            {session.git_branch}
+          </span>
+        )}
+        {session.environment && session.environment !== "production" && (
+          <span className={`environment-badge environment-badge--${session.environment}`}>
+            {session.environment}
+          </span>
+        )}
+        {isActive && (
+          <span className="session-active-indicator">In progress</span>
+        )}
       </div>
 
+      {/* What was done */}
       <div className="session-card-body">
-        <div className="session-card-title">{title}</div>
+        {title && <div className="session-card-title">{title}</div>}
         {showSummary && (
           <div className="session-card-summary">{session.summary}</div>
         )}
@@ -296,12 +310,6 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
         {showSemanticSnippet && (
           <div className="session-card-snippet session-card-snippet--ai">
             {session.match_snippet}
-          </div>
-        )}
-        {session.git_branch && (
-          <div className="session-card-branch">
-            <span className="branch-icon">&#x2387;</span>
-            {session.git_branch}
           </div>
         )}
       </div>
