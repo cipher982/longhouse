@@ -282,7 +282,9 @@ class AgentsStore:
         if existing:
             # Update existing session
             existing.ended_at = data.ended_at or existing.ended_at
-            existing.is_sidechain = 1 if data.is_sidechain else 0
+            # Once-true-stays-true: never clear a previously-set sidechain flag
+            if data.is_sidechain:
+                existing.is_sidechain = 1
             session_created = False
         else:
             # Create new session
