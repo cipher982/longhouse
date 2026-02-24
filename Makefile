@@ -233,32 +233,11 @@ test-e2e-cp: ## Control plane E2E (Playwright, local server, no Docker)
 	uv run --extra dev playwright install chromium --with-deps >/dev/null 2>&1 || true && \
 	uv run --extra dev pytest e2e/ -v
 
-test-legacy: ## Legacy full suite (backend + frontend + hatch-agent + runner)
-	@set -e; \
-	if [ "$(MINIMAL)" = "1" ]; then \
-		echo "🧪 Running legacy unit tests (minimal)..."; \
-		if [ -n "$(CI_TEST_SCHEMA)" ] && { [ -n "$(DATABASE_URL)" ] || [ -n "$(CI_DATABASE_URL)" ]; }; then \
-			$(MAKE) test-backend-ci; \
-		else \
-			(cd apps/zerg/backend && ./run_backend_tests.sh -q --no-header); \
-		fi; \
-		$(MAKE) test-frontend-unit MINIMAL=1; \
-		$(MAKE) test-hatch-agent MINIMAL=1; \
-		$(MAKE) test-runner-unit; \
-		$(MAKE) test-install-runner; \
-	else \
-		echo "🧪 Running legacy unit tests..."; \
-		if [ -n "$(CI_TEST_SCHEMA)" ] && { [ -n "$(DATABASE_URL)" ] || [ -n "$(CI_DATABASE_URL)" ]; }; then \
-			$(MAKE) test-backend-ci; \
-		else \
-			(cd apps/zerg/backend && ./run_backend_tests.sh); \
-		fi; \
-		$(MAKE) test-frontend-unit; \
-		$(MAKE) test-hatch-agent; \
-		$(MAKE) test-runner-unit; \
-		$(MAKE) test-install-runner; \
-	fi
-	$(MAKE) test-control-plane
+test-legacy: ## Deprecated: legacy Postgres test suite removed. Use make test (SQLite-lite).
+	@echo "⚠️  make test-legacy: the Postgres legacy test suite (tests/) was removed."
+	@echo "   The default test suite is now SQLite-lite: make test"
+	@echo "   Running make test instead..."
+	$(MAKE) test
 
 test-unit: ## @internal Deprecated alias for test
 	$(MAKE) test
@@ -370,23 +349,15 @@ test-perf: ## Run performance evaluation tests (chat latency profiling)
 	cd apps/zerg/e2e && RUN_PERF=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
 	@echo "✅ Performance tests complete. Metrics exported to apps/zerg/e2e/metrics/"
 
-test-backend-docker: ## @internal Backend tests with Docker/testcontainers (local dev)
-	@echo "🐳 Running backend tests with testcontainers (Docker mode)..."
-	cd apps/zerg/backend && ./run_backend_tests.sh --db-mode=docker
+test-backend-docker: ## Deprecated: Postgres Docker test suite removed. Use make test.
+	@echo "⚠️  make test-backend-docker: the Postgres legacy test suite was removed."
+	@echo "   Use: make test (SQLite-lite, no Docker required)"
+	$(MAKE) test
 
-test-backend-ci: ## @internal Backend tests with external Postgres (CI only)
-	@if [ -z "$(CI_TEST_SCHEMA)" ]; then \
-		echo "❌ CI_TEST_SCHEMA required for CI mode"; \
-		exit 1; \
-	fi
-	@if [ -z "$(DATABASE_URL)" ] && [ -z "$(CI_DATABASE_URL)" ]; then \
-		echo "❌ DATABASE_URL or CI_DATABASE_URL required for CI mode"; \
-		exit 1; \
-	fi
-	cd apps/zerg/backend && \
-		CI_TEST_SCHEMA="$(CI_TEST_SCHEMA)" \
-		DATABASE_URL="$${CI_DATABASE_URL:-$(DATABASE_URL)}" \
-		./run_backend_tests.sh --db-mode=external
+test-backend-ci: ## Deprecated: Postgres CI test suite removed. Use make test.
+	@echo "⚠️  make test-backend-ci: the Postgres CI test suite was removed."
+	@echo "   Use: make test (SQLite-lite)"
+	$(MAKE) test
 
 test-frontend-unit: ## @internal Run frontend unit tests only
 	@if [ "$(MINIMAL)" = "1" ]; then \
