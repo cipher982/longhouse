@@ -88,7 +88,7 @@ TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
 jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
       --arg tool "$TOOL" --arg cwd "$CWD" \\
   '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}' > "$TMPFILE"
-mv "$TMPFILE" "${TMPFILE/\/.tmp\./\/prs.}.json"
+mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 
 # Stop: also ship the session transcript via engine binary.
 # Done AFTER the outbox write so idle state is always recorded.

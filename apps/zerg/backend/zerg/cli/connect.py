@@ -23,7 +23,6 @@ import subprocess
 import webbrowser
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
 
 import httpx
 import typer
@@ -73,13 +72,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Auto-token helpers
 # ---------------------------------------------------------------------------
-
-
-def _is_localhost(url: str) -> bool:
-    """Return True if the URL points to a loopback address."""
-    parsed = urlparse(url)
-    host = parsed.hostname or ""
-    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
 
 
 def _auto_create_token(url: str, device_name: str | None = None) -> str | None:
