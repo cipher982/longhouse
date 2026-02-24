@@ -1768,6 +1768,45 @@ async def list_sessions(
                 except Exception:
                     pass
 
+            # For semantic-only hits (no keyword snippet), pull the best matching turn
+            # excerpt so AI results show actual content instead of falling back to summary.
+            semantic_snippet_map: dict[int, str] = {}
+            if config and query and query_vec is not None:
+                no_snippet_ids = {str(s.id) for s in fused if not (match_map.get(s.id) or {}).get("snippet")}
+                if no_snippet_ids:
+                    try:
+                        if not cache._turn_loaded:
+                            cache.load_turn_embeddings(db, config.model, config.dims)
+                        turn_hits = cache.search_turns(
+                            query_vec,
+                            limit=len(no_snippet_ids) * 3,
+                            session_filter=no_snippet_ids,
+                        )
+                        # Best turn per session (first hit = highest score)
+                        best_turn: dict[str, tuple[int | None, int | None]] = {}
+                        for tsid, _chunk, _score, estart, eend in turn_hits:
+                            if tsid not in best_turn:
+                                best_turn[tsid] = (estart, eend)
+                        for tsid, (estart, eend) in best_turn.items():
+                            if estart is None:
+                                continue
+                            count = max(1, (eend or estart) - estart + 1)
+                            events = (
+                                db.query(AgentEvent)
+                                .filter(AgentEvent.session_id == int(tsid))
+                                .order_by(AgentEvent.id)
+                                .offset(estart)
+                                .limit(count)
+                                .all()
+                            )
+                            for ev in events:
+                                ct = (ev.content_text or "").strip()
+                                if len(ct) > 20:
+                                    semantic_snippet_map[int(tsid)] = ct[:200]
+                                    break
+                    except Exception:
+                        pass  # Snippets are nice-to-have; degrade gracefully
+
             activity_map = store.get_last_activity_map([s.id for s in fused])
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
 
@@ -1790,7 +1829,7 @@ async def list_sessions(
                     summary_title=s.summary_title,
                     first_user_message=first_user_map.get(s.id),
                     match_event_id=(match_map.get(s.id) or {}).get("event_id"),
-                    match_snippet=(match_map.get(s.id) or {}).get("snippet"),
+                    match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(s.id),
                     match_role=(match_map.get(s.id) or {}).get("role"),
                 )
                 for s in fused

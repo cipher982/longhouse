@@ -248,10 +248,12 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
 
   const title = getSessionTitle(session);
 
-  // Semantic results: show summary + similarity badge (not the raw "Similarity: 0.xxx" snippet)
-  // Keyword results: show FTS match snippet with highlights
-  const showSnippet = highlightQuery && session.match_snippet && !isSemanticResult;
-  const showSummary = !showSnippet && session.summary;
+  // Keyword: show FTS matched excerpt with word highlights
+  // AI/hybrid: show best matching turn excerpt (no word highlights — semantic match)
+  // Fall back to session summary if no snippet available
+  const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!session.match_snippet;
+  const showSemanticSnippet = isSemanticResult && !!session.match_snippet;
+  const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
 
   return (
     <Card className={`session-card${isActive ? " session-card--active" : ""}`} onClick={onClick}>
@@ -279,14 +281,14 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
         {showSummary && (
           <div className="session-card-summary">{session.summary}</div>
         )}
-        {showSnippet && (
+        {showKeywordSnippet && (
           <div className="session-card-snippet">
             {renderHighlightedText(session.match_snippet!, highlightQuery!)}
           </div>
         )}
-        {isSemanticResult && session.match_snippet && (
-          <div className="session-card-similarity">
-            <Badge variant="neutral">{session.match_snippet}</Badge>
+        {showSemanticSnippet && (
+          <div className="session-card-snippet session-card-snippet--ai">
+            {session.match_snippet}
           </div>
         )}
         {session.git_branch && (
@@ -730,19 +732,20 @@ export default function SessionsPage() {
             </Button>
             <button
               type="button"
-              className={`sessions-filter-toggle${recallOpen ? " sessions-filter-toggle--open" : ""}`}
+              className={`sessions-filter-toggle sessions-recall-toggle${recallOpen ? " sessions-filter-toggle--open" : ""}`}
               onClick={() => setRecallOpen((v) => !v)}
               aria-expanded={recallOpen}
               aria-controls="recall-panel"
               aria-label="Recall — search conversation turns by meaning"
-              title="Recall"
               data-testid="recall-toggle"
+              title="Search inside conversations by meaning"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8" />
                 <path d="M11 8v3l2 2" />
                 <line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
+              <span>Recall</span>
             </button>
             <button
               type="button"

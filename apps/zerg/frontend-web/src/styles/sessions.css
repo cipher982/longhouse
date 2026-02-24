@@ -169,6 +169,15 @@
     color: var(--color-text-primary);
   }
 
+  /* Recall toggle has icon + text label */
+  .sessions-recall-toggle {
+    padding: var(--space-1) var(--space-2);
+    gap: var(--space-1);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    font-family: var(--font-family-base);
+  }
+
   .sessions-filter-badge {
     display: inline-flex;
     align-items: center;
@@ -381,6 +390,14 @@
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     line-height: var(--font-line-height-relaxed);
+  }
+
+  /* AI/hybrid semantic snippet — left accent signals "matched by meaning" */
+  .session-card-snippet--ai {
+    border-left: 2px solid var(--color-brand-accent);
+    padding-left: var(--space-2);
+    color: var(--color-text-secondary);
+    opacity: 0.9;
   }
 
   .search-highlight {
