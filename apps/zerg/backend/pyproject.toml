@@ -108,3 +108,6 @@ multiline-quotes = "double"
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+
+[dependency-groups]
+dev = []

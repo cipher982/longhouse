@@ -101,7 +101,7 @@ function computePositionInRoom(room: ForumRoom, index: number, total: number): F
 /**
  * Group sessions by project/repo and create rooms.
  */
-export function createRoomsFromSessions(sessions: ActiveSession[]): Map<string, ForumRoom> {
+function createRoomsFromSessions(sessions: ActiveSession[]): Map<string, ForumRoom> {
   const projects = new Map<string, string>();
   for (const session of sessions) {
     const label = getSessionRoomLabel(session);
@@ -143,7 +143,7 @@ export function createRoomsFromSessions(sessions: ActiveSession[]): Map<string, 
 /**
  * Map sessions to canvas entities.
  */
-export function mapSessionsToEntities(
+function mapSessionsToEntities(
   sessions: ActiveSession[],
   rooms: Map<string, ForumRoom>,
 ): Map<string, ForumEntity> {

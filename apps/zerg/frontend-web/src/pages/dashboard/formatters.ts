@@ -21,7 +21,7 @@ export function formatDateTimeShort(iso: string | null | undefined): string {
   return `${year}-${month}-${day}${NBSP}${hours}:${minutes}`;
 }
 
-export function formatStatus(status: string): string {
+function formatStatus(status: string): string {
   switch (status) {
     case "running":
       return "● Running";
@@ -75,7 +75,7 @@ export function formatCost(cost?: number | null): string {
   return `$${cost.toFixed(4)}`;
 }
 
-export function formatRunStatusIcon(status: Run["status"]): string {
+function formatRunStatusIcon(status: Run["status"]): string {
   switch (status) {
     case "running":
       return "▶";

@@ -271,7 +271,7 @@ declare global {
   }
 }
 
-export function GoogleSignInButton({ clientId, onSuccess, onError }: GoogleSignInButtonProps) {
+function GoogleSignInButton({ clientId, onSuccess, onError }: GoogleSignInButtonProps) {
   const { login } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
 
@@ -352,7 +352,7 @@ export async function getAuthMethods(): Promise<AuthMethods> {
 }
 
 // Password authentication
-export async function loginWithPassword(password: string): Promise<PasswordLoginResult> {
+async function loginWithPassword(password: string): Promise<PasswordLoginResult> {
   const response = await fetch(`${config.apiBaseUrl}/auth/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -399,7 +399,7 @@ interface LoginOverlayProps {
   clientId: string;
 }
 
-export function LoginOverlay({ clientId }: LoginOverlayProps) {
+function LoginOverlay({ clientId }: LoginOverlayProps) {
   const [authMethods, setAuthMethods] = useState<AuthMethods | null>(null);
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
