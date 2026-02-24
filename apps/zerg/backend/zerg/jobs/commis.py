@@ -167,7 +167,13 @@ async def enqueue_scheduled_run(job_id: str, scheduled_at: datetime | None = Non
 
     CRITICAL: Use the actual scheduled fire time (from CronTrigger), NOT datetime.now().
     Using "now" breaks dedupe on backfill and causes duplicate runs.
+
+    If the job has jitter_minutes > 0, a random delay is added to scheduled_for so
+    same-cron jobs don't hammer LLM providers simultaneously. The dedupe key stays
+    pinned to the original cron fire time so backfill dedup still works correctly.
     """
+    import random
+
     job = job_registry.get(job_id)
     if not job:
         logger.error(f"enqueue_scheduled_run: unknown job {job_id}")
@@ -192,10 +198,21 @@ async def enqueue_scheduled_run(job_id: str, scheduled_at: datetime | None = Non
             candidate = trigger.get_next_fire_time(prev, now)
 
     scheduled_at = scheduled_at or now
+    # Dedupe key always uses the original cron fire time (no jitter) so backfill
+    # deduplication works correctly even when scheduled_for is shifted.
     dedupe_key = make_dedupe_key(job_id, scheduled_at)
+
+    # Apply optional jitter: shift scheduled_for forward by a random amount so
+    # jobs sharing the same cron time don't all execute simultaneously.
+    execution_time = scheduled_at
+    if job.jitter_minutes > 0:
+        jitter_seconds = random.randint(0, job.jitter_minutes * 60)
+        execution_time = scheduled_at + timedelta(seconds=jitter_seconds)
+        logger.debug(f"Jitter for {job_id}: +{jitter_seconds}s (max {job.jitter_minutes * 60}s)")
+
     queue_id = await enqueue_job(
         job_id=job_id,
-        scheduled_for=scheduled_at,
+        scheduled_for=execution_time,
         dedupe_key=dedupe_key,
         max_attempts=job.max_attempts,
     )
