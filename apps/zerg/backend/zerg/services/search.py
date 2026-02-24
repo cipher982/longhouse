@@ -122,6 +122,8 @@ def semantic_search(
         filter_query = filter_query.filter(AgentSession.provider == filters.provider)
     if filters.environment:
         filter_query = filter_query.filter(AgentSession.environment == filters.environment)
+    if filters.hide_autonomous:
+        filter_query = filter_query.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
     valid_ids = {str(row[0]) for row in filter_query.all()}
 
     results = cache.search_sessions(query_vec, limit=fetch_limit, session_filter=valid_ids)
