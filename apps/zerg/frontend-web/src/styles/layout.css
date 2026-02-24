@@ -11,46 +11,6 @@
     box-sizing: border-box;
   }
 
-  /* --------------------------------------------------------- */
-  /* Grid helpers                                              */
-  /* --------------------------------------------------------- */
-
-  .grid {
-    display: grid;
-    gap: var(--spacing-lg);
-  }
-
-  .grid-2 {
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  }
-
-  .grid-3 {
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  }
-
-  .grid-4 {
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  }
-
-  /* --------------------------------------------------------- */
-  /* Flex helpers                                              */
-  /* --------------------------------------------------------- */
-
-  .flex {
-    display: flex;
-  }
-
-  .flex-center {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .flex-column {
-    display: flex;
-    flex-direction: column;
-  }
-
   .spacer {
     flex: 1 1 auto;
   }
