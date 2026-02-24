@@ -32,6 +32,7 @@ export interface AgentSession {
   match_event_id?: number | null;
   match_snippet?: string | null;
   match_role?: string | null;
+  match_score?: number | null;
 }
 
 export interface AgentSessionsListResponse {

@@ -222,6 +222,7 @@ class SessionResponse(UTCBaseModel):
     match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role for matching event")
+    match_score: Optional[float] = Field(None, description="Semantic similarity score (0–1) when result is from vector search")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
 
 
@@ -854,14 +855,6 @@ async def ingest_session(
 
         store = AgentsStore(db)
         result = store.ingest_session(data)
-
-        # Enqueue durable background tasks (summary + embedding).
-        # These survive process restarts; the ingest task worker picks them up.
-        if result.events_inserted > 0:
-            from zerg.services.ingest_task_queue import enqueue_ingest_tasks
-
-            enqueue_ingest_tasks(db, str(result.session_id))
-            db.commit()
 
         return IngestResponse(
             session_id=str(result.session_id),
@@ -1810,6 +1803,7 @@ async def list_sessions(
 
             activity_map = store.get_last_activity_map([s.id for s in fused])
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
+            sem_score_map = {s.id: score for s, score in sem_hits}
 
             response_sessions = [
                 SessionResponse(
@@ -1832,6 +1826,7 @@ async def list_sessions(
                     match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                     match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(s.id),
                     match_role=(match_map.get(s.id) or {}).get("role"),
+                    match_score=sem_score_map.get(s.id),
                     is_sidechain=bool(s.is_sidechain or False),
                 )
                 for s in fused
