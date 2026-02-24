@@ -127,10 +127,12 @@ pub fn build_payload<'a>(
                 super::parser::Role::Assistant => "assistant",
                 super::parser::Role::Tool => "tool",
             };
-            // Cap raw_line at 32 KB to prevent runaway single-line bloat
+            // Cap raw_line at 32 KB to prevent runaway single-line bloat.
+            // Must truncate on a char boundary to avoid UTF-8 panics.
             let raw_json = e.raw_line.as_deref().map(|s| {
                 if s.len() > MAX_RAW_LINE_BYTES {
-                    &s[..MAX_RAW_LINE_BYTES]
+                    let boundary = s.floor_char_boundary(MAX_RAW_LINE_BYTES);
+                    &s[..boundary]
                 } else {
                     s
                 }
