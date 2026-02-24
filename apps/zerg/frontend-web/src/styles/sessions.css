@@ -305,7 +305,7 @@
   .session-card {
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--space-2);
     padding: var(--space-4);
     cursor: pointer;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
@@ -320,26 +320,55 @@
   .session-card-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-  }
-
-  .session-card-provider {
-    display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: var(--space-2);
   }
 
+  /* Primary identifier: repo/project name */
+  .session-card-project {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-primary);
+    line-height: var(--font-line-height-snug);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  /* Meta row: provider + branch + badges — all muted, small */
+  .session-card-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .session-card-provider-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .session-card-branch-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+  }
+
   .provider-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: var(--radius-full);
     flex-shrink: 0;
   }
 
   .provider-name {
-    font-size: var(--font-size-sm);
+    font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
     text-transform: capitalize;
   }
 
@@ -390,19 +419,12 @@
     gap: var(--space-1);
   }
 
+  /* Secondary: what was done — summary title or first user message */
   .session-card-title {
-    font-size: var(--font-size-base);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
     line-height: var(--font-line-height-snug);
-  }
-
-  .session-card-branch {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
   }
 
   .branch-icon {
