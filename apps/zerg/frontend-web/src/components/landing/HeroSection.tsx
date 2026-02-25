@@ -31,38 +31,38 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
           </div>
 
           <h1 className="landing-hero-headline">
-            Never lose an <span className="gradient-text">AI coding conversation.</span>
+            Your coding agents, <span className="gradient-text">always on, from anywhere.</span>
           </h1>
 
           <p className="landing-hero-subhead">
-            Claude Code, Codex, and Gemini sessions in one searchable timeline.
+            Close your laptop. Your agents keep running. Resume from any device.
           </p>
 
           <p className="landing-hero-note">
-            Local-first. Self-host free, or we host it for $5/mo.
+            Claude Code, Codex, and Gemini &mdash; one timeline, fully interactive. Self-host free, or we host it for $5/mo.
           </p>
 
           <div className="landing-hero-ctas">
-            <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleSelfHost}>
-              Self-host Now
+            <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleHostedBeta}>
+              Get Started &rarr;
             </Button>
             {config.demoMode ? (
               <Button variant="secondary" size="lg" onClick={() => navigate("/timeline")}>
                 Try Live Demo &rarr;
               </Button>
             ) : (
-              <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
-                Get Hosted &rarr;
+              <Button variant="secondary" size="lg" onClick={handleSelfHost}>
+                Self-host Free
               </Button>
             )}
           </div>
 
           <div className="landing-hero-friction-reducers">
-            <span>Works offline</span>
+            <span>Always-on agents</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
             <span>&lt;2min setup</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>Your data stays local</span>
+            <span>Bring your own API keys</span>
           </div>
 
           {/* Install command section - self-host path */}

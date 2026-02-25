@@ -23,9 +23,9 @@ export function DemoSection() {
     <section className="landing-demo">
       <div className="landing-section-inner">
         <span className="landing-section-label">See it in action</span>
-        <h2 className="landing-section-title">Your AI Session Archive</h2>
+        <h2 className="landing-section-title">One Timeline. Every Agent.</h2>
         <p className="landing-section-subtitle">
-          Every Claude Code, Codex, and Gemini session — searchable and browsable. Self-host or let us handle it.
+          Every Claude Code, Codex, and Gemini session — live, searchable, and resumable from any device.
         </p>
 
         <ProductShowcase />

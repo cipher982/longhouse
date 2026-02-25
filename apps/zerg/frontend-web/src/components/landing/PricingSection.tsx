@@ -34,7 +34,7 @@ export function PricingSection() {
       name: "Self-Hosted",
       price: "Free",
       period: "forever",
-      description: "One command, your machine",
+      description: "Run it on your own machine",
       features: [
         "Full timeline and search",
         "SQLite — no external services",
@@ -42,24 +42,24 @@ export function PricingSection() {
         "Works offline, data stays local",
         "Open source (Apache 2.0)",
       ],
-      ctaText: "Install Now",
+      ctaText: "Self-host Free",
       ctaAction: handleGetStarted,
-      highlighted: true,
     },
     {
       name: "Hosted",
       price: "$5",
       period: "/month",
-      description: "We run it, you use it",
+      description: "Always-on agents, from anywhere",
       features: [
         "Everything in self-hosted",
-        "Always-on — agents work while you sleep",
-        "Access from any device",
-        "Automatic updates and backups",
-        "Your own subdomain",
+        "Agents keep running when you close your laptop",
+        "Resume sessions from any device",
+        "Inter-agent communication across sessions",
+        "Your own subdomain + automatic updates",
       ],
-      ctaText: "Start Hosted",
+      ctaText: "Get Started",
       ctaAction: handleGetHosted,
+      highlighted: true,
     },
   ];
 
@@ -67,7 +67,7 @@ export function PricingSection() {
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
         <h2 className="landing-section-title">Simple Pricing</h2>
-        <p className="landing-section-subtitle">Self-host free forever, or let us run it.</p>
+        <p className="landing-section-subtitle">Always-on agents for $5/mo. Or self-host free.</p>
 
         <div className="landing-pricing-grid">
           {tiers.map((tier, index) => (
