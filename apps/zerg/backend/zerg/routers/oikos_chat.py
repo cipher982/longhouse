@@ -226,6 +226,7 @@ async def oikos_chat(
     """
     from zerg.database import db_session
     from zerg.services.oikos_service import OikosService
+    from zerg.services.quota import assert_can_start_run
 
     # Server-side enforcement: respect user tool configuration
     if not _is_tool_enabled(current_user.context or {}, "oikos"):
@@ -275,6 +276,8 @@ async def oikos_chat(
     from zerg.models.enums import RunTrigger
 
     with db_session() as db:
+        # Enforce shared-pool limits before we start a new run
+        assert_can_start_run(db, user=current_user)
         oikos_service = OikosService(db)
 
         # Get or create oikos components

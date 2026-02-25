@@ -43,6 +43,20 @@ def assert_can_start_run(db: Session, *, user: UserModel) -> None:
     if _is_admin(user):
         return
 
+    # Users with their own LLM provider config are exempt from shared-pool limits.
+    # This keeps onboarding friction low while letting power users bring their own key.
+    try:
+        from zerg.models.models import LlmProviderConfig
+
+        has_own_provider = (
+            db.query(LlmProviderConfig).filter(LlmProviderConfig.owner_id == user.id, LlmProviderConfig.capability == "text").first()
+            is not None
+        )
+        if has_own_provider:
+            return
+    except Exception:  # pragma: no cover - fail open
+        pass
+
     # Enforce run cap when configured (> 0). If disabled (0), skip this block
     if limit > 0:
         today_utc = datetime.now(timezone.utc).date()

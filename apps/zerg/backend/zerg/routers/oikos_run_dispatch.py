@@ -140,6 +140,7 @@ async def oikos_run(
         }
     """
     from zerg.services.oikos_service import OikosService
+    from zerg.services.quota import assert_can_start_run
 
     oikos_service = OikosService(db)
 
@@ -149,6 +150,9 @@ async def oikos_run(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tool disabled: oikos",
         )
+
+    # Enforce shared-pool limits before we start a new run
+    assert_can_start_run(db, user=current_user)
 
     # Get or create oikos components (idempotent)
     fiche = oikos_service.get_or_create_oikos_fiche(current_user.id)
