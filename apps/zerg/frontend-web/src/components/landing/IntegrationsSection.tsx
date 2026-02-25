@@ -24,22 +24,28 @@ export function IntegrationsSection() {
       description: "Full session sync with tool calls",
     },
     {
-      name: "Codex",
+      name: "Codex CLI",
       icon: <CodeIcon width={40} height={40} />,
       status: "syncing",
       description: "OpenAI coding agent sessions",
-    },
-    {
-      name: "Cursor",
-      icon: <CodeIcon width={40} height={40} />,
-      status: "coming",
-      description: "IDE-integrated AI sessions",
     },
     {
       name: "Gemini CLI",
       icon: <SparklesIcon width={40} height={40} />,
       status: "syncing",
       description: "Google AI coding sessions",
+    },
+    {
+      name: "OpenCode",
+      icon: <CodeIcon width={40} height={40} />,
+      status: "coming",
+      description: "Open-source AI terminal agent",
+    },
+    {
+      name: "Cursor",
+      icon: <CodeIcon width={40} height={40} />,
+      status: "coming",
+      description: "IDE-integrated AI sessions",
     },
   ];
 

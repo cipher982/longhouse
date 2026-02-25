@@ -24,7 +24,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What AI coding agents do you support?",
-    answer: "Claude Code, Codex CLI, and Gemini CLI are fully supported today, with Cursor coming soon. Longhouse reads the session files these tools already produce — no plugins or config changes needed."
+    answer: "Claude Code, Codex CLI, and Gemini CLI are fully supported today. OpenCode and Cursor are coming soon. Longhouse reads the session files these tools already produce — no plugins or config changes needed."
   }
 ];
 
