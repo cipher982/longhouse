@@ -291,14 +291,23 @@ test('forum page loads without auth errors', async ({ authedContext }) => {
   // The page title "The Forum" should be visible
   await expect(page.getByText('The Forum')).toBeVisible({ timeout: 5_000 });
 
-  // Wait for session rows — active sessions endpoint may need a few seconds
-  // after fresh instance start to warm up the DB connection pool.
-  await page.locator('.forum-session-row')
-    .first()
-    .waitFor({ timeout: 20_000 })
-    .catch(async () => {
-      await failWithScreenshot(page, 'forum-empty', 'Forum page shows no session rows — data not loading or active sessions endpoint broken.');
-    });
+  // Wait for session rows or an explicit empty state (fresh instances can have no data)
+  await page.waitForFunction(() => {
+    const row = document.querySelector('.forum-session-row');
+    const empty = document.querySelector('.forum-task-empty');
+    if (row) return true;
+    if (!empty) return false;
+    return !empty.textContent?.includes('Loading');
+  }, { timeout: 20_000 }).catch(async () => {
+    await failWithScreenshot(page, 'forum-empty', 'Forum page shows no session rows — data not loading or empty state missing.');
+  });
+
+  const rowCount = await page.locator('.forum-session-row').count();
+  if (rowCount === 0) {
+    await expect(page.getByText('No sessions found in the last 7 days.')).toBeVisible();
+    await page.close();
+    return;
+  }
 
   await page.close();
 });
