@@ -36,6 +36,7 @@ function CapabilityRow({
   onConfigure,
   onDelete,
   isConfiguring,
+  isSharedPool,
 }: {
   capability: Capability;
   label: string;
@@ -44,11 +45,12 @@ function CapabilityRow({
   onConfigure: (cap: Capability) => void;
   onDelete: (cap: Capability) => void;
   isConfiguring: Capability | null;
+  isSharedPool: boolean;
 }) {
   const dbConfig = dbProviders.find((p) => p.capability === capability);
   const isActive = status.available;
   // Derive source/provider from authenticated provider list (not public endpoint)
-  const sourceLabel = dbConfig ? "DB" : isActive ? "Env" : null;
+  const sourceLabel = dbConfig ? "DB" : isActive ? (isSharedPool ? "Shared" : "Env") : null;
   const providerName = dbConfig?.provider_name ?? null;
 
   return (
@@ -65,6 +67,9 @@ function CapabilityRow({
         </div>
         {isActive && providerName && (
           <span className="llm-capability-provider">{providerName}</span>
+        )}
+        {isActive && isSharedPool && !providerName && (
+          <span className="llm-capability-provider">Shared instance key</span>
         )}
         <span className="llm-capability-features">
           Enables: {status.features.join(", ")}
@@ -221,6 +226,10 @@ export default function LlmProviderCard() {
 
   const isLoading = capLoading || provLoading;
   const fetchError = capError || provError;
+  const hasTextConfig = providers.some((p) => p.capability === "text");
+  const hasEmbeddingConfig = providers.some((p) => p.capability === "embedding");
+  const sharedTextPool = Boolean(capabilities?.text.available && !hasTextConfig);
+  const sharedEmbeddingPool = Boolean(capabilities?.embedding.available && !hasEmbeddingConfig);
 
   return (
     <Card>
@@ -231,6 +240,16 @@ export default function LlmProviderCard() {
         <p className="section-description">
           Configure LLM providers for AI-powered features. Keys are encrypted at rest.
         </p>
+
+        {sharedTextPool && (
+          <div className="llm-shared-banner">
+            <div className="llm-shared-title">Shared LLM pool active</div>
+            <div className="llm-shared-body">
+              This instance is using a shared API key for text models. Limits may apply.
+              Add your own key to remove shared limits and use higher tiers.
+            </div>
+          </div>
+        )}
 
         {fetchError ? (
           <div className="llm-test-result llm-test-result--error">
@@ -252,6 +271,7 @@ export default function LlmProviderCard() {
                   onConfigure={handleConfigure}
                   onDelete={handleDelete}
                   isConfiguring={configuringCap}
+                  isSharedPool={sharedTextPool}
                 />
                 <CapabilityRow
                   capability="embedding"
@@ -261,6 +281,7 @@ export default function LlmProviderCard() {
                   onConfigure={handleConfigure}
                   onDelete={handleDelete}
                   isConfiguring={configuringCap}
+                  isSharedPool={sharedEmbeddingPool}
                 />
               </>
             )}

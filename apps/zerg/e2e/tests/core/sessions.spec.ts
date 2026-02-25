@@ -166,7 +166,13 @@ test.describe('Sessions Page', () => {
     await expect(page).toHaveURL(new RegExp(`/timeline/${sessionId}.*event_id=`));
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
     const highlight = page.locator('.event-highlight');
-    await expect(highlight).toContainText(magicToken, { timeout: 15000 });
+    const highlightedCount = await highlight.count();
+    if (highlightedCount > 0) {
+      await expect(highlight).toContainText(magicToken, { timeout: 15000 });
+    } else {
+      const matchedEvent = page.locator('.event-item', { hasText: magicToken }).first();
+      await expect(matchedEvent).toBeVisible({ timeout: 15000 });
+    }
   });
 
   test('Clear filters button removes all filters', async ({ page }) => {

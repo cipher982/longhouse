@@ -435,6 +435,27 @@
     padding: var(--space-4);
   }
 
+  .llm-shared-banner {
+    border: 1px solid color-mix(in srgb, var(--color-brand-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--color-brand-primary) 10%, transparent);
+    border-radius: var(--radius-sm, 4px);
+    padding: 12px 14px;
+    margin-bottom: var(--space-3);
+  }
+
+  .llm-shared-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .llm-shared-body {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    line-height: 1.4;
+  }
+
   .llm-capabilities-list {
     display: flex;
     flex-direction: column;
