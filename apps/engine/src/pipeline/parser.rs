@@ -75,6 +75,10 @@ pub struct ParseResult {
     pub events: Vec<ParsedEvent>,
     pub last_good_offset: u64,
     pub metadata: SessionMetadata,
+    /// Number of records that appeared to contain parseable content.
+    /// Used by the shipper to detect suspicious zero-event outcomes:
+    /// if candidate_records > 0 but events is empty, something likely went wrong.
+    pub candidate_records: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +114,12 @@ struct RawMessage {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+struct CodexGitInfo {
+    branch: Option<String>,
+    repository_url: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct CodexPayload {
     r#type: Option<String>,
     role: Option<String>,
@@ -119,6 +129,8 @@ struct CodexPayload {
     id: Option<String>,
     /// session_meta: working directory
     cwd: Option<String>,
+    /// session_meta: git info (branch + remote URL)
+    git: Option<CodexGitInfo>,
     /// session_meta: CLI version
     cli_version: Option<String>,
     /// function_call: tool name
@@ -158,9 +170,38 @@ struct GeminiMessage {
     timestamp: Option<String>,
     /// "user" or "gemini"
     r#type: Option<String>,
-    content: Option<String>,
+    /// Content is normally a string but may be an object/array in newer Gemini
+    /// CLI versions. Accept any JSON value and extract text defensively.
+    content: Option<serde_json::Value>,
     #[serde(rename = "toolCalls")]
     tool_calls: Option<Vec<GeminiToolCall>>,
+}
+
+/// Extract a plain-text string from a Gemini content value.
+/// Returns `None` (skip event) if no text can be extracted.
+fn extract_gemini_text(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) => {
+            let t = s.trim().to_string();
+            if t.is_empty() { None } else { Some(t) }
+        }
+        serde_json::Value::Array(arr) => {
+            // Try to concatenate "text" fields from a parts array
+            let text = arr
+                .iter()
+                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("");
+            if text.trim().is_empty() { None } else { Some(text.trim().to_string()) }
+        }
+        serde_json::Value::Object(obj) => {
+            // Try common text field names
+            obj.get("text")
+                .or_else(|| obj.get("parts"))
+                .and_then(|v| extract_gemini_text(v))
+        }
+        _ => None,
+    }
 }
 
 /// A tool call inside a Gemini message.
@@ -239,6 +280,7 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         return Ok(ParseResult {
             events: Vec::new(),
             last_good_offset: offset,
+            candidate_records: 0,
             metadata: SessionMetadata {
                 session_id,
                 ..Default::default()
@@ -279,6 +321,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
             return Ok(ParseResult {
                 events: Vec::new(),
                 last_good_offset: file_size,
+                candidate_records: 0,
                 metadata: SessionMetadata {
                     session_id: session_id.to_string(),
                     ..Default::default()
@@ -305,7 +348,10 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
         metadata.started_at = parse_timestamp(start_time);
     }
 
-    for msg in session.messages.unwrap_or_default() {
+    let messages = session.messages.unwrap_or_default();
+    let candidate_records = messages.len();
+
+    for msg in messages {
         let msg_type = msg.r#type.as_deref().unwrap_or("");
         let msg_id = msg
             .id
@@ -329,8 +375,8 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
 
         match msg_type {
             "user" => {
-                let text = msg.content.as_deref().unwrap_or("").trim().to_string();
-                if !text.is_empty() {
+                let text = msg.content.as_ref().and_then(extract_gemini_text);
+                if let Some(text) = text {
                     events.push(ParsedEvent {
                         uuid: msg_id.clone(),
                         session_id: canonical_session_id.clone(),
@@ -348,8 +394,8 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
             }
             "gemini" => {
                 // Assistant text response
-                let text = msg.content.as_deref().unwrap_or("").trim().to_string();
-                if !text.is_empty() {
+                let text = msg.content.as_ref().and_then(extract_gemini_text);
+                if let Some(text) = text {
                     events.push(ParsedEvent {
                         uuid: msg_id.clone(),
                         session_id: canonical_session_id.clone(),
@@ -405,6 +451,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
     Ok(ParseResult {
         events,
         last_good_offset: file_size,
+        candidate_records,
         metadata,
     })
 }
@@ -494,6 +541,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         return Ok(ParseResult {
             events: Vec::new(),
             last_good_offset: offset,
+            candidate_records: 0,
             metadata: SessionMetadata {
                 session_id: session_id.to_string(),
                 ..Default::default()
@@ -509,6 +557,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     let mut min_ts: Option<DateTime<Utc>> = None;
     let mut max_ts: Option<DateTime<Utc>> = None;
     let mut last_good_offset = offset;
+    let mut candidate_lines: usize = 0;
 
     let mut pos: usize = 0;
     while pos < data.len() {
@@ -534,6 +583,8 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
             last_good_offset = after_line;
             continue;
         }
+
+        candidate_lines += 1;
 
         // Parse JSON
         let obj: RawLine = match serde_json::from_slice(trimmed) {
@@ -568,12 +619,17 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     if let Some(ref cwd) = metadata.cwd {
         let (project, git_repo) = resolve_git_info(Path::new(cwd));
         metadata.project = project;
-        metadata.git_repo = git_repo;
+        // Only use disk-resolved git_repo if session_meta didn't already
+        // provide one (e.g. Codex sessions carry it in the payload).
+        if metadata.git_repo.is_none() {
+            metadata.git_repo = git_repo;
+        }
     }
 
     Ok(ParseResult {
         events,
         last_good_offset,
+        candidate_records: candidate_lines,
         metadata,
     })
 }
@@ -601,6 +657,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     let mut min_ts: Option<DateTime<Utc>> = None;
     let mut max_ts: Option<DateTime<Utc>> = None;
     let mut current_offset = offset;
+    let mut candidate_lines: usize = 0;
 
     for line_result in reader.lines() {
         let line = match line_result {
@@ -619,6 +676,8 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
         if trimmed.is_empty() {
             continue;
         }
+
+        candidate_lines += 1;
 
         let obj: RawLine = match serde_json::from_str(trimmed) {
             Ok(v) => v,
@@ -644,12 +703,17 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     if let Some(ref cwd) = metadata.cwd {
         let (project, git_repo) = resolve_git_info(Path::new(cwd));
         metadata.project = project;
-        metadata.git_repo = git_repo;
+        // Only use disk-resolved git_repo if session_meta didn't already
+        // provide one (e.g. Codex sessions carry it in the payload).
+        if metadata.git_repo.is_none() {
+            metadata.git_repo = git_repo;
+        }
     }
 
     Ok(ParseResult {
         events,
         last_good_offset: current_offset,
+        candidate_records: candidate_lines,
         metadata,
     })
 }
@@ -681,7 +745,7 @@ fn collect_metadata(
         }
     }
 
-    // Codex session_meta: extract cwd, version, and session_id from payload
+    // Codex session_meta: extract cwd, version, session_id, and git info from payload
     if obj.r#type.as_deref() == Some("session_meta") {
         if let Some(ref payload) = obj.payload {
             if meta.cwd.is_none() {
@@ -698,6 +762,20 @@ fn collect_metadata(
             if let Some(ref id) = payload.id {
                 if Uuid::parse_str(id).is_ok() {
                     meta.session_id = id.clone();
+                }
+            }
+            // Extract git branch and remote URL directly from session_meta.
+            // These are authoritative — no need to read .git/config from disk.
+            if let Some(ref git) = payload.git {
+                if meta.git_branch.is_none() {
+                    if let Some(ref branch) = git.branch {
+                        meta.git_branch = Some(branch.clone());
+                    }
+                }
+                if meta.git_repo.is_none() {
+                    if let Some(ref url) = git.repository_url {
+                        meta.git_repo = Some(url.clone());
+                    }
                 }
             }
         }
@@ -1482,6 +1560,29 @@ mod tests {
         // Only the user message should produce an event
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].content_text.as_deref(), Some("real user message"));
+    }
+
+    #[test]
+    fn test_codex_git_info_from_session_meta() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-2026-01-10T11-00-00-019c638d-ea04-7983-a845-d0b68a77fa62.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-10T11:00:00.000Z","type":"session_meta","payload":{"id":"019c638d-ea04-7983-a845-d0b68a77fa62","cwd":"/Users/test/zorb","cli_version":"0.105.0","git":{"commit_hash":"abc123","branch":"feature/my-branch","repository_url":"git@github.com:org/zorb.git"}}}"#,
+                r#"{"timestamp":"2026-01-10T11:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        // session_id from payload, not filename v5 UUID
+        assert_eq!(result.metadata.session_id, "019c638d-ea04-7983-a845-d0b68a77fa62");
+        assert_eq!(result.metadata.cwd.as_deref(), Some("/Users/test/zorb"));
+        assert_eq!(result.metadata.git_branch.as_deref(), Some("feature/my-branch"));
+        // git_repo from session_meta payload, not disk
+        assert_eq!(result.metadata.git_repo.as_deref(), Some("git@github.com:org/zorb.git"));
+        // project derived from cwd basename
+        assert_eq!(result.metadata.project.as_deref(), Some("zorb"));
     }
 
     // -----------------------------------------------------------------------
