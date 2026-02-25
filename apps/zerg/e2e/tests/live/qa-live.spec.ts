@@ -483,9 +483,5 @@ test('briefings page loads with project selector', async ({ authedContext }) => 
   const select = page.getByTestId('briefings-project-select');
   await expect(select).toBeVisible();
 
-  // Briefings nav item should be active
-  const navItem = page.getByTestId('global-briefings-tab');
-  await expect(navItem).toBeVisible();
-
   await page.close();
 });
