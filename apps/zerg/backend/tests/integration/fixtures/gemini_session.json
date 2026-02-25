@@ -1,0 +1,36 @@
+{
+  "sessionId": "5053c934-f66d-4fea-96af-f95181de5986",
+  "projectHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "startTime": "2026-02-20T15:59:12.296Z",
+  "lastUpdated": "2026-02-20T15:59:15.853Z",
+  "messages": [
+    {
+      "id": "60894c82-aa06-4962-96c3-d97ede35a7de",
+      "timestamp": "2026-02-20T15:59:12.296Z",
+      "type": "user",
+      "content": "Reply with exactly: \"gemini ok\"\n\n-"
+    },
+    {
+      "id": "8a1804cf-1ed3-4cea-8a0d-3c9cda411400",
+      "timestamp": "2026-02-20T15:59:15.853Z",
+      "type": "gemini",
+      "content": "gemini ok",
+      "thoughts": [
+        {
+          "subject": "Confirming the Setup",
+          "description": "I'm focusing on the user's request. It seems straightforward: the setup needs confirmation using a specific phrase.",
+          "timestamp": "2026-02-20T15:59:15.804Z"
+        }
+      ],
+      "tokens": {
+        "input": 12642,
+        "output": 3,
+        "cached": 0,
+        "thoughts": 22,
+        "tool": 0,
+        "total": 12667
+      },
+      "model": "gemini-3-pro-preview"
+    }
+  ]
+}
