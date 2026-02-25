@@ -19,14 +19,14 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Hosted or self-hosted — never lose an AI session again.
+            Your coding agents, always on, from anywhere.
           </blockquote>
           <div className="landing-footer-cta-buttons">
-            <Button variant="primary" size="lg" onClick={handleSelfHost}>
-              Self-host Now
+            <Button variant="primary" size="lg" onClick={handleGetHosted}>
+              Get Started
             </Button>
-            <Button variant="secondary" size="lg" onClick={handleGetHosted}>
-              Get Hosted
+            <Button variant="secondary" size="lg" onClick={handleSelfHost}>
+              Self-host Free
             </Button>
           </div>
         </div>

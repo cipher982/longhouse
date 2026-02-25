@@ -19,20 +19,20 @@ const steps: Step[] = [
   {
     icon: <DownloadIcon width={32} height={32} />,
     number: "1",
-    title: "Install",
-    description: "Self-host in under 2 minutes, or join the hosted beta. Ships sessions from Claude Code, Codex CLI, and Gemini CLI automatically."
-  },
-  {
-    icon: <SearchIcon width={32} height={32} />,
-    number: "2",
-    title: "Search",
-    description: "Find where you solved it. Instant full-text search across every session, tool call, and code snippet."
+    title: "Connect",
+    description: "Sign up and install the daemon. Your Claude Code, Codex, and Gemini sessions appear in one live timeline automatically."
   },
   {
     icon: <SmartphoneIcon width={32} height={32} />,
+    number: "2",
+    title: "Resume Anywhere",
+    description: "Close your laptop. Open any device. Click a session and pick up where you left off — full context, live interaction."
+  },
+  {
+    icon: <SearchIcon width={32} height={32} />,
     number: "3",
-    title: "Resume",
-    description: "Pick up where you left off. Jump back into any session with full context — no more re-explaining."
+    title: "Agents Talk",
+    description: "Your agents can ask each other questions across sessions. No copy-paste, no log scraping — direct inter-agent communication."
   }
 ];
 
@@ -46,7 +46,7 @@ export function HowItWorksSection() {
       <div className="landing-section-inner">
         <h2 className="landing-section-title">How It Works</h2>
         <p className="landing-section-subtitle">
-          Hosted or self-hosted. Setup in 2 minutes.
+          From local sessions to always-on cloud agents in 2 minutes.
         </p>
 
         <div className="landing-steps-row">

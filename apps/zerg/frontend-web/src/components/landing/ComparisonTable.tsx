@@ -28,12 +28,28 @@ interface Feature {
 
 const features: Feature[] = [
   {
-    name: "Searchable",
-    description: "Find that session where you fixed auth",
+    name: "Always-on",
+    description: "Agents keep running when you close your laptop",
     noTracking: { type: "no" },
-    grepJsonl: { type: "partial", label: "Regex only" },
-    claudeHistory: { type: "partial", label: "Limited" },
-    longhouse: { type: "yes", label: "Full-text search" },
+    grepJsonl: { type: "no" },
+    claudeHistory: { type: "no" },
+    longhouse: { type: "yes", label: "Cloud-hosted agents" },
+  },
+  {
+    name: "Resume anywhere",
+    description: "Pick up a session from any device",
+    noTracking: { type: "no" },
+    grepJsonl: { type: "no" },
+    claudeHistory: { type: "partial", label: "Same machine only" },
+    longhouse: { type: "yes", label: "Any device" },
+  },
+  {
+    name: "Agents talk",
+    description: "One agent asks another a question, gets a real answer",
+    noTracking: { type: "no" },
+    grepJsonl: { type: "no" },
+    claudeHistory: { type: "no" },
+    longhouse: { type: "yes", label: "Cross-session comms" },
   },
   {
     name: "Cross-tool",
@@ -44,32 +60,16 @@ const features: Feature[] = [
     longhouse: { type: "yes", label: "Claude + Codex + Gemini" },
   },
   {
-    name: "Persistent",
-    description: "Sessions survive updates and reinstalls",
+    name: "Searchable",
+    description: "Find that session where you fixed auth",
     noTracking: { type: "no" },
-    grepJsonl: { type: "partial", label: "If you know where" },
-    claudeHistory: { type: "partial", label: "Per-project" },
-    longhouse: { type: "yes", label: "Unified timeline" },
+    grepJsonl: { type: "partial", label: "Regex only" },
+    claudeHistory: { type: "partial", label: "Limited" },
+    longhouse: { type: "yes", label: "Full-text + semantic" },
   },
   {
-    name: "Visual timeline",
-    description: "See what happened and when, at a glance",
-    noTracking: { type: "no" },
-    grepJsonl: { type: "no" },
-    claudeHistory: { type: "no" },
-    longhouse: { type: "yes" },
-  },
-  {
-    name: "Resume sessions",
-    description: "Pick up where you left off with full context",
-    noTracking: { type: "no" },
-    grepJsonl: { type: "no" },
-    claudeHistory: { type: "partial", label: "Built-in" },
-    longhouse: { type: "yes", label: "One-click resume" },
-  },
-  {
-    name: "Self-hosted",
-    description: "Your data stays on your machine",
+    name: "Self-hosted option",
+    description: "Run it on your own machine for free",
     noTracking: { type: "na" },
     grepJsonl: { type: "na" },
     claudeHistory: { type: "no" },
@@ -135,9 +135,9 @@ export function ComparisonTable() {
     <section className="landing-comparison">
       <div className="landing-section-inner">
         <p className="landing-section-label">Why Longhouse?</p>
-        <h2 className="landing-section-title">Why not just grep?</h2>
+        <h2 className="landing-section-title">Why not just run agents locally?</h2>
         <p className="landing-section-subtitle">
-          Most developers lose their AI session history. Here is how the options stack up.
+          Local agents die when your laptop closes. Here is how the options stack up.
         </p>
 
         <div className="comparison-table-wrapper">
