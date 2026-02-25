@@ -245,6 +245,11 @@ test-unit: ## @internal Deprecated alias for test
 test-zerg-unit: ## @internal Deprecated alias for test
 	$(MAKE) test
 
+install-engine: ## Build + sign the Rust engine binary (run after any engine source change)
+	cd apps/engine && cargo build --release
+	codesign -s - apps/engine/target/release/longhouse-engine
+	@echo "longhouse-engine installed (symlink at ~/.local/bin/longhouse-engine)"
+
 test-shipper-e2e: ## Shipper E2E: fixture → longhouse-engine ship → API → DB (requires longhouse-engine on PATH)
 	@echo "🚀 Running shipper E2E tests (Claude/Gemini/Codex)..."
 	cd apps/zerg/backend && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
