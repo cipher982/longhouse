@@ -1,0 +1,24 @@
+{
+  "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+  "startTime": "2026-01-01T10:00:00.000Z",
+  "messages": [
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "timestamp": "2026-01-01T10:00:00.000Z",
+      "type": "user",
+      "content": "real message"
+    },
+    {
+      "id": "55555555-5555-5555-5555-555555555555",
+      "timestamp": "2026-01-01T10:00:01.000Z",
+      "type": "system",
+      "content": "unknown type should be skipped"
+    },
+    {
+      "id": "66666666-6666-6666-6666-666666666666",
+      "timestamp": "2026-01-01T10:00:02.000Z",
+      "type": "gemini",
+      "content": "response to real message"
+    }
+  ]
+}

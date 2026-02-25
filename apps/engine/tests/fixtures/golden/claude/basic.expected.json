@@ -1,0 +1,16 @@
+{
+  "session_id": "4750e411-1d0b-5144-908c-1e547b3f9d4f",
+  "event_count": 2,
+  "events": [
+    {
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "List all MCP tools you have access to that contain 'agent' or 'mesh' in their name."
+    },
+    {
+      "role": "assistant",
+      "raw_type": "assistant",
+      "content_text": "I don't have any MCP tools containing 'agent' or 'mesh' in their names in this session."
+    }
+  ]
+}

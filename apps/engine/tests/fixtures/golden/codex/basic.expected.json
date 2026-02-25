@@ -1,0 +1,16 @@
+{
+  "session_id": "147d0d69-33c8-5827-aee5-430444dc43f7",
+  "event_count": 2,
+  "events": [
+    {
+      "role": "user",
+      "raw_type": "codex_user",
+      "content_text": "What is 1+1?"
+    },
+    {
+      "role": "assistant",
+      "raw_type": "codex_assistant",
+      "content_text": "1+1 equals 2."
+    }
+  ]
+}
