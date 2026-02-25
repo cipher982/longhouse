@@ -684,13 +684,21 @@ async fn cmd_ship(
                 continue;
             }
 
-            let parse_result = match pipeline::parser::parse_session_file(&path, entry.start_offset) {
+            let mut parse_result = match pipeline::parser::parse_session_file(&path, entry.start_offset) {
                 Ok(r) => r,
                 Err(e) => {
                     spool.mark_failed(entry.id, &e.to_string())?;
                     continue;
                 }
             };
+
+            // If start_offset > 0, session_meta is before the parse window.
+            // Use the session_id stored in the spool entry.
+            if entry.start_offset > 0 {
+                if let Some(ref sid) = entry.session_id {
+                    parse_result.metadata.session_id = sid.clone();
+                }
+            }
 
             if parse_result.events.is_empty() {
                 spool.mark_shipped(entry.id)?;

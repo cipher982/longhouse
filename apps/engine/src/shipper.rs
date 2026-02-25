@@ -49,19 +49,8 @@ pub fn prepare_file(
         }
     };
 
-    // For incremental parses (offset > 0), the session_meta line is before the
-    // parse window, so collect_metadata never sees it. Read the canonical
-    // session_id stored from the first successful ship so all incremental
-    // shipments land on the same Longhouse session.
-    let stored_session_id: Option<String> = if current_offset > 0 {
-        file_state
-            .get_session(&path_str)?
-            .and_then(|s| s.session_id)
-    } else {
-        None
-    };
-
-    // Detect truncation
+    // Detect truncation — must happen before deciding whether to restore
+    // stored session_id, since truncation resets offset to 0.
     let offset = if file_size < current_offset {
         tracing::warn!(
             "File truncated: {} (was {}, now {}), resetting",
@@ -76,6 +65,20 @@ pub fn prepare_file(
         return Ok(None);
     } else {
         current_offset
+    };
+
+    // For incremental parses (offset > 0), the session_meta line is before the
+    // parse window, so collect_metadata never sees it. Read the canonical
+    // session_id stored from the first successful ship so all incremental
+    // shipments land on the same Longhouse session.
+    // Only do this after truncation handling — a truncated file resets to
+    // offset=0 and must re-read session_meta fresh.
+    let stored_session_id: Option<String> = if offset > 0 {
+        file_state
+            .get_session(&path_str)?
+            .and_then(|s| s.session_id)
+    } else {
+        None
     };
 
     let mut parse_result = match parser::parse_session_file(path, offset) {
@@ -290,10 +293,13 @@ pub async fn replay_spool_batch(
             }
         };
 
-        // Spool entries always have a non-zero start_offset (session_meta is
-        // before the window). Use the stored session_id from the spool entry.
-        if let Some(ref sid) = entry.session_id {
-            parse_result.metadata.session_id = sid.clone();
+        // If start_offset > 0, session_meta is before the parse window.
+        // Use the session_id stored in the spool entry to keep all incremental
+        // shipments on the same session.
+        if entry.start_offset > 0 {
+            if let Some(ref sid) = entry.session_id {
+                parse_result.metadata.session_id = sid.clone();
+            }
         }
 
         if parse_result.events.is_empty() {
