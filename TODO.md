@@ -15,6 +15,9 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+**[Tech Debt] Reconcile historical Codex orphan sessions (size: 3)** — The incremental-parse session_id bug (fixed 2026-02-25) left 100+ Codex sessions in the DB with null project. These are split: first-parse batch has user messages + correct project, incremental batches have assistant messages + null project. They're not empty (deleting would lose events). Fix requires merging events from v5-UUID sessions into their canonical counterparts — identify pairs by overlapping time window + same file path hint from events.source_path, then re-parent events and delete the duplicate shell.
+
+
 1. ~~**[Launch] Move Settings into user menu** — remove it from any primary nav surface; add to header user dropdown + mobile menu.~~ Done (2026-02-25).
 2. ~~**[Launch] Briefings as Timeline secondary action** — add a Timeline header action to open `/briefings` instead of a primary nav tab.~~ Done (2026-02-25).
 1. ~~**[QA/Test] Stabilize session-continuity E2E polling** — tolerate transient `/api/oikos/runs/:id/events` socket hangups.~~ Done (2026-02-25).
