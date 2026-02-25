@@ -15,6 +15,7 @@ import { useNavigate, useSearchParams, useLocation, Link } from "react-router-do
 import { useQueryClient } from "@tanstack/react-query";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
+import { useActiveSessions, type ActiveSession } from "../hooks/useActiveSessions";
 import {
   type AgentSession,
   type AgentSessionFilters,
@@ -30,9 +31,13 @@ import {
   Spinner,
   Input,
 } from "../components/ui";
+import { PresenceBadge } from "../components/PresenceBadge";
 import { parseUTC } from "../lib/dateUtils";
 import { reportApiError, clearApiError } from "../lib/apiHealth";
 import { RecallPanel } from "../components/RecallPanel";
+import { ForumCanvas } from "../forum/ForumCanvas";
+import { buildForumStateFromSessions, getSessionDisplayTitle, getSessionRoomLabel } from "../forum/session-mapper";
+import "../styles/forum.css";
 import "../styles/sessions.css";
 
 // ---------------------------------------------------------------------------
@@ -177,6 +182,20 @@ function formatDuration(startedAt: string, endedAt: string | null): string {
   const hours = Math.floor(diffMins / 60);
   const mins = diffMins % 60;
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+function sessionSortKey(status: string): number {
+  if (status === "working") return 0;
+  if (status === "idle") return 1;
+  return 2;
+}
+
+function isSessionLive(session: ActiveSession): boolean {
+  return (
+    session.status === "working" ||
+    session.presence_state === "thinking" ||
+    session.presence_state === "running"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +440,8 @@ export default function SessionsPage() {
   );
   const [filtersOpen, setFiltersOpen] = useState(hasUrlFilters);
   const [recallOpen, setRecallOpen] = useState(false);
+  const [liveViewOpen, setLiveViewOpen] = useState(false);
+  const [liveSelectedId, setLiveSelectedId] = useState<string | null>(null);
 
   // Pagination state
   const [limit, setLimit] = useState(PAGE_SIZE);
@@ -493,6 +514,36 @@ export default function SessionsPage() {
   const hasRealSessions = data?.has_real_sessions ?? true;
   const hasMore = sessions.length < total;
 
+  const {
+    data: activeSessionsData,
+    isLoading: activeSessionsLoading,
+    error: activeSessionsError,
+  } = useActiveSessions({
+    pollInterval: 2000,
+    limit: 30,
+    days_back: 7,
+    enabled: liveViewOpen,
+  });
+
+  const activeSessions = useMemo(() => {
+    const list = activeSessionsData?.sessions ?? [];
+    return [...list].sort((a, b) => {
+      const groupDiff = sessionSortKey(a.status) - sessionSortKey(b.status);
+      if (groupDiff !== 0) return groupDiff;
+      return parseUTC(b.last_activity_at).getTime() - parseUTC(a.last_activity_at).getTime();
+    });
+  }, [activeSessionsData]);
+
+  const liveTotal = activeSessions.length;
+  const liveCount = useMemo(
+    () => activeSessions.filter(isSessionLive).length,
+    [activeSessions]
+  );
+
+  const liveAuthError = (activeSessionsError as { status?: number } | null)?.status === 401;
+  const canvasState = useMemo(() => buildForumStateFromSessions(activeSessions), [activeSessions]);
+  const liveList = useMemo(() => activeSessions.slice(0, 8), [activeSessions]);
+
   // Fast-poll while any visible session is still generating its summary
   const hasPendingSessions = sessions.some((s) => !s.summary_title && !s.summary);
   useEffect(() => {
@@ -511,8 +562,29 @@ export default function SessionsPage() {
     return () => clearApiError(); // ensure footer clears if user navigates away
   }, [error]);
 
+  useEffect(() => {
+    if (!liveViewOpen) {
+      setLiveSelectedId(null);
+    }
+  }, [liveViewOpen]);
+
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
+
+  const headerActions = (
+    <div className="sessions-header-actions">
+      {total > 0 && <span className="sessions-header-count">{total} sessions</span>}
+      <Button
+        variant={liveViewOpen ? "primary" : "secondary"}
+        size="sm"
+        onClick={() => setLiveViewOpen((prev) => !prev)}
+        aria-expanded={liveViewOpen}
+        aria-controls="sessions-live-view"
+      >
+        {liveViewOpen ? "Hide live view" : "Live view"}
+      </Button>
+    </div>
+  );
 
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((session: AgentSession) => {
@@ -663,7 +735,7 @@ export default function SessionsPage() {
       <div className="sessions-page">
         <SectionHeader
           title="Timeline"
-          actions={total > 0 ? <span className="sessions-header-count">{total} sessions</span> : undefined}
+          actions={headerActions}
         />
 
         {error && sessions.length > 0 && (
@@ -688,6 +760,107 @@ export default function SessionsPage() {
           <div className="sessions-llm-hint">
             Session summaries require an LLM provider.{" "}
             <Link to="/settings">Configure in Settings</Link>
+          </div>
+        )}
+
+        {liveViewOpen && (
+          <div id="sessions-live-view">
+            <Card className="sessions-live-panel">
+            <div className="sessions-live-header">
+              <div>
+                <div className="sessions-live-title">Live View</div>
+                <div className="sessions-live-subtitle">
+                  {activeSessionsLoading && liveTotal === 0
+                    ? "Checking live sessions..."
+                    : liveTotal === 0
+                      ? "No live sessions in the last 7 days"
+                      : `${liveCount} active · ${liveTotal} total (last 7 days)`
+                  }
+                </div>
+              </div>
+              <div className="sessions-live-actions">
+                <Button variant="ghost" size="sm" onClick={() => navigate("/forum")}>
+                  Open full map
+                </Button>
+              </div>
+            </div>
+            <div className="sessions-live-body">
+              <div className="sessions-live-map">
+                {liveAuthError ? (
+                  <div className="sessions-live-empty">
+                    <span>Session expired.</span>
+                    <Button variant="primary" size="sm" onClick={() => window.location.reload()}>
+                      Refresh to log in
+                    </Button>
+                  </div>
+                ) : activeSessionsLoading && liveTotal === 0 ? (
+                  <div className="sessions-live-empty">
+                    <Spinner size="lg" />
+                    <span>Loading live view...</span>
+                  </div>
+                ) : liveTotal === 0 ? (
+                  <div className="sessions-live-empty">
+                    <span>No sessions yet.</span>
+                    <span className="sessions-live-empty-subtitle">Start a CLI session to light up the map.</span>
+                  </div>
+                ) : (
+                  <ForumCanvas
+                    state={canvasState}
+                    selectedEntityId={liveSelectedId}
+                    onSelectEntity={setLiveSelectedId}
+                  />
+                )}
+              </div>
+              <div className="sessions-live-list">
+                {activeSessionsLoading && liveTotal === 0 ? (
+                  <div className="sessions-live-list-empty">Loading sessions...</div>
+                ) : liveList.length === 0 ? (
+                  <div className="sessions-live-list-empty">No recent sessions.</div>
+                ) : (
+                  liveList.map((session) => {
+                    const isActive = isSessionLive(session);
+                    const rowClass = [
+                      "sessions-live-row",
+                      isActive ? "sessions-live-row--active" : "",
+                      session.id === liveSelectedId ? "sessions-live-row--selected" : "",
+                    ].filter(Boolean).join(" ");
+
+                    return (
+                      <button
+                        key={session.id}
+                        type="button"
+                        className={rowClass}
+                        onClick={() => {
+                          setLiveSelectedId(session.id);
+                          navigate(`/timeline/${session.id}`);
+                        }}
+                      >
+                        <div className="sessions-live-row-title">
+                          {getSessionDisplayTitle(session)}
+                        </div>
+                        <div className="sessions-live-row-meta">
+                          {getSessionRoomLabel(session)} · {session.provider} ·{" "}
+                          {formatRelativeTime(session.last_activity_at)}
+                        </div>
+                        <div className="sessions-live-row-presence">
+                          <PresenceBadge
+                            state={session.presence_state}
+                            tool={session.presence_tool}
+                            compact
+                            heuristicActive={session.status === "working" && session.ended_at == null}
+                            showUnknown={session.ended_at == null}
+                          />
+                          <span className="sessions-live-row-presence-label">
+                            {isActive ? "Live" : "Idle"}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            </Card>
           </div>
         )}
 

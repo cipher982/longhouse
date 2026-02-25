@@ -15,8 +15,9 @@ test.describe('Dashboard - Core', () => {
     // Header nav should be visible
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
 
-    // Dashboard tab should be visible
-    await expect(page.locator('.nav-tab:has-text("Dashboard")')).toBeVisible();
+    // Timeline and Oikos tabs should be visible (streamlined nav)
+    await expect(page.locator('.nav-tab:has-text("Timeline")')).toBeVisible();
+    await expect(page.locator('.nav-tab:has-text("Oikos")')).toBeVisible();
   });
 
   test('create fiche button is present', async ({ page }) => {

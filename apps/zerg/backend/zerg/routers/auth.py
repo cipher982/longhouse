@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import os
 import secrets
 import time
 from collections import defaultdict
@@ -31,8 +32,10 @@ from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import get_optional_user
 from zerg.schemas.schemas import TokenOut
 
-# Use override=True to ensure proper quote stripping even if vars are inherited from parent process
-load_dotenv(override=True)
+# Use override=True to ensure proper quote stripping even if vars are inherited from parent process.
+# In test/E2E mode, do not override explicit env vars like ENVIRONMENT.
+_override_env = os.getenv("TESTING", "").strip().lower() not in {"1", "true", "yes", "on"}
+load_dotenv(override=_override_env)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

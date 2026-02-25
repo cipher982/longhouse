@@ -15,9 +15,12 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
-1. **Extended hook states** (`needs_user`, `blocked`) — blocked on Claude Code hook support. Defer.
-2. **Oikos Dispatch Contract** — defer until usage demands it.
-3. ~~**PyPI publish**~~ — shipped as v0.1.3 (2026-02-24).
+1. ~~**[QA/Test] Stabilize session-continuity E2E polling** — tolerate transient `/api/oikos/runs/:id/events` socket hangups.~~ Done (2026-02-25).
+2. ~~**[Launch] Simplify primary navigation** — Timeline as the core surface. Hide Forum for now, move Settings out of top-level nav, and decide whether Briefings is a primary tab or secondary surface (e.g., under More or Settings).~~ Done (2026-02-24).
+3. ~~**[Launch] Forum as Timeline subpane** — consider migrating the live overview into the Timeline UI if it still earns a place.~~ Done (2026-02-24).
+4. **Extended hook states** (`needs_user`, `blocked`) — blocked on Claude Code hook support. Defer.
+5. **Oikos Dispatch Contract** — defer until usage demands it.
+6. ~~**PyPI publish**~~ — shipped as v0.1.3 (2026-02-24).
 
 ---
 

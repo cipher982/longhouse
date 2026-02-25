@@ -53,7 +53,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 Three promises to users:
 
-1. **Never lose a conversation** — Claude Code, Codex, and Gemini sessions appear in one timeline today; Cursor is in progress. No more grepping JSONL.
+1. **Never lose a session** — Claude Code, Codex, and Gemini sessions appear in one live timeline today; Cursor is in progress. No more grepping JSONL.
 
 2. **Find where you solved it** — Search by keyword, project, date. Instant results. FTS5-backed for sub-10ms discovery; Oikos handles deeper queries.
 
@@ -65,7 +65,7 @@ Three promises to users:
 
 ## Product Surface (2026-02 Decision)
 
-**Primary UX: Web timeline + Oikos chat.** The web UI is the product. Timeline is the archive and control surface; Oikos is the built-in coordinator that has visibility into all agent work (commis sessions, shipped sessions, run status).
+**Primary UX: Web timeline + Oikos chat.** The web UI is the product. Timeline is the live status + resume surface; Oikos is the built-in coordinator with visibility into all agent work (commis sessions, shipped sessions, run status).
 
 **Oikos role:** Personal assistant for your agent team. On the web, Oikos is a full chat interface with tools. Think of it as the manager who can peek into any Claude Code / commis session, surface insights, and help coordinate. On mobile, the responsive web UI covers 80% of use cases. Messaging channels (Telegram, etc.) are a secondary lightweight interface for on-the-go check-ins — "how's the team doing," approve/reject, read summaries.
 
@@ -73,6 +73,7 @@ Three promises to users:
 
 **What this means for execution:**
 - Timeline + Oikos web UX is the critical path
+- Timeline is the primary entrypoint; Oikos is orthogonal and invoked in context
 - Slim Oikos dispatch contract is higher priority than channel wiring
 - Channel integration layers on top of a working web Oikos, not the other way around
 - Mobile story is "responsive web first, chat channels second"
@@ -82,7 +83,7 @@ Three promises to users:
 ## Principles & Constraints
 
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
-- **Lossless logs are sacred.** The agent session archive is not disposable.
+- **Lossless logs are sacred.** The agent session history is not disposable.
 - **Dual-path story**: hosted and self-hosted are equal in positioning and CTA.
 - **Progressive disclosure**: keep primary docs short and link to deeper runbooks; AGENTS.md must point to what else to read.
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
@@ -330,7 +331,7 @@ The first 2 minutes determine adoption. Onboarding must be zero-friction and dem
 
 **Timeline-first:**
 - Timeline (`/timeline`) is the default route for authenticated users
-- The session archive IS the product - not a feature buried in nav
+- The live session timeline (status + resume) IS the product - not a feature buried in nav
 - New users land on Timeline immediately, not a dashboard or settings page
 
 **Zero-key demo:**
