@@ -1,6 +1,8 @@
 # Longhouse Vision (2026)
 
-Longhouse is an AI agent orchestration platform where AI does the work and humans manage the system. The product must feel instant, always-on, and magical: your Claude Code sessions appear as a clean, queryable timeline inside Longhouse with zero friction (Codex and Gemini shipping; Cursor in progress).
+Longhouse is an always-on cloud for your coding agents. Close your laptop — your agents keep running. Pick up from any device. Every session is live, resumable, and can talk to every other session.
+
+The product must feel instant, always-on, and magical. Agents run on Longhouse, not on your laptop.
 
 This is a living vision doc. It captures both the direction and the reasoning that got us here, so we can make fast decisions without re-litigating the fundamentals.
 
@@ -41,42 +43,58 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 ## North Star
 
-1. Zero-friction onboarding for hosted + self-hosted: hosted beta signup plus **install.sh** for OSS. `pip install longhouse` remains the alternate. SQLite only.
-2. Always-on agents: background work continues even when the user is away.
-3. Unified, queryable agent sessions across providers (Claude, Codex, Gemini, Cursor, Oikos).
-4. A hosted option that feels like "I pay $5 and never think about it."
-5. Fast iteration as a solo founder: avoid multi-tenant security complexity unless required.
+1. **Always-on agents from anywhere**: Close your laptop, your agents keep working. Resume from phone, tablet, another machine. The cloud is the primary home for agent work.
+2. **Every session is a live endpoint**: Sessions aren't dead transcripts — they're resumable. Send a message, get a response, the agent picks up where it left off with full context.
+3. **Agents talk to each other**: Agent A can resume Agent B's session, ask it a question, and get a real answer in context. No copy-paste, no log scraping — direct inter-agent communication through shared sessions.
+4. **Unified timeline across providers**: Claude Code, Codex, Gemini sessions in one searchable archive. The shipper is the onramp — local sessions appear in Longhouse, then users transition to cloud-native.
+5. **$5/mo and never think about it**: Hosted is the primary product. Self-host is the free tier and onramp.
+6. Fast iteration as a solo founder: avoid multi-tenant security complexity unless required.
 
 ---
 
 ## User Value Proposition
 
-Three promises to users:
+Three promises, in order of importance:
 
-1. **Never lose a session** — Claude Code, Codex, and Gemini sessions appear in one live timeline today; Cursor is in progress. No more grepping JSONL.
+1. **Your agents, always on, from anywhere** — Agents run on Longhouse. Close your laptop, they keep working. Pick up from any device — browser, TUI, phone. No VPS setup, no SSH tunnels, no VNC nightmares.
 
-2. **Find where you solved it** — Search by keyword, project, date. Instant results. FTS5-backed for sub-10ms discovery; Oikos handles deeper queries.
+2. **Every session is interactive** — Click any session in the Timeline, send a message, get a response. Sessions are live endpoints, not static logs. Resume a session from last week with full context intact.
 
-3. **Resume from anywhere** — Hosted makes sessions resumable across devices. Self-hosted is local by default.
+3. **Your agents talk to each other** — Agent A working on auth can ask Agent B (which fixed OAuth last week) a direct question and get a real answer in context. Not log search — an actual conversation between sessions. The more sessions in Longhouse, the more powerful every new one becomes.
+
+**Supporting value (the onramp):**
+- **Never lose a session** — All your Claude Code, Codex, and Gemini sessions in one searchable timeline. This is what gets users in the door.
+- **Find where you solved it** — Full-text search, semantic search, recall. Sub-10ms.
 
 **Guiding principle: Fast to Fun.** Time from install to "oh cool" should be under 2 minutes.
+
+## Product Journey
+
+Users move through three phases. The product must support all three, but the endgame is phase 3.
+
+1. **Onramp (hook)**: Install shipper → local sessions appear in Timeline → "wow, I can see all my sessions with summaries and search." This is genuinely better than `/.resume` in Claude Code.
+2. **Transition**: User starts spawning sessions on Longhouse directly. Discovers they can resume sessions from their phone. Starts preferring cloud over laptop for agent work.
+3. **Endgame**: All agents live on Longhouse. Laptop is optional. Agents cross-reference and talk to each other. The user manages a fleet of agents, not individual terminal sessions.
+
+The shipper is one-directional and that's fine — it's the gateway, not the product. Once sessions live on Longhouse, there's no sync problem because there's only one source of truth.
 
 ---
 
 ## Product Surface (2026-02 Decision)
 
-**Primary UX: Web timeline + Oikos chat.** The web UI is the product. Timeline is the live status + resume surface; Oikos is the built-in coordinator with visibility into all agent work (commis sessions, shipped sessions, run status).
+**Primary UX: Timeline + session interaction.** The web UI is the product. Timeline is the live dashboard showing all agent sessions. Click any session to view it, send messages, resume it. This is where 90% of user time is spent.
 
-**Oikos role:** Personal assistant for your agent team. On the web, Oikos is a full chat interface with tools. Think of it as the manager who can peek into any Claude Code / commis session, surface insights, and help coordinate. On mobile, the responsive web UI covers 80% of use cases. Messaging channels (Telegram, etc.) are a secondary lightweight interface for on-the-go check-ins — "how's the team doing," approve/reject, read summaries.
+**Secondary: Oikos.** A lightweight assistant / receptionist — not a middleman in the session flow. Oikos handles quick questions ("how's the auth refactor going?"), spawns new sessions ("start a Claude session in my zorb repo"), and surfaces insights. It uses a small shared-pool LLM (Groq), not the user's API keys. It does NOT sit between the user and their agent sessions — users interact with sessions directly.
 
-**Chat channels (Telegram, etc.) are secondary.** They provide a thin interface to the same Oikos — useful for quick coordination while away from desk, not the primary product experience. The web UI can do everything chat can do, plus timeline browsing, search, session detail, and visual controls.
+**Future: TUI.** `longhouse attach session-123` — feels like tmux into a remote Claude Code session. For users who prefer terminal over browser. Same API, different frontend.
+
+**Chat channels (Telegram, etc.) are tertiary.** Thin interface for on-the-go check-ins. Not the primary experience.
 
 **What this means for execution:**
-- Timeline + Oikos web UX is the critical path
-- Timeline is the primary entrypoint; Oikos is orthogonal and invoked in context
-- Slim Oikos dispatch contract is higher priority than channel wiring
-- Channel integration layers on top of a working web Oikos, not the other way around
-- Mobile story is "responsive web first, chat channels second"
+- Timeline + session resume is the critical path — this IS the product
+- Oikos is a convenience layer, not a dependency for the core flow
+- TUI is a high-value future surface (makes cloud-first feel native to terminal users)
+- Channel integration layers on top of a working web experience
 
 ---
 
@@ -88,7 +106,7 @@ Three promises to users:
 - **Progressive disclosure**: keep primary docs short and link to deeper runbooks; AGENTS.md must point to what else to read.
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
-- **Users bring their own API keys**. Longhouse is orchestration + UI + data, not LLM compute billing.
+- **Users bring their own API keys** for agent execution (cloud sessions use their Claude/OpenAI/etc. key). Longhouse provides a shared Groq pool for Oikos (the assistant) so it works out of the box. Longhouse is not an LLM billing intermediary.
 - **No Postgres in core**. SQLite is the only DB requirement for OSS and hosted runtime instances.
 - **Hosted architecture = control plane + isolated runtimes**. Control plane is multi-tenant; Longhouse app stays single-tenant.
 
@@ -284,34 +302,36 @@ Both end up in Life Hub, so Longhouse depends on Life Hub. We are reversing that
 
 ## Product Paths
 
-### OSS Local (default path)
+### Hosted (primary — the product)
+```
+Sign in with Google -> provision isolated instance -> always-on
+```
+- One container stack per user (shared node, strict limits)
+- Always-on — agents run 24/7, survive laptop close
+- Users bring their own API keys for agent execution
+- Shared Groq pool for Oikos (works out of the box)
+- Access from any device (browser, future TUI)
+- Premium support + no-ops maintenance
+
+**Hosted path diagram:**
+```
+User signs up → Instance provisioned → Ship local sessions (onramp)
+  → Start running sessions on Longhouse directly (transition)
+  → All agents live on Longhouse, laptop optional (endgame)
+```
+
+### OSS Local (free tier / onramp)
 ```bash
 pip install longhouse
 longhouse serve
 ```
 - Local web UI on port 8080
 - Local agents DB (SQLite)
-- Shipper requires `longhouse connect` to start
-- Full end-to-end flow is visible locally
+- Shipper watches ~/.claude/, ~/.codex/, ~/.gemini/
+- Full timeline + search visible locally
+- Natural upgrade path to hosted when user wants always-on
 
 (Homebrew formula planned for future.)
-
-**Local path diagram:**
-```
-Laptop
-  ├─ Longhouse (UI + API)
-  ├─ SQLite only (default and core)
-  └─ Shipper watches ~/.claude/, ~/.codex/, ~/.gemini/...
-```
-
-### Hosted (paid, always-on)
-```
-Sign in with Google -> provision isolated instance -> always-on
-```
-- One container stack per user (shared node, strict limits)
-- Always-on background agents
-- Users bring their own API keys
-- Premium support + no-ops maintenance
 
 **Hosted path diagram:**
 ```
@@ -779,6 +799,48 @@ Based on lab testing:
 2. **Chat-only mode** - Allow conversation without workspace (no tools)
 3. **Tool execution warnings** - Confirm before destructive operations
 4. **Multi-session view** - Chat with multiple sessions in tabs
+
+---
+
+## Inter-Agent Communication (The Moat)
+
+The unique capability Longhouse enables: **sessions are live, resumable endpoints — not dead transcripts.** Any agent can talk to any other agent's session by resuming it and sending a message.
+
+### Why This Matters
+
+Current state of the art for agent-to-agent knowledge sharing:
+- **Copy-paste**: User manually copies context between terminal sessions. Tedious, error-prone.
+- **Log search / RAG**: Agents read other agents' logs via MCP search tools. Better, but read-only — you get stale text, not a live conversation.
+- **Longhouse**: Agent A resumes Agent B's session, asks a question, gets a real answer with full context. Agent B responds as if the user asked it. No human in the loop.
+
+### How It Works
+
+Built on top of session resume (`POST /api/sessions/{id}/chat`):
+
+```
+Agent A (working on auth)
+  → "How did you handle token refresh in that OAuth session?"
+  → Longhouse resumes Agent B's session (context restored)
+  → Agent B responds with full context of its original work
+  → Response fed back to Agent A
+  → Agent A continues with real, contextual knowledge
+```
+
+The API surface is the same as user session resume — the "user message" just comes from another agent instead of a human. The session doesn't know or care who's asking.
+
+### Network Effect
+
+This creates a compounding advantage:
+- Every session shipped to Longhouse becomes a queryable, resumable knowledge node
+- New agents start with access to every previous session's expertise
+- The value of Longhouse grows with usage — this is the moat
+- Isolated runs on competitors don't compound; Longhouse sessions do
+
+### What Needs to Be Built
+
+- Session resume (core) — the `POST /sessions/{id}/chat` pattern (designed, needs implementation + verification)
+- Agent-to-agent message routing — thin wrapper that lets one session's agent resume another
+- Permissions / scoping — which sessions can be resumed by other agents (default: all within same instance)
 
 ---
 
