@@ -55,6 +55,10 @@ function WelcomeHeader() {
   const toggleMobileNav = useCallback(() => setMobileNavOpen(prev => !prev), []);
   const closeUserMenu = useCallback(() => setUserMenuOpen(false), []);
   const toggleUserMenu = useCallback(() => setUserMenuOpen(prev => !prev), []);
+  const handleOpenSettings = useCallback(() => {
+    closeUserMenu();
+    navigate("/settings");
+  }, [closeUserMenu, navigate]);
 
   useEffect(() => {
     getAuthMethods().then(setAuthMethods).catch(() => {});
@@ -246,6 +250,9 @@ function WelcomeHeader() {
             )}
           </div>
           <div className={`user-dropdown ${userMenuOpen ? "" : "hidden"}`}>
+            <button type="button" className="user-menu-item" onClick={handleOpenSettings}>
+              Settings
+            </button>
             <button type="button" className="user-menu-item" onClick={handleLogout}>
               Log out
             </button>
@@ -307,6 +314,19 @@ function WelcomeHeader() {
             </button>
           );
         })}
+        {user && (
+          <button
+            type="button"
+            className={clsx("mobile-nav-link", { "mobile-nav-link--active": location.pathname.startsWith("/settings") })}
+            aria-current={location.pathname.startsWith("/settings") ? "page" : undefined}
+            onClick={() => {
+              navigate("/settings");
+              closeMobileNav();
+            }}
+          >
+            Settings
+          </button>
+        )}
       </div>
       {user && (
         <div className="mobile-nav-footer">

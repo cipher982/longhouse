@@ -575,6 +575,13 @@ export default function SessionsPage() {
     <div className="sessions-header-actions">
       {total > 0 && <span className="sessions-header-count">{total} sessions</span>}
       <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => navigate("/briefings")}
+      >
+        Briefings
+      </Button>
+      <Button
         variant={liveViewOpen ? "primary" : "secondary"}
         size="sm"
         onClick={() => setLiveViewOpen((prev) => !prev)}
