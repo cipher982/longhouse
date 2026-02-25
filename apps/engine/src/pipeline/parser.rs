@@ -1,12 +1,16 @@
-//! JSONL session file parser for Claude Code, Codex, and Gemini sessions.
+//! Session file parser for Claude Code, Codex, and Gemini sessions.
 //!
 //! Mirrors the Python parser at `zerg/services/shipper/parser.py`.
 //! Extracts meaningful events (user messages, assistant text, tool calls,
-//! tool results) from JSONL files and converts them to a normalized format.
+//! tool results) from session files and converts them to a normalized format.
 //!
-//! Supports two JSONL formats:
-//! - **Claude**: `{type: "user"|"assistant", message: {content: ...}}`
-//! - **Codex**: `{type: "response_item", payload: {type: "message"|"function_call"|..., role: ..., content: [...]}}`
+//! Supported formats (dispatched by file extension):
+//! - **Claude** (`.jsonl`): `{type: "user"|"assistant", message: {content: ...}}`
+//! - **Codex** (`.jsonl`): `{type: "response_item", payload: {type: "message"|"function_call"|..., role: ..., content: [...]}}`
+//! - **Gemini** (`.json`): `{sessionId, messages: [{type: "user"|"gemini", content, toolCalls: [...]}]}`
+//!
+//! Gemini files are full JSON documents rewritten in-place (not JSONL appended),
+//! so they are always parsed from offset 0. The backend deduplicates events by hash.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -133,6 +137,40 @@ struct CodexContentItem {
     text: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Gemini-specific types
+// ---------------------------------------------------------------------------
+
+/// Top-level Gemini session document.
+#[derive(Deserialize)]
+struct GeminiSession {
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(rename = "startTime")]
+    start_time: Option<String>,
+    messages: Option<Vec<GeminiMessage>>,
+}
+
+/// A single message in a Gemini session.
+#[derive(Deserialize)]
+struct GeminiMessage {
+    id: Option<String>,
+    timestamp: Option<String>,
+    /// "user" or "gemini"
+    r#type: Option<String>,
+    content: Option<String>,
+    #[serde(rename = "toolCalls")]
+    tool_calls: Option<Vec<GeminiToolCall>>,
+}
+
+/// A tool call inside a Gemini message.
+#[derive(Deserialize)]
+struct GeminiToolCall {
+    id: Option<String>,
+    name: Option<String>,
+    args: Option<serde_json::Value>,
+}
+
 /// Targeted deserialization of a single content array item.
 /// Only the fields we actually use are extracted; everything else is skipped.
 #[derive(Deserialize)]
@@ -157,11 +195,21 @@ struct ContentItem {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Parse a JSONL session file starting from a byte offset.
+/// Parse a session file starting from a byte offset.
+///
+/// Dispatches to the appropriate parser based on file extension:
+/// - `.json` → Gemini full-document parser (offset is ignored; always parses from 0)
+/// - `.jsonl` (or any other) → JSONL line-by-line parser (Claude/Codex)
 ///
 /// Returns events, the last good byte offset (excluding partial lines),
-/// and session metadata — all in a single pass.
+/// and session metadata.
 pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
+    let is_gemini = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+
     let raw_stem = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -175,6 +223,11 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     } else {
         Uuid::new_v5(&Uuid::NAMESPACE_URL, path.to_string_lossy().as_bytes()).to_string()
     };
+
+    // Gemini: full JSON document, always parse from 0 (file is rewritten in place)
+    if is_gemini {
+        return parse_gemini_json(path, &session_id);
+    }
 
     let file_size = std::fs::metadata(path)
         .with_context(|| format!("Failed to stat {}", path.display()))?
@@ -193,12 +246,167 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         });
     }
 
-    // Choose strategy based on file size
+    // JSONL: choose strategy based on file size
     if file_size > MMAP_THRESHOLD {
         parse_mmap(path, offset, &session_id)
     } else {
         parse_buffered(path, offset, &session_id)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Gemini JSON parser
+// ---------------------------------------------------------------------------
+
+/// Parse a Gemini session file (full JSON document, not JSONL).
+///
+/// Gemini stores one session per `.json` file inside
+/// `~/.gemini/tmp/<projectHash>/chats/session-<timestamp>-<id>.json`.
+/// The file is a single JSON object with a `messages` array — it is
+/// rewritten in its entirety on every update (not appended).  We
+/// therefore always parse from offset 0 and return `file_size` as
+/// `last_good_offset`.  The ingest backend deduplicates events by hash,
+/// so re-shipping an unchanged session is harmless.
+fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let file_size = content.len() as u64;
+
+    let session: GeminiSession = match serde_json::from_str(&content) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!(path = %path.display(), error = %e, "Failed to parse Gemini JSON");
+            return Ok(ParseResult {
+                events: Vec::new(),
+                last_good_offset: file_size,
+                metadata: SessionMetadata {
+                    session_id: session_id.to_string(),
+                    ..Default::default()
+                },
+            });
+        }
+    };
+
+    // Use the sessionId from the document if it's a valid UUID; otherwise keep stem-derived.
+    let canonical_session_id = session
+        .session_id
+        .as_deref()
+        .filter(|id| Uuid::parse_str(id).is_ok())
+        .unwrap_or(session_id)
+        .to_string();
+
+    let mut events = Vec::new();
+    let mut metadata = SessionMetadata {
+        session_id: canonical_session_id.clone(),
+        ..Default::default()
+    };
+
+    if let Some(start_time) = session.start_time.as_deref() {
+        metadata.started_at = parse_timestamp(start_time);
+    }
+
+    for msg in session.messages.unwrap_or_default() {
+        let msg_type = msg.r#type.as_deref().unwrap_or("");
+        let msg_id = msg
+            .id
+            .as_deref()
+            .filter(|id| Uuid::parse_str(id).is_ok())
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        let timestamp = msg
+            .timestamp
+            .as_deref()
+            .and_then(parse_timestamp)
+            .unwrap_or_else(Utc::now);
+
+        // Track session end time
+        match metadata.ended_at {
+            Some(ref existing) if timestamp > *existing => metadata.ended_at = Some(timestamp),
+            None => metadata.ended_at = Some(timestamp),
+            _ => {}
+        }
+
+        match msg_type {
+            "user" => {
+                let text = msg.content.as_deref().unwrap_or("").trim().to_string();
+                if !text.is_empty() {
+                    events.push(ParsedEvent {
+                        uuid: msg_id.clone(),
+                        session_id: canonical_session_id.clone(),
+                        timestamp,
+                        role: Role::User,
+                        content_text: Some(text),
+                        tool_name: None,
+                        tool_input_json: None,
+                        tool_output_text: None,
+                        source_offset: 0,
+                        raw_type: "gemini_user".to_string(),
+                        raw_line: None,
+                    });
+                }
+            }
+            "gemini" => {
+                // Assistant text response
+                let text = msg.content.as_deref().unwrap_or("").trim().to_string();
+                if !text.is_empty() {
+                    events.push(ParsedEvent {
+                        uuid: msg_id.clone(),
+                        session_id: canonical_session_id.clone(),
+                        timestamp,
+                        role: Role::Assistant,
+                        content_text: Some(text),
+                        tool_name: None,
+                        tool_input_json: None,
+                        tool_output_text: None,
+                        source_offset: 0,
+                        raw_type: "gemini_assistant".to_string(),
+                        raw_line: None,
+                    });
+                }
+
+                // Tool calls embedded in the assistant message
+                for (idx, tc) in msg.tool_calls.unwrap_or_default().into_iter().enumerate() {
+                    let tc_name = tc.name.as_deref().unwrap_or("").to_string();
+                    if tc_name.is_empty() {
+                        continue;
+                    }
+                    let tc_id = tc
+                        .id
+                        .as_deref()
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| format!("{}", idx));
+
+                    let tool_input = tc.args.map(|v| {
+                        RawValue::from_string(v.to_string()).ok()
+                    }).flatten();
+
+                    events.push(ParsedEvent {
+                        uuid: format!("{}-tool-{}", msg_id, tc_id),
+                        session_id: canonical_session_id.clone(),
+                        timestamp,
+                        role: Role::Assistant,
+                        content_text: None,
+                        tool_name: Some(tc_name),
+                        tool_input_json: tool_input,
+                        tool_output_text: None,
+                        source_offset: 0,
+                        raw_type: "gemini_tool_call".to_string(),
+                        raw_line: None,
+                    });
+                }
+            }
+            _ => {
+                // Unknown message type — skip
+            }
+        }
+    }
+
+    Ok(ParseResult {
+        events,
+        last_good_offset: file_size,
+        metadata,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1347,5 +1555,130 @@ mod tests {
         assert!(result.metadata.ended_at.is_some());
         assert!(result.metadata.started_at.unwrap() < result.metadata.ended_at.unwrap());
         assert_eq!(result.metadata.version.as_deref(), Some("1.0"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Gemini JSON format tests
+    // -----------------------------------------------------------------------
+
+    fn make_json_file(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_gemini_parse_user_and_assistant() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_json = r#"{
+            "sessionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "projectHash": "abc123",
+            "startTime": "2026-01-10T10:00:00Z",
+            "lastUpdated": "2026-01-10T10:01:00Z",
+            "messages": [
+                {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "timestamp": "2026-01-10T10:00:00Z",
+                    "type": "user",
+                    "content": "What is 2+2?"
+                },
+                {
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "timestamp": "2026-01-10T10:00:05Z",
+                    "type": "gemini",
+                    "content": "2+2 equals 4."
+                }
+            ]
+        }"#;
+        let path = make_json_file(
+            dir.path(),
+            "session-2026-01-10T10-00-00-a1b2c3d4.json",
+            session_json,
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("What is 2+2?"));
+        assert_eq!(result.events[1].role, Role::Assistant);
+        assert_eq!(result.events[1].content_text.as_deref(), Some("2+2 equals 4."));
+        // Session ID from document takes precedence over stem-derived
+        assert_eq!(result.metadata.session_id, "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        assert!(result.metadata.started_at.is_some());
+    }
+
+    #[test]
+    fn test_gemini_parse_tool_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_json = r#"{
+            "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "startTime": "2026-01-10T11:00:00Z",
+            "messages": [
+                {
+                    "id": "33333333-3333-3333-3333-333333333333",
+                    "timestamp": "2026-01-10T11:00:00Z",
+                    "type": "user",
+                    "content": "Read the README"
+                },
+                {
+                    "id": "44444444-4444-4444-4444-444444444444",
+                    "timestamp": "2026-01-10T11:00:05Z",
+                    "type": "gemini",
+                    "content": "I will read it now.",
+                    "toolCalls": [
+                        {
+                            "id": "tc-001",
+                            "name": "read_file",
+                            "args": {"file_path": "README.md"}
+                        }
+                    ]
+                }
+            ]
+        }"#;
+        let path = make_json_file(dir.path(), "session-2026-01-10T11-00-00-bbbb.json", session_json);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        // user message + assistant text + tool call = 3 events
+        assert_eq!(result.events.len(), 3);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[1].role, Role::Assistant);
+        assert_eq!(result.events[1].content_text.as_deref(), Some("I will read it now."));
+        assert_eq!(result.events[2].role, Role::Assistant);
+        assert_eq!(result.events[2].tool_name.as_deref(), Some("read_file"));
+        assert!(result.events[2].tool_input_json.is_some());
+    }
+
+    #[test]
+    fn test_gemini_offset_ignored() {
+        // Gemini files always parse from 0 regardless of offset argument.
+        let dir = tempfile::tempdir().unwrap();
+        let session_json = r#"{
+            "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "startTime": "2026-01-10T12:00:00Z",
+            "messages": [
+                {
+                    "id": "55555555-5555-5555-5555-555555555555",
+                    "timestamp": "2026-01-10T12:00:00Z",
+                    "type": "user",
+                    "content": "Hello Gemini"
+                }
+            ]
+        }"#;
+        let path = make_json_file(dir.path(), "session-cccc.json", session_json);
+
+        let file_size = std::fs::metadata(&path).unwrap().len();
+        // Even with offset = file_size, we still get events (offset is ignored for .json)
+        let result = parse_session_file(&path, file_size).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("Hello Gemini"));
+    }
+
+    #[test]
+    fn test_gemini_invalid_json_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_json_file(dir.path(), "session-bad.json", "not valid json {{{");
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 0);
     }
 }
