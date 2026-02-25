@@ -39,16 +39,31 @@ def _resolve_key(
 
     Priority:
     1. ``key_content`` argument (raw PEM string) — written to a tempfile
-    2. ``SSH_PRIVATE_KEY`` env var (raw PEM string) — written to a tempfile
+    2. ``SSH_PRIVATE_KEY`` env var (raw PEM string) — written to a tempfile.
+       Note: ``SSH_PRIVATE_KEY`` must be a raw PEM string. Many secret UIs
+       store newlines as literal ``\\n`` — normalize before storing.
     3. ``key_path`` argument
     4. Default ``~/.ssh/id_rsa``
 
     Tempfiles are cleaned up on context exit so callers never need to manage them.
+
+    Raises:
+        ValueError: If ``key_content`` is an empty/whitespace-only string,
+            which likely indicates a misconfigured secret rather than intent
+            to fall back to the file-based key.
     """
-    content = key_content if key_content is not None else os.environ.get("SSH_PRIVATE_KEY")
+    if key_content is not None:
+        if not key_content.strip():
+            raise ValueError("key_content was provided but is empty — check the secret value")
+        content = key_content
+    else:
+        content = os.environ.get("SSH_PRIVATE_KEY")
+
     if content:
+        # Normalize literal \n sequences written by secret management UIs
+        normalized = content.replace("\\n", "\n")
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
-            f.write(content)
+            f.write(normalized)
             tmp = Path(f.name)
         try:
             tmp.chmod(0o600)
@@ -121,7 +136,12 @@ def run_ssh_command(
                 key_content=ctx.require_secret("SSH_PRIVATE_KEY"),
             )
     """
-    with _resolve_key(key_path, key_content) as resolved_key:
+    try:
+        key_ctx = _resolve_key(key_path, key_content)
+    except ValueError as e:
+        return SSHResult(success=False, stdout="", stderr=str(e), returncode=-1)
+
+    with key_ctx as resolved_key:
         if not resolved_key.exists():
             logger.error("SSH key not found: %s", resolved_key)
             return SSHResult(
