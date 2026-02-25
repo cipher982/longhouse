@@ -49,6 +49,18 @@ pub fn prepare_file(
         }
     };
 
+    // For incremental parses (offset > 0), the session_meta line is before the
+    // parse window, so collect_metadata never sees it. Read the canonical
+    // session_id stored from the first successful ship so all incremental
+    // shipments land on the same Longhouse session.
+    let stored_session_id: Option<String> = if current_offset > 0 {
+        file_state
+            .get_session(&path_str)?
+            .and_then(|s| s.session_id)
+    } else {
+        None
+    };
+
     // Detect truncation
     let offset = if file_size < current_offset {
         tracing::warn!(
@@ -66,13 +78,18 @@ pub fn prepare_file(
         current_offset
     };
 
-    let parse_result = match parser::parse_session_file(path, offset) {
+    let mut parse_result = match parser::parse_session_file(path, offset) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("Skip {}: {}", path_str, e);
             return Ok(None);
         }
     };
+
+    // Apply canonical session_id for incremental parses.
+    if let Some(sid) = stored_session_id {
+        parse_result.metadata.session_id = sid;
+    }
 
     if parse_result.events.is_empty() {
         return Ok(None);
@@ -264,7 +281,7 @@ pub async fn replay_spool_batch(
             continue;
         }
 
-        let parse_result = match parser::parse_session_file(&path, entry.start_offset) {
+        let mut parse_result = match parser::parse_session_file(&path, entry.start_offset) {
             Ok(r) => r,
             Err(e) => {
                 spool.mark_failed(entry.id, &e.to_string())?;
@@ -272,6 +289,12 @@ pub async fn replay_spool_batch(
                 continue;
             }
         };
+
+        // Spool entries always have a non-zero start_offset (session_meta is
+        // before the window). Use the stored session_id from the spool entry.
+        if let Some(ref sid) = entry.session_id {
+            parse_result.metadata.session_id = sid.clone();
+        }
 
         if parse_result.events.is_empty() {
             spool.mark_shipped(entry.id)?;
