@@ -219,6 +219,7 @@ test-lite: ## Fast SQLite-lite backend tests (no Docker)
 	@echo "🧪 Running lite backend tests (SQLite)..."; \
 	(cd apps/zerg/backend && ./run_backend_tests_lite.sh)
 	@$(MAKE) test-control-plane
+	@$(MAKE) test-engine-fast
 
 test-control-plane: ## Fast control-plane unit tests (no Docker)
 	@echo "🧪 Running control-plane tests..."; \
@@ -250,9 +251,17 @@ install-engine: ## Build + sign the Rust engine binary (run after any engine sou
 	codesign -s - apps/engine/target/release/longhouse-engine
 	@echo "longhouse-engine installed (symlink at ~/.local/bin/longhouse-engine)"
 
-test-shipper-e2e: ## Shipper E2E: fixture → longhouse-engine ship → API → DB (requires longhouse-engine on PATH)
-	@echo "🚀 Running shipper E2E tests (Claude/Gemini/Codex)..."
+test-engine-fast: ## Rust parser golden + adversarial tests (uses repo-local binary, included in make test)
+	@echo "🦀 Running engine golden + adversarial tests..."
+	cd apps/engine && cargo test --test golden_parser_contract --test adversarial_parser
+
+test-shipper-e2e: ## Full pipeline E2E: fixture → longhouse-engine ship → API → DB (uses repo-local binary)
+	@echo "🚀 Running shipper E2E tests (Claude/Gemini/Codex + schema-drift)..."
 	cd apps/zerg/backend && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
+
+test-shipper-premerge: ## Full shipper QA: engine fast tests + pipeline E2E (run before merging engine changes)
+	$(MAKE) test-engine-fast
+	$(MAKE) test-shipper-e2e
 
 test-e2e: ## Run E2E tests (core + a11y)
 	@echo "🎭 Running E2E tests (core + a11y)..."
@@ -411,9 +420,7 @@ test-integration: ## @internal Run integration tests (REAL API calls, requires A
 shipper-e2e-prereqs: ## Shipper E2E prerequisites (migrations + table check)
 	@./scripts/shipper-e2e-prereqs.sh
 
-test-shipper-e2e: ## Run shipper E2E tests (requires backend running)
-	@echo "🧪 Running shipper E2E tests (requires make dev)..."
-	cd apps/zerg/backend && SHIPPER_E2E=1 SHIPPER_E2E_URL=$(SHIPPER_E2E_URL) uv run --extra dev pytest tests/integration/test_shipper_e2e.py tests/integration/test_shipper_watcher_e2e.py -v -m integration
+## Note: test-shipper-e2e is defined earlier in this file (self-contained, no make dev required)
 
 shipper-smoke-test: ## Run shipper live smoke test script (requires backend running)
 	@./scripts/shipper-smoke-test.sh

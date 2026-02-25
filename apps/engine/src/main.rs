@@ -993,7 +993,13 @@ fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> 
             "ended_at": result.metadata.ended_at.map(|t| t.to_rfc3339()),
         }
     });
-    println!("{}", serde_json::to_string_pretty(&summary)?);
+    // When --dump-events is active, stdout is a stream of event JSON lines.
+    // Send the stats summary to stderr so callers can parse events cleanly.
+    if dump_events {
+        eprintln!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    }
 
     Ok(())
 }

@@ -70,6 +70,7 @@ num_cpus = "1"
 
 [dev-dependencies]
 tempfile = "3"
+pretty_assertions = "1"
 
 [profile.release]
 opt-level = 3

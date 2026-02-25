@@ -1,0 +1,16 @@
+{
+  "session_id": "5053c934-f66d-4fea-96af-f95181de5986",
+  "event_count": 2,
+  "events": [
+    {
+      "role": "user",
+      "raw_type": "gemini_user",
+      "content_text": "Reply with exactly: \"gemini ok\"\n\n-"
+    },
+    {
+      "role": "assistant",
+      "raw_type": "gemini_assistant",
+      "content_text": "gemini ok"
+    }
+  ]
+}

@@ -95,6 +95,19 @@ pub fn prepare_file(
     }
 
     if parse_result.events.is_empty() {
+        // Heuristic: if the file has substantial content and the parser found
+        // candidate records but produced no events, something likely went wrong
+        // (schema drift, format change, stale binary). Warn loudly.
+        if parse_result.candidate_records > 0 && file_size >= 128 {
+            tracing::warn!(
+                path = %path_str,
+                file_size,
+                candidate_records = parse_result.candidate_records,
+                "Suspicious: file has {} candidate records but produced 0 events — \
+                 possible parser bug or format drift",
+                parse_result.candidate_records
+            );
+        }
         return Ok(None);
     }
 
