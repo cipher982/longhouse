@@ -133,22 +133,17 @@
       "$comment": "Default OSS profile: no overrides"
     },
     "hosted": {
-      "$comment": "Hosted/shared-pool instances: route everything to Groq by default. BYO-key users override this at the LlmProviderConfig level.",
+      "$comment": "Hosted instances: Longhouse internal tasks (Oikos, summarization, etc.) route to Groq. Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
       "text": {
         "useCases": {
           "fiche_conversation": "qwen/qwen3-32b",
-          "routing_decision": "qwen/qwen3-32b",
-          "tool_selection": "qwen/qwen3-32b",
-          "commis_task": "qwen/qwen3-32b",
           "summarization": "meta-llama/llama-4-maverick-17b-128e-instruct",
           "summary_update": "meta-llama/llama-4-maverick-17b-128e-instruct",
           "reflection": "meta-llama/llama-4-maverick-17b-128e-instruct",
-          "bulk_classification": "meta-llama/llama-4-maverick-17b-128e-instruct",
-          "ci_test": "meta-llama/llama-4-maverick-17b-128e-instruct"
+          "bulk_classification": "meta-llama/llama-4-maverick-17b-128e-instruct"
         },
         "defaults": {
           "fiche": "qwen/qwen3-32b",
-          "commis": "qwen/qwen3-32b",
           "test": "meta-llama/llama-4-maverick-17b-128e-instruct"
         }
       }

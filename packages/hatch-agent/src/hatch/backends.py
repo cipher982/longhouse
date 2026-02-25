@@ -113,7 +113,7 @@ def configure_bedrock(
     prompt: str,
     ctx: ExecutionContext | None = None,
     *,
-    model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    model: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     aws_profile: str = "zh-qa-engineer",
     aws_region: str = "us-east-1",
     resume: str | None = None,
