@@ -45,13 +45,13 @@ def _resolve_key(
 
     Tempfiles are cleaned up on context exit so callers never need to manage them.
     """
-    content = key_content or os.environ.get("SSH_PRIVATE_KEY")
+    content = key_content if key_content is not None else os.environ.get("SSH_PRIVATE_KEY")
     if content:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
             f.write(content)
             tmp = Path(f.name)
-        tmp.chmod(0o600)
         try:
+            tmp.chmod(0o600)
             yield tmp
         finally:
             tmp.unlink(missing_ok=True)
