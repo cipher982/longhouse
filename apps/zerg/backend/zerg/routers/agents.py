@@ -512,7 +512,10 @@ async def _generate_summary_background(session_id: str) -> None:
     Concurrency-limited via semaphore; excess tasks queue (won't overwhelm LLM API).
     """
     async with _summary_semaphore:
-        await _generate_summary_impl(session_id)
+        try:
+            await _generate_summary_impl(session_id)
+        except Exception:
+            pass  # Background task — errors logged inside _generate_summary_impl
 
 
 async def _set_structured_title_if_empty(session_id: str) -> None:
@@ -693,6 +696,7 @@ async def _generate_summary_impl(session_id: str) -> None:
     except Exception:
         db.rollback()
         logger.exception("Failed to generate summary for session %s", session_id)
+        raise
     finally:
         db.close()
         try:
