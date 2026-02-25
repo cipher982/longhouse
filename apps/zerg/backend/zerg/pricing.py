@@ -10,10 +10,21 @@ from typing import Optional
 from typing import Tuple
 
 # USD per 1K tokens (in, out).
-# Default catalog is intentionally minimal (mock only). Real prices are
-# loaded from an external JSON catalog referenced via env.
+# Built-in prices are baked in so cost tracking works without external config.
+# Prices are approximate and may drift — override via PRICING_CATALOG_PATH for accuracy.
+# External catalog is merged on top of these defaults, so overrides win.
 MODEL_PRICES_USD_PER_1K: dict[str, Tuple[float, float]] = {
     "gpt-mock": (0.0, 0.0),
+    # Groq (shared-pool defaults for hosted instances) — prices per 1K tokens
+    # Source: groq.com/pricing (verify periodically; these are approximate 2025 rates)
+    "qwen/qwen3-32b": (0.00029, 0.00059),
+    "meta-llama/llama-4-maverick-17b-128e-instruct": (0.0002, 0.0006),
+    "llama-3.3-70b-versatile": (0.00059, 0.00079),
+    "llama-3.1-8b-instant": (0.00005, 0.00008),
+    # OpenAI (added when OpenAI key is provisioned) — approximate 2025 rates
+    # These are placeholders; actual gpt-5.x pricing should be loaded via PRICING_CATALOG_PATH
+    "gpt-4o": (0.0025, 0.01),
+    "gpt-4o-mini": (0.00015, 0.0006),
 }
 
 _CATALOG_CACHE: Optional[dict[str, Tuple[float, float]]] = None
