@@ -116,7 +116,9 @@ class DevAuthStrategy(AuthStrategy):
 
         # Skip database operations in unit test mode (NODE_ENV=test WITHOUT E2E)
         # E2E tests need real database operations for full integration testing
-        is_unit_test = os.getenv("NODE_ENV") == "test" and os.getenv("ENVIRONMENT") != "test:e2e"
+        env = os.getenv("ENVIRONMENT", "")
+        is_e2e_env = "e2e" in env.lower() or os.getenv("E2E_DB_DIR") or os.getenv("E2E_DEFAULT_MODEL") or os.getenv("E2E_HATCH_PATH")
+        is_unit_test = os.getenv("NODE_ENV") == "test" and not is_e2e_env
         if is_unit_test:
             # Return a mock user for unit tests to avoid database issues
 

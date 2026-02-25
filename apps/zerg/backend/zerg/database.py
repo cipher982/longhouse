@@ -111,8 +111,10 @@ def _get_or_create_commis_session_factory(commis_id: str) -> sessionmaker:
         return factory
 
 
-# Use override=True to ensure proper quote stripping even if vars are inherited from parent process
-dotenv.load_dotenv(override=True)
+# Use override=True to ensure proper quote stripping even if vars are inherited from parent process.
+# In test/E2E mode, do not override explicit env vars like ENVIRONMENT.
+_override_env = os.getenv("TESTING", "").strip().lower() not in {"1", "true", "yes", "on"}
+dotenv.load_dotenv(override=_override_env)
 
 
 # SQLite-only: no schema support

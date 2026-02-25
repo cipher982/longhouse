@@ -22,7 +22,7 @@ async function ensureDemoProviders(page: Page): Promise<void> {
   // Open filter panel if collapsed
   const filterPanel = page.locator('#filter-panel');
   if (!(await filterPanel.isVisible().catch(() => false))) {
-    const toggleBtn = page.locator('.sessions-filter-toggle');
+    const toggleBtn = page.locator('button[aria-controls="filter-panel"]');
     if (await toggleBtn.isVisible()) {
       await toggleBtn.click();
     }
@@ -77,7 +77,7 @@ test.describe('Sessions Page', () => {
     await expect(toolbar.locator('input[type="search"]')).toBeVisible();
 
     // Filter toggle should be present
-    await expect(page.locator('.sessions-filter-toggle')).toBeVisible();
+    await expect(page.locator('button[aria-controls="filter-panel"]')).toBeVisible();
 
     // Filter panel should be open (ensureDemoProviders opened it)
     const filterPanel = page.locator('#filter-panel');

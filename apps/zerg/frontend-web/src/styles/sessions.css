@@ -223,6 +223,163 @@
     font-weight: var(--font-weight-normal);
   }
 
+  .sessions-header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  /* ---------------------------------------------------------------------------
+   * Live View Subpane
+   * ---------------------------------------------------------------------------*/
+
+  .sessions-live-panel {
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .sessions-live-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .sessions-live-title {
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .sessions-live-subtitle {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    margin-top: var(--space-1);
+  }
+
+  .sessions-live-body {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: stretch;
+  }
+
+  .sessions-live-map {
+    position: relative;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-glass-1);
+    overflow: hidden;
+    min-height: 260px;
+  }
+
+  .sessions-live-map .forum-map-canvas {
+    min-height: 260px;
+    border-radius: inherit;
+  }
+
+  .sessions-live-map .forum-map-hud {
+    font-size: 10px;
+  }
+
+  .sessions-live-empty {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    text-align: center;
+    color: var(--color-text-muted);
+    padding: var(--space-4);
+  }
+
+  .sessions-live-empty-subtitle {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+  }
+
+  .sessions-live-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 320px;
+    overflow: auto;
+  }
+
+  .sessions-live-list-empty {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    padding: var(--space-3);
+    border: 1px dashed var(--border-glass-1);
+    border-radius: var(--radius-md);
+    text-align: center;
+  }
+
+  .sessions-live-row {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-glass-1);
+    background: var(--surface-glass-2);
+    cursor: pointer;
+    transition: transform var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .sessions-live-row:hover {
+    transform: translateY(-1px);
+    border-color: var(--color-border-primary);
+  }
+
+  .sessions-live-row--active {
+    border-color: color-mix(in srgb, var(--color-intent-success) 45%, transparent);
+    background: color-mix(in srgb, var(--color-intent-success) 10%, transparent);
+  }
+
+  .sessions-live-row--selected {
+    border-color: var(--color-brand-primary);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .sessions-live-row-title {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .sessions-live-row-meta {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+  }
+
+  .sessions-live-row-presence {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-tertiary);
+  }
+
+  @media (max-width: 900px) {
+    .sessions-live-body {
+      grid-template-columns: 1fr;
+    }
+
+    .sessions-live-map,
+    .sessions-live-map .forum-map-canvas {
+      min-height: 220px;
+    }
+  }
+
   /* ---------------------------------------------------------------------------
    * Collapsible Filter Panel
    * ---------------------------------------------------------------------------*/

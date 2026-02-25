@@ -101,7 +101,12 @@ test.describe('Session Continuity E2E', () => {
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
+          let eventsRes;
+          try {
+            eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
+          } catch {
+            return false;
+          }
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           events = payload.events ?? [];
@@ -188,7 +193,12 @@ test.describe('Session Continuity E2E', () => {
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
+          let eventsRes;
+          try {
+            eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
+          } catch {
+            return false;
+          }
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           const events = payload.events ?? [];
@@ -274,7 +284,12 @@ test.describe('Session Continuity E2E', () => {
     await expect
       .poll(
         async () => {
-          const eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
+          let eventsRes;
+          try {
+            eventsRes = await request.get(`/api/oikos/runs/${runId}/events`);
+          } catch {
+            return false;
+          }
           if (!eventsRes.ok()) return false;
           const payload = await eventsRes.json();
           const events = payload.events ?? [];
