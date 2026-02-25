@@ -66,6 +66,21 @@ class Settings(BaseSettings):
     # SSH — injected so jobs can SSH to infrastructure hosts
     instance_ssh_private_key_b64: str | None = None
 
+    # LLM keys — injected into every instance (shared pool)
+    # Groq is the default shared-pool provider: fast, cheap, no per-seat cost concerns
+    instance_groq_api_key: str | None = None
+
+    # Models routing profile for new instances.
+    # "hosted" = Groq-first defaults (safe when only Groq key is injected)
+    # "oss"    = no overrides (expects caller to configure model keys)
+    instance_models_profile: str = "hosted"
+
+    # Quota / rate limits injected into every instance.
+    # 0 = disabled. Cost limits only bite when pricing catalog has known prices.
+    instance_daily_runs_per_user: int = 0
+    instance_daily_cost_per_user_cents: int = 0  # per-user daily USD budget in cents
+    instance_daily_cost_global_cents: int = 0  # global daily USD budget in cents
+
     class Config:
         env_prefix = "CONTROL_PLANE_"
 

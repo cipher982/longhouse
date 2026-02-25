@@ -128,6 +128,23 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
     if settings.instance_ssh_private_key_b64:
         env["SSH_PRIVATE_KEY_B64"] = settings.instance_ssh_private_key_b64
 
+    # LLM shared pool — Groq is injected into every instance (no allowlist needed;
+    # Groq pricing is cheap enough to share and we enforce quotas via the limit vars below).
+    if settings.instance_groq_api_key:
+        env["GROQ_API_KEY"] = settings.instance_groq_api_key
+
+    # Models routing profile — determines default tiers for shared-pool users.
+    env["MODELS_PROFILE"] = settings.instance_models_profile
+
+    # Quota / rate limits — all default to 0 (disabled) until the operator sets them.
+    # BYO-key users are automatically exempt; these only bite shared-pool users.
+    if settings.instance_daily_runs_per_user > 0:
+        env["DAILY_RUNS_PER_USER"] = str(settings.instance_daily_runs_per_user)
+    if settings.instance_daily_cost_per_user_cents > 0:
+        env["DAILY_COST_PER_USER_CENTS"] = str(settings.instance_daily_cost_per_user_cents)
+    if settings.instance_daily_cost_global_cents > 0:
+        env["DAILY_COST_GLOBAL_CENTS"] = str(settings.instance_daily_cost_global_cents)
+
     return env
 
 
