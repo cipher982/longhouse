@@ -245,6 +245,10 @@ test-unit: ## @internal Deprecated alias for test
 test-zerg-unit: ## @internal Deprecated alias for test
 	$(MAKE) test
 
+test-shipper-e2e: ## Shipper E2E: fixture → longhouse-engine ship → API → DB (requires longhouse-engine on PATH)
+	@echo "🚀 Running shipper E2E tests (Claude/Gemini/Codex)..."
+	cd apps/zerg/backend && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
+
 test-e2e: ## Run E2E tests (core + a11y)
 	@echo "🎭 Running E2E tests (core + a11y)..."
 	$(MAKE) test-e2e-core
