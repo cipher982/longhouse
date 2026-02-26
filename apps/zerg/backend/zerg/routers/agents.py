@@ -515,9 +515,12 @@ async def _set_structured_title_if_empty(session_id: str) -> None:
         if not session or session.summary_title:
             return
         parts = [p for p in [session.project, session.git_branch] if p]
-        if not parts:
-            return
-        title = " · ".join(parts)
+        if parts:
+            title = " · ".join(parts)
+        else:
+            # No project/branch — use a generic date-based title
+            date_str = (session.started_at or datetime.now(timezone.utc)).strftime("%b %-d")
+            title = f"Session · {date_str}"
         # WHERE summary_title IS NULL prevents overwriting a concurrently-set LLM title
         result = db.execute(
             sa_update(AgentSession)

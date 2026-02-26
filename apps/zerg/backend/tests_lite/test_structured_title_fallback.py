@@ -129,8 +129,8 @@ async def test_structured_title_does_not_overwrite_existing(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_structured_title_skipped_when_no_project_or_branch(tmp_path):
-    """No title set when session has neither project nor branch."""
+async def test_structured_title_date_fallback_when_no_project_or_branch(tmp_path):
+    """Falls back to 'Session · {date}' when session has neither project nor branch."""
     from zerg.routers.agents import _set_structured_title_if_empty
 
     factory = _make_db(tmp_path, "no_meta.db")
@@ -142,7 +142,8 @@ async def test_structured_title_skipped_when_no_project_or_branch(tmp_path):
     db = factory()
     updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
     db.close()
-    assert updated.summary_title is None
+    assert updated.summary_title is not None
+    assert updated.summary_title.startswith("Session · ")
 
 
 # ---------------------------------------------------------------------------
