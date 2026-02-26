@@ -554,43 +554,45 @@ export default function SessionDetailPage() {
 
         {/* Event Timeline */}
         <div className="session-timeline">
-          <div className="timeline-header">
-            <span className="timeline-title">Event Timeline</span>
-            <span className="timeline-count">{events.length} events</span>
-          </div>
-
-          {/* Event role filter + search */}
-          {events.length > 0 && (
-            <div className="session-detail-filters">
-              <div className="filter-btn-group">
-                {(['all', 'messages', 'tools'] as const).map(filter => (
-                  <button
-                    key={filter}
-                    className={`filter-btn ${eventFilter === filter ? 'active' : ''}`}
-                    onClick={() => setEventFilter(filter)}
-                  >
-                    {filter === 'all' ? `All (${events.length})` :
-                     filter === 'messages' ? `Messages (${messageCount})` :
-                     `Tools (${toolCount})`}
-                  </button>
-                ))}
-              </div>
-              <div className="event-search-wrapper">
-                <input
-                  type="text"
-                  className="event-search-input"
-                  placeholder="Search events..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                />
-                {debouncedSearch.trim() && (
-                  <span className="event-search-count">
-                    {filteredEvents.length} match{filteredEvents.length !== 1 ? "es" : ""}
-                  </span>
-                )}
-              </div>
+          <div className="session-timeline-controls">
+            <div className="timeline-header">
+              <span className="timeline-title">Event Timeline</span>
+              <span className="timeline-count">{events.length} events</span>
             </div>
-          )}
+
+            {/* Event role filter + search */}
+            {events.length > 0 && (
+              <div className="session-detail-filters">
+                <div className="filter-btn-group">
+                  {(['all', 'messages', 'tools'] as const).map(filter => (
+                    <button
+                      key={filter}
+                      className={`filter-btn ${eventFilter === filter ? 'active' : ''}`}
+                      onClick={() => setEventFilter(filter)}
+                    >
+                      {filter === 'all' ? `All (${events.length})` :
+                       filter === 'messages' ? `Messages (${messageCount})` :
+                       `Tools (${toolCount})`}
+                    </button>
+                  ))}
+                </div>
+                <div className="event-search-wrapper">
+                  <input
+                    type="text"
+                    className="event-search-input"
+                    placeholder="Search events..."
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                  />
+                  {debouncedSearch.trim() && (
+                    <span className="event-search-count">
+                      {filteredEvents.length} match{filteredEvents.length !== 1 ? "es" : ""}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
 
           {filteredEvents.length === 0 ? (
             <EmptyState
