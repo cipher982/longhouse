@@ -7,15 +7,17 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel, useTurnBasedVoice } from './hooks'
 import { useOikosApp } from './hooks/useOikosApp'
-import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, RunStatusIndicator, TraceIdDisplay } from './components'
+import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, QuotaPanel, RunStatusIndicator, TraceIdDisplay } from './components'
 import './components/TraceIdDisplay.css'
 import { oikosToolStore } from '../lib/oikos-tool-store'
 import { eventBus } from '../lib/event-bus'
 import config from '../../lib/config'
 import { useAuth } from '../../lib/auth'
+import { fetchUserUsage } from './lib/usage'
 
 console.info('[Oikos] Starting React application')
 
@@ -72,6 +74,17 @@ export default function App({ embedded = false }: AppProps) {
     onError: (error) => console.error('[App] Voice error:', error),
     sendText: oikosApp.sendText,
   })
+
+  const usageQuery = useQuery({
+    queryKey: ['oikos-usage', 'today'],
+    queryFn: () => fetchUserUsage('today'),
+    refetchInterval: 30000,
+    staleTime: 15000,
+  })
+  const quotaBlocked = usageQuery.data?.limit.status === 'exceeded'
+  const blockedReason = quotaBlocked
+    ? 'Shared quota reached. Resets at 00:00 UTC. Add your key in Settings to continue.'
+    : null
 
   // Debug panel toggle
   const handleToggleDebugPanel = useCallback(() => {
@@ -169,6 +182,11 @@ export default function App({ embedded = false }: AppProps) {
 
         <div className="chat-settings-bar">
           <ModelSelector />
+          <QuotaPanel
+            usage={usageQuery.data}
+            isLoading={usageQuery.isLoading}
+            isError={usageQuery.isError}
+          />
         </div>
 
         <ChatContainer
@@ -180,6 +198,8 @@ export default function App({ embedded = false }: AppProps) {
           <TextInput
             onSend={textChannel.sendMessage}
             disabled={textChannel.isSending}
+            inputDisabled={quotaBlocked}
+            blockedReason={blockedReason}
             micStatus={micStatus}
             micLevel={turnBasedVoice.micLevel}
             onMicConnect={turnBasedVoice.resetVoice}

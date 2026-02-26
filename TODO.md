@@ -46,11 +46,13 @@ Status (2026-02-26): Done.
 
 ## [Product] Quota Error UX in Oikos Chat (size: 2)
 
-Status (2026-02-26): Done (initial polish).
+Status (2026-02-26): Done (first-principles UI + behavior).
 
 - [x] Parse 429 JSON detail in Oikos chat requests (don't discard backend detail)
 - [x] Convert run-cap/budget errors into clear reset-time messaging
 - [x] Show quota context in-chat for the active assistant bubble instead of raw generic failure
+- [x] Add always-visible quota panel in Oikos header (health/warning/blocked, progress, remaining, runs)
+- [x] Block new input only on true quota exhaustion (keep normal post-run unblock behavior intact)
 
 ## [Tech Debt] Commis model selection — remove implicit defaults (size: 3)
 

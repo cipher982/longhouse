@@ -8,7 +8,9 @@ import { MicButton, type VoiceStatus } from './MicButton'
 interface TextInputProps {
   onSend: (message: string) => void
   disabled?: boolean
+  inputDisabled?: boolean
   placeholder?: string
+  blockedReason?: string | null
   // Voice control props
   micStatus?: VoiceStatus
   micLevel?: number
@@ -20,7 +22,9 @@ interface TextInputProps {
 export function TextInput({
   onSend,
   disabled = false,
+  inputDisabled = false,
   placeholder = 'Type a message...',
+  blockedReason = null,
   micStatus = 'idle',
   micLevel = 0,
   onMicConnect,
@@ -53,10 +57,11 @@ export function TextInput({
   const handleSend = useCallback(() => {
     const trimmed = value.trim()
     if (trimmed && !disabled) {
+      if (inputDisabled) return
       onSend(trimmed)
       setValue('')
     }
-  }, [value, disabled, onSend])
+  }, [value, disabled, inputDisabled, onSend])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
@@ -75,7 +80,7 @@ export function TextInput({
           <MicButton
             status={micStatus}
             level={micLevel}
-            disabled={disabled}
+            disabled={disabled || inputDisabled}
             onConnect={onMicConnect}
             onPressStart={onMicPressStart || (() => {})}
             onPressEnd={onMicPressEnd || (() => {})}
@@ -89,11 +94,12 @@ export function TextInput({
         type="text"
         className="text-input"
         data-testid="chat-input"
-        placeholder={placeholder}
+        placeholder={blockedReason || placeholder}
         aria-label="Message input"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
+        disabled={inputDisabled}
       />
       <button
         className="send-button"
@@ -101,7 +107,7 @@ export function TextInput({
         data-testid="send-message-btn"
         aria-label="Send message"
         onClick={handleSend}
-        disabled={disabled || !value.trim()}
+        disabled={disabled || inputDisabled || !value.trim()}
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <line x1="22" y1="2" x2="11" y2="13" />
