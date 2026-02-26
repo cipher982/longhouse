@@ -351,12 +351,12 @@ class TestIngestSummaryFlow:
 
 
 # =====================================================================
-# Test 6: _generate_summary_background guards and idempotency
+# Test 6: _generate_summary_impl guards and idempotency
 # =====================================================================
 
 
 class TestGenerateSummaryBackground:
-    """Tests for _generate_summary_background.
+    """Tests for _generate_summary_impl.
 
     Patching strategy:
     - ``get_settings`` is imported at module level in ``agents.py`` →
@@ -378,7 +378,17 @@ class TestGenerateSummaryBackground:
             num_events=5,
         )
 
-        from zerg.routers.agents import _generate_summary_background
+        # Mark all events as already summarized so impl finds no new events
+        last_event = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session.id)
+            .order_by(AgentEvent.id.desc())
+            .first()
+        )
+        session.last_summarized_event_id = last_event.id
+        db.commit()
+
+        from zerg.routers.agents import _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -392,11 +402,11 @@ class TestGenerateSummaryBackground:
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
             patch(
-                "zerg.models_config.get_llm_client_for_use_case",
+                "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
             ),
         ):
-            await _generate_summary_background(str(session.id))
+            await _generate_summary_impl(str(session.id))
 
         # Summary should NOT have changed
         db.refresh(session)
@@ -411,7 +421,7 @@ class TestGenerateSummaryBackground:
         db = _setup_db(tmp_path)
         session = _seed_session(db, num_events=5)
 
-        from zerg.routers.agents import _generate_summary_background
+        from zerg.routers.agents import _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -424,11 +434,11 @@ class TestGenerateSummaryBackground:
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
             patch(
-                "zerg.models_config.get_llm_client_for_use_case",
+                "zerg.models_config.get_llm_client_with_db_fallback",
                 side_effect=ValueError("OPENAI_API_KEY required"),
             ),
         ):
-            await _generate_summary_background(str(session.id))
+            await _generate_summary_impl(str(session.id))
 
         # Session should still have no summary
         db.refresh(session)
@@ -454,7 +464,7 @@ class TestGenerateSummaryBackground:
         db.add(session)
         db.commit()
 
-        from zerg.routers.agents import _generate_summary_background
+        from zerg.routers.agents import _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -468,11 +478,11 @@ class TestGenerateSummaryBackground:
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
             patch(
-                "zerg.models_config.get_llm_client_for_use_case",
+                "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
             ),
         ):
-            await _generate_summary_background(str(session.id))
+            await _generate_summary_impl(str(session.id))
 
         db.refresh(session)
         assert session.summary is None
@@ -488,7 +498,7 @@ class TestGenerateSummaryBackground:
         session = _seed_session(db, num_events=6)
         assert session.summary is None
 
-        from zerg.routers.agents import _generate_summary_background
+        from zerg.routers.agents import _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -505,11 +515,11 @@ class TestGenerateSummaryBackground:
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
             patch(
-                "zerg.models_config.get_llm_client_for_use_case",
+                "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
             ),
         ):
-            await _generate_summary_background(str(session.id))
+            await _generate_summary_impl(str(session.id))
 
         db.refresh(session)
         assert session.summary is not None
@@ -520,11 +530,11 @@ class TestGenerateSummaryBackground:
 
     @pytest.mark.asyncio
     async def test_handles_llm_error_gracefully(self, tmp_path):
-        """Background task should catch LLM errors and not crash."""
+        """_generate_summary_impl should re-raise LLM errors so the task queue can retry."""
         db = _setup_db(tmp_path)
         session = _seed_session(db, num_events=6)
 
-        from zerg.routers.agents import _generate_summary_background
+        from zerg.routers.agents import _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -540,14 +550,15 @@ class TestGenerateSummaryBackground:
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
             patch(
-                "zerg.models_config.get_llm_client_for_use_case",
+                "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
             ),
         ):
-            # Should not raise
-            await _generate_summary_background(str(session.id))
+            # Should re-raise so the task queue marks the task as failed and retries
+            with pytest.raises(RuntimeError, match="LLM API down"):
+                await _generate_summary_impl(str(session.id))
 
-        # Session should still have no summary (error was caught)
+        # Session should still have no summary
         db.refresh(session)
         assert session.summary is None
 
@@ -556,7 +567,7 @@ class TestGenerateSummaryBackground:
     @pytest.mark.asyncio
     async def test_skips_nonexistent_session(self, tmp_path):
         """Background task should handle missing session gracefully."""
-        from zerg.routers.agents import _generate_summary_background
+        from zerg.routers.agents import _generate_summary_impl
 
         db = _setup_db(tmp_path)
         factory = sessionmaker(bind=db.get_bind())
@@ -571,12 +582,12 @@ class TestGenerateSummaryBackground:
             patch("zerg.database.get_session_factory", return_value=factory),
             patch("zerg.routers.agents.get_settings", return_value=mock_settings),
             patch(
-                "zerg.models_config.get_llm_client_for_use_case",
+                "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
             ),
         ):
             # Should not raise for non-existent UUID
-            await _generate_summary_background(str(uuid4()))
+            await _generate_summary_impl(str(uuid4()))
 
         db.close()
 

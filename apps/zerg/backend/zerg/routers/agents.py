@@ -435,7 +435,6 @@ class BriefingResponse(BaseModel):
 # During bulk ingest the daemon ships hundreds of sessions/minute; without a cap
 # we'd spawn thousands of concurrent API calls. Semaphores properly queue excess
 # work (up to a point) and the backfill endpoints catch up on anything dropped.
-_summary_semaphore = asyncio.Semaphore(3)
 _embedding_semaphore = asyncio.Semaphore(5)
 
 
@@ -501,21 +500,6 @@ async def _summarize_and_persist(
         session.last_summarized_event_id = events[-1].id
     db.commit()
     return summary
-
-
-async def _generate_summary_background(session_id: str) -> None:
-    """Background task: generate/update summary for a session (incremental).
-
-    Uses incremental_summary() with a nano-tier model for cheap, fast updates.
-    Compare-and-swap (CAS) guard prevents stale overwrites from concurrent tasks.
-    Throttles: skips if fewer than 2 new user/assistant messages since last summary.
-    Concurrency-limited via semaphore; excess tasks queue (won't overwhelm LLM API).
-    """
-    async with _summary_semaphore:
-        try:
-            await _generate_summary_impl(session_id)
-        except Exception:
-            pass  # Background task — errors logged inside _generate_summary_impl
 
 
 async def _set_structured_title_if_empty(session_id: str) -> None:
