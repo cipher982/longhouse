@@ -216,7 +216,6 @@ class TTSService:
 
             response = await self._get_openai_client().audio.speech.create(
                 **payload,
-                extra_body={"metadata": {"source": "longhouse:tts"}},
             )
 
             audio_data = await response.aread()
