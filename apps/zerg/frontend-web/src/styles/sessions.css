@@ -934,6 +934,12 @@
     border-bottom: 1px solid var(--border-glass-1);
   }
 
+  .timeline-scroll-hint {
+    padding: 0 var(--space-4) var(--space-2);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+  }
+
   .timeline-title {
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);
