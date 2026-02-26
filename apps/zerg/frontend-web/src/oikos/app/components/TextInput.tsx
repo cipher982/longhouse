@@ -11,6 +11,7 @@ interface TextInputProps {
   inputDisabled?: boolean
   placeholder?: string
   blockedReason?: string | null
+  helperText?: string | null
   // Voice control props
   micStatus?: VoiceStatus
   micLevel?: number
@@ -25,6 +26,7 @@ export function TextInput({
   inputDisabled = false,
   placeholder = 'Type a message...',
   blockedReason = null,
+  helperText = null,
   micStatus = 'idle',
   micLevel = 0,
   onMicConnect,
@@ -90,30 +92,37 @@ export function TextInput({
           </span>
         </div>
       )}
-      <input
-        type="text"
-        className="text-input"
-        data-testid="chat-input"
-        placeholder={blockedReason || placeholder}
-        aria-label="Message input"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        disabled={inputDisabled}
-      />
-      <button
-        className="send-button"
-        type="button"
-        data-testid="send-message-btn"
-        aria-label="Send message"
-        onClick={handleSend}
-        disabled={disabled || inputDisabled || !value.trim()}
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <line x1="22" y1="2" x2="11" y2="13" />
-          <polygon points="22 2 15 22 11 13 2 9 22 2" />
-        </svg>
-      </button>
+      <div className="text-input-main">
+        <input
+          type="text"
+          className="text-input"
+          data-testid="chat-input"
+          placeholder={blockedReason || placeholder}
+          aria-label="Message input"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={inputDisabled}
+        />
+        <button
+          className="send-button"
+          type="button"
+          data-testid="send-message-btn"
+          aria-label="Send message"
+          onClick={handleSend}
+          disabled={disabled || inputDisabled || !value.trim()}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="22" y1="2" x2="11" y2="13" />
+            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+          </svg>
+        </button>
+        {helperText && (
+          <div className={`text-input-helper ${inputDisabled ? 'text-input-helper--blocked' : ''}`}>
+            {helperText}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
