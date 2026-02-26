@@ -127,6 +127,12 @@ Environment Variables:
     )
 
     parser.add_argument(
+        "--automation",
+        action="store_true",
+        help="Mark session as automation (hidden from Longhouse timeline by default, still searchable)",
+    )
+
+    parser.add_argument(
         "-v",
         "--version",
         action="version",
@@ -263,6 +269,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Build environment
     env = config.build_env()
+    if getattr(args, "automation", False):
+        env["LONGHOUSE_IS_SIDECHAIN"] = "1"
     cwd = args.cwd
 
     # Run the agent
