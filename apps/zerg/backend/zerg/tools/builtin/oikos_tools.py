@@ -21,7 +21,6 @@ from datetime import timezone
 from typing import List
 
 from zerg.connectors.context import get_credential_resolver
-from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_context import get_oikos_context
 from zerg.services.tool_output_store import ToolOutputStore
@@ -35,6 +34,7 @@ logger = logging.getLogger(__name__)
 async def spawn_commis_async(
     task: str,
     model: str | None = None,
+    backend: str | None = None,
     execution_mode: str = "workspace",
     git_repo: str | None = None,
     resume_session_id: str | None = None,
@@ -51,7 +51,8 @@ async def spawn_commis_async(
 
     Args:
         task: Natural language description of what the commis should do
-        model: LLM model for the commis (default: gpt-5-mini)
+        model: Optional model override for the commis
+        backend: Optional backend override (zai/codex/gemini/bedrock/anthropic)
         execution_mode: "workspace" (default) runs headless CLI agent in a git
             workspace. "standard" is deprecated (requires LEGACY_STANDARD_MODE=1).
             Accepts "local" and "cloud" for backward compatibility.
@@ -98,9 +99,8 @@ async def spawn_commis_async(
     oikos_run_id = ctx.run_id if ctx else None
     trace_id = ctx.trace_id if ctx else None
 
-    # Commis inherits model and reasoning_effort from oikos context
-    # Priority: explicit arg > oikos context > default
-    commis_model = model or (ctx.model if ctx else None) or DEFAULT_COMMIS_MODEL_ID
+    # Commis model is explicit override only (no implicit defaults).
+    commis_model = model
     commis_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
 
     # Build execution config for workspace mode (cloud is alias for backward compat)
@@ -109,6 +109,8 @@ async def spawn_commis_async(
         job_config = {
             "execution_mode": "workspace",  # Normalize to new name
         }
+        if backend:
+            job_config["backend"] = backend
         if git_repo:
             job_config["git_repo"] = git_repo
         if resume_session_id:
@@ -236,6 +238,7 @@ async def spawn_commis_async(
                         "tool_call_id": _tool_call_id,
                         "task": task[:100],
                         "model": commis_model,
+                        "backend": backend,
                         "owner_id": owner_id,
                         "trace_id": trace_id,
                     },
@@ -258,6 +261,7 @@ async def spawn_commis_async(
 async def spawn_standard_commis_async(
     task: str,
     model: str | None = None,
+    backend: str | None = None,
     *,
     _tool_call_id: str | None = None,
     _return_structured: bool = False,
@@ -279,6 +283,7 @@ async def spawn_standard_commis_async(
     return await spawn_commis_async(
         task=task,
         model=model,
+        backend=backend,
         execution_mode="standard",
         git_repo=None,
         _tool_call_id=_tool_call_id,
@@ -289,6 +294,7 @@ async def spawn_standard_commis_async(
 def spawn_commis(
     task: str,
     model: str | None = None,
+    backend: str | None = None,
 ) -> str:
     """Spawn a commis (deprecated standard mode wrapper).
 
@@ -296,13 +302,14 @@ def spawn_commis(
     """
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(spawn_standard_commis_async(task, model))
+    return run_async_safely(spawn_standard_commis_async(task, model, backend))
 
 
 async def spawn_workspace_commis_async(
     task: str,
     git_repo: str,
     model: str | None = None,
+    backend: str | None = None,
     resume_session_id: str | None = None,
     skills: list[str] | None = None,
     *,
@@ -317,7 +324,8 @@ async def spawn_workspace_commis_async(
     Args:
         task: What to do in the repository (analyze code, fix bug, etc)
         git_repo: Repository URL (https://github.com/org/repo.git or git@github.com:org/repo.git)
-        model: LLM model for the commis (optional)
+        model: Optional model override for the commis
+        backend: Optional backend override (zai/codex/gemini/bedrock/anthropic)
         resume_session_id: Life Hub session UUID to resume (for session continuity)
         skills: List of skill names to activate for the commis. The full
             skill content is resolved from the user's loaded skills and
@@ -369,6 +377,7 @@ async def spawn_workspace_commis_async(
     return await spawn_commis_async(
         task=task,
         model=model,
+        backend=backend,
         execution_mode="workspace",
         git_repo=git_repo,
         resume_session_id=resume_session_id,
@@ -382,13 +391,23 @@ def spawn_workspace_commis(
     task: str,
     git_repo: str,
     model: str | None = None,
+    backend: str | None = None,
     resume_session_id: str | None = None,
     skills: list[str] | None = None,
 ) -> str:
     """Sync wrapper for spawn_workspace_commis_async."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(spawn_workspace_commis_async(task, git_repo, model, resume_session_id, skills))
+    return run_async_safely(
+        spawn_workspace_commis_async(
+            task=task,
+            git_repo=git_repo,
+            model=model,
+            backend=backend,
+            resume_session_id=resume_session_id,
+            skills=skills,
+        )
+    )
 
 
 async def list_commiss_async(
