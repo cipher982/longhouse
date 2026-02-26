@@ -559,6 +559,11 @@ export default function SessionDetailPage() {
               <span className="timeline-title">Event Timeline</span>
               <span className="timeline-count">{events.length} events</span>
             </div>
+            {events.length > 20 && (
+              <div className="timeline-scroll-hint" role="note">
+                Tip: scroll anywhere in the viewport.
+              </div>
+            )}
 
             {/* Event role filter + search */}
             {events.length > 0 && (
