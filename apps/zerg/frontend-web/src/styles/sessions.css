@@ -916,11 +916,21 @@
     gap: var(--space-4);
   }
 
+  .session-timeline-controls {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: color-mix(in srgb, var(--color-void, #120B09) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-md);
+  }
+
   .timeline-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-bottom: var(--space-3);
+    padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--border-glass-1);
   }
 
@@ -1143,8 +1153,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid var(--border-glass-1);
+    padding: var(--space-3) var(--space-4) var(--space-2);
     flex-wrap: wrap;
   }
 
