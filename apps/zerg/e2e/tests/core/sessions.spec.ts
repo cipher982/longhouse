@@ -292,6 +292,69 @@ test.describe('Session Detail Page', () => {
 
     await expect(page.getByRole('button', { name: 'Resume Session' })).toHaveCount(0);
   });
+
+  test('scrolls from left and right gutters on timeline detail', async ({ page, request }) => {
+    const sessionId = randomUUID();
+    const now = Date.now();
+    const events = Array.from({ length: 80 }, (_, idx) => {
+      const timestamp = new Date(now + idx * 1000).toISOString();
+      return {
+        role: idx % 2 === 0 ? 'user' : 'assistant',
+        content_text: `Scroll regression event ${idx + 1}`,
+        timestamp,
+        source_path: '/tmp/session.jsonl',
+        source_offset: idx,
+      };
+    });
+
+    const ingest = await request.post('/api/agents/ingest', {
+      data: {
+        id: sessionId,
+        provider: 'claude',
+        environment: 'development',
+        project: 'scroll-gutter-e2e',
+        device_id: 'e2e-device',
+        cwd: '/tmp',
+        git_repo: null,
+        git_branch: null,
+        started_at: new Date(now).toISOString(),
+        ended_at: new Date(now + 79_000).toISOString(),
+        events,
+      },
+    });
+
+    expect(ingest.ok()).toBe(true);
+
+    await page.goto(`/timeline/${sessionId}`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+    await expect(page.locator('.timeline-events .event-item').first()).toBeVisible();
+
+    const shell = page.locator('.page-shell');
+    await expect(shell).toBeVisible();
+
+    const startTop = await shell.evaluate((el) => el.scrollTop);
+    const viewportHeight = await page.evaluate(() => window.innerHeight);
+    const gutterY = Math.max(120, Math.floor(viewportHeight * 0.5));
+
+    // Wheel from far-left viewport gutter.
+    await page.mouse.move(4, gutterY);
+    await page.mouse.wheel(0, 600);
+
+    await expect
+      .poll(async () => shell.evaluate((el) => el.scrollTop), { timeout: 4000 })
+      .toBeGreaterThan(startTop);
+
+    const afterLeft = await shell.evaluate((el) => el.scrollTop);
+
+    // Wheel from far-right viewport gutter.
+    const viewportWidth = await page.evaluate(() => window.innerWidth);
+    await page.mouse.move(Math.max(4, viewportWidth - 4), gutterY);
+    await page.mouse.wheel(0, 600);
+
+    await expect
+      .poll(async () => shell.evaluate((el) => el.scrollTop), { timeout: 4000 })
+      .toBeGreaterThan(afterLeft);
+  });
 });
 
 test.describe('Sessions Navigation', () => {
