@@ -1,26 +1,30 @@
 @layer pages {
   .page-shell {
     width: 100%;
-    margin: 0 auto;
     padding: var(--space-6);
     padding-bottom: var(--space-8); /* Extra space so content clears status bar */
     overflow-y: auto;
     min-height: 0; /* Required for flex children to respect overflow */
   }
 
-  .page-shell--narrow {
+  .page-shell-content {
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .page-shell-content--narrow {
     max-width: 1000px;
   }
 
-  .page-shell--normal {
+  .page-shell-content--normal {
     max-width: 1200px;
   }
 
-  .page-shell--wide {
+  .page-shell-content--wide {
     max-width: 1400px;
   }
 
-  .page-shell--full {
+  .page-shell-content--full {
     max-width: none;
   }
 
