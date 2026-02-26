@@ -17,6 +17,7 @@ import { oikosToolStore } from '../lib/oikos-tool-store'
 import { eventBus } from '../lib/event-bus'
 import config from '../../lib/config'
 import { useAuth } from '../../lib/auth'
+import { getQuotaUiState } from './lib/quota-ui'
 import { fetchUserUsage } from './lib/usage'
 
 console.info('[Oikos] Starting React application')
@@ -81,10 +82,7 @@ export default function App({ embedded = false }: AppProps) {
     refetchInterval: 30000,
     staleTime: 15000,
   })
-  const quotaBlocked = usageQuery.data?.limit.status === 'exceeded'
-  const blockedReason = quotaBlocked
-    ? 'Shared quota reached. Resets at 00:00 UTC. Add your key in Settings to continue.'
-    : null
+  const quotaUi = getQuotaUiState(usageQuery.data)
 
   // Debug panel toggle
   const handleToggleDebugPanel = useCallback(() => {
@@ -198,8 +196,9 @@ export default function App({ embedded = false }: AppProps) {
           <TextInput
             onSend={textChannel.sendMessage}
             disabled={textChannel.isSending}
-            inputDisabled={quotaBlocked}
-            blockedReason={blockedReason}
+            inputDisabled={quotaUi.blocked}
+            blockedReason={quotaUi.placeholderOverride}
+            helperText={quotaUi.helperText}
             micStatus={micStatus}
             micLevel={turnBasedVoice.micLevel}
             onMicConnect={turnBasedVoice.resetVoice}
