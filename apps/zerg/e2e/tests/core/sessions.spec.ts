@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import type { APIRequestContext } from '@playwright/test';
 import { test, expect, type Page } from '../fixtures';
 
 async function ensureDemoProviders(page: Page): Promise<void> {
@@ -41,6 +42,47 @@ async function ensureDemoProviders(page: Page): Promise<void> {
   }
 
   await expect(providerSelect.locator('option[value="claude"]')).toHaveCount(1, { timeout: 15000 });
+}
+
+async function ingestSession(
+  request: APIRequestContext,
+  overrides: Partial<{
+    id: string;
+    provider: string;
+    project: string;
+    provider_session_id: string;
+  }> = {},
+): Promise<string> {
+  const sessionId = overrides.id || randomUUID();
+  const timestamp = new Date().toISOString();
+
+  const ingest = await request.post('/api/agents/ingest', {
+    data: {
+      id: sessionId,
+      provider: overrides.provider || 'claude',
+      environment: 'development',
+      project: overrides.project || 'sessions-e2e',
+      device_id: 'e2e-device',
+      cwd: '/tmp',
+      git_repo: null,
+      git_branch: null,
+      provider_session_id: overrides.provider_session_id || 'claude-session-e2e',
+      started_at: timestamp,
+      ended_at: timestamp,
+      events: [
+        {
+          role: 'user',
+          content_text: 'hello',
+          timestamp,
+          source_path: '/tmp/session.jsonl',
+          source_offset: 0,
+        },
+      ],
+    },
+  });
+
+  expect(ingest.ok()).toBe(true);
+  return sessionId;
 }
 
 test.describe('Sessions Page', () => {
@@ -217,6 +259,38 @@ test.describe('Session Detail Page', () => {
 
     // Should be back on sessions list
     await expect(page).toHaveURL('/timeline');
+  });
+
+  test('Resume Session opens chat overlay for Claude sessions', async ({ page, request }) => {
+    const sessionId = await ingestSession(request, {
+      provider: 'claude',
+      project: 'resume-e2e',
+      provider_session_id: 'resume-session-e2e',
+    });
+
+    await page.goto(`/timeline/${sessionId}`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+
+    await expect(page.getByRole('button', { name: 'Resume Session' })).toBeVisible();
+    await page.getByRole('button', { name: 'Resume Session' }).click();
+
+    await expect(page.locator('.session-chat')).toBeVisible();
+    await expect(page.locator('.session-chat-empty')).toContainText('Context from previous turns');
+
+    await page.locator('.session-chat-back').click();
+    await expect(page.locator('.timeline-header')).toContainText('Event Timeline');
+  });
+
+  test('Resume Session action is hidden for non-Claude sessions', async ({ page, request }) => {
+    const sessionId = await ingestSession(request, {
+      provider: 'codex',
+      project: 'resume-hidden-e2e',
+    });
+
+    await page.goto(`/timeline/${sessionId}`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+
+    await expect(page.getByRole('button', { name: 'Resume Session' })).toHaveCount(0);
   });
 });
 

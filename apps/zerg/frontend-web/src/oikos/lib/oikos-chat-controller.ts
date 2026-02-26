@@ -90,6 +90,60 @@ export interface OikosChatConfig {
   retryDelay?: number;
 }
 
+type QuotaHint = {
+  kind: 'run_cap' | 'budget';
+  scope?: 'user' | 'global';
+  used?: number;
+  limit?: number;
+  unit?: 'runs' | 'usd';
+};
+
+function parseQuotaHint(message: string): QuotaHint | null {
+  const text = message.toLowerCase();
+  if (!text.includes('daily') || !(text.includes('limit') || text.includes('budget'))) {
+    return null;
+  }
+
+  const runMatch = message.match(/Daily run limit reached\s*\((\d+)\/(\d+)\)/i);
+  if (runMatch) {
+    return {
+      kind: 'run_cap',
+      used: Number(runMatch[1]),
+      limit: Number(runMatch[2]),
+      unit: 'runs',
+    };
+  }
+
+  const budgetMatch = message.match(/Daily (user|global) budget exhausted\s*\(\$([0-9.]+)\/\$([0-9.]+)\)/i);
+  if (budgetMatch) {
+    return {
+      kind: 'budget',
+      scope: budgetMatch[1].toLowerCase() as 'user' | 'global',
+      used: Number(budgetMatch[2]),
+      limit: Number(budgetMatch[3]),
+      unit: 'usd',
+    };
+  }
+
+  return null;
+}
+
+function formatQuotaMessage(hint: QuotaHint | null, fallback: string): string {
+  if (!hint) return fallback;
+  const reset = 'Resets at 00:00 UTC.';
+
+  if (hint.kind === 'run_cap' && hint.used !== undefined && hint.limit !== undefined) {
+    return `Daily shared run cap reached (${hint.used}/${hint.limit}). ${reset}`;
+  }
+
+  if (hint.kind === 'budget' && hint.used !== undefined && hint.limit !== undefined) {
+    const scope = hint.scope || 'shared';
+    return `Daily ${scope} budget reached ($${hint.used.toFixed(2)}/$${hint.limit.toFixed(2)}). ${reset}`;
+  }
+
+  return `${fallback} ${reset}`;
+}
+
 export class OikosChatController {
   private config: OikosChatConfig;
   private currentAbortController: AbortController | null = null;
@@ -305,7 +359,18 @@ export class OikosChatController {
     });
 
     if (!response.ok) {
-      throw new Error(`Chat request failed: ${response.status} ${response.statusText}`);
+      let detail = `${response.status} ${response.statusText}`;
+      try {
+        const body = await response.json();
+        if (body && typeof body === 'object' && 'detail' in body) {
+          detail = String((body as { detail?: unknown }).detail ?? detail);
+        } else if (body && typeof body === 'object' && 'error' in body) {
+          detail = String((body as { error?: unknown }).error ?? detail);
+        }
+      } catch {
+        // Keep status text when response body is not JSON.
+      }
+      throw new Error(detail);
     }
 
     const body = response.body;
@@ -691,10 +756,20 @@ export class OikosChatController {
       case 'error': {
         const payload = wrapper.payload as ErrorPayload;
         logger.error('[OikosChat] Oikos error:', payload.error || payload.message);
-        const errorMsg = payload.error || payload.message || 'Unknown error';
-        stateManager.showToast(`Error: ${errorMsg}`, 'error');
+        const rawError = payload.error || payload.message || 'Unknown error';
+        const quotaHint = parseQuotaHint(rawError);
+        const errorMsg = formatQuotaMessage(quotaHint, rawError);
+        stateManager.showToast(errorMsg, 'error');
 
-        if (this.currentMessageId) {
+        if (this.currentMessageId && quotaHint) {
+          stateManager.updateAssistantStatusByMessageId(
+            this.currentMessageId,
+            'final',
+            `${errorMsg} Add your own provider key in Settings to bypass shared limits.`,
+            undefined,
+            this.currentRunId ?? undefined,
+          );
+        } else if (this.currentMessageId) {
           stateManager.updateAssistantStatusByMessageId(this.currentMessageId, 'error');
         }
 

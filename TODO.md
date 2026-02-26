@@ -17,6 +17,41 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ---
 
+## [QA/Test] Verify Session Resume End-to-End (size: 4)
+
+Status (2026-02-26): Core verification shipped.
+
+**Goal:** Validate the core promise ("resume from any device") with deterministic E2E coverage and fix any behavioral gaps discovered.
+
+- [x] Run targeted resume E2E coverage and capture current failures
+- [x] Fix resume path regressions (backend and/or frontend) found by E2E (none found in current flow)
+- [x] Add/adjust assertions so resume guarantees are explicit (not implied by generic session continuity)
+- [x] Ship with passing `make test-e2e-single TEST=tests/core/session-continuity.spec.ts` and `make test-e2e`
+
+Notes (2026-02-26):
+- Added user-facing resume coverage in `apps/zerg/e2e/tests/core/sessions.spec.ts`:
+  - Claude sessions show `Resume Session` and open the chat overlay
+  - Non-Claude sessions hide `Resume Session`
+
+---
+
+## [Docs/Drift] Resolve VISION Contradictions (size: 1)
+
+Status (2026-02-26): Done.
+
+- [x] Updated Principles section to cloud-first CTA (hosted primary; self-hosted supported)
+- [x] Replaced old "Oikos main chat" ASCII diagram with timeline/session-first product diagram
+
+---
+
+## [Product] Quota Error UX in Oikos Chat (size: 2)
+
+Status (2026-02-26): Done (initial polish).
+
+- [x] Parse 429 JSON detail in Oikos chat requests (don't discard backend detail)
+- [x] Convert run-cap/budget errors into clear reset-time messaging
+- [x] Show quota context in-chat for the active assistant bubble instead of raw generic failure
+
 ## [Tech Debt] Commis model selection — remove implicit defaults (size: 3)
 
 Status (2026-02-26): Done (shipped in `c0872450`).

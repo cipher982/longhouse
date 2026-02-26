@@ -102,7 +102,7 @@ The shipper is one-directional and that's fine — it's the gateway, not the pro
 
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
 - **Lossless logs are sacred.** The agent session history is not disposable.
-- **Dual-path story**: hosted and self-hosted are equal in positioning and CTA.
+- **Cloud-first CTA**: hosted is the primary path; self-hosted remains fully supported for users who want to run their own infra.
 - **Progressive disclosure**: keep primary docs short and link to deeper runbooks; AGENTS.md must point to what else to read.
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
@@ -1392,19 +1392,17 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 │  LONGHOUSE (runs 24/7 on VPS / homelab / Mac mini)               │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Oikos (main chat)           Commis Pool (background)       │
-│  ┌─────────────────┐         ┌────────────────────────┐     │
-│  │ "Convert that   │────────▶│ Commis 1: cloning...   │     │
-│  │  repo to Rust"  │         │ Commis 2: writing tests│     │
-│  │                 │         │ Commis 3: reviewing PR │     │
-│  │ "Status on the  │◀────────│ Commis 4: (idle)       │     │
-│  │  PR from earlier"│        │ Commis 5: deploying... │     │
-│  └─────────────────┘         └────────────────────────┘     │
-│         ▲                            ▲                      │
-│    [Phone/Web]                  [Sauron crons]              │
+│  Timeline (primary surface)      Agent Sessions (always-on) │
+│  ┌─────────────────────────┐     ┌────────────────────────┐  │
+│  │ Search all work         │     │ Claude/Codex/Gemini    │  │
+│  │ See what's running now  │────▶│ keep running in cloud  │  │
+│  │ Resume from any device  │◀────│ and talk to each other │  │
+│  └─────────────────────────┘     └────────────────────────┘  │
+│            ▲                              ▲                  │
+│       [Web + Phone]             Oikos (receptionist layer)   │
 │                                                             │
-│  Timeline: searchable archive of all sessions               │
-│  Resume: continue any session from any device               │
+│  Oikos is optional UX glue, not the core product surface    │
+│  The moat is resumable, communicating, always-on sessions   │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
