@@ -15,6 +15,43 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+---
+
+## [Tech Debt] Commis model selection — remove implicit defaults (size: 3)
+
+**Problem:** `DEFAULT_COMMIS_MODEL_ID` resolves via `models.json` tiers to `gpt-5.2` (OpenAI). This gets stored on `CommisJob.model` and passed as `--model gpt-5.2` to hatch, which passes it to Claude Code CLI — nonsensical for non-OpenAI backends. Two spawn paths are both broken:
+- `oikos_tools.py:103` — falls back to `DEFAULT_COMMIS_MODEL_ID`
+- `oikos_react_engine.py:615` — hardcoded fallback to `"gpt-5-mini"`
+
+`CloudExecutor` always passes `--model`, so hatch backend defaults never kick in.
+
+**Fix:**
+Make `model` an explicit override only, not a forced default. New execution logic in `cloud_executor.py`:
+- `backend + model` both provided → pass both (`-b <backend> --model <model>`)
+- `backend` only → pass `-b` only, let hatch pick the backend's default model
+- `model` only → infer backend via compat mapping (see below)
+- neither → full hatch defaults (zai + glm-5)
+
+**Backend ↔ model compat mapping** (for backward compat when bare model ID is passed):
+- `gpt-*`, `o1-*`, `o3-*`, `o4-*` → `codex` backend
+- `claude-*`, `us.anthropic.*` → `bedrock` backend (or direct anthropic if key available)
+- `glm-*` → `zai` backend
+- `gemini-*` → `gemini` backend
+- anything else → error loudly, don't silently use wrong backend
+
+**Files to change:**
+- `apps/zerg/backend/zerg/tools/builtin/oikos_tools.py:103` — remove `DEFAULT_COMMIS_MODEL_ID` fallback
+- `apps/zerg/backend/zerg/services/oikos_react_engine.py:615,704` — remove `"gpt-5-mini"` hardcode
+- `apps/zerg/backend/zerg/services/cloud_executor.py:75,203` — implement new logic (backend-only path)
+- `apps/zerg/backend/zerg/models_config.py:182` — remove or deprecate `DEFAULT_COMMIS_MODEL_ID`
+- `apps/zerg/backend/zerg/models/models.py:220` — keep `CommisJob.model` nullable (don't rebuild SQLite table; just allow None)
+
+**Don't:** make `CommisJob.model` NOT NULL migration on SQLite — table rebuild is risky. Just allow None and skip `--model` flag when absent.
+
+**Tests to write first** (`tests_lite/`): no backend tests exist for the commis→cloud_executor→hatch path. Add at least: model+backend passed → correct hatch args; backend-only → no --model flag; unknown model → error.
+
+---
+
 ~~**[Tech Debt] Reconcile historical Codex orphan sessions (size: 3)**~~ Done (2026-02-25). 129 orphans merged (7,446 events re-parented) via `scripts/fix_codex_orphan_sessions.py`. Used `source_path` filename to extract canonical UUID — no time-window ambiguity. Prod DB updated, 0 null-project Codex sessions remain.
 
 
