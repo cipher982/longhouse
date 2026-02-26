@@ -354,7 +354,7 @@ class AgentsStore:
             if result.rowcount > 0:
                 events_inserted += 1
                 # Track counts
-                if event_data.role == "user":
+                if event_data.role == "user" and (event_data.content_text or "").strip().lower() != "warmup":
                     user_count += 1
                 elif event_data.role == "assistant":
                     if event_data.tool_name:

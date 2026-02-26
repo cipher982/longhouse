@@ -612,6 +612,8 @@ async def _generate_summary_impl(session_id: str) -> None:
         meaningful_count = sum(1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text"))
         if meaningful_count < 2:
             logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
+            # Set a structured title so the session doesn't show "Generating summary..." forever
+            await _set_structured_title_if_empty(session_id)
             return
 
         # Track the last event ID processed — becomes the new cursor
