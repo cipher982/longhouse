@@ -15,8 +15,10 @@ export const PageShell: React.FC<PageShellProps> = ({
   children,
 }) => {
   return (
-    <div className={clsx('page-shell', `page-shell--${size}`, className)}>
-      {children}
+    <div className="page-shell">
+      <div className={clsx('page-shell-content', `page-shell-content--${size}`, className)}>
+        {children}
+      </div>
     </div>
   );
 };
