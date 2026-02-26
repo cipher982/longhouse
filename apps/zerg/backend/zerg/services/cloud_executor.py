@@ -32,11 +32,12 @@ logger = logging.getLogger(__name__)
 # Default timeout for commis execution (1 hour)
 DEFAULT_TIMEOUT_SECONDS = 3600
 
-# Default model for cloud execution (backend/model format)
-# Using z.ai to avoid AWS SSO credential complexity
+# Legacy default model retained for optional explicit use.
+# By default we now pass no backend/model flags and let hatch choose defaults.
 DEFAULT_CLOUD_MODEL = "zai/glm-4.7"
 
-CLAUDE_BACKENDS = {"zai", "bedrock"}
+CLAUDE_BACKENDS = {"zai", "bedrock", "anthropic"}
+KNOWN_BACKENDS = {"zai", "codex", "gemini", "bedrock", "anthropic"}
 CLAUDE_OUTPUT_FORMAT_ENV = "HATCH_CLAUDE_OUTPUT_FORMAT"
 CLAUDE_INCLUDE_PARTIAL_ENV = "HATCH_CLAUDE_INCLUDE_PARTIAL_MESSAGES"
 ALLOWED_CLAUDE_OUTPUT_FORMATS = {"text", "json", "stream-json"}
@@ -72,23 +73,78 @@ def _coerce_bool(value: str | bool | None) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def normalize_model_id(model: str) -> tuple[str, str]:
-    """Convert Zerg model ID to hatch backend and model name.
+def _infer_backend_for_model(model: str) -> str:
+    """Infer hatch backend from an unqualified model ID."""
+    lowered = model.lower()
+    if lowered.startswith(("gpt-", "o1-", "o3-", "o4-")):
+        return "codex"
+    if lowered.startswith("claude-") or lowered.startswith("us.anthropic."):
+        return "anthropic" if os.environ.get("ANTHROPIC_API_KEY") else "bedrock"
+    if lowered.startswith("glm-"):
+        return "zai"
+    if lowered.startswith("gemini-"):
+        return "gemini"
+    raise ValueError(
+        f"Unknown model '{model}'. Provide backend explicitly (e.g. backend='zai') "
+        "or use a recognized model prefix (gpt-/o1-/o3-/o4-/claude-/us.anthropic./glm-/gemini-)."
+    )
 
-    Returns (backend, model_name) tuple suitable for hatch CLI args.
-    If model already has a provider prefix (contains '/'), parses it.
-    Otherwise, looks up in MODEL_MAPPING or defaults to zai backend.
-    """
+
+def normalize_model_id(model: str) -> tuple[str, str]:
+    """Normalize a model-only override into (backend, model_name)."""
     if "/" in model:
         backend, model_name = model.split("/", 1)
         return backend, model_name
 
-    if model in MODEL_MAPPING:
-        backend, model_name = MODEL_MAPPING[model].split("/", 1)
+    mapped = MODEL_MAPPING.get(model)
+    if mapped:
+        backend, model_name = mapped.split("/", 1)
         return backend, model_name
 
-    # Default to zai backend for unknown models
-    return "zai", model
+    return _infer_backend_for_model(model), model
+
+
+def resolve_backend_and_model(model: str | None, backend: str | None) -> tuple[str | None, str | None]:
+    """Resolve optional backend/model inputs into hatch CLI flags.
+
+    Rules:
+    - backend + model -> pass both
+    - backend only -> pass backend only
+    - model only -> infer backend via compat mapping/prefixes
+    - neither -> pass neither (hatch defaults)
+    """
+    normalized_backend = backend.strip() if backend and backend.strip() else None
+    normalized_model = model.strip() if model and model.strip() else None
+
+    if normalized_backend and normalized_backend not in KNOWN_BACKENDS:
+        raise ValueError(f"Unknown backend '{normalized_backend}'. Supported backends: {sorted(KNOWN_BACKENDS)}")
+
+    if normalized_backend and normalized_model:
+        if "/" in normalized_model:
+            embedded_backend, embedded_model = normalized_model.split("/", 1)
+            if embedded_backend != normalized_backend:
+                raise ValueError("Conflicting backend inputs: " f"backend='{normalized_backend}' but model='{normalized_model}'")
+            normalized_model = embedded_model
+        return normalized_backend, normalized_model
+
+    if normalized_backend:
+        return normalized_backend, None
+
+    if normalized_model:
+        return normalize_model_id(normalized_model)
+
+    return None, None
+
+
+def _format_selected_model(backend: str | None, model: str | None) -> str:
+    """Format selected execution target for logs/results."""
+    if backend and model:
+        return f"{backend}/{model}"
+    if backend:
+        return f"{backend}/(default)"
+    if model:
+        return model
+    return "(hatch-default)"
 
 
 @dataclass
@@ -111,7 +167,7 @@ class CloudExecutor:
     def __init__(
         self,
         hatch_path: str | None = None,
-        default_model: str = DEFAULT_CLOUD_MODEL,
+        default_model: str | None = None,
         claude_output_format: str | None = None,
         include_partial_messages: bool | None = None,
     ):
@@ -122,7 +178,8 @@ class CloudExecutor:
         hatch_path
             Path to hatch executable. If None, uses 'hatch' from PATH.
         default_model
-            Default model to use if not specified in run_commis().
+            Optional legacy model default to use when run_commis() does not
+            pass model/backend overrides. Leave unset to use hatch defaults.
         claude_output_format
             Optional Claude output format override (text/json/stream-json).
             Defaults to env var HATCH_CLAUDE_OUTPUT_FORMAT when unset.
@@ -152,6 +209,7 @@ class CloudExecutor:
         workspace_path: str | Path,
         *,
         model: str | None = None,
+        backend: str | None = None,
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
         env_vars: dict[str, str] | None = None,
         resume_session_id: str | None = None,
@@ -171,7 +229,10 @@ class CloudExecutor:
         workspace_path
             Directory where commis should run (working directory)
         model
-            LLM model to use (default: zai/glm-4.7)
+            Optional model override. If backend is omitted, backend is inferred.
+        backend
+            Optional backend override (zai/codex/gemini/bedrock/anthropic).
+            If provided without model, hatch backend defaults are used.
         timeout
             Maximum execution time in seconds (default: 3600 = 1 hour)
         env_vars
@@ -190,34 +251,52 @@ class CloudExecutor:
         or at the configured hatch_path. On zerg-vps, installed via uv tool.
         """
         workspace = Path(workspace_path)
-        # Normalize model ID to backend/model tuple for hatch
-        raw_model = model or self.default_model
-        backend, model_name = normalize_model_id(raw_model)
+        # Resolve backend/model selection.
+        # If both are omitted, we pass no flags and let hatch defaults apply.
+        raw_model = model if model is not None else self.default_model
+        requested_target = _format_selected_model(backend, raw_model)
+        try:
+            resolved_backend, resolved_model = resolve_backend_and_model(raw_model, backend)
+        except ValueError as exc:
+            return CloudExecutionResult(
+                status="failed",
+                output="",
+                error=str(exc),
+                exit_code=-1,
+                model=requested_target,
+                started_at=datetime.now(timezone.utc),
+                finished_at=datetime.now(timezone.utc),
+            )
+
+        selected_target = _format_selected_model(resolved_backend, resolved_model)
+        backend_for_options = resolved_backend or "zai"
         started_at = datetime.now(timezone.utc)
 
-        logger.info(f"Starting cloud execution in {workspace} with backend={backend}, model={model_name}")
+        logger.info(
+            "Starting cloud execution in %s with backend=%s model=%s",
+            workspace,
+            resolved_backend or "(hatch-default)",
+            resolved_model or "(hatch-default)",
+        )
         logger.debug(f"Task: {task[:200]}...")
 
         # Build command for hatch CLI
-        # hatch -b <backend> --model <model> -C <workspace> [--resume <id>] "<prompt>"
-        cmd = [
-            self.hatch_path,
-            "-b",
-            backend,
-            "--model",
-            model_name,
-            "-C",
-            str(workspace),
-        ]
+        # hatch [-b <backend>] [--model <model>] -C <workspace> [--resume <id>] "<prompt>"
+        cmd = [self.hatch_path]
+        if resolved_backend:
+            cmd.extend(["-b", resolved_backend])
+        if resolved_model:
+            cmd.extend(["--model", resolved_model])
+        cmd.extend(["-C", str(workspace)])
 
-        if self.claude_output_format and backend in CLAUDE_BACKENDS:
+        if self.claude_output_format and backend_for_options in CLAUDE_BACKENDS:
             cmd.extend(["--output-format", self.claude_output_format])
 
-        if self.include_partial_messages and backend in CLAUDE_BACKENDS:
+        if self.include_partial_messages and backend_for_options in CLAUDE_BACKENDS:
             cmd.append("--include-partial-messages")
 
         # Add resume flag for session continuity (Claude backends only)
-        if resume_session_id and backend in CLAUDE_BACKENDS:
+        if resume_session_id and backend_for_options in CLAUDE_BACKENDS:
             cmd.extend(["--resume", resume_session_id])
 
         cmd.append(task)
@@ -234,7 +313,7 @@ class CloudExecutor:
                 output="",
                 error=f"Workspace directory does not exist: {workspace}",
                 exit_code=-1,
-                model=f"{backend}/{model_name}",
+                model=selected_target,
                 started_at=started_at,
                 finished_at=datetime.now(timezone.utc),
             )
@@ -273,7 +352,7 @@ class CloudExecutor:
                     error=f"Execution timed out after {timeout} seconds",
                     exit_code=-1,
                     duration_ms=duration_ms,
-                    model=f"{backend}/{model_name}",
+                    model=selected_target,
                     started_at=started_at,
                     finished_at=finished_at,
                 )
@@ -300,7 +379,7 @@ class CloudExecutor:
                     error=error_output if error_output else None,
                     exit_code=proc.returncode,
                     duration_ms=duration_ms,
-                    model=f"{backend}/{model_name}",
+                    model=selected_target,
                     started_at=started_at,
                     finished_at=finished_at,
                 )
@@ -312,7 +391,7 @@ class CloudExecutor:
                     error=error_output or f"Exit code: {proc.returncode}",
                     exit_code=proc.returncode,
                     duration_ms=duration_ms,
-                    model=f"{backend}/{model_name}",
+                    model=selected_target,
                     started_at=started_at,
                     finished_at=finished_at,
                 )
@@ -324,7 +403,7 @@ class CloudExecutor:
                 output="",
                 error=f"hatch executable not found at: {self.hatch_path}",
                 exit_code=-1,
-                model=f"{backend}/{model_name}",
+                model=selected_target,
                 started_at=started_at,
                 finished_at=datetime.now(timezone.utc),
             )
@@ -335,7 +414,7 @@ class CloudExecutor:
                 output="",
                 error=str(e),
                 exit_code=-1,
-                model=f"{backend}/{model_name}",
+                model=selected_target,
                 started_at=started_at,
                 finished_at=datetime.now(timezone.utc),
             )

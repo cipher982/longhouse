@@ -612,7 +612,6 @@ async def _handle_spawn_calls(
     db = resolver.db
     oikos_run_id = ctx.run_id if ctx else None
     trace_id = ctx.trace_id if ctx else None
-    commis_model = (ctx.model if ctx else None) or "gpt-5-mini"
     commis_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
 
     created_jobs: list[dict] = []
@@ -621,6 +620,7 @@ async def _handle_spawn_calls(
         tool_args = tc.get("args", {})
         task = tool_args.get("task", "")
         model_override = tool_args.get("model")
+        backend_override = tool_args.get("backend")
         git_repo = tool_args.get("git_repo")
         resume_session_id = tool_args.get("resume_session_id")
         tool_call_id = tc.get("id", "")
@@ -634,13 +634,17 @@ async def _handle_spawn_calls(
                 job_config["resume_session_id"] = resume_session_id
         elif resume_session_id:
             job_config = {"resume_session_id": resume_session_id}
+        if backend_override:
+            if job_config is None:
+                job_config = {}
+            job_config["backend"] = backend_override
 
         if emitter:
             await emitter.emit_tool_started(
                 tool_name="spawn_commis",
                 tool_call_id=tool_call_id,
                 tool_args_preview=task[:100],
-                tool_args={"task": task, "model": model_override},
+                tool_args={"task": task, "model": model_override, "backend": backend_override},
             )
 
         try:
@@ -701,7 +705,7 @@ async def _handle_spawn_calls(
                 tool_call_id=tool_call_id,
                 trace_id=uuid_module.UUID(trace_id) if trace_id else None,
                 task=task,
-                model=model_override or commis_model,
+                model=model_override,
                 reasoning_effort=commis_reasoning_effort,
                 status="created",
                 config=job_config,

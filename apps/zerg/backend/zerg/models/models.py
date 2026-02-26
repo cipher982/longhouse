@@ -25,7 +25,6 @@ from sqlalchemy.sql import func
 # Local helpers / enums
 from zerg.database import Base
 from zerg.models.types import GUID
-from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 
 from .connector import Connector  # noqa: E402, F401
 
@@ -217,7 +216,8 @@ class CommisJob(Base):
 
     # Job specification
     task = Column(Text, nullable=False)
-    model = Column(String(100), nullable=False, default=DEFAULT_COMMIS_MODEL_ID)
+    # Optional explicit model override. When null, hatch backend/default model is used.
+    model = Column(String(100), nullable=True, default=None)
     reasoning_effort = Column(String(20), nullable=True, default="none")  # none, low, medium, high
 
     # Flexible execution configuration (workspace execution, git repo, etc.)

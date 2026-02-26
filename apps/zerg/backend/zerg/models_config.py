@@ -179,6 +179,8 @@ TIER_3: str = _TIERS["TIER_3"]  # Basic, cheapest (gpt-5-nano)
 # =============================================================================
 
 DEFAULT_MODEL_ID: str = _resolve_model_reference(_DEFAULTS["fiche"], source="defaults.text.fiche")
+# Deprecated: commis model is now an explicit override only.
+# Keep this for legacy scripts; runtime commis execution no longer relies on it.
 DEFAULT_COMMIS_MODEL_ID: str = _resolve_model_reference(_DEFAULTS["commis"], source="defaults.text.commis")
 TEST_MODEL_ID: str = _resolve_model_reference(_DEFAULTS["test"], source="defaults.text.test")
 

@@ -19,6 +19,8 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Tech Debt] Commis model selection — remove implicit defaults (size: 3)
 
+Status (2026-02-26): In progress.
+
 **Problem:** `DEFAULT_COMMIS_MODEL_ID` resolves via `models.json` tiers to `gpt-5.2` (OpenAI). This gets stored on `CommisJob.model` and passed as `--model gpt-5.2` to hatch, which passes it to Claude Code CLI — nonsensical for non-OpenAI backends. Two spawn paths are both broken:
 - `oikos_tools.py:103` — falls back to `DEFAULT_COMMIS_MODEL_ID`
 - `oikos_react_engine.py:615` — hardcoded fallback to `"gpt-5-mini"`

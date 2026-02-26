@@ -523,6 +523,7 @@ class CommisJobProcessor:
             job_trace_id = str(job.trace_id) if job.trace_id else None
             job_started_at = job.started_at or datetime.now(timezone.utc)
             job_config = job.config or {}
+            job_backend = job_config.get("backend")
             git_repo = job_config.get("git_repo")
             resume_session_id = job_config.get("resume_session_id")
 
@@ -667,6 +668,7 @@ class CommisJobProcessor:
                 task=job_task,
                 workspace_path=workspace_path,
                 model=job_model,
+                backend=job_backend,
                 resume_session_id=prepared_resume_id,
                 env_vars=hook_env,
             )
