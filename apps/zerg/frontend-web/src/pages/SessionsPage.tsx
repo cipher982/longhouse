@@ -408,6 +408,10 @@ export default function SessionsPage() {
   const [project, setProject] = useState(searchParams.get("project") || "");
   const [provider, setProvider] = useState(searchParams.get("provider") || "");
   const [environment, setEnvironment] = useState(searchParams.get("environment") || "");
+  // hide_autonomous defaults true; only false when URL param is explicitly "false"
+  const [hideAutonomous, setHideAutonomous] = useState(
+    searchParams.get("hide_autonomous") !== "false"
+  );
   const [daysBack, setDaysBack] = useState(
     Number(searchParams.get("days_back")) || 14
   );
@@ -436,7 +440,8 @@ export default function SessionsPage() {
     searchParams.get("project") ||
     searchParams.get("provider") ||
     searchParams.get("environment") ||
-    (searchParams.get("days_back") && Number(searchParams.get("days_back")) !== 14)
+    (searchParams.get("days_back") && Number(searchParams.get("days_back")) !== 14) ||
+    searchParams.get("hide_autonomous") === "false"
   );
   const [filtersOpen, setFiltersOpen] = useState(hasUrlFilters);
   const [recallOpen, setRecallOpen] = useState(false);
@@ -478,8 +483,9 @@ export default function SessionsPage() {
     if (debouncedQuery) params.set("query", debouncedQuery);
     if (aiSearch) params.set("mode", "hybrid");
     if (debouncedQuery && sortOrder !== "relevant") params.set("sort", sortOrder);
+    if (!hideAutonomous) params.set("hide_autonomous", "false");
     setSearchParams(params, { replace: true });
-  }, [project, provider, environment, daysBack, debouncedQuery, aiSearch, sortOrder, setSearchParams]);
+  }, [project, provider, environment, daysBack, debouncedQuery, aiSearch, sortOrder, hideAutonomous, setSearchParams]);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -498,8 +504,9 @@ export default function SessionsPage() {
       limit,
       mode: searchMode === "keyword" ? undefined : searchMode,
       sort: debouncedQuery ? (sortOrder === "recent" ? "recency" : "relevance") : undefined,
+      hide_autonomous: hideAutonomous ? undefined : false,
     }),
-    [project, provider, environment, daysBack, debouncedQuery, limit, aiSearch, sortOrder]
+    [project, provider, environment, daysBack, debouncedQuery, limit, aiSearch, sortOrder, hideAutonomous]
   );
 
   // Single unified query — no dual-fetch fallback logic needed.
@@ -647,6 +654,7 @@ export default function SessionsPage() {
     provider,
     environment,
     daysBack !== 14 ? "active" : "",
+    !hideAutonomous ? "active" : "",
   ].filter(Boolean).length;
 
   // Ready signal for E2E
@@ -1019,6 +1027,14 @@ export default function SessionsPage() {
               onChange={setEnvironment}
             />
             <DaysSelect value={daysBack} onChange={setDaysBack} />
+            <label className="sessions-filter-toggle-label">
+              <input
+                type="checkbox"
+                checked={!hideAutonomous}
+                onChange={(e) => setHideAutonomous(!e.target.checked)}
+              />
+              show autonomous
+            </label>
           </div>
         )}
 
