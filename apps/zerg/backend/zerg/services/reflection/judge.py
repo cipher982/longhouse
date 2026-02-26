@@ -158,7 +158,6 @@ async def analyze_sessions(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             response_format={"type": "json_object"},
-            extra_body={"metadata": {"source": "longhouse:reflection"}},
         )
 
         usage = {

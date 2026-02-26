@@ -274,7 +274,6 @@ class OpenAIChat:
         params: dict[str, Any] = {
             "model": self._model,
             "messages": openai_messages,
-            "extra_body": {"metadata": {"source": "longhouse:oikos"}},
         }
 
         # Add tools if bound

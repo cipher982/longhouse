@@ -130,7 +130,6 @@ class STTService:
                 response_format="json",
                 prompt=prompt,
                 language=language,
-                extra_body={"metadata": {"source": "longhouse:stt"}},
             )
         except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to caller
             logger.exception("STT: transcription failed")
