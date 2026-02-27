@@ -145,6 +145,39 @@ def test_parallel_tool_calls_linked_correctly(tmp_path):
         api_app.dependency_overrides.clear()
 
 
+def test_parallel_tool_results_not_deduplicated(tmp_path):
+    """Two tool results with the same timestamp must both be stored (hash must differ)."""
+    client, _ = _make_client(tmp_path)
+    try:
+        session_id = "aaaaaaaa-0000-0000-0000-000000000004"
+        _ingest_session(client, session_id, [
+            {"role": "assistant", "tool_name": "Bash",
+             "tool_call_id": "toolu_A", "timestamp": "2026-01-01T00:00:01Z"},
+            {"role": "assistant", "tool_name": "Read",
+             "tool_call_id": "toolu_B", "timestamp": "2026-01-01T00:00:01Z"},
+            # Same timestamp, different output + tool_call_id — must NOT be deduped
+            {"role": "tool", "tool_output_text": "output A",
+             "tool_call_id": "toolu_A", "timestamp": "2026-01-01T00:00:02Z"},
+            {"role": "tool", "tool_output_text": "output B",
+             "tool_call_id": "toolu_B", "timestamp": "2026-01-01T00:00:02Z"},
+        ])
+
+        resp = client.get(
+            f"/agents/sessions/{session_id}/events",
+            headers={"X-Agents-Token": "dev"},
+        )
+        events = resp.json()["events"]
+        assert len(events) == 4, f"Expected 4 events, got {len(events)} — dedup collapsed parallel results"
+
+        results = [e for e in events if e["role"] == "tool"]
+        assert len(results) == 2
+        outputs = {e["tool_call_id"]: e["tool_output_text"] for e in results}
+        assert outputs["toolu_A"] == "output A"
+        assert outputs["toolu_B"] == "output B"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_legacy_events_without_tool_call_id_still_ingest(tmp_path):
     """Events without tool_call_id (pre-fix legacy rows) ingest without error."""
     client, _ = _make_client(tmp_path)

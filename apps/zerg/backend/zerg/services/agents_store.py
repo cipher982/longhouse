@@ -257,6 +257,8 @@ class AgentsStore:
                 "content_text": event.content_text,
                 "tool_name": event.tool_name,
                 "tool_input_json": event.tool_input_json,
+                "tool_output_text": event.tool_output_text,
+                "tool_call_id": event.tool_call_id,
                 "timestamp": event.timestamp.isoformat(),
             },
             sort_keys=True,
