@@ -589,7 +589,7 @@
 }
 
 .oikos-container .text-input-helper--blocked {
-  color: #e0b4a8;
+  color: var(--color-intent-warning);
 }
 
 .oikos-container .send-button:hover:not(:disabled) {
