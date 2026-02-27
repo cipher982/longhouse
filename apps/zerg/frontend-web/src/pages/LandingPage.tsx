@@ -20,6 +20,7 @@ import { ComparisonTable } from "../components/landing/ComparisonTable";
 import { FooterCTA } from "../components/landing/FooterCTA";
 
 type LandingFxName = "particles" | "hero";
+type ScreenshotFrameTheme = "warm" | "cool-pop";
 
 function parseFxParam(value: string | null): Set<LandingFxName> | null {
   if (!value) return null;
@@ -40,16 +41,36 @@ function parseFxParam(value: string | null): Set<LandingFxName> | null {
   return enabled;
 }
 
-function getLandingFxFromUrl(): { fxEnabled: Set<LandingFxName>; showPerfHud: boolean } {
+function parseScreenshotThemeParam(value: string | null): ScreenshotFrameTheme {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "cool" || normalized === "cool-pop" || normalized === "pop" || normalized === "vivid") {
+    return "cool-pop";
+  }
+  return "warm";
+}
+
+function getLandingFxFromUrl(): {
+  fxEnabled: Set<LandingFxName>;
+  showPerfHud: boolean;
+  screenshotTheme: ScreenshotFrameTheme;
+  showScreenshotThemeToggle: boolean;
+} {
   if (typeof window === "undefined") {
-    return { fxEnabled: new Set<LandingFxName>(["particles", "hero"]), showPerfHud: false };
+    return {
+      fxEnabled: new Set<LandingFxName>(["particles", "hero"]),
+      showPerfHud: false,
+      screenshotTheme: "warm",
+      showScreenshotThemeToggle: false,
+    };
   }
 
   const params = new URLSearchParams(window.location.search);
   const fxEnabled = parseFxParam(params.get("fx")) ?? new Set<LandingFxName>(["particles", "hero"]);
   const perfRaw = (params.get("perf") ?? "").trim().toLowerCase();
   const showPerfHud = perfRaw === "1" || perfRaw === "true" || perfRaw === "yes";
-  return { fxEnabled, showPerfHud };
+  const screenshotTheme = parseScreenshotThemeParam(params.get("screenshot_theme"));
+  const showScreenshotThemeToggle = params.get("marketing") === "true";
+  return { fxEnabled, showPerfHud, screenshotTheme, showScreenshotThemeToggle };
 }
 
 function LandingPerfHud({
@@ -109,7 +130,13 @@ export default function LandingPage() {
   const navigate = useNavigate();
   const [isAcceptingToken, setIsAcceptingToken] = useState(false);
 
-  const { fxEnabled, showPerfHud } = useMemo(() => getLandingFxFromUrl(), []);
+  const {
+    fxEnabled,
+    showPerfHud,
+    screenshotTheme: initialScreenshotTheme,
+    showScreenshotThemeToggle,
+  } = useMemo(() => getLandingFxFromUrl(), []);
+  const [screenshotTheme, setScreenshotTheme] = useState<ScreenshotFrameTheme>(initialScreenshotTheme);
   const particlesEnabled = fxEnabled.has("particles");
   const heroAnimationsEnabled = fxEnabled.has("hero");
 
@@ -203,8 +230,22 @@ export default function LandingPage() {
     }
   };
 
+  const handleScreenshotThemeChange = (nextTheme: ScreenshotFrameTheme) => {
+    setScreenshotTheme(nextTheme);
+    const params = new URLSearchParams(window.location.search);
+    params.set("screenshot_theme", nextTheme);
+    const query = params.toString();
+    const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+    window.history.replaceState({}, "", nextUrl);
+  };
+
   return (
-    <div className="landing-page" data-fx-hero={heroAnimationsEnabled ? "1" : "0"} data-fx-particles={particlesEnabled ? "1" : "0"}>
+    <div
+      className="landing-page"
+      data-fx-hero={heroAnimationsEnabled ? "1" : "0"}
+      data-fx-particles={particlesEnabled ? "1" : "0"}
+      data-screenshot-theme={screenshotTheme}
+    >
       {/* Sticky Header */}
       <LandingHeader onSignIn={handleSignIn} onGetStarted={scrollToDeployment} />
 
@@ -215,16 +256,40 @@ export default function LandingPage() {
       <div className="landing-glow-orb" />
 
       <main className="landing-main">
-        <HeroSection onScrollToHowItWorks={scrollToHowItWorks} heroAnimationsEnabled={heroAnimationsEnabled} />
+        <HeroSection
+          onScrollToHowItWorks={scrollToHowItWorks}
+          heroAnimationsEnabled={heroAnimationsEnabled}
+          screenshotTheme={screenshotTheme}
+        />
         <SocialProof />
         <HowItWorksSection />
-        <DemoSection />
+        <DemoSection screenshotTheme={screenshotTheme} />
         <IntegrationsSection />
         <ComparisonTable />
         <PricingSection />
         <TrustSection />
         <FooterCTA />
       </main>
+
+      {showScreenshotThemeToggle && (
+        <div className="landing-screenshot-theme-toggle" role="group" aria-label="Screenshot frame theme">
+          <span className="landing-screenshot-theme-label">Screenshot frame</span>
+          <button
+            type="button"
+            className={`landing-screenshot-theme-button warm ${screenshotTheme === "warm" ? "active" : ""}`}
+            onClick={() => handleScreenshotThemeChange("warm")}
+          >
+            Warm
+          </button>
+          <button
+            type="button"
+            className={`landing-screenshot-theme-button cool-pop ${screenshotTheme === "cool-pop" ? "active" : ""}`}
+            onClick={() => handleScreenshotThemeChange("cool-pop")}
+          >
+            Cool Pop
+          </button>
+        </div>
+      )}
 
       {showPerfHud && <LandingPerfHud fxEnabled={fxEnabled} />}
     </div>

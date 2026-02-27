@@ -13,6 +13,7 @@ interface AppScreenshotFrameProps {
   title?: string;
   aspectRatio?: "16/9" | "4/3" | "21/9";
   showChrome?: boolean;
+  theme?: "warm" | "cool-pop";
   className?: string;
 }
 
@@ -22,13 +23,14 @@ export function AppScreenshotFrame({
   title,
   aspectRatio = "16/9",
   showChrome = true,
+  theme = "warm",
   className = "",
 }: AppScreenshotFrameProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
 
   return (
-    <div className={`app-screenshot-frame ${className}`}>
+    <div className={`app-screenshot-frame app-screenshot-frame--${theme} ${className}`}>
       {showChrome && (
         <div className="app-screenshot-chrome">
           <div className="app-screenshot-dots">

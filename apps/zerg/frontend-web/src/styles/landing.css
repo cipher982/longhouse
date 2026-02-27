@@ -508,7 +508,7 @@
 
   .landing-hero-screenshot {
     max-width: 100%;
-    box-shadow: var(--shadow-2xl), 0 0 64px rgba(201, 166, 107, 0.2);
+    box-shadow: var(--shadow-2xl);
   }
 
   /* Friction reducers below hero CTAs */
@@ -1151,13 +1151,21 @@
    -------------------------------------------------------- */
 
   .landing-page .app-screenshot-frame {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    --screenshot-frame-bg: var(--color-surface-card);
+    --screenshot-frame-border: var(--color-border-subtle);
+    --screenshot-frame-shadow: rgba(201, 166, 107, 0.1);
+    --screenshot-frame-shadow-hover: rgba(201, 166, 107, 0.2);
+    --screenshot-chrome-bg: var(--color-surface-section);
+    --screenshot-chrome-border: var(--color-border-subtle);
+    --screenshot-content-bg: var(--color-surface-page);
+    --screenshot-title: var(--color-text-muted);
+    background: var(--screenshot-frame-bg);
+    border: 1px solid var(--screenshot-frame-border);
     border-radius: var(--radius-xl);
     overflow: hidden;
     box-shadow:
       var(--shadow-lg),
-      0 0 48px rgba(201, 166, 107, 0.1);
+      0 0 48px var(--screenshot-frame-shadow);
     transition: all var(--motion-duration-normal) var(--motion-easing-standard);
   }
 
@@ -1165,7 +1173,29 @@
     transform: translateY(-2px);
     box-shadow:
       var(--shadow-xl),
-      0 0 64px rgba(201, 166, 107, 0.2);
+      0 0 64px var(--screenshot-frame-shadow-hover);
+  }
+
+  .landing-page .app-screenshot-frame--cool-pop {
+    --screenshot-frame-bg: linear-gradient(180deg, #161d2a 0%, #101620 100%);
+    --screenshot-frame-border: rgba(126, 183, 255, 0.42);
+    --screenshot-frame-shadow: rgba(88, 173, 255, 0.22);
+    --screenshot-frame-shadow-hover: rgba(91, 196, 255, 0.4);
+    --screenshot-chrome-bg: linear-gradient(180deg, rgba(64, 97, 140, 0.55) 0%, rgba(28, 40, 59, 0.92) 100%);
+    --screenshot-chrome-border: rgba(133, 184, 255, 0.35);
+    --screenshot-content-bg: #0c1420;
+    --screenshot-title: #d5e9ff;
+    box-shadow:
+      var(--shadow-lg),
+      0 0 56px var(--screenshot-frame-shadow),
+      0 0 0 1px rgba(133, 184, 255, 0.24) inset;
+  }
+
+  .landing-page .app-screenshot-frame--cool-pop:hover {
+    box-shadow:
+      var(--shadow-xl),
+      0 0 84px var(--screenshot-frame-shadow-hover),
+      0 0 0 1px rgba(161, 206, 255, 0.35) inset;
   }
 
   .landing-page .app-screenshot-chrome {
@@ -1173,8 +1203,8 @@
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    background: var(--color-surface-section);
-    border-bottom: 1px solid var(--color-border-subtle);
+    background: var(--screenshot-chrome-bg);
+    border-bottom: 1px solid var(--screenshot-chrome-border);
   }
 
   .landing-page .app-screenshot-dots {
@@ -1203,7 +1233,7 @@
 
   .landing-page .app-screenshot-title {
     font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    color: var(--screenshot-title);
     font-weight: var(--font-weight-medium);
     text-align: center;
     flex: 1;
@@ -1212,7 +1242,7 @@
   .landing-page .app-screenshot-content {
     position: relative;
     width: 100%;
-    background: var(--color-surface-page);
+    background: var(--screenshot-content-bg);
     overflow: hidden;
   }
 
@@ -1227,7 +1257,7 @@
   .landing-page .app-screenshot-skeleton {
     position: absolute;
     inset: 0;
-    background: var(--color-surface-section);
+    background: var(--screenshot-content-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1263,7 +1293,7 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-3);
-    background: var(--color-surface-section);
+    background: var(--screenshot-content-bg);
   }
 
   .landing-page .error-icon {
@@ -1275,6 +1305,74 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-sm);
     margin: 0;
+  }
+
+  .landing-screenshot-theme-toggle {
+    position: fixed;
+    left: 12px;
+    bottom: 12px;
+    z-index: 9998;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-full);
+    background: rgba(22, 17, 14, 0.86);
+    border: 1px solid #2a2318;
+    backdrop-filter: blur(10px);
+  }
+
+  .landing-screenshot-theme-label {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: 0.02em;
+    padding: 0 var(--space-2);
+    white-space: nowrap;
+  }
+
+  .landing-screenshot-theme-button {
+    border: 1px solid var(--color-border-subtle);
+    background: transparent;
+    color: var(--color-text-secondary);
+    border-radius: var(--radius-full);
+    padding: 6px 10px;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .landing-screenshot-theme-button:hover {
+    color: var(--color-text-primary);
+    border-color: var(--color-border-default);
+  }
+
+  .landing-screenshot-theme-button.warm.active {
+    color: #fff;
+    border-color: var(--color-brand-primary);
+    background: linear-gradient(135deg, #dbb476 0%, #b07a2a 100%);
+    box-shadow: 0 0 18px rgba(176, 122, 42, 0.35);
+  }
+
+  .landing-screenshot-theme-button.cool-pop.active {
+    color: #fff;
+    border-color: var(--color-brand-primary);
+    background: linear-gradient(135deg, #9cc8ff 0%, #4f96ff 100%);
+    box-shadow: 0 0 18px rgba(79, 150, 255, 0.35);
+  }
+
+  @media (width <= 700px) {
+    .landing-screenshot-theme-toggle {
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      justify-content: center;
+    }
+
+    .landing-screenshot-theme-label {
+      display: none;
+    }
   }
 
   .landing-perf-hud {

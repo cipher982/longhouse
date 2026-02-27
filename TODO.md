@@ -17,6 +17,16 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ---
 
+## [Product] Landing Screenshot Frame Contrast Variants (size: 1)
+
+Status (2026-02-27): Done.
+
+**Goal:** Add two visual frame variants for landing screenshots so warm-page screenshots still pop and can be compared quickly in-browser.
+
+- [x] Add a second screenshot frame theme with cooler/high-contrast treatment
+- [x] Wire screenshot frame theme through landing hero + product showcase
+- [x] Add an in-browser toggle for quick visual comparison in marketing mode
+
 ## [QA/Test] Verify Session Resume End-to-End (size: 4)
 
 Status (2026-02-26): Core verification shipped.

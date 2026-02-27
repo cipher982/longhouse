@@ -7,9 +7,14 @@ import config from "../../lib/config";
 interface HeroSectionProps {
   onScrollToHowItWorks: () => void;
   heroAnimationsEnabled: boolean;
+  screenshotTheme: "warm" | "cool-pop";
 }
 
-export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _heroAnimationsEnabled }: HeroSectionProps) {
+export function HeroSection({
+  onScrollToHowItWorks,
+  heroAnimationsEnabled: _heroAnimationsEnabled,
+  screenshotTheme,
+}: HeroSectionProps) {
   const navigate = useNavigate();
 
   const handleSelfHost = () => {
@@ -90,6 +95,7 @@ export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _hero
             title="Longhouse"
             aspectRatio="4/3"
             showChrome={true}
+            theme={screenshotTheme}
             className="landing-hero-screenshot"
           />
         </div>
