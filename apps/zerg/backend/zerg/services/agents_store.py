@@ -45,6 +45,7 @@ class EventIngest(BaseModel):
     tool_name: Optional[str] = Field(None, description="Tool name if this is a tool call")
     tool_input_json: Optional[Dict[str, Any]] = Field(None, description="Tool call parameters")
     tool_output_text: Optional[str] = Field(None, description="Tool result")
+    tool_call_id: Optional[str] = Field(None, description="Cross-provider call/result linkage ID (Claude tool_use_id, Codex call_id)")
     timestamp: datetime = Field(..., description="Event timestamp")
     source_path: Optional[str] = Field(None, description="Original source file path")
     source_offset: Optional[int] = Field(None, description="Byte offset in source file")
@@ -327,6 +328,7 @@ class AgentsStore:
                 tool_name=event_data.tool_name,
                 tool_input_json=event_data.tool_input_json,
                 tool_output_text=event_data.tool_output_text,
+                tool_call_id=event_data.tool_call_id,
                 timestamp=event_data.timestamp,
                 source_path=event_data.source_path,
                 source_offset=event_data.source_offset,

@@ -478,6 +478,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
+    # events table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(events)"))}
+            if columns and "tool_call_id" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN tool_call_id VARCHAR(255)"))
+                conn.commit()
+    except Exception:
+        logger.debug("events table migration skipped (table may not exist yet)", exc_info=True)
+
     # job_runs table migrations
     try:
         with engine.connect() as conn:

@@ -55,6 +55,7 @@ class ParsedEvent:
     tool_name: str | None = None
     tool_input_json: dict | None = None
     tool_output_text: str | None = None
+    tool_call_id: str | None = None  # cross-provider call/result linkage ID
     source_offset: int = 0  # byte offset in file
     raw_type: str = ""  # original type (user, assistant, summary, etc.)
     raw_line: str = ""  # original JSONL line for lossless archiving
@@ -67,6 +68,7 @@ class ParsedEvent:
             "tool_name": self.tool_name,
             "tool_input_json": self.tool_input_json,
             "tool_output_text": self.tool_output_text,
+            "tool_call_id": self.tool_call_id,
             "timestamp": self.timestamp.isoformat(),
             "source_path": source_path,
             "source_offset": self.source_offset,
@@ -182,6 +184,7 @@ def _extract_assistant_events(
                 role="assistant",
                 tool_name=tool_name,
                 tool_input_json=tool_input if isinstance(tool_input, dict) else None,
+                tool_call_id=tool_id or None,
                 source_offset=offset,
                 raw_type="assistant",
                 raw_line=raw_line if first else "",
@@ -239,6 +242,7 @@ def _extract_tool_results(
                     timestamp=timestamp,
                     role="tool",
                     tool_output_text=result_text,
+                    tool_call_id=tool_use_id or None,
                     source_offset=offset,
                     raw_type="tool_result",
                     raw_line=raw_line if first else "",

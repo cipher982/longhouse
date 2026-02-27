@@ -319,6 +319,7 @@ class EventResponse(UTCBaseModel):
     tool_name: Optional[str] = Field(None, description="Tool name")
     tool_input_json: Optional[Dict[str, Any]] = Field(None, description="Tool input")
     tool_output_text: Optional[str] = Field(None, description="Tool output")
+    tool_call_id: Optional[str] = Field(None, description="Cross-provider call/result linkage ID")
     timestamp: datetime = Field(..., description="Event timestamp")
 
 
@@ -2383,6 +2384,7 @@ async def get_session_events(
                 tool_name=e.tool_name,
                 tool_input_json=e.tool_input_json,
                 tool_output_text=e.tool_output_text,
+                tool_call_id=e.tool_call_id,
                 timestamp=e.timestamp,
             )
             for e in events
