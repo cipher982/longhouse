@@ -147,6 +147,9 @@ class AgentEvent(AgentsBase):
     tool_name = Column(String(100), nullable=True, index=True)  # e.g., 'Edit', 'Bash', 'Read'
     tool_input_json = Column(JSON(), nullable=True)  # Tool call parameters
     tool_output_text = Column(Text, nullable=True)  # Tool result (when role='tool')
+    # Cross-provider linkage: matches tool_use.id (call) to tool_result.tool_use_id (result)
+    # Enables deterministic pairing of calls and results; None for non-tool events.
+    tool_call_id = Column(String(255), nullable=True)
 
     # Timing
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)

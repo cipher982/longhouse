@@ -51,6 +51,15 @@ pub struct ParsedEvent {
     pub tool_input_json: Option<Box<RawValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_output_text: Option<String>,
+    /// Cross-provider call/result linkage ID.
+    /// - Claude tool_use call:   item.id  (e.g. "toolu_bdrk_01...")
+    /// - Claude tool_result:     item.tool_use_id
+    /// - Codex function_call:    payload.call_id
+    /// - Codex function_output:  payload.call_id
+    /// - Gemini tool_call:       tc.id
+    /// None for all non-tool events and where provider doesn't emit an ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     pub source_offset: u64,
     pub raw_type: String,
     /// Only the first event per source line carries raw_line (dedup).
@@ -386,6 +395,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                         tool_name: None,
                         tool_input_json: None,
                         tool_output_text: None,
+                        tool_call_id: None,
                         source_offset: 0,
                         raw_type: "gemini_user".to_string(),
                         raw_line: None,
@@ -405,6 +415,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                         tool_name: None,
                         tool_input_json: None,
                         tool_output_text: None,
+                        tool_call_id: None,
                         source_offset: 0,
                         raw_type: "gemini_assistant".to_string(),
                         raw_line: None,
@@ -427,6 +438,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                         RawValue::from_string(v.to_string()).ok()
                     }).flatten();
 
+                    let gemini_tc_id = tc.id.as_deref().filter(|s| !s.is_empty()).map(|s| s.to_string());
                     events.push(ParsedEvent {
                         uuid: format!("{}-tool-{}", msg_id, tc_id),
                         session_id: canonical_session_id.clone(),
@@ -436,6 +448,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                         tool_name: Some(tc_name),
                         tool_input_json: tool_input,
                         tool_output_text: None,
+                        tool_call_id: gemini_tc_id,
                         source_offset: 0,
                         raw_type: "gemini_tool_call".to_string(),
                         raw_line: None,
@@ -940,6 +953,7 @@ fn extract_codex_events(
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: None,
+                tool_call_id: None,
                 source_offset: line_offset,
                 raw_type: format!("codex_{}", role_str),
                 raw_line: Some(raw_line.to_string()),
@@ -969,6 +983,7 @@ fn extract_codex_events(
                 tool_name: Some(tool_name),
                 tool_input_json: tool_input,
                 tool_output_text: None,
+                tool_call_id: if call_id.is_empty() { None } else { Some(call_id.to_string()) },
                 source_offset: line_offset,
                 raw_type: "codex_function_call".to_string(),
                 raw_line: Some(raw_line.to_string()),
@@ -992,6 +1007,7 @@ fn extract_codex_events(
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: Some(output.to_string()),
+                tool_call_id: if call_id.is_empty() { None } else { Some(call_id.to_string()) },
                 source_offset: line_offset,
                 raw_type: "codex_function_call_output".to_string(),
                 raw_line: Some(raw_line.to_string()),
@@ -1050,6 +1066,7 @@ fn extract_user_events(
                         tool_name: None,
                         tool_input_json: None,
                         tool_output_text: None,
+                        tool_call_id: None,
                         source_offset: line_offset,
                         raw_type: "user".to_string(),
                         raw_line: Some(raw_line.to_string()),
@@ -1069,6 +1086,7 @@ fn extract_user_events(
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: None,
+                tool_call_id: None,
                 source_offset: line_offset,
                 raw_type: "user".to_string(),
                 raw_line: Some(raw_line.to_string()),
@@ -1108,6 +1126,7 @@ fn extract_assistant_events(
                         tool_name: None,
                         tool_input_json: None,
                         tool_output_text: None,
+                        tool_call_id: None,
                         source_offset: line_offset,
                         raw_type: "assistant".to_string(),
                         raw_line: if first {
@@ -1149,6 +1168,7 @@ fn extract_assistant_events(
                     tool_name: Some(tool_name),
                     tool_input_json: tool_input,
                     tool_output_text: None,
+                    tool_call_id: if tool_id.is_empty() { None } else { Some(tool_id.to_string()) },
                     source_offset: line_offset,
                     raw_type: "assistant".to_string(),
                     raw_line: if first {
@@ -1203,6 +1223,7 @@ fn extract_tool_results_from_items(
                     tool_name: None,
                     tool_input_json: None,
                     tool_output_text: Some(text),
+                    tool_call_id: if tool_use_id.is_empty() { None } else { Some(tool_use_id.to_string()) },
                     source_offset: line_offset,
                     raw_type: "tool_result".to_string(),
                     raw_line: if first {
@@ -1781,5 +1802,108 @@ mod tests {
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // tool_call_id pairing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_claude_tool_use_carries_tool_call_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"toolu_bdrk_01ABC","name":"Bash","input":{"command":"ls"}}]}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].tool_name.as_deref(), Some("Bash"));
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("toolu_bdrk_01ABC"));
+    }
+
+    #[test]
+    fn test_claude_tool_result_carries_tool_call_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_bdrk_01ABC","content":"file contents here"}]}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::Tool);
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("toolu_bdrk_01ABC"));
+    }
+
+    #[test]
+    fn test_claude_call_and_result_share_same_tool_call_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[
+                r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"toolu_01XYZ","name":"Read","input":{"file_path":"/tmp/f"}}]}}"#,
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01XYZ","content":"file contents"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+
+        let call = &result.events[0];
+        let res = &result.events[1];
+
+        assert_eq!(call.role, Role::Assistant);
+        assert_eq!(call.tool_call_id.as_deref(), Some("toolu_01XYZ"));
+
+        assert_eq!(res.role, Role::Tool);
+        assert_eq!(res.tool_call_id.as_deref(), Some("toolu_01XYZ"));
+
+        // Same ID links them
+        assert_eq!(call.tool_call_id, res.tool_call_id);
+    }
+
+    #[test]
+    fn test_codex_function_call_carries_call_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:13Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"ls -la\"}","call_id":"call_abc123"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:14Z","payload":{"type":"function_call_output","call_id":"call_abc123","output":"file1.txt\nfile2.txt"}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+
+        let call = &result.events[0];
+        let res = &result.events[1];
+
+        assert_eq!(call.tool_call_id.as_deref(), Some("call_abc123"));
+        assert_eq!(res.tool_call_id.as_deref(), Some("call_abc123"));
+        assert_eq!(call.tool_call_id, res.tool_call_id);
+    }
+
+    #[test]
+    fn test_non_tool_events_have_no_tool_call_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"Hello"}}"#,
+                r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"Hi"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+        assert!(result.events[0].tool_call_id.is_none());
+        assert!(result.events[1].tool_call_id.is_none());
     }
 }

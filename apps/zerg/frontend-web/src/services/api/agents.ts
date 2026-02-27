@@ -118,6 +118,7 @@ export interface AgentEvent {
   tool_name: string | null;
   tool_input_json: Record<string, unknown> | null;
   tool_output_text: string | null;
+  tool_call_id: string | null;
   timestamp: string;
 }
 

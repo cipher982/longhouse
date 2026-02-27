@@ -353,18 +353,35 @@ export default function SessionDetailPage() {
   );
 
   // Resolve tool names for result events (role=tool has no tool_name in DB).
-  // Claude emits tool calls and results separately; we pair them FIFO: each
-  // assistant tool-call event pushes its name onto a queue, each role=tool
-  // result dequeues it. Handles parallel tool calls correctly.
+  // Primary: join on tool_call_id (set for all events ingested after the fix).
+  // Fallback: FIFO queue for legacy rows where tool_call_id is NULL.
   const toolResultNames = useMemo(() => {
     const map = new Map<number, string>();
-    const queue: string[] = [];
+
+    // Build call_id → tool_name index from tool-call events
+    const nameById = new Map<string, string>();
     for (const e of events) {
-      if (e.tool_name && e.role === "assistant") {
-        queue.push(e.tool_name);
+      if (e.role === "assistant" && e.tool_name && e.tool_call_id) {
+        nameById.set(e.tool_call_id, e.tool_name);
+      }
+    }
+
+    // FIFO queue for legacy rows without tool_call_id
+    const fifoQueue: string[] = [];
+
+    for (const e of events) {
+      if (e.role === "assistant" && e.tool_name) {
+        if (!e.tool_call_id) fifoQueue.push(e.tool_name);
       } else if (e.role === "tool" && !e.tool_name) {
-        const name = queue.shift();
-        if (name) map.set(e.id, name);
+        if (e.tool_call_id) {
+          // Precise ID-based match
+          const name = nameById.get(e.tool_call_id);
+          if (name) map.set(e.id, name);
+        } else {
+          // Legacy fallback
+          const name = fifoQueue.shift();
+          if (name) map.set(e.id, name);
+        }
       }
     }
     return map;
