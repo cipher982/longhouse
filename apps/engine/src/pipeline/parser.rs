@@ -239,6 +239,8 @@ struct ContentItem {
     /// Tool result content — kept as raw JSON, parsed lazily for text extraction.
     #[serde(rename = "content")]
     result_content: Option<Box<RawValue>>,
+    /// Error flag on tool_result items (true = tool call failed/rejected)
+    is_error: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1212,28 +1214,34 @@ fn extract_tool_results_from_items(
             extract_text_from_raw_content(raw.get())
         });
 
-        if let Some(text) = result_text {
-            if !text.is_empty() {
-                events.push(ParsedEvent {
-                    uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
-                    session_id: session_id.to_string(),
-                    timestamp,
-                    role: Role::Tool,
-                    content_text: None,
-                    tool_name: None,
-                    tool_input_json: None,
-                    tool_output_text: Some(text),
-                    tool_call_id: if tool_use_id.is_empty() { None } else { Some(tool_use_id.to_string()) },
-                    source_offset: line_offset,
-                    raw_type: "tool_result".to_string(),
-                    raw_line: if first {
-                        first = false;
-                        Some(raw_line.to_string())
-                    } else {
-                        None
-                    },
-                });
-            }
+        // Use extracted text, or fall back to "[tool error]" for empty-content error results
+        // so the result event is still emitted and the call/result pair stays linked.
+        let output_text = match result_text {
+            Some(ref t) if !t.is_empty() => Some(t.clone()),
+            _ if item.is_error == Some(true) => Some("[tool error]".to_string()),
+            _ => None,
+        };
+
+        if let Some(text) = output_text {
+            events.push(ParsedEvent {
+                uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::Tool,
+                content_text: None,
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: Some(text),
+                tool_call_id: if tool_use_id.is_empty() { None } else { Some(tool_use_id.to_string()) },
+                source_offset: line_offset,
+                raw_type: "tool_result".to_string(),
+                raw_line: if first {
+                    first = false;
+                    Some(raw_line.to_string())
+                } else {
+                    None
+                },
+            });
         }
     }
 }
@@ -1887,6 +1895,38 @@ mod tests {
         assert_eq!(call.tool_call_id.as_deref(), Some("call_abc123"));
         assert_eq!(res.tool_call_id.as_deref(), Some("call_abc123"));
         assert_eq!(call.tool_call_id, res.tool_call_id);
+    }
+
+    #[test]
+    fn test_is_error_empty_content_emits_placeholder() {
+        // is_error:true with no content should still emit an event (keeps call paired)
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01ERR","content":"","is_error":true}]}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::Tool);
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("toolu_01ERR"));
+        assert_eq!(result.events[0].tool_output_text.as_deref(), Some("[tool error]"));
+    }
+
+    #[test]
+    fn test_is_error_with_content_uses_content() {
+        // is_error:true WITH content should use the actual content, not placeholder
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01ERR","content":"The user rejected this action.","is_error":true}]}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].tool_output_text.as_deref(), Some("The user rejected this action."));
     }
 
     #[test]
