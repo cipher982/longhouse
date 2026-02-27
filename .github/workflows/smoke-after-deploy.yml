@@ -63,6 +63,13 @@ jobs:
           chmod +x scripts/check-cp-credentials.sh
           ./scripts/check-cp-credentials.sh
 
+      - name: Check email routing (mailto → Cloudflare forward rules)
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          chmod +x scripts/check-email-routing.sh
+          ./scripts/check-email-routing.sh
+
       - name: Summary
         if: always()
         run: |
