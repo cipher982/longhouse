@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { useRoutes, Outlet, Navigate } from "react-router-dom";
+import { useRoutes, Outlet, Navigate, useLocation } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
 import PricingPage from "../pages/PricingPage";
@@ -72,6 +72,11 @@ function DemoApp() {
       </Layout>
     </ShelfProvider>
   );
+}
+
+function LandingAliasRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: "/", search: location.search }} replace />;
 }
 
 export default function App() {
@@ -177,7 +182,7 @@ export default function App() {
     // Keep /landing as an alias (bookmarks, old links)
     {
       path: "/landing",
-      element: <Navigate to="/" replace />
+      element: <LandingAliasRedirect />
     },
     // Public info pages - NO AuthGuard
     {
