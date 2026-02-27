@@ -18,7 +18,11 @@ import { DemoVideoPlaceholder } from "./DemoVideoPlaceholder";
  */
 const DEMO_VIDEO_URL: string | undefined = "/videos/timeline-demo.mp4";
 
-export function DemoSection() {
+interface DemoSectionProps {
+  screenshotTheme: "warm" | "cool-pop";
+}
+
+export function DemoSection({ screenshotTheme }: DemoSectionProps) {
   return (
     <section className="landing-demo">
       <div className="landing-section-inner">
@@ -28,7 +32,7 @@ export function DemoSection() {
           Every Claude Code, Codex, and Gemini session — live, searchable, and resumable from any device.
         </p>
 
-        <ProductShowcase />
+        <ProductShowcase screenshotTheme={screenshotTheme} />
 
         <DemoVideoPlaceholder videoUrl={DEMO_VIDEO_URL} />
       </div>

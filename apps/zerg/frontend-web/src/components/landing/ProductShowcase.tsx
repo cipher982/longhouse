@@ -42,7 +42,11 @@ const tabs: TabConfig[] = [
   },
 ];
 
-export function ProductShowcase() {
+interface ProductShowcaseProps {
+  screenshotTheme: "warm" | "cool-pop";
+}
+
+export function ProductShowcase({ screenshotTheme }: ProductShowcaseProps) {
   const [activeTab, setActiveTab] = useState<Tab>("timeline");
   const activeConfig = tabs.find((t) => t.id === activeTab)!;
 
@@ -70,6 +74,7 @@ export function ProductShowcase() {
             title={activeConfig.label}
             aspectRatio="16/9"
             showChrome={true}
+            theme={screenshotTheme}
           />
         </div>
       </div>
