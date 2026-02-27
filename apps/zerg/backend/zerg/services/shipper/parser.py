@@ -222,6 +222,7 @@ def _extract_tool_results(
         if item.get("type") == "tool_result":
             tool_use_id = item.get("tool_use_id", "")
             result_content = item.get("content", "")
+            is_error = item.get("is_error", False)
 
             # Content can be string or list
             if isinstance(result_content, list):
@@ -231,9 +232,13 @@ def _extract_tool_results(
                         parts.append(part.get("text", ""))
                     elif isinstance(part, str):
                         parts.append(part)
-                result_text = "\n".join(parts)
+                result_text = "\n".join(parts) or None
             else:
                 result_text = str(result_content) if result_content else None
+
+            # Emit placeholder for empty-content error results so call stays paired
+            if not result_text and is_error:
+                result_text = "[tool error]"
 
             if result_text:
                 yield ParsedEvent(
