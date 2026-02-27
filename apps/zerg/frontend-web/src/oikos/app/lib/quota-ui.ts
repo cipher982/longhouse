@@ -6,7 +6,7 @@ export interface QuotaUiState {
   placeholderOverride: string | null;
 }
 
-function getResetCountdownLabel(): string {
+export function getResetCountdownLabel(): string {
   const now = new Date();
   const nextUtcMidnightMs = Date.UTC(
     now.getUTCFullYear(),
@@ -23,7 +23,7 @@ function getResetCountdownLabel(): string {
   return `${hours}h ${minutes}m`;
 }
 
-function formatUsd(value: number): string {
+export function formatUsd(value: number): string {
   if (value <= 0) return "$0.00";
   if (value < 0.01) return "<$0.01";
   return `$${value.toFixed(2)}`;
