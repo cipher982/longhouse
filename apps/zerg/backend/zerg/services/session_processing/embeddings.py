@@ -86,6 +86,7 @@ async def generate_embedding(text: str, config: "EmbeddingConfig") -> np.ndarray
             model=config.model,
             input=text,
             dimensions=config.dims,
+            extra_body={"metadata": {"source": "longhouse:embeddings"}},
         )
         return np.array(response.data[0].embedding, dtype=np.float32)
     finally:
