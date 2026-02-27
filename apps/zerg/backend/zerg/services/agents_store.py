@@ -651,7 +651,7 @@ class AgentsStore:
         offset: int = 0,
     ) -> List[AgentEvent]:
         """Get events for a session with optional filtering."""
-        stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp)
+        stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
 
         if roles:
             stmt = stmt.where(AgentEvent.role.in_(roles))
