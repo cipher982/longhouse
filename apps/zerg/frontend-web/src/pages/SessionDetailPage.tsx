@@ -376,9 +376,15 @@ export default function SessionDetailPage() {
         if (e.tool_call_id) {
           // Precise ID-based match
           const name = nameById.get(e.tool_call_id);
-          if (name) map.set(e.id, name);
+          if (name) {
+            map.set(e.id, name);
+          } else {
+            // ID present but no matching call found (mid-rollout session) — try FIFO
+            const fallback = fifoQueue.shift();
+            if (fallback) map.set(e.id, fallback);
+          }
         } else {
-          // Legacy fallback
+          // Legacy fallback: no ID on either side
           const name = fifoQueue.shift();
           if (name) map.set(e.id, name);
         }
