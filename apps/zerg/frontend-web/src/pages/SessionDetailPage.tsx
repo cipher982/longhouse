@@ -83,21 +83,34 @@ function truncatePath(path: string | null, maxLen: number = 50): string {
 
 function getToolDisplayInfo(toolName: string): { icon: string; color: string } {
   switch (toolName.toLowerCase()) {
+    // File operations
     case "bash":
+    case "exec_command":
+    case "shell":
+    case "shell_command":
+    case "run_shell_command":
+    case "write_stdin":
       return { icon: "$", color: "var(--color-intent-warning)" };
     case "read":
+    case "read_file":
       return { icon: "R", color: "var(--color-neon-cyan)" };
     case "write":
+    case "create_file":
       return { icon: "W", color: "var(--color-intent-success)" };
     case "edit":
+    case "str_replace_editor":
       return { icon: "E", color: "var(--color-brand-primary)" };
     case "grep":
+      return { icon: "~", color: "var(--color-text-secondary)" };
     case "glob":
-      return { icon: "?", color: "var(--color-text-secondary)" };
+      return { icon: "*", color: "var(--color-text-secondary)" };
     case "task":
       return { icon: "T", color: "var(--color-neon-secondary)" };
+    case "todowrite":
+    case "update_plan":
+      return { icon: "✓", color: "var(--color-brand-accent)" };
     default:
-      return { icon: toolName[0]?.toUpperCase() || "?", color: "var(--color-text-secondary)" };
+      return { icon: (toolName[0] || "·").toUpperCase(), color: "var(--color-text-secondary)" };
   }
 }
 
@@ -154,15 +167,22 @@ interface ToolCallProps {
   isExpanded: boolean;
   onToggle: () => void;
   isHighlighted?: boolean;
+  resolvedToolName?: string; // for role=tool result events that have no tool_name in DB
 }
 
-function ToolCall({ event, isExpanded, onToggle, isHighlighted }: ToolCallProps) {
-  const toolInfo = getToolDisplayInfo(event.tool_name || "");
+function ToolCall({ event, isExpanded, onToggle, isHighlighted, resolvedToolName }: ToolCallProps) {
+  const isResult = event.role === "tool" && !event.tool_name;
+  const displayName = event.tool_name || resolvedToolName || "tool";
+  const toolInfo = getToolDisplayInfo(displayName);
   const hasInput = event.tool_input_json && Object.keys(event.tool_input_json).length > 0;
   const hasOutput = event.tool_output_text && event.tool_output_text.length > 0;
 
   // Extract brief summary for collapsed state
   const getSummary = (): string => {
+    // For result events, preview the output
+    if (isResult && event.tool_output_text) {
+      return event.tool_output_text.slice(0, 80).replace(/\n/g, " ");
+    }
     if (!event.tool_input_json) return "";
     const input = event.tool_input_json;
 
@@ -189,10 +209,11 @@ function ToolCall({ event, isExpanded, onToggle, isHighlighted }: ToolCallProps)
         aria-expanded={isExpanded}
       >
         <div className="event-tool-title">
-          <span className="tool-icon" style={{ backgroundColor: toolInfo.color }}>
+          <span className="tool-icon" style={{ backgroundColor: toolInfo.color, opacity: isResult ? 0.6 : 1 }}>
             {toolInfo.icon}
           </span>
-          <span className="tool-name">{event.tool_name}</span>
+          <span className="tool-name">{displayName}</span>
+          {isResult && <span className="tool-result-badge">↩</span>}
           {!isExpanded && summary && (
             <span className="tool-summary">{summary}</span>
           )}
@@ -330,6 +351,24 @@ export default function SessionDetailPage() {
     () => events.filter(e => e.role === 'tool' || e.tool_name).length,
     [events]
   );
+
+  // Resolve tool names for result events (role=tool has no tool_name in DB).
+  // Claude emits tool calls and results separately; we pair them FIFO: each
+  // assistant tool-call event pushes its name onto a queue, each role=tool
+  // result dequeues it. Handles parallel tool calls correctly.
+  const toolResultNames = useMemo(() => {
+    const map = new Map<number, string>();
+    const queue: string[] = [];
+    for (const e of events) {
+      if (e.tool_name && e.role === "assistant") {
+        queue.push(e.tool_name);
+      } else if (e.role === "tool" && !e.tool_name) {
+        const name = queue.shift();
+        if (name) map.set(e.id, name);
+      }
+    }
+    return map;
+  }, [events]);
 
   // Ready signal for E2E
   useEffect(() => {
@@ -642,6 +681,7 @@ export default function SessionDetailPage() {
                       isExpanded={expandedTools.has(event.id)}
                       onToggle={() => toggleTool(event.id)}
                       isHighlighted={isHighlighted}
+                      resolvedToolName={toolResultNames.get(event.id)}
                     />
                   );
                 }
