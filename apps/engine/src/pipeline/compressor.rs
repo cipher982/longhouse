@@ -35,12 +35,6 @@ fn cached_hostname() -> &'static str {
     })
 }
 
-/// Maximum size of raw_json field per event. Lines longer than this are truncated.
-/// TODO: Remove this cap — raw_json must store the complete original source line.
-/// Full fidelity is required; Longhouse is the authoritative cloud record.
-/// See TODO.md "Parser fidelity: remove raw_json 32KB cap"
-const MAX_RAW_LINE_BYTES: usize = 32 * 1024; // 32 KB — to be removed
-
 // ---------------------------------------------------------------------------
 // Payload types (match Python ingest API exactly)
 // ---------------------------------------------------------------------------
@@ -132,16 +126,6 @@ pub fn build_payload<'a>(
                 super::parser::Role::Assistant => "assistant",
                 super::parser::Role::Tool => "tool",
             };
-            // Cap raw_line at 32 KB to prevent runaway single-line bloat.
-            // Must truncate on a char boundary to avoid UTF-8 panics.
-            let raw_json = e.raw_line.as_deref().map(|s| {
-                if s.len() > MAX_RAW_LINE_BYTES {
-                    let boundary = s.floor_char_boundary(MAX_RAW_LINE_BYTES);
-                    &s[..boundary]
-                } else {
-                    s
-                }
-            });
             EventIngest {
                 role,
                 content_text: e.content_text.as_deref(),
@@ -152,7 +136,7 @@ pub fn build_payload<'a>(
                 timestamp: e.timestamp.to_rfc3339(),
                 source_path,
                 source_offset: e.source_offset,
-                raw_json,
+                raw_json: e.raw_line.as_deref(),
             }
         })
         .collect();
@@ -367,9 +351,9 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_line_cap_truncates() {
-        // Build an event with a raw_line larger than MAX_RAW_LINE_BYTES (32KB)
-        let oversized_raw = "x".repeat(MAX_RAW_LINE_BYTES + 1024);
+    fn test_raw_line_preserves_full_content() {
+        // raw_json must preserve the complete original source line.
+        let oversized_raw = "x".repeat((32 * 1024) + 1024);
         let events = vec![ParsedEvent {
             uuid: "big".to_string(),
             session_id: "s1".to_string(),
@@ -391,19 +375,7 @@ mod tests {
         };
 
         let payload = build_payload("test-id", &events, &meta, "/path", "claude");
-
-        // Find the event in the payload and check raw_json length
-        let raw_json_len = payload.events[0]
-            .raw_json
-            .as_deref()
-            .map(|s| s.len())
-            .unwrap_or(0);
-
-        assert!(
-            raw_json_len <= MAX_RAW_LINE_BYTES,
-            "raw_json should be capped at {} bytes, got {}",
-            MAX_RAW_LINE_BYTES,
-            raw_json_len
-        );
+        let raw_json = payload.events[0].raw_json.expect("raw_json should be present");
+        assert_eq!(raw_json, events[0].raw_line.as_deref().unwrap());
     }
 }

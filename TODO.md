@@ -19,14 +19,14 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Infra] Parser fidelity: remove raw_json 32KB cap (size: 4)
 
-Status: Not started.
+Status (2026-03-02): In progress.
 
 **Problem:** `raw_json` in the events table is supposed to be the complete original JSONL source line — the authoritative cloud copy of the user's session. It's currently hard-capped at 32KB (`MAX_RAW_LINE_BYTES` in `apps/engine/src/pipeline/compressor.rs`). A single image-containing Codex message can be 1–10MB of base64. Those lines get truncated, which means Longhouse is NOT a complete copy of the session. This violates the core product promise.
 
 **Root cause confirmed:** In a real session (`8c81e236` on david010 instance), a user message with an attached screenshot was ~826KB. The 32KB cap truncated the raw_json. Combined with the parser bug that emitted zero events for image-only lines (fixed separately), the entire user turn was lost from the cloud record.
 
 **What needs to change:**
-- Remove `MAX_RAW_LINE_BYTES` constant and the truncation logic in `compressor.rs` (lines ~38-41, ~132-140)
+- [x] Remove `MAX_RAW_LINE_BYTES` constant and the truncation logic in `compressor.rs` (lines ~38-41, ~132-140)
 - The `raw_json` column in SQLite (`TEXT` type) handles arbitrary size; no schema change needed
 - The HTTP ingest payload (`EventIngest.raw_json`) is just a JSON string field — no API change needed
 - The gzip-compressed ingest payload will still compress well (base64 at 4:3 ratio, gzip recovers much of it)
@@ -34,17 +34,25 @@ Status: Not started.
 **Scope / considerations:**
 - DB will grow. A session with 50 screenshots could add 50–500MB to the user's DB. That's correct and expected — you need 5GB of images if the user has 5GB of images.
 - The ingest HTTP request payload will be larger for image-heavy sessions. May need to bump any request size limits on the backend (check `MAX_CONTENT_LENGTH` / nginx/caddy config on the server).
-- Check `apps/zerg/backend/zerg/routers/agents.py` ingest endpoint for any body size limits.
-- Check the Coolify/nginx proxy config for upload limits on the zerg server.
-- After removing the cap, run `make test` and `make test-e2e` — existing test `test_raw_line_cap_truncates` in `compressor.rs` must be updated or deleted (it tests the cap behavior that's being removed).
+- [x] Check `apps/zerg/backend/zerg/routers/agents.py` ingest endpoint for any body size limits. (No explicit body clamp found; gzip/zstd paths support streaming decode.)
+- [ ] Check the Coolify/nginx proxy config for upload limits on the zerg server.
+- [x] After removing the cap, run `make test` — existing test `test_raw_line_cap_truncates` in `compressor.rs` updated to assert full preservation.
+- [ ] Run `make test-e2e`.
 
 **Files to touch:**
 - `apps/engine/src/pipeline/compressor.rs` — remove cap (marked with TODO comment)
-- `apps/engine/src/pipeline/compressor.rs` test `test_raw_line_cap_truncates` — update/remove
+- `apps/engine/src/pipeline/compressor.rs` test `test_raw_line_preserves_full_content` — validates no truncation
 - Backend proxy/nginx config — check upload size limits
 - Possibly `apps/zerg/backend/zerg/routers/agents.py` — check `max_content_length`
 
 **Validation:** After the change, ingest a real Codex session with an image attachment and confirm `length(raw_json)` in the DB equals the full source line length from the JSONL file.
+
+Notes (2026-03-02):
+- Removed raw_json truncation in `apps/engine/src/pipeline/compressor.rs`; `raw_json` now forwards the full source line unchanged.
+- Replaced truncation test with `test_raw_line_preserves_full_content`.
+- Validation run:
+  - `cargo test -p longhouse-engine pipeline::compressor::tests` → 4 passed
+  - `make test` → 444 backend tests passed, 96 control-plane tests passed, 9 engine parser tests passed
 
 ---
 
