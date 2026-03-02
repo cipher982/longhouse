@@ -922,25 +922,70 @@ fn extract_codex_events(
                 _ => return,
             };
 
-            // Extract text from content items
-            let text = payload
-                .content
-                .as_ref()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| {
-                            let t = item.r#type.as_deref().unwrap_or("");
-                            if t == "input_text" || t == "output_text" {
-                                item.text.as_deref()
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
+            let content_items: &[CodexContentItem] =
+                payload.content.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+
+            // Filter Codex context-injection user messages.
+            // Codex prepends AGENTS.md, environment context, and permission instructions
+            // as role=user (not role=developer), so we detect them by content prefix.
+            if role == Role::User {
+                let injected_prefixes = [
+                    "# AGENTS.md instructions",
+                    "<environment_context>",
+                    "<permissions instructions>",
+                    "<collaboration_mode>",
+                ];
+                let first_text = content_items
+                    .iter()
+                    .find_map(|item| {
+                        if item.r#type.as_deref() == Some("input_text") {
+                            item.text.as_deref()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or("");
+                if injected_prefixes.iter().any(|p| first_text.starts_with(p)) {
+                    return;
+                }
+            }
+
+            // Count image attachments for placeholder text
+            let image_count = content_items
+                .iter()
+                .filter(|item| item.r#type.as_deref() == Some("input_image"))
+                .count();
+
+            // Extract real text: join input_text/output_text, strip XML image wrapper tags
+            // that Codex injects as <image name=...> / </image> around image blocks.
+            let real_text: String = content_items
+                .iter()
+                .filter_map(|item| {
+                    let t = item.r#type.as_deref().unwrap_or("");
+                    if t == "input_text" || t == "output_text" {
+                        item.text.as_deref()
+                    } else {
+                        None
+                    }
                 })
-                .unwrap_or_default();
+                .filter(|t| {
+                    let trimmed = t.trim();
+                    !(trimmed.starts_with("<image ") || trimmed == "</image>")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // If there are images but no real text, emit a placeholder so the user
+            // event is always stored (prevents assistant appearing as first event).
+            let text = if real_text.trim().is_empty() && image_count > 0 {
+                if image_count == 1 {
+                    "[image attached]".to_string()
+                } else {
+                    format!("[{} images attached]", image_count)
+                }
+            } else {
+                real_text
+            };
 
             if text.trim().is_empty() {
                 return;
@@ -1927,6 +1972,106 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].tool_output_text.as_deref(), Some("The user rejected this action."));
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex image + context injection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_codex_image_only_message_emits_placeholder() {
+        // Image-only user message must still emit an event so assistant isn't first
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000010.jsonl",
+            &[r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,abc123"}]}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1, "image-only message should emit placeholder event");
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("[image attached]"));
+    }
+
+    #[test]
+    fn test_codex_image_with_text_strips_wrapper_tags() {
+        // Mixed content: image wrapper tags stripped, real text preserved
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000011.jsonl",
+            &[r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image name=[Image #1]>"},{"type":"input_image","image_url":"data:image/png;base64,abc"},{"type":"input_text","text":"</image>"},{"type":"input_text","text":"[Image #1]\n\nwhat is in this screenshot?"}]}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        let text = result.events[0].content_text.as_deref().unwrap_or("");
+        // Wrapper tags stripped, real prompt preserved
+        assert!(!text.contains("<image "), "wrapper tag should be stripped");
+        assert!(!text.contains("</image>"), "closing tag should be stripped");
+        assert!(text.contains("what is in this screenshot?"), "real prompt should be kept");
+    }
+
+    #[test]
+    fn test_codex_context_injection_filtered() {
+        // AGENTS.md and environment context injected as role=user must be dropped
+        let dir = tempfile::tempdir().unwrap();
+
+        // Build lines programmatically to avoid backslash escaping issues in raw strings
+        let agents_line = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-03-01T10:00:00Z",
+            "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "# AGENTS.md instructions for /Users/foo\n\n<INSTRUCTIONS>...</INSTRUCTIONS>"}]
+            }
+        }).to_string();
+        let env_line = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-03-01T10:00:00Z",
+            "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "<environment_context><cwd>/Users/foo</cwd></environment_context>"}]
+            }
+        }).to_string();
+        let real_line = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-03-01T10:00:01Z",
+            "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "please help me debug this"}]
+            }
+        }).to_string();
+
+        let path = {
+            let path = dir.path().join("019c638d-0000-0000-0000-000000000012.jsonl");
+            let mut f = std::fs::File::create(&path).unwrap();
+            use std::io::Write;
+            writeln!(f, "{}", agents_line).unwrap();
+            writeln!(f, "{}", env_line).unwrap();
+            writeln!(f, "{}", real_line).unwrap();
+            path
+        };
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1, "only real user message should survive");
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("please help me debug this"));
+    }
+
+    #[test]
+    fn test_codex_multiple_images_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000013.jsonl",
+            &[r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,a"},{"type":"input_image","image_url":"data:image/png;base64,b"},{"type":"input_image","image_url":"data:image/png;base64,c"}]}}"#],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("[3 images attached]"));
     }
 
     #[test]
