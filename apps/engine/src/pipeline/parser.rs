@@ -270,11 +270,20 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
 
     // Ensure session_id is a valid UUID. Non-UUID stems (e.g. "agent-a51c878")
     // get a deterministic UUID v5 derived from the full file path.
-    let session_id = if Uuid::parse_str(&raw_stem).is_ok() {
+    let mut session_id = if Uuid::parse_str(&raw_stem).is_ok() {
         raw_stem
     } else {
         Uuid::new_v5(&Uuid::NAMESPACE_URL, path.to_string_lossy().as_bytes()).to_string()
     };
+
+    // Incremental parses can start after the initial session_meta line.
+    // Recover canonical Codex session ID from file header so first incremental
+    // ship doesn't fall back to filename-derived UUIDs.
+    if offset > 0 {
+        if let Some(canonical) = scan_session_meta_id(path) {
+            session_id = canonical;
+        }
+    }
 
     // Gemini: full JSON document, always parse from 0 (file is rewritten in place)
     if is_gemini {
@@ -305,6 +314,52 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     } else {
         parse_buffered(path, offset, &session_id)
     }
+}
+
+/// Scan the start of a JSONL file for a Codex `session_meta.payload.id`.
+///
+/// This is intentionally bounded to avoid large-file overhead on every parse.
+/// Returns a canonical UUID string if found; otherwise None.
+fn scan_session_meta_id(path: &Path) -> Option<String> {
+    const SESSION_META_SCAN_LIMIT_BYTES: usize = 256 * 1024;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = BufReader::with_capacity(16 * 1024, file);
+    let mut line = String::new();
+    let mut bytes_scanned = 0usize;
+
+    while bytes_scanned < SESSION_META_SCAN_LIMIT_BYTES {
+        line.clear();
+        let n = reader.read_line(&mut line).ok()?;
+        if n == 0 {
+            break;
+        }
+        bytes_scanned += n;
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let obj: RawLine = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if obj.r#type.as_deref() != Some("session_meta") {
+            continue;
+        }
+
+        let id = obj
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.id.as_ref())?;
+        if Uuid::parse_str(id).is_ok() {
+            return Some(id.clone());
+        }
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -1404,6 +1459,7 @@ fn trim_bytes(bytes: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::io::Write;
 
     fn make_jsonl_file(dir: &Path, name: &str, lines: &[&str]) -> std::path::PathBuf {
@@ -1711,6 +1767,65 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         // session_meta id should take precedence
         assert_eq!(result.metadata.session_id, "019c638d-ea04-7983-a845-d0b68a77fa62");
+    }
+
+    #[test]
+    fn test_codex_offset_recovers_session_meta_id_buffered() {
+        let dir = tempfile::tempdir().unwrap();
+        let canonical_id = "019c638d-ea04-7983-a845-d0b68a77fa62";
+        let session_meta = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-02-15T17:06:10Z\",\"payload\":{{\"id\":\"{}\",\"cwd\":\"/test\"}}}}",
+            canonical_id
+        );
+        let user_line = r#"{"type":"response_item","timestamp":"2026-02-15T17:06:11Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#;
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-2026-02-15T17-06-10-suffix.jsonl",
+            &[&session_meta, user_line],
+        );
+
+        // Skip the session_meta line to simulate incremental parse without stored session_id.
+        let offset = (session_meta.len() + 1) as u64;
+        let result = parse_session_file(&path, offset).unwrap();
+
+        assert_eq!(result.metadata.session_id, canonical_id);
+        assert_eq!(result.events.len(), 1);
+    }
+
+    #[test]
+    fn test_codex_offset_recovers_session_meta_id_mmap() {
+        let dir = tempfile::tempdir().unwrap();
+        let canonical_id = "019c638d-ea04-7983-a845-d0b68a77fa62";
+        let session_meta = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-02-15T17:06:10Z\",\"payload\":{{\"id\":\"{}\",\"cwd\":\"/test\"}}}}",
+            canonical_id
+        );
+
+        // Force mmap path by making total file size > MMAP_THRESHOLD.
+        let big_text = "x".repeat((MMAP_THRESHOLD as usize) + 2048);
+        let large_user_line = json!({
+            "type": "response_item",
+            "timestamp": "2026-02-15T17:06:11Z",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": big_text}],
+            }
+        })
+        .to_string();
+
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-2026-02-15T17-06-10-large.jsonl",
+            &[&session_meta, &large_user_line],
+        );
+
+        // Skip the session_meta line to simulate incremental parse without stored session_id.
+        let offset = (session_meta.len() + 1) as u64;
+        let result = parse_session_file(&path, offset).unwrap();
+
+        assert_eq!(result.metadata.session_id, canonical_id);
+        assert_eq!(result.events.len(), 1);
     }
 
     #[test]
