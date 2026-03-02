@@ -1080,11 +1080,12 @@
     color: var(--color-text-primary);
   }
 
-  .tool-result-badge {
+  .tool-pending-badge {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
-    opacity: 0.6;
+    opacity: 0.5;
     flex-shrink: 0;
+    font-style: italic;
   }
 
   .tool-summary {
