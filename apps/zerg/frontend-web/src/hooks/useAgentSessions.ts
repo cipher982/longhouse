@@ -4,7 +4,7 @@
  * Used by the Session Picker modal and other session UIs.
  */
 
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, keepPreviousData } from "@tanstack/react-query";
 import {
   fetchAgentSessions,
   fetchAgentSession,
@@ -69,6 +69,36 @@ export function useAgentSessionEvents(
     queryKey: ["agent-session-events", sessionId, options],
     queryFn: () => fetchAgentSessionEvents(sessionId!, options),
     enabled: !!sessionId,
+    staleTime: 10_000,
+    gcTime: 5 * 60_000,
+  });
+}
+
+/**
+ * Hook to fetch paginated events for a session.
+ *
+ * Uses offset pagination under the hood and flattens pages in the caller.
+ */
+export function useAgentSessionEventsInfinite(
+  sessionId: string | null,
+  options: { roles?: string; limit?: number; enabled?: boolean } = {}
+) {
+  const { roles, limit = 1000, enabled = true } = options;
+
+  return useInfiniteQuery<AgentEventsListResponse>({
+    queryKey: ["agent-session-events-infinite", sessionId, { roles, limit }],
+    queryFn: ({ pageParam = 0 }) =>
+      fetchAgentSessionEvents(sessionId!, {
+        roles,
+        limit,
+        offset: Number(pageParam),
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, pages) => {
+      const loaded = pages.reduce((sum, page) => sum + page.events.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    enabled: !!sessionId && enabled,
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   });

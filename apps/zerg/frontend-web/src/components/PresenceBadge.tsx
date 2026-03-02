@@ -8,9 +8,10 @@
 import { useEffect } from "react";
 
 export type PresenceState = "thinking" | "running" | "idle";
+export type PresenceStateInput = PresenceState | (string & {});
 
 export interface PresenceBadgeProps {
-  state: PresenceState | null;
+  state: PresenceStateInput | null;
   tool?: string | null;
   /** compact=true renders only the animated dot, no text label */
   compact?: boolean;
@@ -81,6 +82,14 @@ function getToolLabel(tool: string): { prefix: string; label: string } {
   if (t === "task") return { prefix: "\u2699", label: "spawning" };
   // default: show raw tool name with bolt prefix
   return { prefix: "\u26a1", label: tool };
+}
+
+function isKnownPresenceState(state: PresenceStateInput | null | undefined): state is PresenceState {
+  return state === "thinking" || state === "running" || state === "idle";
+}
+
+function normalizePresenceState(state: PresenceStateInput | null | undefined): PresenceState | null {
+  return isKnownPresenceState(state) ? state : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,10 +183,15 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
     ensureStyles();
   }, []);
 
-  // null/no signal — fall back to heuristic active or unknown indicator
-  if (state === null || state === undefined) {
-    if (!heuristicActive) {
-      if (!showUnknown) return null;
+  const normalizedState = normalizePresenceState(state);
+  const hasUnknownState = state != null && normalizedState == null;
+
+  // null/no signal (or unsupported state) — fall back to heuristic active or unknown indicator
+  if (normalizedState === null) {
+    if (!heuristicActive || hasUnknownState) {
+      if (!showUnknown && !hasUnknownState) return null;
+
+      const unknownLabel = hasUnknownState ? `Unknown (${state})` : "Unknown";
 
       // Unknown state: dim gray dot — session appears active but has never emitted signals
       const unknownDotStyle: React.CSSProperties = {
@@ -192,7 +206,7 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
 
       if (compact) {
         return (
-          <span className={className} title="Unknown" style={{ display: "inline-flex", alignItems: "center" }}>
+          <span className={className} title={unknownLabel} style={{ display: "inline-flex", alignItems: "center" }}>
             <span style={unknownDotStyle} />
           </span>
         );
@@ -211,7 +225,7 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
           }}
         >
           <span style={unknownDotStyle} />
-          <span style={{ color: "var(--text-tertiary, #6b7280)", fontWeight: 400 }}>Unknown</span>
+          <span style={{ color: "var(--text-tertiary, #6b7280)", fontWeight: 400 }}>{unknownLabel}</span>
         </span>
       );
     }
@@ -265,10 +279,10 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
     return (
       <span
         className={className}
-        title={state === "running" && tool ? `Running: ${tool}` : state}
+        title={normalizedState === "running" && tool ? `Running: ${tool}` : normalizedState}
         style={{ display: "inline-flex", alignItems: "center" }}
       >
-        <Dot state={state} size={dotSize} />
+        <Dot state={normalizedState} size={dotSize} />
       </span>
     );
   }
@@ -283,7 +297,7 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
     userSelect: "none",
   };
 
-  if (state === "thinking") {
+  if (normalizedState === "thinking") {
     return (
       <span className={className} style={containerStyle}>
         <Dot state="thinking" size={dotSize} />
@@ -295,7 +309,7 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
     );
   }
 
-  if (state === "running") {
+  if (normalizedState === "running") {
     const { prefix, label } = tool ? getToolLabel(tool) : { prefix: "\u26a1", label: "running" };
     return (
       <span className={className} style={containerStyle}>
@@ -332,7 +346,7 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
 // ---------------------------------------------------------------------------
 
 export interface PresenceHeroProps {
-  state: PresenceState | null;
+  state: PresenceStateInput | null;
   tool?: string | null;
   className?: string;
 }
@@ -342,10 +356,11 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
     ensureStyles();
   }, []);
 
-  if (state === null || state === undefined) return null;
+  const normalizedState = normalizePresenceState(state);
+  if (normalizedState === null) return null;
 
-  const isThinking = state === "thinking";
-  const isRunning = state === "running";
+  const isThinking = normalizedState === "thinking";
+  const isRunning = normalizedState === "running";
 
   const borderColor = isThinking
     ? "rgba(251, 146, 60, 0.4)"
@@ -374,7 +389,7 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
         marginBottom: 12,
       }}
     >
-      <PresenceBadge state={state} tool={tool} compact={false} />
+      <PresenceBadge state={normalizedState} tool={tool} compact={false} />
     </div>
   );
 }

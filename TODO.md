@@ -55,13 +55,21 @@ Notes (2026-03-02):
 
 ## [Frontend] Forum/Session Status Normalization (size: 2)
 
-Status (2026-03-02): Confirmed by code audit.
+Status (2026-03-02): Done.
 
 **Problem:** Frontend active-session handling has edge-case mismatches between `status` and `presence_state`, and session detail can miss deep anchors on long sessions due to a hard event cap.
 
-- [ ] Normalize active/inactive status mapping across Forum + session mapper
-- [ ] Add unknown/unsupported presence fallback handling for future hook states
-- [ ] Add session-detail pagination (or equivalent fetch strategy) so deep links beyond first 1000 events resolve reliably
+- [x] Normalize active/inactive status mapping across Forum + session mapper
+- [x] Add unknown/unsupported presence fallback handling for future hook states
+- [x] Add session-detail pagination (or equivalent fetch strategy) so deep links beyond first 1000 events resolve reliably
+
+Notes (2026-03-02):
+- Added shared session-state helpers in `frontend-web/src/forum/session-status.ts` and wired Forum list/canvas mapping to a single normalization path.
+- Presence badges now safely handle unsupported states (e.g. future hook values) without breaking UI state mapping.
+- Session detail now uses paginated event loading (`useAgentSessionEventsInfinite`) with auto-fetch for deep-link anchors and manual "Load older events" pagination.
+- Frontend verification:
+  - `bunx vitest run src/forum/__tests__/session-status.test.ts src/pages/__tests__/ForumPage.test.tsx` → 8 passed
+  - `bun run validate:types` → passed
 
 ---
 

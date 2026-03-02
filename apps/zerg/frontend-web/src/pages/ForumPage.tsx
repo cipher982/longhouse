@@ -13,6 +13,14 @@ import {
   getSessionDisplayTitle,
   getSessionRoomLabel,
 } from "../forum/session-mapper";
+import {
+  hasUnknownPresenceState,
+  isSessionActive,
+  isSessionIdle,
+  isSessionInactive,
+  normalizePresenceState,
+  sessionActivitySortKey,
+} from "../forum/session-status";
 import { parseUTC } from "../lib/dateUtils";
 import "../styles/forum.css";
 
@@ -43,12 +51,6 @@ function formatDuration(startedAt: string, endedAt: string | null): string {
   return `${hours}h ${remMins}m`;
 }
 
-function sessionSortKey(status: string): number {
-  if (status === "working") return 0;
-  if (status === "idle") return 1;
-  return 2; // completed and everything else
-}
-
 export default function ForumPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -72,15 +74,19 @@ export default function ForumPage() {
   const sessions = useMemo(() => {
     const list = sessionsData?.sessions ?? [];
     return [...list].sort((a, b) => {
-      const groupDiff = sessionSortKey(a.status) - sessionSortKey(b.status);
+      const groupDiff = sessionActivitySortKey(a) - sessionActivitySortKey(b);
       if (groupDiff !== 0) return groupDiff;
       return parseUTC(b.last_activity_at).getTime() - parseUTC(a.last_activity_at).getTime();
     });
   }, [sessionsData]);
 
   const activeCount = useMemo(
-    () => sessions.filter(s => s.status === "working" || s.presence_state === "thinking" || s.presence_state === "running").length,
-    [sessions]
+    () => sessions.filter((session) => isSessionActive(session)).length,
+    [sessions],
+  );
+  const idleCount = useMemo(
+    () => sessions.filter((session) => isSessionIdle(session)).length,
+    [sessions],
   );
 
   const canvasState = useMemo(() => buildForumStateFromSessions(sessions), [sessions]);
@@ -88,6 +94,12 @@ export default function ForumPage() {
   const selectedSession = selectedSessionId
     ? sessions.find((session) => session.id === selectedSessionId)
     : null;
+  const selectedPresenceState = selectedSession
+    ? normalizePresenceState(selectedSession.presence_state)
+    : null;
+  const selectedUnknownPresence = selectedSession
+    ? hasUnknownPresenceState(selectedSession.presence_state)
+    : false;
 
   useEffect(() => {
     if (selectedSessionId && !selectedSession) {
@@ -186,12 +198,11 @@ export default function ForumPage() {
               </div>
             ) : (
               sessions.map((session) => {
-                const isActive =
-                  session.status === "working" ||
-                  session.presence_state === "thinking" ||
-                  session.presence_state === "running";
+                const isActive = isSessionActive(session);
+                const normalizedPresenceState = normalizePresenceState(session.presence_state);
+                const unknownPresenceState = hasUnknownPresenceState(session.presence_state);
                 const isParked = session.user_state === "parked";
-                const isInactive = !isActive && (session.status === "completed" || session.ended_at != null || session.status === "idle");
+                const isInactive = isSessionInactive(session);
                 const rowClass = [
                   "forum-session-row",
                   session.id === selectedSessionId ? "forum-session-row--selected" : "",
@@ -226,10 +237,10 @@ export default function ForumPage() {
                     )}
                     <div style={{ marginTop: 4 }}>
                       <PresenceBadge
-                        state={session.presence_state}
+                        state={normalizedPresenceState}
                         tool={session.presence_tool}
-                        heuristicActive={session.status === "working" && session.ended_at == null}
-                        showUnknown={session.ended_at == null}
+                        heuristicActive={isActive && normalizedPresenceState == null && !unknownPresenceState}
+                        showUnknown={unknownPresenceState || session.ended_at == null}
                       />
                     </div>
                   </button>
@@ -283,14 +294,16 @@ export default function ForumPage() {
                 {selectedSession ? (
                   <>
                     <PresenceHero
-                      state={selectedSession.presence_state}
+                      state={selectedPresenceState}
                       tool={selectedSession.presence_tool}
                     />
                     <div className="forum-selection-title">
                       {getSessionDisplayTitle(selectedSession)}
                     </div>
                     <div className="forum-selection-pills">
-                      <span className={`forum-duration-pill${selectedSession.ended_at == null && (selectedSession.status === "working" || selectedSession.presence_state != null) ? " forum-duration-pill--active" : ""}`}>
+                      <span
+                        className={`forum-duration-pill${selectedSession.ended_at == null && isSessionActive(selectedSession) ? " forum-duration-pill--active" : ""}`}
+                      >
                         {formatDuration(selectedSession.started_at, selectedSession.ended_at)}
                       </span>
                       <span className="forum-turns-pill">
@@ -322,6 +335,11 @@ export default function ForumPage() {
                     <div className="forum-selection-meta forum-selection-meta--time">
                       {formatRelativeTime(selectedSession.last_activity_at)}
                     </div>
+                    {selectedUnknownPresence && (
+                      <div className="forum-selection-meta">
+                        <span className="forum-selection-meta-label">Presence</span> Unknown signal state ({selectedSession.presence_state})
+                      </div>
+                    )}
                     <div className="forum-selection-actions">
                       <Button size="sm" variant="primary" onClick={handleFocus}>
                         {focusEntityId === selectedSession.id ? "Unfocus" : "Focus"}
@@ -364,11 +382,11 @@ export default function ForumPage() {
               <div className="forum-stats-bar">
                 <span className="forum-stats-active">
                   <span className="forum-stats-dot" />
-                  {sessions.filter(s => s.status === "working" || s.presence_state === "thinking" || s.presence_state === "running").length} active
+                  {activeCount} active
                 </span>
                 <span className="forum-stats-sep">·</span>
                 <span className="forum-stats-idle">
-                  {sessions.filter(s => s.status === "idle").length} idle
+                  {idleCount} idle
                 </span>
                 <span className="forum-stats-sep">·</span>
                 <span className="forum-stats-total">
