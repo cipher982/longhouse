@@ -8,6 +8,8 @@ from zerg.crud import crud
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.managers.fiche_runner import RuntimeView
+from zerg.managers.message_builder import MessageArrayBuilder
 from zerg.models.models import User
 from zerg.services.thread_service import ThreadService
 
@@ -86,3 +88,38 @@ def test_thread_service_respects_history_limit_override(tmp_path):
         contents = [m.content for m in messages]
 
         assert contents == ["a16", "a17", "a18", "a19", "a20"]
+
+
+def test_message_builder_uses_latest_100_thread_messages(tmp_path):
+    """Runner message assembly should include the newest 100 thread messages."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        thread = _seed_thread(db)
+        _seed_assistant_messages(db, thread.id, count=150)
+
+        fiche = crud.get_fiche(db, thread.fiche_id)
+        assert fiche is not None
+
+        runtime = RuntimeView(
+            id=fiche.id,
+            owner_id=fiche.owner_id,
+            updated_at=fiche.updated_at,
+            model=fiche.model,
+            config=fiche.config or {},
+            allowed_tools=fiche.allowed_tools,
+        )
+
+        result = (
+            MessageArrayBuilder(db, runtime)
+            .with_system_prompt(fiche, include_skills=False)
+            .with_conversation(thread.id)
+            .build()
+        )
+
+        # Message array layout: [system prompt] + [thread conversation window]
+        conversation = result.messages[1:]
+        contents = [message.content for message in conversation]
+
+        assert len(conversation) == 100
+        assert contents[0] == "a51"
+        assert contents[-1] == "a150"
