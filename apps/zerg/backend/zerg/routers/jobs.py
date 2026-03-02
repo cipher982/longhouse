@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
 from zerg.jobs.registry import _normalize_secret_fields
+from zerg.jobs.registry import get_registration_warnings
 from zerg.jobs.registry import job_registry
 from zerg.jobs.registry import register_all_jobs
 from zerg.models.models import JobRun
@@ -63,6 +64,7 @@ class JobListResponse(BaseModel):
 
     jobs: list[JobInfo]
     total: int
+    registration_warnings: list[str] = []
 
 
 class JobRunResponse(BaseModel):
@@ -368,8 +370,9 @@ async def list_jobs(
 
     jobs = job_registry.list_jobs(enabled_only=enabled_only)
     job_infos = [_job_info_from_config(j) for j in jobs]
+    warnings = get_registration_warnings()
 
-    return JobListResponse(jobs=job_infos, total=len(job_infos))
+    return JobListResponse(jobs=job_infos, total=len(job_infos), registration_warnings=warnings)
 
 
 @router.get("/{job_id}", response_model=JobInfo)

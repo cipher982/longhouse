@@ -9,6 +9,7 @@ Provides a centralized registry for all scheduled jobs, with:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
 import logging
 import os
@@ -29,6 +30,7 @@ from apscheduler.triggers.cron import CronTrigger
 logger = logging.getLogger(__name__)
 
 _legacy_env_lock = asyncio.Lock()
+_last_registration_warnings: list[str] = []
 
 
 async def _run_legacy_job_with_env(func: Callable[[], Awaitable[dict[str, Any]]], secrets: dict[str, str]):
@@ -513,24 +515,24 @@ async def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue
 
     Returns count of jobs scheduled.
     """
-    # Import builtin job modules (self-register on import)
-    # Each module calls job_registry.register() at module level
-    try:
-        import zerg.jobs.daily_digest  # noqa: F401
-    except Exception as e:
-        logger.warning("Failed to import daily_digest job: %s", e)
-    try:
-        import zerg.jobs.reflection  # noqa: F401
-    except Exception as e:
-        logger.warning("Failed to import reflection job: %s", e)
-    try:
-        import zerg.jobs.health_monitor  # noqa: F401
-    except Exception as e:
-        logger.warning("Failed to import health_monitor job: %s", e)
-    try:
-        import zerg.jobs.check_stale_agents  # noqa: F401
-    except Exception as e:
-        logger.warning("Failed to import check_stale_agents job: %s", e)
+    global _last_registration_warnings
+    warnings: list[str] = []
+
+    # Import builtin job modules (self-register on import).
+    # Each module calls job_registry.register() at module level.
+    builtin_modules = (
+        "zerg.jobs.daily_digest",
+        "zerg.jobs.reflection",
+        "zerg.jobs.health_monitor",
+        "zerg.jobs.check_stale_agents",
+    )
+    for module_name in builtin_modules:
+        try:
+            importlib.import_module(module_name)
+        except Exception as e:
+            message = f"Failed to import {module_name}: {e}"
+            warnings.append(message)
+            logger.exception(message)
 
     # Load external jobs from git manifest (if configured)
     # Wrapped in try/except so manifest failures don't block builtin jobs
@@ -539,12 +541,21 @@ async def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue
 
         await load_jobs_manifest()
     except Exception as e:
-        logger.exception("Manifest load failed (builtin jobs remain active): %s", e)
+        message = f"Manifest load failed (builtin jobs remain active): {e}"
+        warnings.append(message)
+        logger.exception(message)
+
+    _last_registration_warnings = warnings
 
     if scheduler:
         return job_registry.schedule_all(scheduler, use_queue=use_queue)
 
     return 0
+
+
+def get_registration_warnings() -> list[str]:
+    """Return the latest registration/import warnings from register_all_jobs()."""
+    return list(_last_registration_warnings)
 
 
 __all__ = [
@@ -554,6 +565,7 @@ __all__ = [
     "SecretField",
     "job_registry",
     "register_all_jobs",
+    "get_registration_warnings",
     "_invoke_job_func",
     "_normalize_secret_fields",
     "_extract_secret_keys",
