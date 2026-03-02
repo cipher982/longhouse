@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic_settings import BaseSettings
+from pydantic_settings import SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -81,8 +82,7 @@ class Settings(BaseSettings):
     instance_daily_cost_per_user_cents: int = 0  # per-user daily USD budget in cents
     instance_daily_cost_global_cents: int = 0  # global daily USD budget in cents
 
-    class Config:
-        env_prefix = "CONTROL_PLANE_"
+    model_config = SettingsConfigDict(env_prefix="CONTROL_PLANE_")
 
 
 settings = Settings()

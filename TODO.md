@@ -276,4 +276,4 @@ current columns. **Rule:** every new `Column` on an agents model must get a corr
 ## [Tech Debt] Newly Verified Follow-ups (2026-03-02)
 
 - [x] Surface `register_all_jobs()` import/registration failures as actionable health status (now exposed as `registration_warnings` on `GET /api/jobs`) (2026-03-02).
-- [ ] Eliminate current control-plane test deprecation warnings (Pydantic class-based config + FastAPI `on_event` lifecycle usage).
+- [x] Eliminated control-plane test deprecation warnings by migrating to `SettingsConfigDict` and FastAPI lifespan startup hook (2026-03-02).

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import logging
 from datetime import datetime
 from datetime import timezone
@@ -29,14 +30,20 @@ from control_plane.routers import webhooks
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Longhouse Control Plane", version="0.1.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    _startup()
+    yield
+
+
+app = FastAPI(title="Longhouse Control Plane", version="0.1.0", lifespan=_lifespan)
 
 app.state.limiter = auth.limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
-@app.on_event("startup")
 def _startup():
     Base.metadata.create_all(bind=engine)
     # Migrate: add email_verified column if missing, backfill existing users as verified
