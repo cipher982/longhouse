@@ -13,7 +13,7 @@ import {
 import {
   useDisableJob,
   useEnableJob,
-  useJobs,
+  useJobsWithMeta,
   useJobsRepoStatus,
   useRecentJobRuns,
   useLastJobRuns,
@@ -61,14 +61,15 @@ function formatDuration(ms: number | null): string {
 
 export default function JobsPage() {
   const navigate = useNavigate();
-  const { data: jobs, isLoading: jobsLoading, error: jobsError } = useJobs();
+  const { data: jobsResponse, isLoading: jobsLoading, error: jobsError } = useJobsWithMeta();
   const { data: repo, isLoading: repoLoading, error: repoError } = useJobsRepoStatus();
   const { data: recentRunsData, isLoading: runsLoading, error: runsError } = useRecentJobRuns(10);
   const { data: lastRunData } = useLastJobRuns();
   const enableMutation = useEnableJob();
   const disableMutation = useDisableJob();
 
-  const allJobs = jobs ?? [];
+  const allJobs = jobsResponse?.jobs ?? [];
+  const registrationWarnings = jobsResponse?.registration_warnings ?? [];
   const allRuns = recentRunsData?.runs ?? [];
 
   // Last run per job from dedicated endpoint (accurate, not capped)
@@ -232,68 +233,84 @@ export default function JobsPage() {
                 </div>
               </div>
             ) : (
-              <Table>
-                <Table.Header>
-                  <Table.Cell isHeader>Job</Table.Cell>
-                  <Table.Cell isHeader>Cron</Table.Cell>
-                  <Table.Cell isHeader>Status</Table.Cell>
-                  <Table.Cell isHeader>Last Run</Table.Cell>
-                  <Table.Cell isHeader>Secrets</Table.Cell>
-                  <Table.Cell isHeader>Actions</Table.Cell>
-                </Table.Header>
-                <Table.Body>
-                  {allJobs.map((job) => (
-                    <Table.Row key={job.id}>
-                      <Table.Cell>
-                        <div><strong>{job.id}</strong></div>
-                        <div className="text-muted">{job.description}</div>
-                      </Table.Cell>
-                      <Table.Cell>{job.cron}</Table.Cell>
-                      <Table.Cell>
-                        <Badge variant={job.enabled ? "success" : "neutral"}>
-                          {job.enabled ? "enabled" : "disabled"}
-                        </Badge>
-                      </Table.Cell>
-                      <Table.Cell>
-                        {(() => {
-                          const lastRun = lastRunByJob[job.id];
-                          if (!lastRun) return "—";
-                          return (
-                            <div>
-                              <span>
-                                <Badge variant={runStatusVariant(lastRun.status)}>
-                                  {lastRun.status}
-                                </Badge>{" "}
-                                <span className="text-muted">{relativeTime(lastRun.started_at)}</span>
-                              </span>
-                              {lastRun.error_type && (
-                                <div className="text-muted" style={{ fontSize: "0.8em", marginTop: "2px" }}>
-                                  {lastRun.error_type === "MissingSecret"
-                                    ? "Missing secrets"
-                                    : lastRun.error_type}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </Table.Cell>
-                      <Table.Cell>
-                        {job.secrets.length > 0 ? `${job.secrets.length} declared` : "—"}
-                      </Table.Cell>
-                      <Table.Cell>
-                        <Button
-                          variant={job.enabled ? "ghost" : "primary"}
-                          size="sm"
-                          onClick={() => handleToggle(job.id, job.enabled)}
-                          disabled={toggling}
-                        >
-                          {toggling ? "..." : job.enabled ? "Disable" : "Enable"}
-                        </Button>
-                      </Table.Cell>
-                    </Table.Row>
-                  ))}
-                </Table.Body>
-              </Table>
+              <div className="settings-stack settings-stack--md">
+                {registrationWarnings.length > 0 && (
+                  <Card variant="default">
+                    <Card.Body>
+                      <div className="settings-stack settings-stack--sm">
+                        <Badge variant="warning">Registration Warnings</Badge>
+                        {registrationWarnings.map((warning) => (
+                          <div key={warning} className="text-muted">
+                            {warning}
+                          </div>
+                        ))}
+                      </div>
+                    </Card.Body>
+                  </Card>
+                )}
+                <Table>
+                  <Table.Header>
+                    <Table.Cell isHeader>Job</Table.Cell>
+                    <Table.Cell isHeader>Cron</Table.Cell>
+                    <Table.Cell isHeader>Status</Table.Cell>
+                    <Table.Cell isHeader>Last Run</Table.Cell>
+                    <Table.Cell isHeader>Secrets</Table.Cell>
+                    <Table.Cell isHeader>Actions</Table.Cell>
+                  </Table.Header>
+                  <Table.Body>
+                    {allJobs.map((job) => (
+                      <Table.Row key={job.id}>
+                        <Table.Cell>
+                          <div><strong>{job.id}</strong></div>
+                          <div className="text-muted">{job.description}</div>
+                        </Table.Cell>
+                        <Table.Cell>{job.cron}</Table.Cell>
+                        <Table.Cell>
+                          <Badge variant={job.enabled ? "success" : "neutral"}>
+                            {job.enabled ? "enabled" : "disabled"}
+                          </Badge>
+                        </Table.Cell>
+                        <Table.Cell>
+                          {(() => {
+                            const lastRun = lastRunByJob[job.id];
+                            if (!lastRun) return "—";
+                            return (
+                              <div>
+                                <span>
+                                  <Badge variant={runStatusVariant(lastRun.status)}>
+                                    {lastRun.status}
+                                  </Badge>{" "}
+                                  <span className="text-muted">{relativeTime(lastRun.started_at)}</span>
+                                </span>
+                                {lastRun.error_type && (
+                                  <div className="text-muted" style={{ fontSize: "0.8em", marginTop: "2px" }}>
+                                    {lastRun.error_type === "MissingSecret"
+                                      ? "Missing secrets"
+                                      : lastRun.error_type}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </Table.Cell>
+                        <Table.Cell>
+                          {job.secrets.length > 0 ? `${job.secrets.length} declared` : "—"}
+                        </Table.Cell>
+                        <Table.Cell>
+                          <Button
+                            variant={job.enabled ? "ghost" : "primary"}
+                            size="sm"
+                            onClick={() => handleToggle(job.id, job.enabled)}
+                            disabled={toggling}
+                          >
+                            {toggling ? "..." : job.enabled ? "Disable" : "Enable"}
+                          </Button>
+                        </Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table>
+              </div>
             )}
           </Card.Body>
         </Card>
