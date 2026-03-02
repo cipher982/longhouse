@@ -5,7 +5,7 @@ Usage:
     longhouse status        # Show configuration
     longhouse config show   # Show effective configuration
     longhouse ship          # One-shot sync
-    longhouse connect       # Watch mode sync (polling with --poll)
+    longhouse connect       # Foreground engine sync (watch + fallback scan)
     longhouse recall        # Search past sessions
     longhouse onboard       # Run onboarding wizard
     longhouse doctor        # Self-diagnosis
