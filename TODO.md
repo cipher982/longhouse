@@ -50,8 +50,10 @@ Status (2026-03-02): In progress.
 Notes (2026-03-02):
 - Removed raw_json truncation in `apps/engine/src/pipeline/compressor.rs`; `raw_json` now forwards the full source line unchanged.
 - Replaced truncation test with `test_raw_line_preserves_full_content`.
+- Fixed Codex incremental session-id drift when parsing from non-zero offsets by scanning the file header for `session_meta.payload.id` before parse dispatch; added regression tests for both buffered and mmap paths.
 - Validation run:
   - `cargo test -p longhouse-engine pipeline::compressor::tests` → 4 passed
+  - `cargo test -p longhouse-engine pipeline::parser::tests` → 33 passed
   - `make test` → 444 backend tests passed, 96 control-plane tests passed, 9 engine parser tests passed
   - `make test-e2e` → 59 core E2E + 4 a11y passed
   - Live ingest check (synthetic image-like payload): posted a 1,200,093-byte `raw_json` line to `https://david010.longhouse.ai/api/agents/ingest`; DB `LENGTH(raw_json)` matched exactly (`1200093`)
