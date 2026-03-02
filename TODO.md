@@ -17,6 +17,54 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ---
 
+## [Product] Oikos Thread Context Window Bug (size: 3)
+
+Status (2026-03-02): Confirmed by code audit. Runtime repro pending.
+
+**Problem:** Oikos uses a long-lived thread, but current history loading appears to cap to an oldest-message window rather than a latest-message sliding window. On long threads, this can drop recent context and degrade decisions.
+
+- [ ] Reproduce with a long oikos thread and confirm current message window behavior end-to-end
+- [ ] Fix thread message retrieval to feed the most recent window to the LLM while preserving chronological order
+- [ ] Add regression coverage in `tests_lite/` for long-thread context selection
+- [ ] Run targeted backend tests and update this task with pass/fail evidence
+
+---
+
+## [Product] Oikos Prompt/Tool Contract Alignment (size: 2)
+
+Status (2026-03-02): Confirmed by code audit.
+
+**Problem:** Oikos prompt guidance still emphasizes deprecated `spawn_commis` patterns while runtime is workspace-first and `spawn_workspace_commis` is the canonical path.
+
+- [ ] Update Oikos base prompt examples/instructions to reflect workspace-first delegation
+- [ ] Remove/replace deprecated `spawn_commis` guidance from user-facing prompt text
+- [ ] Keep compatibility alias behavior in code, but stop teaching legacy semantics
+- [ ] Add/adjust tests that assert prompt/tool contract consistency
+
+---
+
+## [Frontend] Forum/Session Status Normalization (size: 2)
+
+Status (2026-03-02): Confirmed by code audit.
+
+**Problem:** Frontend active-session handling has edge-case mismatches between `status` and `presence_state`, and session detail can miss deep anchors on long sessions due to a hard event cap.
+
+- [ ] Normalize active/inactive status mapping across Forum + session mapper
+- [ ] Add unknown/unsupported presence fallback handling for future hook states
+- [ ] Add session-detail pagination (or equivalent fetch strategy) so deep links beyond first 1000 events resolve reliably
+
+---
+
+## [QA/Test] High-Risk Guardrails (size: 2)
+
+Status (2026-03-02): Confirmed by code audit.
+
+- [ ] Add presence ingest tests for invalid state no-op and `tool_name` clearing on non-running states
+- [ ] Add migration guard test that checks SQLite table columns against agents model columns
+- [ ] Add deterministic dispatch tests (direct response vs quick tool vs commis delegation) in default test suite
+
+---
+
 ## [Product] Landing Screenshot Frame Contrast Variants (size: 1)
 
 Status (2026-02-27): Done.
@@ -155,7 +203,7 @@ Make `model` an explicit override only, not a forced default. New execution logi
 - [ ] Oikos dispatch contract: direct vs quick-tool vs CLI delegation
 - [ ] Claude Compaction API for infinite thread context management
 
-Research doc: `docs/specs/3a-deferred-research.md`
+Research doc: `apps/zerg/backend/docs/specs/3a-deferred-research.md`
 
 ---
 
@@ -172,12 +220,13 @@ current columns. **Rule:** every new `Column` on an agents model must get a corr
 
 ## [Docs/Drift] Open Items
 
-- DB size claim stale in README (prod DB reset 2026-02-05, no real users yet). Update when data exists.
+- `docs/install-guide.md` still references `longhouse connect --poll` behavior that no longer matches runtime engine behavior. Update install docs and CLI help text together.
+- Keep VISION "Current State" sections in sync with hook installation/runtime details whenever hook registration behavior changes.
 - ~~PyPI `0.1.1` lags repo `0.1.2`.~~ Published as v0.1.3 (2026-02-24).
 
 ---
 
 ## [Tech Debt] CSS Legacy Patterns
 
-- Legacy modal pattern CSS — 7+ components use `.modal-*` classes, 58 definitions in `styles/css/modal.css`.
+- Legacy modal pattern CSS — `.modal-*` classes still exist across multiple components/stylesheets and both modal systems remain loaded.
 - Legacy token aliases — present in `styles/tokens.css`, actively referenced in component CSS.
