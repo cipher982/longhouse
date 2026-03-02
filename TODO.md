@@ -270,3 +270,10 @@ current columns. **Rule:** every new `Column` on an agents model must get a corr
 
 - Legacy modal pattern CSS — `.modal-*` classes still exist across multiple components/stylesheets and both modal systems remain loaded.
 - Legacy token aliases — present in `styles/tokens.css`, actively referenced in component CSS.
+
+---
+
+## [Tech Debt] Newly Verified Follow-ups (2026-03-02)
+
+- [ ] Surface `register_all_jobs()` import/registration failures as actionable health status (currently logged and startup continues).
+- [ ] Eliminate current control-plane test deprecation warnings (Pydantic class-based config + FastAPI `on_event` lifecycle usage).
