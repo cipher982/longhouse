@@ -117,7 +117,7 @@ class OikosService:
     """Service for managing oikos fiche execution."""
 
     # Bump this whenever BASE_OIKOS_PROMPT meaningfully changes.
-    OIKOS_PROMPT_VERSION = 2
+    OIKOS_PROMPT_VERSION = 3
 
     def __init__(self, db: Session):
         """Initialize the oikos service.
