@@ -37,7 +37,7 @@ Status (2026-03-02): In progress.
 - [x] Check `apps/zerg/backend/zerg/routers/agents.py` ingest endpoint for any body size limits. (No explicit body clamp found; gzip/zstd paths support streaming decode.)
 - [ ] Check the Coolify/nginx proxy config for upload limits on the zerg server.
 - [x] After removing the cap, run `make test` — existing test `test_raw_line_cap_truncates` in `compressor.rs` updated to assert full preservation.
-- [ ] Run `make test-e2e`.
+- [x] Run `make test-e2e`.
 
 **Files to touch:**
 - `apps/engine/src/pipeline/compressor.rs` — remove cap (marked with TODO comment)
@@ -53,6 +53,7 @@ Notes (2026-03-02):
 - Validation run:
   - `cargo test -p longhouse-engine pipeline::compressor::tests` → 4 passed
   - `make test` → 444 backend tests passed, 96 control-plane tests passed, 9 engine parser tests passed
+  - `make test-e2e` → 59 core E2E + 4 a11y passed
 
 ---
 
