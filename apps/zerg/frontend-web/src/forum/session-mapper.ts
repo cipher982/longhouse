@@ -11,6 +11,7 @@ import type {
 } from "./types";
 import { createForumState, type ForumMapState } from "./state";
 import { parseUTC } from "../lib/dateUtils";
+import { isSessionActive, normalizePresenceState } from "./session-status";
 
 const ROOM_SIZE = 8; // Grid units per room
 const ROOM_PADDING = 3;
@@ -175,13 +176,14 @@ function mapSessionsToEntities(
       // Map real presence state (or heuristic status) to canvas entity status.
       // Parked sessions render as disabled — user has intentionally deprioritised them.
       let entityStatus: ForumEntity["status"] = "idle";
+      const presenceState = normalizePresenceState(session.presence_state);
       if (session.ended_at || session.user_state === "parked") {
         entityStatus = "disabled";
-      } else if (session.presence_state === "running") {
+      } else if (presenceState === "running") {
         entityStatus = "working";
-      } else if (session.presence_state === "thinking") {
+      } else if (presenceState === "thinking") {
         entityStatus = "moving"; // visual: in-motion/active
-      } else if (session.status === "working") {
+      } else if (isSessionActive(session)) {
         // Heuristic fallback: no presence signal but status heuristic says working
         entityStatus = "moving";
       }
@@ -197,7 +199,7 @@ function mapSessionsToEntities(
           provider: session.provider,
           room: room.name,
           subtitle: subtitle || undefined,
-          presence_state: session.presence_state,
+          presence_state: presenceState,
           presence_tool: session.presence_tool,
         },
       });

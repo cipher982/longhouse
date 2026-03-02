@@ -76,7 +76,7 @@ export interface AgentSessionPreview {
 export type AgentSessionStatus = "working" | "thinking" | "idle" | "completed" | "active";
 export type AgentAttentionLevel = "hard" | "needs" | "soft" | "auto";
 
-export type PresenceState = "thinking" | "running" | "idle";
+export type PresenceState = "thinking" | "running" | "idle" | (string & {});
 
 export interface AgentActiveSession {
   id: string;

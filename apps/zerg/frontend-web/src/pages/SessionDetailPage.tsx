@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
-import { useAgentSession, useAgentSessionEvents } from "../hooks/useAgentSessions";
+import { useAgentSession, useAgentSessionEventsInfinite } from "../hooks/useAgentSessions";
 import type { AgentEvent } from "../services/api/agents";
 import {
   Button,
@@ -24,6 +24,8 @@ import { SessionChat } from "../components/SessionChat";
 import type { ActiveSession } from "../hooks/useActiveSessions";
 import { parseUTC } from "../lib/dateUtils";
 import "../styles/sessions.css";
+
+const EVENTS_PAGE_SIZE = 1000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -415,10 +417,23 @@ export default function SessionDetailPage() {
   // Fetch session and events
   const { data: session, isLoading: sessionLoading, error: sessionError } =
     useAgentSession(sessionId || null);
-  const { data: eventsData, isLoading: eventsLoading, error: eventsError } =
-    useAgentSessionEvents(sessionId || null, { limit: 1000 });
+  const {
+    data: eventsPagesData,
+    isLoading: eventsLoading,
+    error: eventsError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useAgentSessionEventsInfinite(sessionId || null, { limit: EVENTS_PAGE_SIZE });
 
-  const events = useMemo(() => eventsData?.events || [], [eventsData]);
+  const events = useMemo(
+    () => eventsPagesData?.pages.flatMap((page) => page.events) || [],
+    [eventsPagesData]
+  );
+  const totalEvents = useMemo(
+    () => eventsPagesData?.pages[0]?.total ?? events.length,
+    [eventsPagesData, events.length]
+  );
 
   // Build merged timeline view-model
   const { items: timelineItems, toolItems, eventIdToAnchor } = useMemo(
@@ -503,6 +518,21 @@ export default function SessionDetailPage() {
     () => timelineItems.filter((i) => i.kind === "message").length,
     [timelineItems]
   );
+  const hasHighlightEvent = useMemo(() => {
+    if (highlightEventId == null) {
+      return true;
+    }
+    return events.some((event) => event.id === highlightEventId);
+  }, [highlightEventId, events]);
+
+  // For deep-link anchors, auto-fetch additional pages until the target event appears
+  // or we exhaust pagination.
+  useEffect(() => {
+    if (highlightEventId == null) return;
+    if (hasHighlightEvent) return;
+    if (!hasNextPage || isFetchingNextPage) return;
+    void fetchNextPage();
+  }, [highlightEventId, hasHighlightEvent, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Ready signal for E2E
   useEffect(() => {
@@ -592,7 +622,7 @@ export default function SessionDetailPage() {
         started_at: session.started_at,
         ended_at: session.ended_at,
         last_activity_at: session.ended_at || session.started_at,
-        status: session.ended_at ? "completed" : "active",
+        status: session.ended_at ? "completed" : "working",
         attention: "auto",
         duration_minutes: 0,
         last_user_message: null,
@@ -724,11 +754,20 @@ export default function SessionDetailPage() {
           <div className="session-timeline-controls">
             <div className="timeline-header">
               <span className="timeline-title">Event Timeline</span>
-              <span className="timeline-count">{events.length} events</span>
+              <span className="timeline-count">
+                {events.length >= totalEvents
+                  ? `${totalEvents} events`
+                  : `${events.length}/${totalEvents} events loaded`}
+              </span>
             </div>
             {events.length > 20 && (
               <div className="timeline-scroll-hint" role="note">
                 Tip: scroll anywhere in the viewport.
+              </div>
+            )}
+            {highlightEventId != null && !hasHighlightEvent && (
+              <div className="timeline-scroll-hint" role="status">
+                Loading more events to locate anchor `{highlightEventId}`…
               </div>
             )}
 
@@ -764,6 +803,18 @@ export default function SessionDetailPage() {
                     </span>
                   )}
                 </div>
+              </div>
+            )}
+            {hasNextPage && (
+              <div className="session-detail-pagination">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                >
+                  {isFetchingNextPage ? "Loading more…" : "Load older events"}
+                </Button>
               </div>
             )}
           </div>
