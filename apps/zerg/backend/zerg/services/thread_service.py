@@ -234,10 +234,19 @@ class ThreadService:
         return thread
 
     @staticmethod
-    def get_thread_messages_as_langchain(db: Session, thread_id: int) -> List[BaseMessage]:
-        """Return thread history converted to LangChain message objects."""
+    def get_thread_messages_as_langchain(
+        db: Session,
+        thread_id: int,
+        *,
+        history_limit: int = 100,
+    ) -> List[BaseMessage]:
+        """Return recent thread history converted to LangChain message objects.
 
-        rows = crud.get_thread_messages(db, thread_id=thread_id)
+        The returned history is the most recent ``history_limit`` messages,
+        ordered chronologically.
+        """
+
+        rows = crud.get_recent_thread_messages(db, thread_id=thread_id, limit=history_limit)
         return [_db_to_langchain(row) for row in rows]
 
     # ------------------------------------------------------------------
