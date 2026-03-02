@@ -37,14 +37,19 @@ Notes (2026-03-02):
 
 ## [Product] Oikos Prompt/Tool Contract Alignment (size: 2)
 
-Status (2026-03-02): Confirmed by code audit.
+Status (2026-03-02): Done.
 
 **Problem:** Oikos prompt guidance still emphasizes deprecated `spawn_commis` patterns while runtime is workspace-first and `spawn_workspace_commis` is the canonical path.
 
-- [ ] Update Oikos base prompt examples/instructions to reflect workspace-first delegation
-- [ ] Remove/replace deprecated `spawn_commis` guidance from user-facing prompt text
-- [ ] Keep compatibility alias behavior in code, but stop teaching legacy semantics
-- [ ] Add/adjust tests that assert prompt/tool contract consistency
+- [x] Update Oikos base prompt examples/instructions to reflect workspace-first delegation
+- [x] Remove/replace deprecated `spawn_commis` guidance from user-facing prompt text
+- [x] Keep compatibility alias behavior in code, but stop teaching legacy semantics
+- [x] Add/adjust tests that assert prompt/tool contract consistency
+
+Notes (2026-03-02):
+- Updated `BASE_OIKOS_PROMPT` to make `spawn_workspace_commis` primary, mark `spawn_commis` as deprecated, and replace stale `wait` parameter guidance with explicit `wait_for_commis(job_id)` usage.
+- Added `tests_lite/test_oikos_prompt_contract.py` guardrails for workspace-first wording, removal of `wait=True/False` prompt guidance, and alignment with tool descriptions.
+- Targeted test run: `./run_backend_tests_lite.sh tests_lite/test_oikos_prompt_contract.py tests_lite/test_thread_context_window.py` → 5 passed.
 
 ---
 
