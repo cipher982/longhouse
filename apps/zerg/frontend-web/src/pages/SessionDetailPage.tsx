@@ -3,7 +3,7 @@
  *
  * Features:
  * - Full event timeline (user, assistant, tool)
- * - Collapsible tool calls (collapsed by default)
+ * - Tool calls and their results merged into single collapsible cards
  * - Session metadata header
  * - Back navigation
  */
@@ -83,7 +83,6 @@ function truncatePath(path: string | null, maxLen: number = 50): string {
 
 function getToolDisplayInfo(toolName: string): { icon: string; color: string } {
   switch (toolName.toLowerCase()) {
-    // File operations
     case "bash":
     case "exec_command":
     case "shell":
@@ -112,6 +111,132 @@ function getToolDisplayInfo(toolName: string): { icon: string; color: string } {
     default:
       return { icon: (toolName[0] || "·").toUpperCase(), color: "var(--color-text-secondary)" };
   }
+}
+
+// ---------------------------------------------------------------------------
+// View-model types
+// ---------------------------------------------------------------------------
+
+/** A single merged tool interaction (call + its result, if any). */
+type ToolInteraction = {
+  /** Stable key for expand/collapse state. */
+  key: string;
+  toolName: string;
+  callEvent: AgentEvent | null;
+  resultEvent: AgentEvent | null;
+  /** How call and result were paired. */
+  pairing: "id" | "fifo" | "orphan" | "pending";
+  /** DOM id anchor — always the call event id when present, else result id. */
+  anchorId: number;
+  timestamp: string;
+};
+
+type TimelineItem =
+  | { kind: "message"; event: AgentEvent }
+  | { kind: "tool"; interaction: ToolInteraction };
+
+/**
+ * Build the merged timeline view-model from raw events.
+ *
+ * Two passes:
+ * 1. Pair every tool-call event with its result using tool_call_id (precise)
+ *    or FIFO position (legacy rows without IDs).
+ * 2. Emit TimelineItems in order, skipping result events that were absorbed
+ *    into their call's ToolInteraction.
+ */
+function buildTimelineItems(events: AgentEvent[]): {
+  items: TimelineItem[];
+  toolItems: ToolInteraction[];
+  /** Maps any event id (call or result) to the anchor id of its merged card. */
+  eventIdToAnchor: Map<number, number>;
+} {
+  // Pass 1 ── build ToolInteractions
+  const byCallId = new Map<string, ToolInteraction>();   // tool_call_id → interaction
+  const byCallEventId = new Map<number, ToolInteraction>(); // call event id → interaction
+  const fifoQueue: ToolInteraction[] = [];               // unmatched legacy calls
+  const absorbedResultIds = new Set<number>();
+  const eventIdToAnchor = new Map<number, number>();
+
+  for (const e of events) {
+    if (e.role === "assistant" && e.tool_name) {
+      const key = e.tool_call_id ? `id:${e.tool_call_id}` : `call:${e.id}`;
+      const interaction: ToolInteraction = {
+        key,
+        toolName: e.tool_name,
+        callEvent: e,
+        resultEvent: null,
+        pairing: e.tool_call_id ? "id" : "pending",
+        anchorId: e.id,
+        timestamp: e.timestamp,
+      };
+      byCallEventId.set(e.id, interaction);
+      if (e.tool_call_id) {
+        byCallId.set(e.tool_call_id, interaction);
+      } else {
+        fifoQueue.push(interaction);
+      }
+      eventIdToAnchor.set(e.id, e.id);
+
+    } else if (e.role === "tool") {
+      let matched: ToolInteraction | undefined;
+
+      if (e.tool_call_id) {
+        matched = byCallId.get(e.tool_call_id);
+        // ID present but no matching call (mid-rollout / orphan) → fall through to FIFO
+      }
+      if (!matched) {
+        matched = fifoQueue.shift();
+        if (matched) matched.pairing = "fifo";
+      }
+
+      if (matched) {
+        matched.resultEvent = e;
+        absorbedResultIds.add(e.id);
+        eventIdToAnchor.set(e.id, matched.anchorId);
+      } else {
+        // Genuine orphan result — no call found
+        eventIdToAnchor.set(e.id, e.id);
+      }
+    }
+  }
+
+  // Pass 2 ── build TimelineItems in order
+  const items: TimelineItem[] = [];
+  const toolItems: ToolInteraction[] = [];
+
+  for (const e of events) {
+    // Skip result events absorbed into their call's card
+    if (e.role === "tool" && absorbedResultIds.has(e.id)) continue;
+
+    if (e.role === "user") {
+      items.push({ kind: "message", event: e });
+
+    } else if (e.role === "assistant" && e.tool_name) {
+      const interaction = byCallEventId.get(e.id)!;
+      items.push({ kind: "tool", interaction });
+      toolItems.push(interaction);
+
+    } else if (e.role === "tool") {
+      // Orphan result (call was never recorded)
+      const interaction: ToolInteraction = {
+        key: `orphan:${e.id}`,
+        toolName: "tool",
+        callEvent: null,
+        resultEvent: e,
+        pairing: "orphan",
+        anchorId: e.id,
+        timestamp: e.timestamp,
+      };
+      items.push({ kind: "tool", interaction });
+      toolItems.push(interaction);
+
+    } else {
+      // assistant text (no tool_name) or unknown role
+      items.push({ kind: "message", event: e });
+    }
+  }
+
+  return { items, toolItems, eventIdToAnchor };
 }
 
 // ---------------------------------------------------------------------------
@@ -162,45 +287,53 @@ function AssistantMessage({ event, isHighlighted }: AssistantMessageProps) {
   );
 }
 
-interface ToolCallProps {
-  event: AgentEvent;
+interface ToolInteractionCardProps {
+  interaction: ToolInteraction;
   isExpanded: boolean;
   onToggle: () => void;
   isHighlighted?: boolean;
-  resolvedToolName?: string; // for role=tool result events that have no tool_name in DB
 }
 
-function ToolCall({ event, isExpanded, onToggle, isHighlighted, resolvedToolName }: ToolCallProps) {
-  const isResult = event.role === "tool" && !event.tool_name;
-  const displayName = event.tool_name || resolvedToolName || "tool";
-  const toolInfo = getToolDisplayInfo(displayName);
-  const hasInput = event.tool_input_json && Object.keys(event.tool_input_json).length > 0;
-  const hasOutput = event.tool_output_text && event.tool_output_text.length > 0;
+function ToolInteractionCard({
+  interaction,
+  isExpanded,
+  onToggle,
+  isHighlighted,
+}: ToolInteractionCardProps) {
+  const { toolName, callEvent, resultEvent, pairing } = interaction;
+  const toolInfo = getToolDisplayInfo(toolName);
 
-  // Extract brief summary for collapsed state
+  const hasInput =
+    callEvent?.tool_input_json != null &&
+    Object.keys(callEvent.tool_input_json).length > 0;
+  const hasOutput =
+    resultEvent?.tool_output_text != null &&
+    resultEvent.tool_output_text.length > 0;
+
+  const isPending = !resultEvent && pairing !== "orphan";
+  const isOrphan = pairing === "orphan";
+
   const getSummary = (): string => {
-    // For result events, preview the output
-    if (isResult && event.tool_output_text) {
-      return event.tool_output_text.slice(0, 80).replace(/\n/g, " ");
+    if (callEvent?.tool_input_json) {
+      const input = callEvent.tool_input_json;
+      if ("file_path" in input) return truncatePath(String(input.file_path));
+      if ("command" in input) return String(input.command).slice(0, 60);
+      if ("pattern" in input) return String(input.pattern);
+      if ("path" in input) return truncatePath(String(input.path));
+      if ("url" in input) return String(input.url).slice(0, 50);
     }
-    if (!event.tool_input_json) return "";
-    const input = event.tool_input_json;
-
-    // Common patterns
-    if ("file_path" in input) return truncatePath(String(input.file_path));
-    if ("command" in input) return String(input.command).slice(0, 60);
-    if ("pattern" in input) return String(input.pattern);
-    if ("path" in input) return truncatePath(String(input.path));
-    if ("url" in input) return String(input.url).slice(0, 50);
-
+    if (resultEvent?.tool_output_text) {
+      return resultEvent.tool_output_text.slice(0, 80).replace(/\n/g, " ");
+    }
     return "";
   };
 
   const summary = getSummary();
+  const timestamp = callEvent?.timestamp ?? resultEvent?.timestamp ?? "";
 
   return (
     <div
-      id={`event-${event.id}`}
+      id={`event-${interaction.anchorId}`}
       className={`event-item event-tool ${isExpanded ? "expanded" : ""}${isHighlighted ? " event-highlight" : ""}`}
     >
       <button
@@ -209,17 +342,20 @@ function ToolCall({ event, isExpanded, onToggle, isHighlighted, resolvedToolName
         aria-expanded={isExpanded}
       >
         <div className="event-tool-title">
-          <span className="tool-icon" style={{ backgroundColor: toolInfo.color, opacity: isResult ? 0.6 : 1 }}>
+          <span
+            className="tool-icon"
+            style={{ backgroundColor: toolInfo.color, opacity: isOrphan ? 0.5 : 1 }}
+          >
             {toolInfo.icon}
           </span>
-          <span className="tool-name">{displayName}</span>
-          {isResult && <span className="tool-result-badge">↩</span>}
+          <span className="tool-name">{toolName}</span>
+          {isPending && <span className="tool-pending-badge">…</span>}
           {!isExpanded && summary && (
             <span className="tool-summary">{summary}</span>
           )}
         </div>
         <div className="event-tool-meta">
-          <span className="event-time">{formatTime(event.timestamp)}</span>
+          {timestamp && <span className="event-time">{formatTime(timestamp)}</span>}
           <span className="expand-icon">{isExpanded ? "▼" : "▶"}</span>
         </div>
       </button>
@@ -230,7 +366,7 @@ function ToolCall({ event, isExpanded, onToggle, isHighlighted, resolvedToolName
             <div className="tool-section">
               <div className="tool-section-label">Input</div>
               <pre className="tool-section-content">
-                {JSON.stringify(event.tool_input_json, null, 2)}
+                {JSON.stringify(callEvent!.tool_input_json, null, 2)}
               </pre>
             </div>
           )}
@@ -238,11 +374,19 @@ function ToolCall({ event, isExpanded, onToggle, isHighlighted, resolvedToolName
             <div className="tool-section">
               <div className="tool-section-label">Output</div>
               <pre className="tool-section-content tool-output">
-                {event.tool_output_text}
+                {resultEvent!.tool_output_text}
               </pre>
             </div>
           )}
-          {!hasInput && !hasOutput && (
+          {isPending && (
+            <div className="tool-section-empty">
+              Result not recorded — session ended mid-execution
+            </div>
+          )}
+          {isOrphan && !hasOutput && (
+            <div className="tool-section-empty">No output recorded</div>
+          )}
+          {!hasInput && !hasOutput && !isPending && !isOrphan && (
             <div className="tool-section-empty">No input/output recorded</div>
           )}
         </div>
@@ -269,18 +413,24 @@ export default function SessionDetailPage() {
   }, [searchParams]);
 
   // Fetch session and events
-  const { data: session, isLoading: sessionLoading, error: sessionError } = useAgentSession(sessionId || null);
-  const { data: eventsData, isLoading: eventsLoading, error: eventsError } = useAgentSessionEvents(sessionId || null, {
-    limit: 1000,
-  });
+  const { data: session, isLoading: sessionLoading, error: sessionError } =
+    useAgentSession(sessionId || null);
+  const { data: eventsData, isLoading: eventsLoading, error: eventsError } =
+    useAgentSessionEvents(sessionId || null, { limit: 1000 });
 
   const events = useMemo(() => eventsData?.events || [], [eventsData]);
+
+  // Build merged timeline view-model
+  const { items: timelineItems, toolItems, eventIdToAnchor } = useMemo(
+    () => buildTimelineItems(events),
+    [events]
+  );
 
   // Resume chat state
   const [showResume, setShowResume] = useState(false);
 
   // Event role filter
-  const [eventFilter, setEventFilter] = useState<'all' | 'messages' | 'tools'>('all');
+  const [eventFilter, setEventFilter] = useState<"all" | "messages" | "tools">("all");
 
   // Text search with debounce
   const [searchQuery, setSearchQuery] = useState("");
@@ -291,107 +441,68 @@ export default function SessionDetailPage() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Expanded state for tool calls
-  const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
-  const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null);
+  // Expand/collapse state keyed by interaction key (string)
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
 
-  // Toggle individual tool
-  const toggleTool = (eventId: number) => {
+  const toggleTool = (key: string) => {
     setExpandedTools((prev) => {
       const next = new Set(prev);
-      if (next.has(eventId)) {
-        next.delete(eventId);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(eventId);
+        next.add(key);
       }
       return next;
     });
   };
 
-  // Expand/collapse all tools
-  const toolEvents = useMemo(
-    () => events.filter((e) => e.role === "tool"),
-    [events]
-  );
-  const allExpanded = toolEvents.length > 0 && toolEvents.every((e) => expandedTools.has(e.id));
+  const allExpanded =
+    toolItems.length > 0 && toolItems.every((i) => expandedTools.has(i.key));
 
   const toggleAll = () => {
     if (allExpanded) {
       setExpandedTools(new Set());
     } else {
-      setExpandedTools(new Set(toolEvents.map((e) => e.id)));
+      setExpandedTools(new Set(toolItems.map((i) => i.key)));
     }
   };
 
-  // Client-side event filter + text search
-  const filteredEvents = useMemo(() => {
-    let result = events;
-    if (eventFilter === 'messages') result = result.filter(e => e.role === 'user' || e.role === 'assistant');
-    else if (eventFilter === 'tools') result = result.filter(e => e.role === 'tool' || e.tool_name);
+  // Filter + search over timeline items
+  const filteredItems = useMemo(() => {
+    let result = timelineItems;
+
+    if (eventFilter === "messages") {
+      result = result.filter((item) => item.kind === "message");
+    } else if (eventFilter === "tools") {
+      result = result.filter((item) => item.kind === "tool");
+    }
 
     if (debouncedSearch.trim()) {
       const q = debouncedSearch.toLowerCase();
-      result = result.filter(e => {
-        if (e.content_text?.toLowerCase().includes(q)) return true;
-        if (e.tool_name?.toLowerCase().includes(q)) return true;
-        if (e.tool_output_text?.toLowerCase().includes(q)) return true;
-        if (e.tool_input_json && JSON.stringify(e.tool_input_json).toLowerCase().includes(q)) return true;
+      result = result.filter((item) => {
+        if (item.kind === "message") {
+          return item.event.content_text?.toLowerCase().includes(q);
+        }
+        // tool: search name, input, output
+        const { interaction } = item;
+        if (interaction.toolName.toLowerCase().includes(q)) return true;
+        if (interaction.callEvent?.tool_input_json &&
+          JSON.stringify(interaction.callEvent.tool_input_json).toLowerCase().includes(q))
+          return true;
+        if (interaction.resultEvent?.tool_output_text?.toLowerCase().includes(q))
+          return true;
         return false;
       });
     }
 
     return result;
-  }, [events, eventFilter, debouncedSearch]);
+  }, [timelineItems, eventFilter, debouncedSearch]);
 
   const messageCount = useMemo(
-    () => events.filter(e => e.role === 'user' || e.role === 'assistant').length,
-    [events]
+    () => timelineItems.filter((i) => i.kind === "message").length,
+    [timelineItems]
   );
-  const toolCount = useMemo(
-    () => events.filter(e => e.role === 'tool' || e.tool_name).length,
-    [events]
-  );
-
-  // Resolve tool names for result events (role=tool has no tool_name in DB).
-  // Primary: join on tool_call_id (set for all events ingested after the fix).
-  // Fallback: FIFO queue for legacy rows where tool_call_id is NULL.
-  const toolResultNames = useMemo(() => {
-    const map = new Map<number, string>();
-
-    // Build call_id → tool_name index from tool-call events
-    const nameById = new Map<string, string>();
-    for (const e of events) {
-      if (e.role === "assistant" && e.tool_name && e.tool_call_id) {
-        nameById.set(e.tool_call_id, e.tool_name);
-      }
-    }
-
-    // FIFO queue for legacy rows without tool_call_id
-    const fifoQueue: string[] = [];
-
-    for (const e of events) {
-      if (e.role === "assistant" && e.tool_name) {
-        if (!e.tool_call_id) fifoQueue.push(e.tool_name);
-      } else if (e.role === "tool" && !e.tool_name) {
-        if (e.tool_call_id) {
-          // Precise ID-based match
-          const name = nameById.get(e.tool_call_id);
-          if (name) {
-            map.set(e.id, name);
-          } else {
-            // ID present but no matching call found (mid-rollout session) — try FIFO
-            const fallback = fifoQueue.shift();
-            if (fallback) map.set(e.id, fallback);
-          }
-        } else {
-          // Legacy fallback: no ID on either side
-          const name = fifoQueue.shift();
-          if (name) map.set(e.id, name);
-        }
-      }
-    }
-    return map;
-  }, [events]);
 
   // Ready signal for E2E
   useEffect(() => {
@@ -405,28 +516,30 @@ export default function SessionDetailPage() {
     };
   }, [sessionLoading, eventsLoading]);
 
-  // Scroll to matched event when arriving from search results
+  // Scroll to event when arriving from search results.
+  // Map raw event_id → anchor id of its merged card.
   useEffect(() => {
     if (!highlightEventId || events.length === 0) return;
-    const targetId = `event-${highlightEventId}`;
-    const target = document.getElementById(targetId);
+    const anchorId = eventIdToAnchor.get(highlightEventId) ?? highlightEventId;
+    const domId = `event-${anchorId}`;
+    const target = document.getElementById(domId);
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "center" });
-      setHighlightedEventId(targetId);
+      setHighlightedAnchorId(domId);
+      // Auto-expand the highlighted tool card
+      const toolItem = toolItems.find((i) => i.anchorId === anchorId);
+      if (toolItem) {
+        setExpandedTools((prev) => new Set([...prev, toolItem.key]));
+      }
     }
-  }, [highlightEventId, events]);
+  }, [highlightEventId, events, eventIdToAnchor, toolItems]);
 
-  // Back navigation - preserve filters from location state
+  // Back navigation
   const handleBack = () => {
     const from = (location.state as { from?: string })?.from;
-    if (from) {
-      navigate(from);
-    } else {
-      navigate("/timeline");
-    }
+    navigate(from ?? "/timeline");
   };
 
-  // Loading state
   if (sessionLoading || eventsLoading) {
     return (
       <PageShell size="wide" className="sessions-page-container">
@@ -439,7 +552,6 @@ export default function SessionDetailPage() {
     );
   }
 
-  // Error state
   const error = sessionError || eventsError;
   if (error || !session) {
     return (
@@ -462,15 +574,13 @@ export default function SessionDetailPage() {
     );
   }
 
-  const title = (session.summary_title && session.summary_title !== "Untitled Session")
-    ? session.summary_title
-    : session.project || session.git_branch || "Session";
-  const turnCount = session.user_messages;
+  const title =
+    session.summary_title && session.summary_title !== "Untitled Session"
+      ? session.summary_title
+      : session.project || session.git_branch || "Session";
 
-  // Resume is available for Claude-provider sessions (they support --resume)
   const canResume = session.provider === "claude";
 
-  // Adapt AgentSession to ActiveSession shape for SessionChat
   const activeSessionForChat: ActiveSession | null = canResume
     ? {
         id: session.id,
@@ -496,7 +606,6 @@ export default function SessionDetailPage() {
       }
     : null;
 
-  // Show resume chat overlay
   if (showResume && activeSessionForChat) {
     return (
       <PageShell size="wide" className="sessions-page-container">
@@ -527,15 +636,11 @@ export default function SessionDetailPage() {
             </span>
             <div className="session-detail-actions">
               {canResume && (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => setShowResume(true)}
-                >
+                <Button variant="primary" size="sm" onClick={() => setShowResume(true)}>
                   Resume Session
                 </Button>
               )}
-              {toolEvents.length > 0 && (
+              {toolItems.length > 0 && (
                 <Button variant="ghost" size="sm" onClick={toggleAll}>
                   {allExpanded ? "Collapse All" : "Expand All"}
                 </Button>
@@ -555,9 +660,9 @@ export default function SessionDetailPage() {
           </div>
           <span className="meta-separator">&middot;</span>
           <div className="meta-item">
-            <span className={`session-status-badge ${session.ended_at ? 'completed' : 'in-progress'}`}>
-              <span className={`status-dot ${session.ended_at ? 'completed' : 'in-progress'}`} />
-              {session.ended_at ? 'Completed' : 'In Progress'}
+            <span className={`session-status-badge ${session.ended_at ? "completed" : "in-progress"}`}>
+              <span className={`status-dot ${session.ended_at ? "completed" : "in-progress"}`} />
+              {session.ended_at ? "Completed" : "In Progress"}
             </span>
           </div>
           <span className="meta-separator">&middot;</span>
@@ -572,10 +677,10 @@ export default function SessionDetailPage() {
           </div>
           <span className="meta-separator">&middot;</span>
           <div className="meta-item">
-            <Badge variant="neutral">{turnCount} turns</Badge>
+            <Badge variant="neutral">{session.user_messages} turns</Badge>
             <Badge variant="neutral">{session.tool_calls} tools</Badge>
           </div>
-          {session.environment && session.environment !== 'production' && (
+          {session.environment && session.environment !== "production" && (
             <>
               <span className="meta-separator">&middot;</span>
               <div className="meta-item">
@@ -627,19 +732,20 @@ export default function SessionDetailPage() {
               </div>
             )}
 
-            {/* Event role filter + search */}
-            {events.length > 0 && (
+            {timelineItems.length > 0 && (
               <div className="session-detail-filters">
                 <div className="filter-btn-group">
-                  {(['all', 'messages', 'tools'] as const).map(filter => (
+                  {(["all", "messages", "tools"] as const).map((filter) => (
                     <button
                       key={filter}
-                      className={`filter-btn ${eventFilter === filter ? 'active' : ''}`}
+                      className={`filter-btn ${eventFilter === filter ? "active" : ""}`}
                       onClick={() => setEventFilter(filter)}
                     >
-                      {filter === 'all' ? `All (${events.length})` :
-                       filter === 'messages' ? `Messages (${messageCount})` :
-                       `Tools (${toolCount})`}
+                      {filter === "all"
+                        ? `All (${timelineItems.length})`
+                        : filter === "messages"
+                        ? `Messages (${messageCount})`
+                        : `Tools (${toolItems.length})`}
                     </button>
                   ))}
                 </div>
@@ -649,11 +755,12 @@ export default function SessionDetailPage() {
                     className="event-search-input"
                     placeholder="Search events..."
                     value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
+                    onChange={(e) => setSearchQuery(e.target.value)}
                   />
                   {debouncedSearch.trim() && (
                     <span className="event-search-count">
-                      {filteredEvents.length} match{filteredEvents.length !== 1 ? "es" : ""}
+                      {filteredItems.length} match
+                      {filteredItems.length !== 1 ? "es" : ""}
                     </span>
                   )}
                 </div>
@@ -661,54 +768,49 @@ export default function SessionDetailPage() {
             )}
           </div>
 
-          {filteredEvents.length === 0 ? (
+          {filteredItems.length === 0 ? (
             <EmptyState
               title="No events"
               description={
                 debouncedSearch.trim()
                   ? `No events match "${debouncedSearch}".`
-                  : eventFilter !== 'all'
-                    ? "No events match the selected filter."
-                    : "This session has no recorded events."
+                  : eventFilter !== "all"
+                  ? "No events match the selected filter."
+                  : "This session has no recorded events."
               }
             />
           ) : (
             <div className="timeline-events">
-              {filteredEvents.map((event) => {
-                const isHighlighted = highlightedEventId === `event-${event.id}`;
-                if (event.role === "user") {
-                  return <UserMessage key={event.id} event={event} isHighlighted={isHighlighted} />;
-                }
-                if (event.role === "assistant") {
-                  // Codex (and similar) emit tool calls as assistant events with
-                  // tool_name set but no content_text. Render them as ToolCall
-                  // instead of showing the misleading "(thinking...)" placeholder.
-                  if (event.tool_name && !event.content_text) {
-                    return (
-                      <ToolCall
-                        key={event.id}
-                        event={event}
-                        isExpanded={expandedTools.has(event.id)}
-                        onToggle={() => toggleTool(event.id)}
-                        isHighlighted={isHighlighted}
-                      />
-                    );
-                  }
-                  return <AssistantMessage key={event.id} event={event} isHighlighted={isHighlighted} />;
-                }
-                if (event.role === "tool") {
+              {filteredItems.map((item) => {
+                if (item.kind === "tool") {
+                  const { interaction } = item;
+                  const isHighlighted =
+                    highlightedAnchorId === `event-${interaction.anchorId}`;
                   return (
-                    <ToolCall
-                      key={event.id}
-                      event={event}
-                      isExpanded={expandedTools.has(event.id)}
-                      onToggle={() => toggleTool(event.id)}
+                    <ToolInteractionCard
+                      key={interaction.key}
+                      interaction={interaction}
+                      isExpanded={expandedTools.has(interaction.key)}
+                      onToggle={() => toggleTool(interaction.key)}
                       isHighlighted={isHighlighted}
-                      resolvedToolName={toolResultNames.get(event.id)}
                     />
                   );
                 }
-                // Unknown role - render as generic
+
+                // kind === "message"
+                const { event } = item;
+                const isHighlighted = highlightedAnchorId === `event-${event.id}`;
+                if (event.role === "user") {
+                  return (
+                    <UserMessage key={event.id} event={event} isHighlighted={isHighlighted} />
+                  );
+                }
+                if (event.role === "assistant") {
+                  return (
+                    <AssistantMessage key={event.id} event={event} isHighlighted={isHighlighted} />
+                  );
+                }
+                // Unknown role
                 return (
                   <div
                     key={event.id}
