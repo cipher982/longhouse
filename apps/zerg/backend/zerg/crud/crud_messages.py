@@ -41,6 +41,28 @@ def get_thread_messages(
     return query.order_by(ThreadMessage.id).offset(skip).limit(limit).all()
 
 
+def get_recent_thread_messages(
+    db: Session,
+    thread_id: int,
+    limit: int = 100,
+    *,
+    include_internal: bool = True,
+):
+    """Get the most recent messages for a thread in chronological order.
+
+    This helper is intended for model-context loading where we want a sliding
+    window over the latest conversation turns while preserving strict
+    insertion-order semantics for the returned window.
+    """
+    query = db.query(ThreadMessage).filter(ThreadMessage.thread_id == thread_id)
+    if not include_internal:
+        query = query.filter(ThreadMessage.internal.is_(False))
+
+    rows = query.order_by(ThreadMessage.id.desc()).limit(limit).all()
+    rows.reverse()
+    return rows
+
+
 def create_thread_message(
     db: Session,
     thread_id: int,

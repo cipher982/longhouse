@@ -17,6 +17,7 @@ from .crud_fiches import update_fiche
 
 # Message operations
 from .crud_messages import create_thread_message
+from .crud_messages import get_recent_thread_messages
 from .crud_messages import get_thread_messages
 from .crud_messages import get_unprocessed_messages
 from .crud_messages import mark_message_processed
@@ -79,6 +80,7 @@ __all__ = [
     "update_connector",
     # Messages
     "create_thread_message",
+    "get_recent_thread_messages",
     "get_thread_messages",
     "get_unprocessed_messages",
     "mark_message_processed",
