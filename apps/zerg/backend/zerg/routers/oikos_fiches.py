@@ -52,20 +52,13 @@ def list_oikos_fiches(
 
     summaries = []
     for fiche in fiches:
-        # Calculate next_run_at from schedule if present
-        next_run_at = None
-        if fiche.schedule:
-            # TODO: Parse cron schedule and calculate next run
-            # For now, leave as None - implement in Phase 4
-            pass
-
         summaries.append(
             OikosFicheSummary(
                 id=fiche.id,
                 name=fiche.name,
                 status=fiche.status.value if hasattr(fiche.status, "value") else str(fiche.status),
                 schedule=fiche.schedule,
-                next_run_at=next_run_at,
+                next_run_at=fiche.next_run_at,
                 description=fiche.system_instructions[:200] if fiche.system_instructions else None,
             )
         )
