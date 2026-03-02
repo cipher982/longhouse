@@ -216,6 +216,15 @@ Make `model` an explicit override only, not a forced default. New execution logi
 
 ---
 
+## [Product] Oikos Fiche Surface
+
+**Status (2026-03-02):** Fixed.
+
+- [x] `/api/oikos/fiches` now returns persisted `fiche.next_run_at` (was always `null` even when scheduler populated it).
+- [x] Added API-lite regression test coverage for owner scoping + `next_run_at` serialization.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.
