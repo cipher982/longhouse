@@ -75,13 +75,13 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 |---------|-----|----------|-----|-------|
 | Session timeline | `GET /api/agents/sessions` | SessionsPage | `search_sessions` | FTS search, filters by project/provider/days |
 | Session detail | `GET /api/agents/sessions/:id` | SessionDetailPage | — | Full event transcript |
-| **Semantic search** | `GET /api/agents/sessions/semantic?query=` | **Not wired up** | `search_sessions` | Requires embeddings (OpenAI text-embedding-3-small, 256d) |
-| **Recall** | `GET /api/agents/recall?query=` | **Not wired up** | `recall` | Turn-level knowledge retrieval with context windows |
+| **Semantic search** | `GET /api/agents/sessions/semantic?query=` | SessionsPage (AI search / hybrid mode) | `search_sessions` | Requires embeddings (OpenAI text-embedding-3-small, 256d) |
+| **Recall** | `GET /api/agents/recall?query=` | SessionsPage (Recall panel) | `recall` | Turn-level knowledge retrieval with context windows |
 | Embeddings | `POST /api/agents/backfill-embeddings` | — | — | Auto-generated on ingest; backfill for existing sessions |
 | Oikos (chat) | WebSocket `/ws/oikos` | OikosPage | — | Voice/text AI assistant with tool use |
 | Insights | `GET/POST /api/agents/insights` | InsightsPage | `log_insight`, `query_insights` | Patterns, failures, learnings |
-| Reflection | `GET /api/agents/reflection/briefing` | **Not wired up** | `get_briefing` | Daily/weekly session briefings |
-| Jobs/Scheduler | `GET /api/agents/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
+| Reflection | `GET /api/agents/reflection/briefing` | BriefingsPage | `get_briefing` | Daily/weekly session briefings |
+| Jobs/Scheduler | `GET /api/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
 | Memory | `GET/PUT /api/agents/memory` | — | `read_memory`, `write_memory` | Key-value store for agent state |
 | File reservations | `POST /api/agents/reservations` | — | `reserve_file` | Prevent concurrent edits |
 | Action proposals | `GET/POST /api/proposals` | ProposalsPage | — | Review queue for reflection insights with approve/decline; approved proposals show in briefings |
