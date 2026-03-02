@@ -220,6 +220,43 @@ class TestUpsertProvider:
             )
             assert resp.status_code == 400
 
+    def test_ssrf_blocks_metadata_hostname_on_save(self, tmp_path):
+        """PUT rejects metadata.google.internal hostname directly."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            resp = client.put(
+                "/llm/providers/text",
+                json={
+                    "provider_name": "custom",
+                    "api_key": "sk-1",
+                    "base_url": "https://metadata.google.internal/computeMetadata/v1",
+                },
+            )
+            assert resp.status_code == 400
+
+    @patch("socket.getaddrinfo")
+    def test_ssrf_blocks_hostname_resolving_to_private_ip(self, mock_getaddrinfo, tmp_path):
+        """PUT rejects hostnames that DNS-resolve into private IP ranges."""
+        import socket
+
+        # Simulate DNS rebinding: public hostname resolves to private RFC1918 IP.
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443)),
+        ]
+
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            resp = client.put(
+                "/llm/providers/text",
+                json={
+                    "provider_name": "custom",
+                    "api_key": "sk-1",
+                    "base_url": "https://example.com/v1",
+                },
+            )
+            assert resp.status_code == 400
+            assert "Hostname resolves to private/reserved IP" in str(resp.json())
+
     def test_ollama_localhost_allowed(self, tmp_path):
         """PUT allows localhost for Ollama provider."""
         sf = _make_db(tmp_path)
