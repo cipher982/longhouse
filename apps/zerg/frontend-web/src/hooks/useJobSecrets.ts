@@ -74,7 +74,7 @@ export function useJobs() {
 
 export function useJobsWithMeta() {
   return useQuery<JobListResponse>({
-    queryKey: ["jobs"],
+    queryKey: ["jobs", "with-meta"],
     queryFn: listJobsWithMeta,
   });
 }
