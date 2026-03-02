@@ -55,6 +55,7 @@ export interface JobInfo {
 export interface JobListResponse {
   jobs: JobInfo[];
   total: number;
+  registration_warnings: string[];
 }
 
 export interface JobsRepoStatusResponse {
@@ -150,6 +151,10 @@ export async function getJobSecretsStatus(jobId: string): Promise<JobSecretsStat
 export async function listJobs(): Promise<JobInfo[]> {
   const response = await request<JobListResponse>(`/jobs/`);
   return response.jobs;
+}
+
+export async function listJobsWithMeta(): Promise<JobListResponse> {
+  return request<JobListResponse>(`/jobs/`);
 }
 
 export async function getJobsRepoStatus(): Promise<JobsRepoStatusResponse> {

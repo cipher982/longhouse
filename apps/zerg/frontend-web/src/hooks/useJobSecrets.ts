@@ -6,6 +6,7 @@ import {
   deleteJobSecret,
   getJobSecretsStatus,
   listJobs,
+  listJobsWithMeta,
   getJobsRepoStatus,
   enableJob,
   disableJob,
@@ -20,6 +21,7 @@ import {
   type JobSecretUpsertRequest,
   type JobSecretsStatusResponse,
   type JobInfo,
+  type JobListResponse,
   type JobsRepoStatusResponse,
   type JobRepoConfigResponse,
   type JobRepoConfigRequest,
@@ -67,6 +69,13 @@ export function useJobs() {
   return useQuery<JobInfo[]>({
     queryKey: ["jobs"],
     queryFn: listJobs,
+  });
+}
+
+export function useJobsWithMeta() {
+  return useQuery<JobListResponse>({
+    queryKey: ["jobs"],
+    queryFn: listJobsWithMeta,
   });
 }
 
