@@ -75,11 +75,20 @@ Notes (2026-03-02):
 
 ## [QA/Test] High-Risk Guardrails (size: 2)
 
-Status (2026-03-02): Confirmed by code audit.
+Status (2026-03-02): Done.
 
-- [ ] Add presence ingest tests for invalid state no-op and `tool_name` clearing on non-running states
-- [ ] Add migration guard test that checks SQLite table columns against agents model columns
-- [ ] Add deterministic dispatch tests (direct response vs quick tool vs commis delegation) in default test suite
+- [x] Add presence ingest tests for invalid state no-op and `tool_name` clearing on non-running states
+- [x] Add migration guard test that checks SQLite table columns against agents model columns
+- [x] Add deterministic dispatch tests (direct response vs quick tool vs commis delegation) in default test suite
+
+Notes (2026-03-02):
+- Extended `tests_lite/test_forum_filtering.py` with presence no-op coverage for invalid states and `tool_name` clearing when transitioning away from `running`.
+- Added `tests_lite/test_sqlite_migration_guard.py` to simulate legacy SQLite tables and assert `_migrate_agents_columns()` backfills all current model columns for `sessions`, `events`, and `job_runs`.
+- Added `tests_lite/test_oikos_dispatch_contract.py` for deterministic dispatch categories:
+  - direct response (no tool call),
+  - quick utility tool call,
+  - commis delegation.
+- Targeted test run: `./run_backend_tests_lite.sh tests_lite/test_forum_filtering.py tests_lite/test_sqlite_migration_guard.py tests_lite/test_oikos_dispatch_contract.py` → 15 passed.
 
 ---
 
