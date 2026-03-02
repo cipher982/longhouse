@@ -19,11 +19,11 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Product] Oikos Thread Context Window Bug (size: 3)
 
-Status (2026-03-02): Partial fix shipped (backend context window + regression tests).
+Status (2026-03-02): Done.
 
 **Problem:** Oikos uses a long-lived thread, but current history loading appears to cap to an oldest-message window rather than a latest-message sliding window. On long threads, this can drop recent context and degrade decisions.
 
-- [ ] Reproduce with a long oikos thread and confirm current message window behavior end-to-end
+- [x] Reproduce with a long oikos thread and confirm current message window behavior end-to-end
 - [x] Fix thread message retrieval to feed the most recent window to the LLM while preserving chronological order
 - [x] Add regression coverage in `tests_lite/` for long-thread context selection
 - [x] Run targeted backend tests and update this task with pass/fail evidence
@@ -31,7 +31,8 @@ Status (2026-03-02): Partial fix shipped (backend context window + regression te
 Notes (2026-03-02):
 - Implemented `get_recent_thread_messages()` and switched `ThreadService.get_thread_messages_as_langchain()` to recent-window retrieval.
 - Added `tests_lite/test_thread_context_window.py` (latest-100 and custom-limit window assertions).
-- Targeted test run: `./run_backend_tests_lite.sh tests_lite/test_thread_context_window.py` → 2 passed.
+- Added runner-path verification (`MessageArrayBuilder.with_conversation`) so the same latest-window behavior is validated through message assembly used by execution.
+- Targeted test run: `./run_backend_tests_lite.sh tests_lite/test_thread_context_window.py` → 3 passed.
 
 ---
 
