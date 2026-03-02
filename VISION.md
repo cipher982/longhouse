@@ -624,14 +624,13 @@ Claude Code hooks fire on lifecycle events (`Stop`, `SessionStart`, etc.). A `St
 
 ```json
 // .claude/settings.json (injected by `longhouse connect --install`)
-{"hooks": {"Stop": [{"command": "longhouse ship --session $SESSION_ID"}]}}
+{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/abs/path/to/longhouse-engine ship --file \"$TRANSCRIPT\"", "async": false, "timeout": 30}]}]}}
 ```
 
 Benefits:
-- Zero-config after install (no background service to manage)
-- Instant push (faster than file-watching debounce)
-- Works on any OS without launchd/systemd
-- `longhouse connect --install` auto-injects the hook + verifies it works
+- Instant push on Stop (no debounce delay)
+- Works on any OS where hooks are supported
+- `longhouse connect --install` auto-injects and verifies hook registration
 
 Limitations:
 - Only works for providers with hook support (Claude Code today)
@@ -978,8 +977,8 @@ Users bring their own LLM API keys. Longhouse stores and uses them securely.
 **Commands:**
 ```bash
 longhouse serve           # Start local server (SQLite, port 8080)
-longhouse connect --url <url>   # Run shipper in foreground (watch mode by default)
-longhouse connect --url <url> --install   # Install/start shipper service
+longhouse connect --url <url>   # Run engine daemon in foreground (watch + fallback scan)
+longhouse connect --url <url> --install   # Install/start managed engine service + hooks
 longhouse ship            # One-time manual sync
 longhouse status          # Show current configuration
 ```
@@ -1684,7 +1683,7 @@ $ longhouse serve
 → SQLite: ~/.longhouse/longhouse.db
 ```
 
-Logs are written to `~/.longhouse/server.log` (server) and `~/.claude/shipper.log` (shipper).
+Logs are written to `~/.longhouse/server.log` (server) and `~/.claude/logs/engine.log.*` (engine daemon).
 
 ---
 

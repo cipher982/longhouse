@@ -248,8 +248,8 @@ current columns. **Rule:** every new `Column` on an agents model must get a corr
 
 ## [Docs/Drift] Open Items
 
-- `docs/install-guide.md` still references `longhouse connect --poll` behavior that no longer matches runtime engine behavior. Update install docs and CLI help text together.
-- Keep VISION "Current State" sections in sync with hook installation/runtime details whenever hook registration behavior changes.
+- ~~`docs/install-guide.md` still references `longhouse connect --poll` behavior that no longer matches runtime engine behavior.~~ Fixed in docs + CLI help sync (2026-03-02).
+- ~~Keep VISION "Current State" sections in sync with hook installation/runtime details whenever hook registration behavior changes.~~ Synced shipper/hook examples + command docs (2026-03-02).
 - ~~PyPI `0.1.1` lags repo `0.1.2`.~~ Published as v0.1.3 (2026-02-24).
 
 ---
