@@ -3,14 +3,16 @@
 Commands:
 - auth: Authenticate with Longhouse and obtain a device token
 - ship: One-shot sync of all sessions
-- connect: Continuous sync (watch mode or polling)
+- connect: Continuous sync via Rust engine (watch + fallback scan)
 - connect --install: Install as background service
 - connect --uninstall: Remove background service
 - connect --status: Check service status
 - recall: Search past sessions from the terminal
 
-Watch mode (default): Uses file system events for sub-second sync.
-Polling mode: Falls back to periodic scanning (--poll or --interval).
+Runtime behavior:
+- longhouse connect delegates to longhouse-engine connect
+- file watching is always enabled; fallback scan runs periodically
+- --poll is kept for backwards compatibility and ignored
 """
 
 from __future__ import annotations
@@ -424,13 +426,13 @@ def connect(
         False,
         "--poll",
         "-p",
-        help="Use polling mode instead of file watching",
+        help="Deprecated compatibility flag (ignored; engine always uses file watching + fallback scan)",
     ),
     interval: int = typer.Option(
-        30,
+        300,
         "--interval",
         "-i",
-        help="Polling interval in seconds (implies --poll)",
+        help="Fallback scan interval in seconds (engine --fallback-scan-secs)",
     ),
     debounce: int = typer.Option(
         500,
@@ -470,10 +472,12 @@ def connect(
         help="Check the status of the background service",
     ),
 ) -> None:
-    """Continuous: watch and ship sessions to Longhouse.
+    """Continuous: watch and ship sessions to Longhouse via Rust engine.
 
-    By default uses file watching for sub-second sync.
-    Use --poll or --interval for polling mode.
+    Runtime behavior:
+    - Uses OS file watching for near-real-time sync.
+    - Runs a periodic fallback scan (default: 300s, configurable via --interval).
+    - No dedicated polling mode in the engine (--poll is ignored for compatibility).
 
     Service management:
         --install    Install background service + Claude Code hooks
@@ -541,15 +545,14 @@ def connect(
         typer.secho(str(e), fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    if poll or interval != 30:
+    if poll:
         typer.secho(
-            "Warning: --poll / --interval are not supported by the Rust engine. "
-            "The engine uses file watching with a fallback scan instead. Ignoring.",
+            "Warning: --poll is deprecated and ignored. The Rust engine always uses " "file watching plus a periodic fallback scan.",
             fg=typer.colors.YELLOW,
         )
 
     engine_args = [engine, "connect", "--flush-ms", str(debounce)]
-    if interval != 30:
+    if interval != 300:
         engine_args += ["--fallback-scan-secs", str(interval)]
 
     env = os.environ.copy()

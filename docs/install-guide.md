@@ -27,7 +27,7 @@ Run manually anytime with `longhouse onboard`. The wizard walks through 7 steps:
 |------|-------------|
 | 1. Dependencies | Checks for Claude Code (optional) and existing config |
 | 2. Server setup | Starts `longhouse serve --daemon` on port 8080 |
-| 3. Session shipping | Installs background shipper service (launchd/systemd) via `longhouse connect --install` |
+| 3. Session shipping | Installs background engine service (launchd/systemd) via `longhouse connect --install` |
 | 4. Verification | Emits a test event to confirm the pipeline works |
 | 5. Demo data | Seeds sample sessions so you see something immediately |
 | 6. Config | Saves settings to `~/.config/longhouse/config.toml` |
@@ -48,19 +48,21 @@ Use `longhouse onboard --quick` to accept all defaults non-interactively.
 
 ## Connect Flow
 
-`longhouse connect` continuously syncs Claude Code sessions to your Longhouse instance.
+`longhouse connect` configures and runs session shipping to your Longhouse instance.
 
 **What `--install` does:**
-1. Creates a background service (launchd plist on macOS, systemd unit on Linux)
+1. Creates a background `longhouse-engine` service (launchd plist on macOS, systemd unit on Linux)
 2. Installs Claude Code hooks (`~/.claude/hooks/`) so sessions ship on every Stop event
 3. Registers Longhouse as an MCP server for Claude Code and Codex CLI
 4. Verifies PATH in a fresh shell
 
 **Other modes:**
-- `longhouse connect` -- foreground file watcher (sub-second sync)
-- `longhouse connect --poll` -- polling mode (fallback)
+- `longhouse connect` -- foreground engine daemon (file watch + fallback scan)
+- `longhouse connect --interval 120` -- adjust fallback scan interval (default: 300s)
 - `longhouse connect --hooks-only` -- hooks + MCP only, no background daemon
 - `longhouse ship` -- one-shot sync of all pending sessions
+
+`--poll` is accepted for backwards compatibility but ignored by the Rust engine.
 
 **Service management:**
 ```bash
