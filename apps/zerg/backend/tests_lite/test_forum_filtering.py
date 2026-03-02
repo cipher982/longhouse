@@ -19,7 +19,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
-from zerg.models.agents import AgentSession, AgentsBase
+from zerg.models.agents import AgentSession, AgentsBase, SessionPresence
 
 
 def _make_db(tmp_path, name="forum.db"):
@@ -71,6 +71,15 @@ def _get_user_state(factory, session_id):
     state = s.user_state if s else None
     db.close()
     return state
+
+
+def _get_presence_row(factory, session_id):
+    db = factory()
+    row = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
+    state = row.state if row else None
+    tool_name = row.tool_name if row else None
+    db.close()
+    return state, tool_name
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +279,53 @@ def test_presence_idle_does_not_resume_snoozed(tmp_path):
         )
         assert resp.status_code == 204
         assert _get_user_state(factory, sid) == "snoozed"  # unchanged
+    finally:
+        from zerg.main import api_app
+        api_app.dependency_overrides.clear()
+
+
+def test_presence_invalid_state_is_noop(tmp_path):
+    """Unknown presence states are ignored (no DB write, no state transitions)."""
+    factory = _make_db(tmp_path, "invalid_presence_state.db")
+    sid = _seed(factory, user_state="snoozed")
+
+    client = _client(factory)
+    try:
+        resp = client.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "tool_name": "bash", "provider": "claude"},
+            headers={"X-Device-Token": "dev"},
+        )
+        assert resp.status_code == 204
+        assert _get_user_state(factory, sid) == "snoozed"
+        assert _get_presence_row(factory, sid) == (None, None)
+    finally:
+        from zerg.main import api_app
+        api_app.dependency_overrides.clear()
+
+
+def test_presence_non_running_state_clears_tool_name(tmp_path):
+    """tool_name is cleared whenever state transitions away from running."""
+    factory = _make_db(tmp_path, "presence_tool_name_clear.db")
+    sid = _seed(factory, user_state="active")
+
+    client = _client(factory)
+    try:
+        running = client.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "running", "tool_name": "bash", "provider": "claude"},
+            headers={"X-Device-Token": "dev"},
+        )
+        assert running.status_code == 204
+        assert _get_presence_row(factory, sid) == ("running", "bash")
+
+        thinking = client.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "thinking", "tool_name": "read", "provider": "claude"},
+            headers={"X-Device-Token": "dev"},
+        )
+        assert thinking.status_code == 204
+        assert _get_presence_row(factory, sid) == ("thinking", None)
     finally:
         from zerg.main import api_app
         api_app.dependency_overrides.clear()
