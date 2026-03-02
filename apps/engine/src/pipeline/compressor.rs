@@ -36,7 +36,10 @@ fn cached_hostname() -> &'static str {
 }
 
 /// Maximum size of raw_json field per event. Lines longer than this are truncated.
-const MAX_RAW_LINE_BYTES: usize = 32 * 1024; // 32 KB
+/// TODO: Remove this cap — raw_json must store the complete original source line.
+/// Full fidelity is required; Longhouse is the authoritative cloud record.
+/// See TODO.md "Parser fidelity: remove raw_json 32KB cap"
+const MAX_RAW_LINE_BYTES: usize = 32 * 1024; // 32 KB — to be removed
 
 // ---------------------------------------------------------------------------
 // Payload types (match Python ingest API exactly)
