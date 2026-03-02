@@ -239,6 +239,7 @@ def seed_scenario(
             task = job_data.get("task")
             if not task:
                 raise ScenarioError("Commis job requires 'task'")
+            model_override = job_data.get("model")
             job_status = job_data.get("status", "queued")
             job_started_at = _parse_time(job_data.get("started_at"), base_time)
             job_finished_at = _parse_time(job_data.get("finished_at"), base_time)
@@ -250,7 +251,7 @@ def seed_scenario(
                     oikos_run_id=run.id,
                     task=str(task),
                     status=str(job_status),
-                    model=str(job_data.get("model") or "gpt-5-mini"),
+                    model=str(model_override) if model_override is not None else None,
                     reasoning_effort=job_data.get("reasoning_effort"),
                     config=dict(job_data.get("config") or {}),
                     commis_id=job_data.get("commis_id"),
