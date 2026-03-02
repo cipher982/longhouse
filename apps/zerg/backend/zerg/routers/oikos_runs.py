@@ -75,11 +75,7 @@ def list_oikos_runs(
     Returns:
         List of run summaries ordered by created_at descending
     """
-    # Get recent runs
-    # TODO: Add crud method for filtering by fiche_id and ordering by created_at
-    # For now, get all runs and filter/sort in memory
-
-    # Multi-tenant SaaS: Oikos shows only the logged-in user's runs.
+    # Get recent runs scoped to the authenticated user.
     query = db.query(Run).options(selectinload(Run.fiche)).join(Fiche, Fiche.id == Run.fiche_id).filter(Fiche.owner_id == current_user.id)
 
     if fiche_id:
