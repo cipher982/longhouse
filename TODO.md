@@ -35,7 +35,7 @@ Status (2026-03-02): In progress.
 - DB will grow. A session with 50 screenshots could add 50–500MB to the user's DB. That's correct and expected — you need 5GB of images if the user has 5GB of images.
 - The ingest HTTP request payload will be larger for image-heavy sessions. May need to bump any request size limits on the backend (check `MAX_CONTENT_LENGTH` / nginx/caddy config on the server).
 - [x] Check `apps/zerg/backend/zerg/routers/agents.py` ingest endpoint for any body size limits. (No explicit body clamp found; gzip/zstd paths support streaming decode.)
-- [ ] Check the Coolify/nginx proxy config for upload limits on the zerg server.
+- [x] Check the Coolify/nginx proxy config for upload limits on the zerg server. (`coolify-proxy` Caddy config has no request-body clamp directives for `david010.longhouse.ai`.)
 - [x] After removing the cap, run `make test` — existing test `test_raw_line_cap_truncates` in `compressor.rs` updated to assert full preservation.
 - [x] Run `make test-e2e`.
 
@@ -54,6 +54,7 @@ Notes (2026-03-02):
   - `cargo test -p longhouse-engine pipeline::compressor::tests` → 4 passed
   - `make test` → 444 backend tests passed, 96 control-plane tests passed, 9 engine parser tests passed
   - `make test-e2e` → 59 core E2E + 4 a11y passed
+  - Live ingest check (synthetic image-like payload): posted a 1,200,093-byte `raw_json` line to `https://david010.longhouse.ai/api/agents/ingest`; DB `LENGTH(raw_json)` matched exactly (`1200093`)
 
 ---
 
