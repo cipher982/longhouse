@@ -78,6 +78,8 @@ For each discovered instance directory with `longhouse.db`:
   Backup + verify + prune only
 - `zerg-ops verify`
   Verify latest snapshot per instance
+- `zerg-ops monitor`
+  Dead-man switch: check backup freshness and (when enabled) offsite artifact presence/size parity
 - `zerg-ops cleanup`
   Legacy artifacts + docker prune
 - `zerg-ops report`
@@ -93,6 +95,9 @@ Required/primary:
 - `VERIFY_ON_BACKUP` (`true|false`)
 - `ROOT_WARN_PCT`
 - `DOCKER_PRUNE_UNTIL_HOURS`
+- `MONITOR_MAX_AGE_HOURS` (default 30)
+- `MONITOR_REQUIRE_REMOTE` (`auto` default; `true|false` override)
+- `ALERT_WEBHOOK_URL` (optional; sends monitor failure message as JSON `text` + `content`)
 
 Optional remote:
 
@@ -130,9 +135,12 @@ make test-zerg-ops-backup
 # On zerg host
 sudo zerg-ops run
 sudo zerg-ops verify
+sudo zerg-ops monitor
 sudo zerg-ops report
 systemctl status zerg-ops.timer --no-pager
+systemctl status zerg-ops-monitor.timer --no-pager
 journalctl -u zerg-ops.service -n 200 --no-pager
+journalctl -u zerg-ops-monitor.service -n 200 --no-pager
 ```
 
 Common failure paths:
