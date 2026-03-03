@@ -9,9 +9,6 @@ services:
       - /var/lib/docker/data/longhouse/david:/data
     networks:
       - coolify
-    # Allow container to reach host services via Tailscale (SSH bastion for cube/clifford)
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     labels:
       - caddy=david.longhouse.ai
       - caddy.reverse_proxy={{upstreams 8000}}
