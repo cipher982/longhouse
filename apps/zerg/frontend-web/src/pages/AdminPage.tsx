@@ -96,11 +96,6 @@ interface OpsSummary {
   };
   errors_last_hour: number;
   top_fiches: OpsTopFiche[];
-
-  // Backward-compatible aliases retained by backend during transition.
-  runs_today: number;
-  cost_today_usd: number | null;
-  top_fiches_today: OpsTopFiche[];
 }
 
 interface OpsTopFiche {
@@ -942,12 +937,6 @@ function AdminPage() {
 
   const formatCurrency = (value: number) => `$${value.toFixed(4)}`;
   const formatPercent = (value: number) => `${value.toFixed(1)}%`;
-  const selectedWindowLabel = selectedWindow === "today"
-    ? "Today"
-    : selectedWindow === "7d"
-      ? "Last 7 Days"
-      : "Last 30 Days";
-
   // Admin action handlers
   const handleClearData = () => {
     setModalState({
@@ -1013,7 +1002,7 @@ function AdminPage() {
           <div className="ops-metrics-note" role="note">
             <span>
               Window-scoped metrics: runs, cost, latency, and top fiches in{" "}
-              <strong>{summary.window_label || selectedWindowLabel}</strong>.
+              <strong>{summary.window_label}</strong>.
             </span>
             <span>
               Fixed realtime metrics: errors (1h), active users (24h), and budgets (today).
@@ -1025,7 +1014,7 @@ function AdminPage() {
             <MetricCard
               title="Runs (Window)"
               value={summary.runs}
-              subtitle={`In ${summary.window_label || selectedWindowLabel}`}
+              subtitle={`In ${summary.window_label}`}
               color={metricColors.primary}
             />
             <MetricCard
@@ -1037,7 +1026,7 @@ function AdminPage() {
             <MetricCard
               title="Cost (Window)"
               value={summary.cost_usd !== null ? formatCurrency(summary.cost_usd) : "N/A"}
-              subtitle={`USD spent in ${summary.window_label || selectedWindowLabel}`}
+              subtitle={`USD spent in ${summary.window_label}`}
               color={metricColors.success}
             />
             <MetricCard
@@ -1079,7 +1068,7 @@ function AdminPage() {
             <MetricCard
               title="Latency P95 (Window)"
               value={`${summary.latency_ms.p95}ms`}
-              subtitle={`P50: ${summary.latency_ms.p50}ms in ${summary.window_label || selectedWindowLabel}`}
+              subtitle={`P50: ${summary.latency_ms.p50}ms in ${summary.window_label}`}
               color={metricColors.accent}
             />
           </div>
@@ -1088,13 +1077,13 @@ function AdminPage() {
           <Card>
             <Card.Header>
               <h3 className="admin-section-title ui-section-title">
-                Top Performing Fiches ({summary.window_label || selectedWindowLabel})
+                Top Performing Fiches ({summary.window_label})
               </h3>
             </Card.Header>
             <Card.Body>
               <TopFichesTable
                 fiches={summary.top_fiches}
-                windowLabel={summary.window_label || selectedWindowLabel}
+                windowLabel={summary.window_label}
               />
             </Card.Body>
           </Card>

@@ -48,11 +48,6 @@ class OpsSummary(BaseModel):
     errors_last_hour: int
     top_fiches: List[OpsTopFiche]
 
-    # Backward-compatible aliases (deprecated).
-    runs_today: int
-    cost_today_usd: Optional[float]
-    top_fiches_today: List[OpsTopFiche]
-
 
 class OpsSeriesPoint(BaseModel):
     """Single point in a time series."""

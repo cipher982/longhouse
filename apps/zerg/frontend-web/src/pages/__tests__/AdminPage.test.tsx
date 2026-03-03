@@ -45,28 +45,7 @@ function buildOpsSummary(window: "today" | "7d" | "30d") {
     window_label: byWindow.label,
     runs: byWindow.runs,
     cost_usd: byWindow.cost,
-    // Backward-compatible aliases
-    runs_today: byWindow.runs,
-    cost_today_usd: byWindow.cost,
     top_fiches: [
-      {
-        fiche_id: 1,
-        name: "Test Fiche",
-        owner_email: "test@example.com",
-        runs: 50,
-        cost_usd: 0.125,
-        p95_ms: 300,
-      },
-      {
-        fiche_id: 2,
-        name: "Helper Fiche",
-        owner_email: "helper@example.com",
-        runs: 30,
-        cost_usd: 0.089,
-        p95_ms: 250,
-      },
-    ],
-    top_fiches_today: [
       {
         fiche_id: 1,
         name: "Test Fiche",
