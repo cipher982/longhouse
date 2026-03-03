@@ -15,6 +15,7 @@ MONITOR_MAX_AGE_HOURS=30
 OFFSITE_ENABLED="true"
 OFFSITE_SSH_TARGET="longhouse-offsite"
 OFFSITE_BASE_PATH="longhouse-backups"
+OFFSITE_KEEP_SNAPSHOTS=30
 
 ENABLE_DOCKER_PRUNE="true"
 DOCKER_PRUNE_UNTIL_HOURS=240
@@ -381,6 +382,22 @@ remote_sync_snapshot() {
   local remote_dir="${OFFSITE_BASE_PATH%/}/$instance"
   ssh_cmd "$OFFSITE_SSH_TARGET" "mkdir -p '$remote_dir'"
   rsync -az "$archive_path" "$manifest_path" "$OFFSITE_SSH_TARGET:$remote_dir/"
+  offsite_prune_instance "$instance"
+}
+
+offsite_prune_instance() {
+  local instance="$1"
+  local remote_dir="${OFFSITE_BASE_PATH%/}/$instance"
+  local keep="$OFFSITE_KEEP_SNAPSHOTS"
+
+  ssh_cmd "$OFFSITE_SSH_TARGET" "
+    cd '$remote_dir' 2>/dev/null || exit 0
+    ls -1t longhouse.*.sqlite.* 2>/dev/null | tail -n +$((keep + 1)) | while read -r f; do
+      ts=\"\${f#longhouse.}\"
+      ts=\"\${ts%.sqlite.*}\"
+      rm -f \"\$f\" \"longhouse.\$ts.manifest.json\"
+    done
+  " || log "WARNING offsite prune failed for $instance"
 }
 
 snapshot_instance() {
