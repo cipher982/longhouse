@@ -216,6 +216,9 @@ apps/zerg/backend/data/
 # Work-in-progress docs
 apps/zerg/backend/docs/work/
 
+# Agent handoff docs (ephemeral, session-specific)
+docs/handoffs/
+
 # Video generation (temporary build artifacts)
 videos/
 .claude/
