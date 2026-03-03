@@ -59,9 +59,9 @@ services:
       AWS_SES_REGION: ${AWS_SES_REGION:-us-east-1}
 
       # === Email addresses ===
-      NOTIFY_EMAIL: ${NOTIFY_EMAIL:-david010@gmail.com}
-      DIGEST_EMAIL: ${DIGEST_EMAIL:-david010@gmail.com}
-      ALERT_EMAIL: ${ALERT_EMAIL:-david010@gmail.com}
+      NOTIFY_EMAIL: ${NOTIFY_EMAIL}
+      DIGEST_EMAIL: ${DIGEST_EMAIL}
+      ALERT_EMAIL: ${ALERT_EMAIL}
       FROM_EMAIL: ${FROM_EMAIL:-Sauron <sauron@drose.io>}
 
       # === API settings ===

@@ -22,9 +22,9 @@ class SauronSettings:
     aws_ses_secret_access_key: str | None = None
     aws_ses_region: str = "us-east-1"
     from_email: str = "Sauron <sauron@drose.io>"
-    notify_email: str = "david010@gmail.com"
-    alert_email: str = "david010@gmail.com"
-    digest_email: str = "david010@gmail.com"
+    notify_email: str = ""
+    alert_email: str = ""
+    digest_email: str = ""
 
     # Git sync settings (for sauron-jobs repo)
     jobs_git_repo_url: str | None = None
@@ -56,9 +56,9 @@ def get_settings() -> SauronSettings:
         aws_ses_secret_access_key=os.getenv("AWS_SES_SECRET_ACCESS_KEY"),
         aws_ses_region=os.getenv("AWS_SES_REGION", "us-east-1"),
         from_email=os.getenv("FROM_EMAIL", "Sauron <sauron@drose.io>"),
-        notify_email=os.getenv("NOTIFY_EMAIL", "david010@gmail.com"),
-        alert_email=os.getenv("ALERT_EMAIL", "david010@gmail.com"),
-        digest_email=os.getenv("DIGEST_EMAIL", "david010@gmail.com"),
+        notify_email=os.getenv("NOTIFY_EMAIL", ""),
+        alert_email=os.getenv("ALERT_EMAIL", ""),
+        digest_email=os.getenv("DIGEST_EMAIL", ""),
         # Git sync
         jobs_git_repo_url=os.getenv("JOBS_GIT_REPO_URL"),
         jobs_git_token=os.getenv("JOBS_GIT_TOKEN"),
