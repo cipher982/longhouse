@@ -17,6 +17,41 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ---
 
+## [Infra] Zerg backup + restore drill via unified zerg-ops (size: 3)
+
+Status (2026-03-03): Done.
+
+**Goal:** Replace ad-hoc snapshot cleanup with a single, testable backup/restore flow that protects every Longhouse instance DB on zerg and keeps disk growth bounded.
+
+- [x] Write first-principles spec (data scope, retention, remote sync contract, restore drill)
+- [x] Implement unified `zerg-ops` script in repo (cleanup + backup + verify + prune + report)
+- [x] Add automated local E2E test for backup -> restore byte/hash match across multiple instance dirs
+- [x] Roll out updated script/config to zerg host and run a real backup + verify cycle
+- [x] Update docs/runbook with operational commands and failure triage
+
+Notes:
+- Must stay schema-agnostic: backup logic must copy full SQLite bytes so future columns/events are automatically covered.
+- Offsite sync should be optional config (Synology-ready) without coupling core local backups to network health.
+
+Notes (2026-03-03):
+- Added first-principles spec: `docs/specs/zerg-ops-backup.md`.
+- Added unified script + config template:
+  - `scripts/zerg-ops.sh`
+  - `scripts/zerg-ops.env.example`
+- Added automated local E2E contract test:
+  - `scripts/test-zerg-ops.sh`
+  - `make test-zerg-ops-backup`
+- Added Make target and AGENTS gotcha update for zerg-ops workflow.
+- Live rollout on `zerg`:
+  - Script deployed to `/usr/local/bin/zerg-ops`
+  - Config deployed to `/etc/zerg-ops.env` (`DISCOVERY_MODE=running`, `KEEP_SNAPSHOTS=14`, verify enabled)
+  - Timer verified active: `zerg-ops.timer` (next run scheduled)
+  - Manual `zerg-ops run` + `zerg-ops verify` passed for active instances (`david010`, `david-stripetest`)
+  - Latest `david010` manifest records `events=987073`, `sessions=10787`, `verified_restore=true`
+- Synology offsite path remains optional and not enabled yet because passwordless SSH from `zerg` to `drose@100.98.103.56` is not configured.
+
+---
+
 ## [QA/Test] Ship→Unship raw_json roundtrip contract (size: 1)
 
 Status (2026-03-02): Done.
