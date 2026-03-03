@@ -29,6 +29,13 @@
   --color-intent-error: #C45040;
   --color-intent-error-muted: rgba(196, 80, 64, 0.15);
 
+  /* Provider Colors */
+  --color-provider-claude: #C4A050;
+  --color-provider-codex: #6B9E5A;
+  --color-provider-gemini: #7A9DB5;
+  --color-provider-zai: #B06E8A;
+  --color-provider-default: #8A7A64;
+
   /* Text Colors */
   /* WCAG AA requires 4.5:1 contrast ratio for normal text */
   /* Against #120B09 (page bg): */
