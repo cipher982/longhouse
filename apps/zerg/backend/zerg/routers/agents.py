@@ -344,6 +344,7 @@ class FiltersResponse(BaseModel):
 
     projects: List[str]
     providers: List[str]
+    machines: List[str] = []
 
 
 class DemoSeedResponse(BaseModel):
@@ -2192,6 +2193,7 @@ async def get_filters(
         return FiltersResponse(
             projects=filters["projects"],
             providers=filters["providers"],
+            machines=filters["machines"],
         )
     except Exception:
         logger.exception("Failed to get filters")

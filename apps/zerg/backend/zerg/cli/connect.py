@@ -38,6 +38,7 @@ from zerg.services.shipper import install_hooks
 from zerg.services.shipper import install_mcp_server
 from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
+from zerg.services.shipper import save_machine_name
 from zerg.services.shipper import save_token
 from zerg.services.shipper import save_zerg_url
 from zerg.services.shipper import uninstall_service
@@ -827,6 +828,19 @@ def _handle_install(
     if token:
         save_token(token, config_dir)
 
+    # Prompt for machine name — sessions from this machine will be tagged with it.
+    default_name = socket.gethostname()
+    typer.echo("")
+    machine_name = (
+        typer.prompt(
+            "Name this machine (used to label your sessions in Longhouse)",
+            default=default_name,
+        ).strip()
+        or default_name
+    )
+    save_machine_name(machine_name, config_dir)
+    typer.secho(f"  Machine: {machine_name}", fg=typer.colors.CYAN)
+
     typer.echo("Installing engine service...")
     typer.echo(f"  URL: {url}")
 
@@ -835,6 +849,7 @@ def _handle_install(
             url=url,
             token=token,
             claude_dir=claude_dir,
+            machine_name=machine_name,
         )
         typer.echo("")
         typer.secho(f"[OK] {result['message']}", fg=typer.colors.GREEN)

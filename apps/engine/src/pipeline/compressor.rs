@@ -23,7 +23,7 @@ pub enum CompressionAlgo {
     Zstd,
 }
 
-/// Cached hostname — called once, reused for all payloads.
+/// Cached hostname — called once, reused for device_id.
 fn cached_hostname() -> &'static str {
     static HOSTNAME: OnceLock<String> = OnceLock::new();
     HOSTNAME.get_or_init(|| {
@@ -34,6 +34,19 @@ fn cached_hostname() -> &'static str {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| "unknown".to_string())
     })
+}
+
+/// Machine name set at startup from config (user's label for this machine).
+/// Falls back to hostname if not initialized.
+static MACHINE_NAME: OnceLock<String> = OnceLock::new();
+
+/// Initialize the machine name from config. Call once at startup.
+pub fn set_machine_name(name: &str) {
+    MACHINE_NAME.get_or_init(|| name.to_string());
+}
+
+fn get_machine_name() -> &'static str {
+    MACHINE_NAME.get_or_init(|| cached_hostname().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +211,7 @@ pub fn build_payload_with_source_lines<'a>(
     IngestPayload {
         id: session_id,
         provider,
-        environment: "production",
+        environment: get_machine_name(),
         project: metadata.project.as_deref(),
         device_id: format!("shipper-{}", hostname),
         cwd: metadata.cwd.as_deref(),

@@ -30,6 +30,7 @@ from zerg.services.shipper.token import clear_zerg_url
 from zerg.services.shipper.token import get_token_path
 from zerg.services.shipper.token import get_zerg_url
 from zerg.services.shipper.token import load_token
+from zerg.services.shipper.token import save_machine_name
 from zerg.services.shipper.token import save_token
 from zerg.services.shipper.token import save_zerg_url
 
@@ -48,6 +49,7 @@ __all__ = [
     "ParsedEvent",
     "parse_session_file",
     "parse_session_file_full",
+    "save_machine_name",
     "save_token",
     "save_zerg_url",
     "uninstall_service",

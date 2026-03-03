@@ -116,6 +116,10 @@ enum Commands {
         /// Log directory for rolling log files (default: ~/.claude/logs, or LONGHOUSE_LOG_DIR env)
         #[arg(long)]
         log_dir: Option<PathBuf>,
+
+        /// Human-readable name for this machine (default: from ~/.claude/longhouse-machine-name or hostname)
+        #[arg(long)]
+        machine_name: Option<String>,
     },
 
     /// One-shot: scan all provider sessions and ship new events
@@ -155,6 +159,10 @@ enum Commands {
         /// Compression algorithm: gzip (default) or zstd
         #[arg(long, default_value = "gzip")]
         compression: String,
+
+        /// Human-readable name for this machine (default: from ~/.claude/longhouse-machine-name or hostname)
+        #[arg(long)]
+        machine_name: Option<String>,
     },
 }
 
@@ -243,6 +251,7 @@ fn main() -> anyhow::Result<()> {
             fallback_scan_secs,
             spool_replay_secs,
             log_dir: _,
+            machine_name,
         } => {
             let algo = parse_compression_algo(&compression)?;
             let shipper_config = ShipperConfig::from_env()?.with_overrides(
@@ -250,7 +259,9 @@ fn main() -> anyhow::Result<()> {
                 token.as_deref(),
                 db.as_deref(),
                 None,
+                machine_name.as_deref(),
             );
+            pipeline::compressor::set_machine_name(&shipper_config.machine_name);
 
             let connect_config = daemon::ConnectConfig {
                 shipper_config,
@@ -294,8 +305,17 @@ fn main() -> anyhow::Result<()> {
             dry_run,
             json,
             compression,
+            machine_name,
         } => {
             let algo = parse_compression_algo(&compression)?;
+            // Initialize machine name for payload labeling
+            if let Some(ref name) = machine_name {
+                pipeline::compressor::set_machine_name(name);
+            } else {
+                // Load from config file (reads ~/.claude/longhouse-machine-name)
+                let cfg = ShipperConfig::from_env().unwrap_or_default();
+                pipeline::compressor::set_machine_name(&cfg.machine_name);
+            }
             // Build tokio runtime for async HTTP
             let rt = tokio::runtime::Runtime::new()?;
             if let Some(path) = file.as_ref() {
@@ -347,7 +367,9 @@ async fn cmd_ship(
         token,
         db_path,
         if workers > 0 { Some(workers) } else { None },
+        None,
     );
+    pipeline::compressor::set_machine_name(&config.machine_name);
 
     if !json_output {
         eprintln!("Shipping to: {}", config.api_url);
@@ -820,7 +842,8 @@ async fn cmd_ship_file(
 
     let provider = detect_provider_for_file(path, provider_override)?;
 
-    let config = ShipperConfig::from_env()?.with_overrides(url, token, db_path, None);
+    let config = ShipperConfig::from_env()?.with_overrides(url, token, db_path, None, None);
+    pipeline::compressor::set_machine_name(&config.machine_name);
 
     if !json_output {
         eprintln!("Shipping file: {}", path.display());

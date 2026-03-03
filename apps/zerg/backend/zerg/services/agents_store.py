@@ -754,6 +754,7 @@ class AgentsStore:
         Returns dict with:
           - projects: List of distinct project names
           - providers: List of distinct provider names
+          - machines: List of distinct machine names (from environment field)
         """
         from datetime import timedelta
         from datetime import timezone
@@ -774,7 +775,17 @@ class AgentsStore:
         providers_stmt = select(AgentSession.provider).where(AgentSession.started_at >= since).distinct().order_by(AgentSession.provider)
         providers = [p for (p,) in self.db.execute(providers_stmt).fetchall() if p]
 
-        return {"projects": projects, "providers": providers}
+        # Get distinct machine names (stored in environment column)
+        machines_stmt = (
+            select(AgentSession.environment)
+            .where(AgentSession.environment.isnot(None))
+            .where(AgentSession.started_at >= since)
+            .distinct()
+            .order_by(AgentSession.environment)
+        )
+        machines = [m for (m,) in self.db.execute(machines_stmt).fetchall() if m]
+
+        return {"projects": projects, "providers": providers, "machines": machines}
 
     def export_session_jsonl(self, session_id: UUID) -> Optional[tuple[bytes, AgentSession]]:
         """Export a session as JSONL bytes for Claude Code --resume.
