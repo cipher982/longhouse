@@ -74,16 +74,15 @@ pub fn prepare_file(
         }
     };
 
-    if parse_result.events.is_empty() {
+    if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
         // Heuristic: if the file has substantial content and the parser found
-        // candidate records but produced no events, something likely went wrong
-        // (schema drift, format change, stale binary). Warn loudly.
+        // candidate records but produced no events, something likely went wrong.
         if parse_result.candidate_records > 0 && file_size >= 128 {
             tracing::warn!(
                 path = %path_str,
                 file_size,
                 candidate_records = parse_result.candidate_records,
-                "Suspicious: file has {} candidate records but produced 0 events — \
+                "Suspicious: file has {} candidate records but produced 0 events and 0 source lines — \
                  possible parser bug or format drift",
                 parse_result.candidate_records
             );
@@ -92,12 +91,13 @@ pub fn prepare_file(
     }
 
     let event_count = parse_result.events.len();
-    let compressed = compressor::build_and_compress_with(
+    let compressed = compressor::build_and_compress_with_source_lines(
         &parse_result.metadata.session_id,
         &parse_result.events,
         &parse_result.metadata,
         &path_str,
         provider,
+        Some(&parse_result.source_lines),
         algo,
     )?;
 
@@ -286,19 +286,20 @@ pub async fn replay_spool_batch(
             }
         };
 
-        if parse_result.events.is_empty() {
+        if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
             spool.mark_shipped(entry.id)?;
             file_state.set_acked_offset(&entry.file_path, entry.end_offset)?;
             shipped += 1;
             continue;
         }
 
-        let compressed = compressor::build_and_compress_with(
+        let compressed = compressor::build_and_compress_with_source_lines(
             &parse_result.metadata.session_id,
             &parse_result.events,
             &parse_result.metadata,
             &entry.file_path,
             &entry.provider,
+            Some(&parse_result.source_lines),
             algo,
         )?;
 

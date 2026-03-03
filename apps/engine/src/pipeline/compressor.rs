@@ -10,8 +10,9 @@ use flate2::write::GzEncoder;
 use flate2::Compression as GzCompression;
 use serde::Serialize;
 use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 
-use super::parser::{ParsedEvent, SessionMetadata};
+use super::parser::{ParsedEvent, ParsedSourceLine, SessionMetadata};
 
 /// Compression algorithm for payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +60,8 @@ pub struct IngestPayload<'a> {
     pub provider_session_id: &'a str,
     pub is_sidechain: bool,
     pub events: Vec<EventIngest<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_lines: Vec<SourceLineIngest<'a>>,
 }
 
 #[derive(Serialize)]
@@ -81,6 +84,13 @@ pub struct EventIngest<'a> {
     pub raw_json: Option<&'a str>,
 }
 
+#[derive(Serialize)]
+pub struct SourceLineIngest<'a> {
+    pub source_path: &'a str,
+    pub source_offset: u64,
+    pub raw_json: &'a str,
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -92,6 +102,18 @@ pub fn build_payload<'a>(
     metadata: &'a SessionMetadata,
     source_path: &'a str,
     provider: &'a str,
+) -> IngestPayload<'a> {
+    build_payload_with_source_lines(session_id, events, metadata, source_path, provider, None)
+}
+
+/// Build an IngestPayload and include optional full source-line archive.
+pub fn build_payload_with_source_lines<'a>(
+    session_id: &'a str,
+    events: &'a [ParsedEvent],
+    metadata: &'a SessionMetadata,
+    source_path: &'a str,
+    provider: &'a str,
+    source_lines: Option<&'a [ParsedSourceLine]>,
 ) -> IngestPayload<'a> {
     let hostname = cached_hostname();
 
@@ -141,6 +163,38 @@ pub fn build_payload<'a>(
         })
         .collect();
 
+    let source_line_ingests: Vec<SourceLineIngest<'a>> = if let Some(lines) = source_lines {
+        if lines.is_empty() {
+            Vec::new()
+        } else {
+            lines
+                .iter()
+                .map(|line| SourceLineIngest {
+                    source_path,
+                    source_offset: line.source_offset,
+                    raw_json: line.raw_line.as_str(),
+                })
+                .collect()
+        }
+    } else {
+        // Compatibility fallback for non-updated parsers: derive source lines
+        // from event raw_json entries (event-bearing lines only).
+        let mut by_offset: BTreeMap<u64, &'a str> = BTreeMap::new();
+        for e in events {
+            if let Some(raw) = e.raw_line.as_deref() {
+                by_offset.entry(e.source_offset).or_insert(raw);
+            }
+        }
+        by_offset
+            .into_iter()
+            .map(|(source_offset, raw_json)| SourceLineIngest {
+                source_path,
+                source_offset,
+                raw_json,
+            })
+            .collect()
+    };
+
     IngestPayload {
         id: session_id,
         provider,
@@ -158,6 +212,7 @@ pub fn build_payload<'a>(
         is_sidechain: metadata.is_sidechain
             || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1"),
         events: event_ingests,
+        source_lines: source_line_ingests,
     }
 }
 
@@ -173,7 +228,15 @@ pub fn build_and_compress(
     source_path: &str,
     provider: &str,
 ) -> anyhow::Result<Vec<u8>> {
-    build_and_compress_with(session_id, events, metadata, source_path, provider, CompressionAlgo::Gzip)
+    build_and_compress_with_source_lines(
+        session_id,
+        events,
+        metadata,
+        source_path,
+        provider,
+        None,
+        CompressionAlgo::Gzip,
+    )
 }
 
 /// Build an IngestPayload and stream-compress it with the specified algorithm.
@@ -185,7 +248,29 @@ pub fn build_and_compress_with(
     provider: &str,
     algo: CompressionAlgo,
 ) -> anyhow::Result<Vec<u8>> {
-    let payload = build_payload(session_id, events, metadata, source_path, provider);
+    build_and_compress_with_source_lines(
+        session_id,
+        events,
+        metadata,
+        source_path,
+        provider,
+        None,
+        algo,
+    )
+}
+
+/// Build an IngestPayload (with optional full source lines) and stream-compress it.
+pub fn build_and_compress_with_source_lines(
+    session_id: &str,
+    events: &[ParsedEvent],
+    metadata: &SessionMetadata,
+    source_path: &str,
+    provider: &str,
+    source_lines: Option<&[ParsedSourceLine]>,
+    algo: CompressionAlgo,
+) -> anyhow::Result<Vec<u8>> {
+    let payload =
+        build_payload_with_source_lines(session_id, events, metadata, source_path, provider, source_lines);
     compress_payload_with(&payload, algo)
 }
 
@@ -225,8 +310,8 @@ pub fn content_encoding(algo: CompressionAlgo) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+    use std::collections::BTreeMap;
+    use std::io::{BufRead, BufReader, Read};
     use std::path::{Path, PathBuf};
 
     use super::*;
@@ -391,22 +476,28 @@ mod tests {
             .join("basic.jsonl")
     }
 
-    fn read_source_line_without_newline(path: &Path, offset: u64) -> String {
+    fn read_all_source_lines_with_offsets(path: &Path) -> BTreeMap<u64, String> {
         let file = std::fs::File::open(path).expect("open fixture");
         let mut reader = BufReader::new(file);
-        reader
-            .seek(SeekFrom::Start(offset))
-            .expect("seek to source offset");
-
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read source line");
-        while line.ends_with('\n') || line.ends_with('\r') {
-            line.pop();
+        let mut offset = 0u64;
+        let mut lines = BTreeMap::new();
+        loop {
+            let mut line = String::new();
+            let n = reader.read_line(&mut line).expect("read source line");
+            if n == 0 {
+                break;
+            }
+            while line.ends_with('\n') || line.ends_with('\r') {
+                line.pop();
+            }
+            let prev = lines.insert(offset, line);
+            assert!(prev.is_none(), "duplicate source offset {}", offset);
+            offset += n as u64;
         }
-        line
+        lines
     }
 
-    fn raw_lines_from_compressed_payload(compressed: &[u8]) -> BTreeMap<u64, String> {
+    fn source_lines_from_compressed_payload(compressed: &[u8]) -> BTreeMap<u64, String> {
         let mut decoder = GzDecoder::new(compressed);
         let mut json_str = String::new();
         decoder
@@ -415,18 +506,18 @@ mod tests {
 
         let payload: serde_json::Value =
             serde_json::from_str(&json_str).expect("payload must be valid json");
-        let events = payload["events"]
+        let source_lines = payload["source_lines"]
             .as_array()
-            .expect("payload.events must be an array");
+            .expect("payload.source_lines must be an array");
 
         let mut by_offset = BTreeMap::new();
-        for event in events {
-            let Some(raw_json) = event["raw_json"].as_str() else {
-                continue;
-            };
-            let offset = event["source_offset"]
+        for line in source_lines {
+            let raw_json = line["raw_json"]
+                .as_str()
+                .expect("source_lines[*].raw_json must be string");
+            let offset = line["source_offset"]
                 .as_u64()
-                .expect("event.source_offset must be u64");
+                .expect("source_lines[*].source_offset must be u64");
             let prev = by_offset.insert(offset, raw_json.to_string());
             assert!(
                 prev.is_none(),
@@ -446,47 +537,27 @@ mod tests {
         );
 
         let source_path = path.to_string_lossy().to_string();
-        let compressed = build_and_compress(
+        let compressed = build_and_compress_with_source_lines(
             &parsed.metadata.session_id,
             &parsed.events,
             &parsed.metadata,
             &source_path,
             provider,
+            Some(&parsed.source_lines),
+            CompressionAlgo::Gzip,
         )
-        .expect("build and compress payload");
+        .expect("build and compress payload with source lines");
 
-        let actual = raw_lines_from_compressed_payload(&compressed);
-        assert!(
-            !actual.is_empty(),
-            "payload must include at least one raw_json line"
-        );
-
-        let unique_event_offsets: BTreeSet<u64> =
-            parsed.events.iter().map(|e| e.source_offset).collect();
+        let actual = source_lines_from_compressed_payload(&compressed);
+        let expected_map = read_all_source_lines_with_offsets(&path);
         assert_eq!(
-            actual.len(),
-            unique_event_offsets.len(),
-            "each event-bearing source line must roundtrip with one raw_json entry"
+            actual, expected_map,
+            "source_lines archive must match full source file byte-for-byte"
         );
 
-        // Byte-for-byte line fidelity: every shipped raw_json line must equal
-        // the source file line at the same byte offset.
-        for (offset, raw_json) in &actual {
-            let expected = read_source_line_without_newline(&path, *offset);
-            assert_eq!(
-                raw_json, &expected,
-                "raw_json mismatch at source_offset={}",
-                offset
-            );
-        }
-
-        // "Unship back to log": reconstruct event-bearing lines from payload raw_json.
+        // "Unship back to log": reconstruct the full file body from source_lines.
         let actual_log = actual.values().cloned().collect::<Vec<_>>().join("\n");
-        let expected_log = actual
-            .keys()
-            .map(|offset| read_source_line_without_newline(&path, *offset))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let expected_log = expected_map.values().cloned().collect::<Vec<_>>().join("\n");
         assert_eq!(actual_log, expected_log);
     }
 

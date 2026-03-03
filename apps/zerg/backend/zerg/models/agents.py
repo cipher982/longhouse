@@ -106,6 +106,7 @@ class AgentSession(AgentsBase):
 
     # Relationships
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")
+    source_lines = relationship("AgentSourceLine", back_populates="session", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_sessions_project_started", "project", "started_at"),
@@ -182,6 +183,37 @@ class AgentEvent(AgentsBase):
         ),
         Index("ix_events_session_timestamp", "session_id", "timestamp"),
         Index("ix_events_role_tool", "role", "tool_name"),
+    )
+
+
+class AgentSourceLine(AgentsBase):
+    """Lossless source-line archive for a session log.
+
+    Stores every parsed source line with byte offset so logs can be exported
+    byte-for-byte even when parser schema extraction changes over time.
+    """
+
+    __tablename__ = "source_lines"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _fk_ref = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    session_id = Column(
+        GUID(),
+        ForeignKey(_fk_ref, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_path = Column(Text, nullable=False)
+    source_offset = Column(BigInteger, nullable=False)
+    raw_json = Column(Text, nullable=False)
+    line_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    session = relationship("AgentSession", back_populates="source_lines")
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "source_path", "source_offset", name="uq_source_line_pos"),
+        Index("ix_source_lines_session_offset", "session_id", "source_offset"),
     )
 
 

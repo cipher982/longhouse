@@ -15,7 +15,6 @@ Key insight: Claude Code path encoding is deterministic:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import platform
@@ -216,45 +215,56 @@ async def ship_session_to_zerg(
 
     logger.info(f"Shipping session {provider_session_id} for commis {commis_id}")
 
-    # Read session content as bytes to track offsets for dedup
-    session_bytes = session_file.read_bytes()
-    session_content = session_bytes.decode("utf-8", errors="replace")
-
-    # Parse JSONL and build ingest payload with byte offsets for dedup
-    events = []
-    byte_offset = 0
-    for line in session_content.splitlines(keepends=True):
-        line_stripped = line.strip()
-        if not line_stripped:
-            byte_offset += len(line.encode("utf-8"))
-            continue
-        try:
-            event = json.loads(line_stripped)
-            events.append(
+    # Build lossless source-line archive first so schema drift still ships.
+    source_path = str(session_file)
+    source_lines = []
+    with session_file.open("rb") as fh:
+        byte_offset = 0
+        for raw in fh:
+            source_lines.append(
                 {
-                    "role": event.get("role", "assistant"),
-                    "content_text": event.get("content"),
-                    "tool_name": event.get("tool_name"),
-                    "tool_input_json": event.get("tool_input"),
-                    "tool_output_text": event.get("tool_output"),
-                    "timestamp": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                    "source_path": str(session_file),
-                    "source_offset": byte_offset,  # Byte offset for dedup
-                    "raw_json": line_stripped,  # Original line for lossless archiving
+                    "source_path": source_path,
+                    "source_offset": byte_offset,
+                    "raw_json": raw.rstrip(b"\r\n").decode("utf-8", errors="replace"),
                 }
             )
-        except json.JSONDecodeError:
-            logger.warning(f"Failed to parse JSONL line: {line_stripped[:100]}")
-        byte_offset += len(line.encode("utf-8"))
+            byte_offset += len(raw)
 
-    if not events:
-        logger.warning(f"No events parsed from session file {session_file}")
+    if not source_lines:
+        logger.warning(f"Session file {session_file} is empty, skipping ship")
         return None
 
-    # Determine timestamps from events
-    timestamps = [e.get("timestamp") for e in events if e.get("timestamp")]
-    started_at = min(timestamps) if timestamps else datetime.now(timezone.utc).isoformat()
-    ended_at = max(timestamps) if timestamps else None
+    # Parse known Claude schema for structured events, but do not depend on it
+    # for archival fidelity.
+    from zerg.services.shipper.parser import extract_session_metadata
+    from zerg.services.shipper.parser import parse_session_file
+
+    metadata = extract_session_metadata(session_file)
+    try:
+        parsed_events = list(parse_session_file(session_file))
+    except Exception as exc:
+        logger.warning(
+            "Failed to parse session file %s; shipping source lines only: %s",
+            session_file,
+            exc,
+        )
+        parsed_events = []
+    events = [e.to_event_ingest(source_path) for e in parsed_events]
+    if not events:
+        logger.info(
+            "No parseable events in %s; shipping %d source lines only",
+            session_file,
+            len(source_lines),
+        )
+
+    # Determine session timestamps.
+    if events:
+        timestamps = [e.get("timestamp") for e in events if e.get("timestamp")]
+        started_at = metadata.started_at.isoformat() if metadata.started_at else min(timestamps)
+        ended_at = metadata.ended_at.isoformat() if metadata.ended_at else (max(timestamps) if timestamps else None)
+    else:
+        started_at = (metadata.started_at or datetime.now(timezone.utc)).isoformat()
+        ended_at = metadata.ended_at.isoformat() if metadata.ended_at else None
 
     # Build ingest payload
     # Note: Don't send 'id' - let API generate UUID. Store provider_session_id in device_id for tracking.
@@ -262,12 +272,14 @@ async def ship_session_to_zerg(
     payload = {
         "provider": "claude",
         "provider_session_id": provider_session_id,  # Claude Code session UUID from filename
-        "project": workspace_path.name,  # Use directory name as project
+        "project": metadata.project or workspace_path.name,  # Use parsed project when available
         "device_id": device_id,
-        "cwd": str(workspace_path.absolute()),
+        "cwd": metadata.cwd or str(workspace_path.absolute()),
+        "git_branch": metadata.git_branch,
         "started_at": started_at,
         "ended_at": ended_at,
         "events": events,
+        "source_lines": source_lines,
     }
 
     # Ship to Zerg ingest endpoint
