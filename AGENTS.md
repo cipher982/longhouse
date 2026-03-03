@@ -134,7 +134,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 11. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
 12. **Do NOT add `extra_body={"metadata": ...}` to LLM calls** — Instance calls go directly to providers (Groq, OpenAI, z.ai), NOT through the LiteLLM proxy. Groq rejects `metadata` with 400. The proxy at `llm.drose.io` is personal-dev only, not used by user instances. New models must be added to `~/git/litellm-proxy/config.yaml` AND `hooks/model_hints.py` (for personal-dev proxy use).
 13. **DB provider config overrides env vars** — `get_llm_client_with_db_fallback()` checks `LlmProviderConfig` table first. Stale rows with wrong keys cause silent 401s. Check DB before debugging API auth failures.
-14. **Zerg host backups/cleanup are unified under `zerg-ops`** — source of truth script is `scripts/zerg-ops.sh`, deployed to `/usr/local/bin/zerg-ops` with config in `/etc/zerg-ops.env`. For scoped checks use env override (for example `INSTANCE_ALLOWLIST=david-stripetest zerg-ops verify`). Freshness dead-man switch runs via `zerg-ops-monitor.timer` (`zerg-ops monitor`).
+14. **Zerg host backups/cleanup are unified under `zerg-ops`** — source of truth is `scripts/zerg-ops.sh`, deployed to `/usr/local/bin/zerg-ops`. It is intentionally code-configured (no `/etc/zerg-ops.env` contract). For scoped checks use CLI `--instance`, and offsite uses SSH alias `longhouse-offsite` configured on the host.
 
 ## Pushing Changes
 

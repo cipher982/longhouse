@@ -1,91 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODE="${1:-run}"
-ENV_FILE="${ZERG_OPS_ENV_FILE:-/etc/zerg-ops.env}"
+MODE="run"
 
-load_env_defaults() {
-  local file="$1"
-  [[ -f "$file" ]] || return 0
+# Opinionated zerg defaults live in code on purpose.
+LIVE_ROOT="/var/lib/docker/data/longhouse"
+BACKUP_ROOT="/var/app-data/longhouse-backups"
+TMP_BACKUP_DIR="$BACKUP_ROOT/tmp"
+KEEP_SNAPSHOTS=14
+VERIFY_ON_BACKUP="true"
+MONITOR_MAX_AGE_HOURS=30
 
-  local line key value
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ "$line" =~ ^[[:space:]]*# ]] && continue
-    [[ -z "${line//[[:space:]]/}" ]] && continue
-    [[ "$line" == *"="* ]] || continue
+# Offsite sync uses a neutral SSH alias. Map this alias in host ssh config.
+OFFSITE_ENABLED="true"
+OFFSITE_SSH_TARGET="longhouse-offsite"
+OFFSITE_BASE_PATH="longhouse-backups"
 
-    key="${line%%=*}"
-    value="${line#*=}"
-    key="${key#"${key%%[![:space:]]*}"}"
-    key="${key%"${key##*[![:space:]]}"}"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
+ENABLE_DOCKER_PRUNE="true"
+DOCKER_PRUNE_UNTIL_HOURS=240
+ROOT_WARN_PCT=85
+LOCK_FILE="/run/zerg-ops.lock"
 
-    if [[ "$value" == \"*\" && "$value" == *\" ]]; then
-      value="${value:1:${#value}-2}"
-    fi
-    if [[ "$value" == \'*\' && "$value" == *\' ]]; then
-      value="${value:1:${#value}-2}"
-    fi
-
-    [[ -n "$key" ]] || continue
-    if [[ -z "${!key+x}" ]]; then
-      export "$key=$value"
-    fi
-  done < "$file"
-}
-
-load_env_defaults "$ENV_FILE"
-
-BACKUP_ROOT="${BACKUP_ROOT:-/var/app-data/longhouse-backups}"
-LIVE_ROOT="${LIVE_ROOT:-/var/lib/docker/data/longhouse}"
-TMP_BACKUP_DIR="${TMP_BACKUP_DIR:-$BACKUP_ROOT/tmp}"
-INSTANCE_ALLOWLIST="${INSTANCE_ALLOWLIST:-}"
-DISCOVERY_MODE="${DISCOVERY_MODE:-running}"
-KEEP_SNAPSHOTS="${KEEP_SNAPSHOTS:-14}"
-KEEP_DAYS_PRE="${KEEP_DAYS_PRE:-14}"
-KEEP_DAYS_TMP="${KEEP_DAYS_TMP:-3}"
-VERIFY_ON_BACKUP="${VERIFY_ON_BACKUP:-true}"
-ENABLE_DOCKER_PRUNE="${ENABLE_DOCKER_PRUNE:-true}"
-ROOT_WARN_PCT="${ROOT_WARN_PCT:-85}"
-DOCKER_PRUNE_UNTIL_HOURS="${DOCKER_PRUNE_UNTIL_HOURS:-240}"
-REMOTE_SSH_TARGET="${REMOTE_SSH_TARGET:-}"
-REMOTE_BASE_PATH="${REMOTE_BASE_PATH:-}"
-REMOTE_KEEP_SNAPSHOTS="${REMOTE_KEEP_SNAPSHOTS:-30}"
-MONITOR_MAX_AGE_HOURS="${MONITOR_MAX_AGE_HOURS:-30}"
-MONITOR_REQUIRE_REMOTE="${MONITOR_REQUIRE_REMOTE:-auto}"
-ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-}"
-LOCK_FILE="${LOCK_FILE:-/run/zerg-ops.lock}"
+TARGET_INSTANCES=()
 
 log() {
   echo "[zerg-ops $(date -u +"%Y-%m-%dT%H:%M:%SZ")] $*"
-}
-
-ssh_cmd() {
-  ssh -n "$@"
-}
-
-send_alert_webhook() {
-  local message="$1"
-  [[ -n "$ALERT_WEBHOOK_URL" ]] || return 0
-
-  local payload
-  payload="$(
-    python3 - "$message" <<'PY'
-import json
-import socket
-import sys
-
-msg = sys.argv[1]
-host = socket.gethostname()
-body = f"[zerg-ops monitor] {host}: {msg}"
-print(json.dumps({"text": body, "content": body}, separators=(",", ":")))
-PY
-  )"
-
-  if ! curl -fsS -m 15 -H "Content-Type: application/json" -d "$payload" "$ALERT_WEBHOOK_URL" >/dev/null; then
-    log "WARNING alert webhook delivery failed"
-  fi
 }
 
 die() {
@@ -100,11 +39,84 @@ is_true() {
   esac
 }
 
+usage() {
+  cat <<'USAGE'
+Usage:
+  zerg-ops run
+  zerg-ops backup
+  zerg-ops verify
+  zerg-ops monitor
+  zerg-ops cleanup
+  zerg-ops report
+
+Options:
+  --instance <name>       Scope run to one instance (repeatable)
+  --live-root <path>      Override live DB root (testing)
+  --backup-root <path>    Override backup root (testing)
+  --tmp-backup-dir <path> Override temporary working directory (testing)
+  --no-offsite            Disable offsite sync/check for this invocation
+  --no-docker-prune       Disable docker prune for this invocation
+  -h, --help              Show help
+USAGE
+}
+
+parse_args() {
+  if (($# > 0)) && [[ "${1:-}" != --* ]]; then
+    MODE="$1"
+    shift
+  fi
+
+  while (($# > 0)); do
+    case "$1" in
+      --instance)
+        [[ -n "${2:-}" ]] || die "--instance requires a value"
+        TARGET_INSTANCES+=("$2")
+        shift 2
+        ;;
+      --live-root)
+        [[ -n "${2:-}" ]] || die "--live-root requires a value"
+        LIVE_ROOT="$2"
+        shift 2
+        ;;
+      --backup-root)
+        [[ -n "${2:-}" ]] || die "--backup-root requires a value"
+        BACKUP_ROOT="$2"
+        TMP_BACKUP_DIR="$BACKUP_ROOT/tmp"
+        shift 2
+        ;;
+      --tmp-backup-dir)
+        [[ -n "${2:-}" ]] || die "--tmp-backup-dir requires a value"
+        TMP_BACKUP_DIR="$2"
+        shift 2
+        ;;
+      --no-offsite)
+        OFFSITE_ENABLED="false"
+        shift
+        ;;
+      --no-docker-prune)
+        ENABLE_DOCKER_PRUNE="false"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+}
+
 trim() {
   local value="${1:-}"
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf "%s" "$value"
+}
+
+ssh_cmd() {
+  ssh -n "$@"
 }
 
 stat_bytes() {
@@ -155,66 +167,6 @@ decompress_file() {
   else
     die "unknown archive extension for $src"
   fi
-}
-
-discover_allowlist_instances() {
-  local raw="${INSTANCE_ALLOWLIST//,/ }"
-  local inst
-  for inst in $raw; do
-    inst="$(trim "$inst")"
-    [[ -n "$inst" ]] && echo "$inst"
-  done
-}
-
-discover_live_instances() {
-  if [[ -n "$INSTANCE_ALLOWLIST" ]]; then
-    discover_allowlist_instances | sort -u
-    return
-  fi
-
-  if [[ "$DISCOVERY_MODE" == "running" ]] && command -v docker >/dev/null 2>&1; then
-    local discovered=""
-    local instance
-    while IFS= read -r instance; do
-      [[ -n "$instance" ]] || continue
-      [[ -f "$LIVE_ROOT/$instance/longhouse.db" ]] || continue
-      echo "$instance"
-      discovered="1"
-    done < <(docker ps --format '{{.Names}}' 2>/dev/null | sed -n 's/^longhouse-//p' | sort -u)
-    if [[ -n "$discovered" ]]; then
-      return
-    fi
-  fi
-
-  if [[ ! -d "$LIVE_ROOT" ]]; then
-    return
-  fi
-
-  local dir
-  for dir in "$LIVE_ROOT"/*; do
-    [[ -d "$dir" ]] || continue
-    [[ -f "$dir/longhouse.db" ]] || continue
-    basename "$dir"
-  done | sort -u
-}
-
-discover_backup_instances() {
-  if [[ -n "$INSTANCE_ALLOWLIST" ]]; then
-    discover_allowlist_instances | sort -u
-    return
-  fi
-
-  if [[ ! -d "$BACKUP_ROOT" ]]; then
-    return
-  fi
-
-  local dir
-  for dir in "$BACKUP_ROOT"/*; do
-    [[ -d "$dir" ]] || continue
-    [[ "$(basename "$dir")" == "tmp" ]] && continue
-    ls "$dir"/longhouse.*.sqlite.* >/dev/null 2>&1 || continue
-    basename "$dir"
-  done | sort -u
 }
 
 sqlite_backup_copy() {
@@ -352,37 +304,71 @@ with open(manifest_path, "w", encoding="utf-8") as f:
 PY
 }
 
-remote_enabled() {
-  [[ -n "$REMOTE_SSH_TARGET" && -n "$REMOTE_BASE_PATH" ]]
+discover_instances_from_targets() {
+  if ((${#TARGET_INSTANCES[@]} == 0)); then
+    return
+  fi
+
+  local inst
+  for inst in "${TARGET_INSTANCES[@]}"; do
+    inst="$(trim "$inst")"
+    [[ -n "$inst" ]] && echo "$inst"
+  done | sort -u
 }
 
-monitor_remote_required() {
-  case "${MONITOR_REQUIRE_REMOTE:-auto}" in
-    auto|AUTO|"") remote_enabled ;;
-    *) is_true "$MONITOR_REQUIRE_REMOTE" ;;
-  esac
+discover_live_instances() {
+  if ((${#TARGET_INSTANCES[@]} > 0)); then
+    discover_instances_from_targets
+    return
+  fi
+
+  if command -v docker >/dev/null 2>&1; then
+    local discovered=""
+    local instance
+    while IFS= read -r instance; do
+      [[ -n "$instance" ]] || continue
+      [[ -f "$LIVE_ROOT/$instance/longhouse.db" ]] || continue
+      echo "$instance"
+      discovered="1"
+    done < <(docker ps --format '{{.Names}}' 2>/dev/null | sed -n 's/^longhouse-//p' | sort -u)
+    if [[ -n "$discovered" ]]; then
+      return
+    fi
+  fi
+
+  if [[ ! -d "$LIVE_ROOT" ]]; then
+    return
+  fi
+
+  local dir
+  for dir in "$LIVE_ROOT"/*; do
+    [[ -d "$dir" ]] || continue
+    [[ -f "$dir/longhouse.db" ]] || continue
+    basename "$dir"
+  done | sort -u
 }
 
-remote_prune_instance() {
-  local instance="$1"
-  local remote_dir="${REMOTE_BASE_PATH%/}/$instance"
-  local stale
-  stale="$(
-    ssh_cmd "$REMOTE_SSH_TARGET" \
-      "cd '$remote_dir' 2>/dev/null || exit 0; ls -1t longhouse.*.sqlite.* 2>/dev/null | awk 'NR>${REMOTE_KEEP_SNAPSHOTS}'" \
-      || true
-  )"
+discover_backup_instances() {
+  if ((${#TARGET_INSTANCES[@]} > 0)); then
+    discover_instances_from_targets
+    return
+  fi
 
-  local file ts
-  while IFS= read -r file; do
-    [[ -n "$file" ]] || continue
-    ts="${file#longhouse.}"
-    ts="${ts%.sqlite.*}"
-    ssh_cmd "$REMOTE_SSH_TARGET" \
-      "rm -f '$remote_dir/$file' '$remote_dir/longhouse.$ts.manifest.json'" \
-      || true
-    log "remote pruned $instance/$file"
-  done <<<"$stale"
+  if [[ ! -d "$BACKUP_ROOT" ]]; then
+    return
+  fi
+
+  local dir
+  for dir in "$BACKUP_ROOT"/*; do
+    [[ -d "$dir" ]] || continue
+    [[ "$(basename "$dir")" == "tmp" ]] && continue
+    ls "$dir"/longhouse.*.sqlite.* >/dev/null 2>&1 || continue
+    basename "$dir"
+  done | sort -u
+}
+
+offsite_enabled() {
+  is_true "$OFFSITE_ENABLED"
 }
 
 remote_sync_snapshot() {
@@ -390,22 +376,20 @@ remote_sync_snapshot() {
   local archive_path="$2"
   local manifest_path="$3"
 
-  remote_enabled || return 0
+  offsite_enabled || return 0
 
-  local remote_dir="${REMOTE_BASE_PATH%/}/$instance"
-  ssh_cmd "$REMOTE_SSH_TARGET" "mkdir -p '$remote_dir'"
-  rsync -az "$archive_path" "$manifest_path" "$REMOTE_SSH_TARGET:$remote_dir/"
-  log "remote sync complete for $instance -> ${REMOTE_SSH_TARGET}:$remote_dir"
-
-  if [[ "$REMOTE_KEEP_SNAPSHOTS" =~ ^[0-9]+$ ]] && (( REMOTE_KEEP_SNAPSHOTS > 0 )); then
-    remote_prune_instance "$instance"
-  fi
+  local remote_dir="${OFFSITE_BASE_PATH%/}/$instance"
+  ssh_cmd "$OFFSITE_SSH_TARGET" "mkdir -p '$remote_dir'"
+  rsync -az "$archive_path" "$manifest_path" "$OFFSITE_SSH_TARGET:$remote_dir/"
 }
 
 snapshot_instance() {
   local instance="$1"
   local source_db="$LIVE_ROOT/$instance/longhouse.db"
-  [[ -f "$source_db" ]] || { log "skip $instance (no longhouse.db at $source_db)"; return 0; }
+  [[ -f "$source_db" ]] || {
+    log "skip $instance (no longhouse.db at $source_db)"
+    return 0
+  }
 
   mkdir -p "$TMP_BACKUP_DIR" "$BACKUP_ROOT/$instance"
 
@@ -448,6 +432,7 @@ snapshot_instance() {
 
   mv "$archive_tmp" "$archive_final"
   archive_bytes="$(stat_bytes "$archive_final")"
+
   manifest_write \
     "$manifest_final" \
     "$instance" \
@@ -461,7 +446,14 @@ snapshot_instance() {
     "$counts_json" \
     "$verified"
 
-  remote_sync_snapshot "$instance" "$archive_final" "$manifest_final"
+  if ! remote_sync_snapshot "$instance" "$archive_final" "$manifest_final"; then
+    log "WARNING offsite sync failed for $instance (local backup remains valid)"
+  else
+    if offsite_enabled; then
+      log "offsite sync complete instance=$instance target=$OFFSITE_SSH_TARGET"
+    fi
+  fi
+
   rm -rf "$workdir"
   log "snapshot done instance=$instance archive=$(basename "$archive_final") verified=$verified"
 }
@@ -501,11 +493,17 @@ prune_all_local() {
 verify_latest_instance() {
   local instance="$1"
   local instance_dir="$BACKUP_ROOT/$instance"
-  [[ -d "$instance_dir" ]] || { log "verify skip $instance (no backup dir)"; return 0; }
+  [[ -d "$instance_dir" ]] || {
+    log "verify skip $instance (no backup dir)"
+    return 0
+  }
 
   local latest
   latest="$(ls -1t "$instance_dir"/longhouse.*.sqlite.* 2>/dev/null | head -n1 || true)"
-  [[ -n "$latest" ]] || { log "verify skip $instance (no backup archives)"; return 0; }
+  [[ -n "$latest" ]] || {
+    log "verify skip $instance (no backup archives)"
+    return 0
+  }
 
   local ts manifest
   ts="$(basename "$latest")"
@@ -617,12 +615,7 @@ monitor_instance() {
     return 1
   fi
 
-  if monitor_remote_required; then
-    if ! remote_enabled; then
-      log "ERROR monitor instance=$instance remote required but REMOTE_* not configured"
-      return 1
-    fi
-
+  if offsite_enabled; then
     local archive_name local_archive local_size remote_dir remote_archive remote_manifest remote_size
     archive_name="$(manifest_get_archive_name "$manifest")"
     local_archive="$instance_dir/$archive_name"
@@ -631,23 +624,23 @@ monitor_instance() {
       return 1
     fi
 
-    remote_dir="${REMOTE_BASE_PATH%/}/$instance"
+    remote_dir="${OFFSITE_BASE_PATH%/}/$instance"
     remote_archive="$remote_dir/$archive_name"
     remote_manifest="$remote_dir/longhouse.$ts.manifest.json"
 
-    if ! ssh_cmd "$REMOTE_SSH_TARGET" "test -f '$remote_archive' && test -f '$remote_manifest'"; then
-      log "ERROR monitor instance=$instance remote archive/manifest missing for ts=$ts"
+    if ! ssh_cmd "$OFFSITE_SSH_TARGET" "test -f '$remote_archive' && test -f '$remote_manifest'"; then
+      log "ERROR monitor instance=$instance offsite artifacts missing ts=$ts"
       return 1
     fi
 
     local_size="$(stat_bytes "$local_archive")"
     remote_size="$(
-      ssh_cmd "$REMOTE_SSH_TARGET" \
+      ssh_cmd "$OFFSITE_SSH_TARGET" \
         "if stat -c%s '$remote_archive' >/dev/null 2>&1; then stat -c%s '$remote_archive'; else stat -f%z '$remote_archive'; fi"
     )"
 
     if [[ "$local_size" != "$remote_size" ]]; then
-      log "ERROR monitor instance=$instance remote_size_mismatch local=$local_size remote=$remote_size archive=$archive_name"
+      log "ERROR monitor instance=$instance offsite_size_mismatch local=$local_size remote=$remote_size archive=$archive_name"
       return 1
     fi
   fi
@@ -659,16 +652,12 @@ monitor_instance() {
 monitor_all() {
   local fail=0 count=0 instance
 
-  discover_monitor_instances() {
-    if [[ -n "$INSTANCE_ALLOWLIST" ]]; then
-      discover_allowlist_instances | sort -u
-      return
-    fi
-    {
-      discover_live_instances
-      discover_backup_instances
-    } | awk 'NF > 0' | sort -u
-  }
+  local monitor_instances
+  if ((${#TARGET_INSTANCES[@]} > 0)); then
+    monitor_instances="$(discover_instances_from_targets || true)"
+  else
+    monitor_instances="$({ discover_live_instances; discover_backup_instances; } | awk 'NF > 0' | sort -u)"
+  fi
 
   while IFS= read -r instance; do
     [[ -n "$instance" ]] || continue
@@ -676,19 +665,15 @@ monitor_all() {
     if ! monitor_instance "$instance"; then
       fail=$((fail + 1))
     fi
-  done < <(discover_monitor_instances)
+  done <<<"$monitor_instances"
 
   if (( count == 0 )); then
-    local msg="monitor found no instances to check (live or backup)"
-    log "ERROR $msg"
-    send_alert_webhook "$msg"
+    log "ERROR monitor found no instances to check"
     return 1
   fi
 
   if (( fail > 0 )); then
-    local msg="monitor failures=$fail checked_instances=$count"
-    log "ERROR $msg"
-    send_alert_webhook "$msg"
+    log "ERROR monitor failures=$fail checked_instances=$count"
     return 1
   fi
 
@@ -696,51 +681,25 @@ monitor_all() {
   return 0
 }
 
-cleanup_legacy_artifacts() {
-  mkdir -p "$BACKUP_ROOT" "$TMP_BACKUP_DIR"
+cleanup_tmp_artifacts() {
+  mkdir -p "$TMP_BACKUP_DIR"
 
-  local file inst dest_dir base dest ts
-  while IFS= read -r -d '' file; do
-    inst="$(basename "$(dirname "$file")")"
-    dest_dir="$BACKUP_ROOT/$inst"
-    mkdir -p "$dest_dir"
-    base="$(basename "$file")"
-    dest="$dest_dir/$base"
-    if [[ -e "$dest" ]]; then
-      ts="$(date -u +%Y%m%dT%H%M%SZ)"
-      dest="$dest_dir/${base%.db}-$ts.db"
-    fi
-    mv "$file" "$dest"
-    log "moved legacy snapshot $file -> $dest"
-  done < <(find "$LIVE_ROOT" -maxdepth 2 -type f -name "longhouse.pre-*.db" -print0 2>/dev/null)
-
-  while IFS= read -r -d '' file; do
-    base="$(basename "$file")"
-    dest="$TMP_BACKUP_DIR/$base"
-    if [[ -e "$dest" ]]; then
-      ts="$(date -u +%Y%m%dT%H%M%SZ)"
-      dest="$TMP_BACKUP_DIR/${base%.db}-$ts.db"
-    fi
-    mv "$file" "$dest"
-    log "moved temp artifact $file -> $dest"
-  done < <(find /tmp -maxdepth 1 -type f \( -name "longhouse*.db" -o -name "agents*.db" \) -print0 2>/dev/null)
-
-  while IFS= read -r file; do
-    [[ -n "$file" ]] || continue
-    rm -f "$file"
-    log "deleted old legacy snapshot $file"
-  done < <(find "$BACKUP_ROOT" -type f -name "longhouse.pre-*.db" -mtime +"$KEEP_DAYS_PRE" -print 2>/dev/null)
-
+  local file
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
     rm -f "$file"
     log "deleted old tmp artifact $file"
-  done < <(find "$TMP_BACKUP_DIR" -type f -mtime +"$KEEP_DAYS_TMP" -print 2>/dev/null)
+  done < <(find "$TMP_BACKUP_DIR" -type f -mtime +3 -print 2>/dev/null)
 }
 
 cleanup_docker() {
   if ! is_true "$ENABLE_DOCKER_PRUNE"; then
     log "docker prune disabled"
+    return
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    log "docker not installed; skipping prune"
     return
   fi
 
@@ -789,26 +748,20 @@ report() {
   fi
 }
 
-usage() {
-  cat <<USAGE
-Usage:
-  zerg-ops run      Cleanup + backup + verify + prune + report
-  zerg-ops backup   Backup + optional verify + prune
-  zerg-ops verify   Verify latest archive per instance
-  zerg-ops monitor  Backup freshness + offsite presence/size check
-  zerg-ops cleanup  Legacy cleanup + prune + docker cleanup + report
-  zerg-ops report   Print disk + backup summary
-USAGE
-}
-
 main() {
+  parse_args "$@"
+
   mkdir -p "$BACKUP_ROOT" "$TMP_BACKUP_DIR"
   if [[ ! -d "$(dirname "$LOCK_FILE")" ]]; then
     LOCK_FILE="/tmp/zerg-ops.lock"
   fi
+
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$LOCK_FILE"
-    flock -n 9 || { log "another zerg-ops run is active; exiting"; exit 0; }
+    flock -n 9 || {
+      log "another zerg-ops run is active; exiting"
+      exit 0
+    }
   else
     local lock_dir="${LOCK_FILE}.d"
     if ! mkdir "$lock_dir" 2>/dev/null; then
@@ -820,10 +773,10 @@ main() {
 
   case "$MODE" in
     run)
-      cleanup_legacy_artifacts
       backup_all
       verify_latest_all
       prune_all_local
+      cleanup_tmp_artifacts
       cleanup_docker
       report
       ;;
@@ -833,6 +786,7 @@ main() {
         verify_latest_all
       fi
       prune_all_local
+      cleanup_tmp_artifacts
       ;;
     verify)
       verify_latest_all
@@ -841,8 +795,8 @@ main() {
       monitor_all
       ;;
     cleanup)
-      cleanup_legacy_artifacts
       prune_all_local
+      cleanup_tmp_artifacts
       cleanup_docker
       report
       ;;
@@ -856,4 +810,4 @@ main() {
   esac
 }
 
-main
+main "$@"

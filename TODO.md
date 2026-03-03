@@ -60,31 +60,16 @@ Notes:
 
 Notes (2026-03-03):
 - Added first-principles spec: `docs/specs/zerg-ops-backup.md`.
-- Added unified script + config template:
+- Added unified script + local contract test:
   - `scripts/zerg-ops.sh`
-  - `scripts/zerg-ops.env.example`
-- Added automated local E2E contract test:
   - `scripts/test-zerg-ops.sh`
   - `make test-zerg-ops-backup`
-- Added Make target and AGENTS gotcha update for zerg-ops workflow.
-- Live rollout on `zerg`:
-  - Script deployed to `/usr/local/bin/zerg-ops`
-  - Config deployed to `/etc/zerg-ops.env` (`DISCOVERY_MODE=running`, `KEEP_SNAPSHOTS=14`, verify enabled)
-  - Timer verified active: `zerg-ops.timer` (next run scheduled)
-  - Manual `zerg-ops run` + `zerg-ops verify` passed for active instances (`david010`, `david-stripetest`)
-  - Latest `david010` manifest records `events=987073`, `sessions=10787`, `verified_restore=true`
-- Offsite enabled on 2026-03-03:
-  - Root-runner SSH key configured on `zerg` (`/root/.ssh/longhouse_bremen_backup`) and authorized on Bremen `drose`
-  - Remote target configured: `REMOTE_SSH_TARGET=drose@100.98.103.56`, `REMOTE_BASE_PATH=/volume1/drose/backups/zerg-longhouse`
-  - Verified scoped runs:
-    - `sudo INSTANCE_ALLOWLIST=david-stripetest /usr/local/bin/zerg-ops backup`
-    - `sudo INSTANCE_ALLOWLIST=david010 /usr/local/bin/zerg-ops backup`
-  - Verified remote artifacts present on Bremen and archive byte size match for `david010` (`2214878372` local == remote)
-- Dead-man switch enabled:
-  - Added `zerg-ops monitor` mode (freshness + offsite presence/size checks)
-  - Deployed `zerg-ops-monitor.service` + `zerg-ops-monitor.timer` on `zerg` (every 6 hours)
-  - Manual monitor run verifies both active instances with `checked_instances=2`
-  - Optional alert hook supported via `ALERT_WEBHOOK_URL` in `/etc/zerg-ops.env` (not configured yet)
+- Simplified implementation after complexity review:
+  - Removed env-file driven config surface (`/etc/zerg-ops.env` is no longer part of the contract).
+  - Removed personal offsite host/path details from repo code.
+  - Offsite sync now uses neutral SSH alias `longhouse-offsite`; alias mapping lives only in host ssh config.
+  - Scoped execution now uses CLI `--instance` instead of env overrides.
+- Dead-man switch remains via `zerg-ops monitor` and systemd monitor timer.
 
 ---
 

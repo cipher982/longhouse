@@ -5,149 +5,107 @@
 
 ## 1. Problem
 
-`zerg` has two different storage concerns:
+We need one reliable operational path for Longhouse instance durability:
 
-1. **Data safety:** Longhouse user data must be recoverable after host/container failures.
-2. **Disk pressure:** stale snapshots/tmp/docker artifacts can fill the root disk.
+1. Create consistent SQLite backups for every active instance.
+2. Verify those backups are actually restorable.
+3. Keep local disk bounded with predictable retention.
+4. Keep an offsite copy without embedding personal infrastructure details in repo code.
 
-Current state had cleanup automation but no unified, repeatable backup+restore contract.
+## 2. What We Build
 
-## 2. What We Are Building
+A single script (`zerg-ops`) with an opinionated contract:
 
-A single operations entrypoint (`zerg-ops`) that handles:
+1. Discover instances from running `longhouse-*` containers (fallback: all DB dirs).
+2. Snapshot each live SQLite DB using SQLite backup API.
+3. Compress + manifest each snapshot.
+4. Restore-verify every snapshot (`hash`, `integrity_check`, row-count parity).
+5. Keep latest `N` snapshots per instance.
+6. Optionally sync snapshot+manifest offsite via neutral SSH alias (`longhouse-offsite`).
+7. Monitor freshness + offsite parity and fail loudly when broken.
 
-1. Legacy cleanup + disk hygiene
-2. SQLite backups for all instance DBs
-3. Restore verification on every run
-4. Retention pruning
-5. Optional offsite sync (Synology/NAS-ready)
-6. One report command for operator visibility
+No env-file config surface. Operational defaults live in code.
 
-One config file controls behavior (`/etc/zerg-ops.env`).
+## 3. Authoritative Data Scope
 
-## 3. First-Principles Data Scope
-
-### Authoritative data (must be protected)
+Must protect:
 
 - `/var/lib/docker/data/longhouse/<instance>/longhouse.db`
 
-This includes sessions/events/raw JSON and automatically covers schema evolution because we copy full SQLite bytes, not selected tables/columns.
+Everything else is derived/replaceable.
 
-### Non-authoritative data (safe to prune)
+## 4. Contract (Per Instance)
 
-- legacy `longhouse.pre-*.db` artifacts
-- temporary local snapshot files
-- docker build/image/volume cruft
-
-## 4. Design Constraints
-
-1. **Do not over-engineer:** one script + one env file + systemd timer.
-2. **Schema-agnostic by default:** no table-specific export logic.
-3. **No downtime:** snapshot live DB safely via SQLite backup API.
-4. **Verification is mandatory:** backup success requires restore validation.
-5. **Offsite is optional:** local backup must succeed even if NAS is unavailable.
-
-## 5. Backup Contract
-
-For each discovered instance directory with `longhouse.db`:
-
-1. Create a consistent SQLite snapshot via backup API (`src.backup(dst)`).
-2. Capture snapshot metadata:
-   - timestamp
-   - source DB path
-   - uncompressed size
-   - SHA-256 of snapshot bytes
-   - key row counts (when tables exist)
+1. Create consistent snapshot with `sqlite3.Connection.backup()`.
+2. Record manifest (`timestamp`, `source path`, sizes, `snapshot_sha256`, selected row counts, `verified_restore`).
 3. Compress snapshot (`zstd` preferred, `gzip` fallback).
-4. Run restore drill:
-   - decompress to temp
-   - hash must match manifest
-   - `PRAGMA integrity_check` must return `ok`
-   - row counts must match manifest counts
-5. Persist:
-   - `longhouse.<timestamp>.sqlite.<ext>`
-   - matching `.manifest.json`
-6. Prune old snapshots per retention count.
-7. Optionally sync snapshot+manifest to remote target over SSH/rsync.
+4. Decompress + verify byte hash + `PRAGMA integrity_check` + row counts.
+5. Persist archive + matching manifest.
+6. Prune older local snapshots beyond retention.
+7. Sync archive+manifest to offsite alias when enabled.
 
-## 6. Command Surface
+## 5. Command Surface
 
-- `zerg-ops run`
-  Full cycle: cleanup -> backup -> verify -> prune -> docker hygiene -> disk report
-- `zerg-ops backup`
-  Backup + verify + prune only
-- `zerg-ops verify`
-  Verify latest snapshot per instance
-- `zerg-ops monitor`
-  Dead-man switch: check backup freshness and (when enabled) offsite artifact presence/size parity
-- `zerg-ops cleanup`
-  Legacy artifacts + docker prune
-- `zerg-ops report`
-  Disk + backup inventory summary
+- `zerg-ops run` — backup + verify + prune + cleanup + docker prune + report
+- `zerg-ops backup` — backup + verify + prune + cleanup
+- `zerg-ops verify` — verify latest snapshot per instance
+- `zerg-ops monitor` — freshness + offsite artifact/size checks
+- `zerg-ops cleanup` — prune/cleanup + docker prune + report
+- `zerg-ops report` — disk + backup inventory
 
-## 7. Config Surface (`/etc/zerg-ops.env`)
+Minimal scoped flags:
 
-Required/primary:
+- `--instance <name>` (repeatable)
+- `--no-offsite`
+- test-only path overrides: `--live-root`, `--backup-root`, `--tmp-backup-dir`
 
-- `LIVE_ROOT` (default `/var/lib/docker/data/longhouse`)
-- `BACKUP_ROOT` (default `/var/app-data/longhouse-backups`)
-- `KEEP_SNAPSHOTS` (count per instance)
-- `VERIFY_ON_BACKUP` (`true|false`)
-- `ROOT_WARN_PCT`
-- `DOCKER_PRUNE_UNTIL_HOURS`
-- `MONITOR_MAX_AGE_HOURS` (default 30)
-- `MONITOR_REQUIRE_REMOTE` (`auto` default; `true|false` override)
-- `ALERT_WEBHOOK_URL` (optional; sends monitor failure message as JSON `text` + `content`)
+## 6. Offsite Design
 
-Optional remote:
+Repo code never stores personal IPs/hostnames/paths.
 
-- `REMOTE_SSH_TARGET` (example: `drose@100.98.103.56`)
-- `REMOTE_BASE_PATH` (example: `/volume1/drose/backups/zerg-longhouse`)
+Offsite target is a neutral SSH alias in code: `longhouse-offsite`.
+Host-level SSH config maps that alias to real infrastructure.
 
-Optional targeting:
+Example host SSH config (not in repo):
 
-- `INSTANCE_ALLOWLIST` (comma-separated instance names; empty = auto-discover all)
-- `DISCOVERY_MODE` (`running` default to backup active `longhouse-*` containers only, `all` for every DB directory)
-
-## 8. Acceptance Criteria
-
-1. Script can back up at least two instance directories in one run.
-2. Restore drill runs automatically and fails hard on mismatch/corruption.
-3. Retention keeps only configured newest snapshots per instance.
-4. `report` provides human-usable state for ops checks.
-5. Automated local E2E test validates backup->restore hash equality.
-
-## 9. Rollout
-
-1. Implement script in repo.
-2. Add local automated E2E script test.
-3. Deploy script to `/usr/local/bin/zerg-ops` on host.
-4. Update `/etc/zerg-ops.env` with retention + optional remote settings.
-5. Run `zerg-ops run` manually once.
-6. Confirm timer-based runs and successful latest verify status.
-
-## 10. Ops Commands / Triage
-
-```bash
-# Local contract test
-make test-zerg-ops-backup
-
-# On zerg host
-sudo zerg-ops run
-sudo zerg-ops verify
-sudo zerg-ops monitor
-sudo zerg-ops report
-systemctl status zerg-ops.timer --no-pager
-systemctl status zerg-ops-monitor.timer --no-pager
-journalctl -u zerg-ops.service -n 200 --no-pager
-journalctl -u zerg-ops-monitor.service -n 200 --no-pager
+```sshconfig
+Host longhouse-offsite
+  HostName <offsite-host-or-tailnet-name>
+  User <backup-user>
+  IdentityFile /root/.ssh/<key>
+  IdentitiesOnly yes
 ```
 
-Common failure paths:
+## 7. Acceptance Criteria
+
+1. Multi-instance backup works in one run.
+2. Restore verification fails hard on corruption/mismatch.
+3. Retention prunes to exactly configured count.
+4. Local contract test passes: `make test-zerg-ops-backup`.
+5. Monitor fails when backup freshness or offsite parity is broken.
+
+## 8. Rollout + Verify
+
+```bash
+# local contract
+make test-zerg-ops-backup
+
+# deploy to host
+sudo install -m 0755 scripts/zerg-ops.sh /usr/local/bin/zerg-ops
+
+# configure host ssh alias (outside git)
+# /root/.ssh/config -> Host longhouse-offsite ...
+
+# run + verify
+sudo /usr/local/bin/zerg-ops backup
+sudo /usr/local/bin/zerg-ops verify
+sudo /usr/local/bin/zerg-ops monitor
+sudo /usr/local/bin/zerg-ops report
+```
+
+Common failure triage:
 
 1. `verify hash mismatch` or `integrity_check failed`
-   Treat backup as invalid. Keep prior snapshots, inspect host disk and DB health, re-run `zerg-ops backup`.
-2. `permission denied` on live/backup paths
-   Fix ownership/permissions on `LIVE_ROOT` and `BACKUP_ROOT`; rerun.
-3. Remote sync failures
-   Local backup remains valid by design. Fix SSH auth/network separately; do not block local retention/verify.
+   - Treat latest backup as invalid; keep prior snapshots and investigate DB/storage health.
+2. `offsite artifacts missing` or `offsite_size_mismatch`
+   - Local backup remains valid; fix SSH alias/network/offsite storage and rerun `monitor`.
