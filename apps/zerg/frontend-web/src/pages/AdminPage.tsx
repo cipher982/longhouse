@@ -73,8 +73,10 @@ interface AdminUserDetailResponse {
 
 // Types for ops data - matching actual backend contract
 interface OpsSummary {
-  runs_today: number;
-  cost_today_usd: number | null;
+  window: "today" | "7d" | "30d";
+  window_label: string;
+  runs: number;
+  cost_usd: number | null;
   budget_user: {
     limit_cents: number;
     used_usd: number;
@@ -93,6 +95,11 @@ interface OpsSummary {
     p95: number;
   };
   errors_last_hour: number;
+  top_fiches: OpsTopFiche[];
+
+  // Backward-compatible aliases retained by backend during transition.
+  runs_today: number;
+  cost_today_usd: number | null;
   top_fiches_today: OpsTopFiche[];
 }
 
@@ -106,8 +113,8 @@ interface OpsTopFiche {
 }
 
 // API functions (top agents are included in summary)
-async function fetchOpsSummary(): Promise<OpsSummary> {
-  const response = await fetch(`${config.apiBaseUrl}/ops/summary`, {
+async function fetchOpsSummary(window: "today" | "7d" | "30d"): Promise<OpsSummary> {
+  const response = await fetch(`${config.apiBaseUrl}/ops/summary?window=${window}`, {
     credentials: 'include', // Cookie auth
   });
 
@@ -409,12 +416,18 @@ function ConfirmationModal({
 }
 
 // Top fiches table component - using real backend contract
-function TopFichesTable({ fiches = [] }: { fiches?: OpsTopFiche[] }) {
+function TopFichesTable({
+  fiches = [],
+  windowLabel,
+}: {
+  fiches?: OpsTopFiche[];
+  windowLabel: string;
+}) {
   if (fiches.length === 0) {
     return (
       <EmptyState
         title="No fiche data available"
-        description="Data will appear once fiches start running."
+        description={`No fiche runs recorded in ${windowLabel.toLowerCase()}.`}
       />
     );
   }
@@ -684,7 +697,7 @@ function AdminPage() {
     accent: "var(--color-neon-secondary)",
     muted: "var(--color-text-muted)",
   };
-  const [selectedWindow, setSelectedWindow] = useState<"today" | "7d" | "30d">("today");
+  const [selectedWindow, setSelectedWindow] = useState<"today" | "7d" | "30d">("30d");
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
     type: "clear_data" | "full_rebuild" | null;
@@ -714,8 +727,8 @@ function AdminPage() {
 
   // Ops summary query - FIXED: Move ALL hooks before any conditional logic
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
-    queryKey: ["ops-summary"],
-    queryFn: fetchOpsSummary,
+    queryKey: ["ops-summary", selectedWindow],
+    queryFn: () => fetchOpsSummary(selectedWindow),
     refetchInterval: 30000, // Refresh every 30 seconds
     enabled: !!user, // Only run query when user is available
   });
@@ -929,6 +942,11 @@ function AdminPage() {
 
   const formatCurrency = (value: number) => `$${value.toFixed(4)}`;
   const formatPercent = (value: number) => `${value.toFixed(1)}%`;
+  const selectedWindowLabel = selectedWindow === "today"
+    ? "Today"
+    : selectedWindow === "7d"
+      ? "Last 7 Days"
+      : "Last 30 Days";
 
   // Admin action handlers
   const handleClearData = () => {
@@ -957,7 +975,7 @@ function AdminPage() {
   };
 
   return (
-    <PageShell size="wide" className="admin-page-container">
+    <PageShell size="wide" className="admin-page-container ops-admin-page">
       <SectionHeader
         title="Operations Dashboard"
         description="Monitor system-wide activity, budgets, and user usage."
@@ -991,29 +1009,39 @@ function AdminPage() {
           action={<Button onClick={() => window.location.reload()}>Retry</Button>}
         />
       ) : summary ? (
-        <div className="admin-stack">
+        <div className="admin-stack ops-admin-stack">
+          <div className="ops-metrics-note" role="note">
+            <span>
+              Window-scoped metrics: runs, cost, latency, and top fiches in{" "}
+              <strong>{summary.window_label || selectedWindowLabel}</strong>.
+            </span>
+            <span>
+              Fixed realtime metrics: errors (1h), active users (24h), and budgets (today).
+            </span>
+          </div>
+
           {/* Key Metrics - using real backend data */}
-          <div className="metrics-grid">
+          <div className="metrics-grid ops-metrics-grid">
             <MetricCard
-              title="Runs Today"
-              value={summary.runs_today}
-              subtitle="Total executions"
+              title="Runs (Window)"
+              value={summary.runs}
+              subtitle={`In ${summary.window_label || selectedWindowLabel}`}
               color={metricColors.primary}
             />
             <MetricCard
               title="Errors (1h)"
               value={summary.errors_last_hour}
-              subtitle="Failed runs"
+              subtitle="Failed runs in the last hour"
               color={metricColors.error}
             />
             <MetricCard
-              title="Cost Today"
-              value={summary.cost_today_usd !== null ? formatCurrency(summary.cost_today_usd) : "N/A"}
-              subtitle="USD spent"
+              title="Cost (Window)"
+              value={summary.cost_usd !== null ? formatCurrency(summary.cost_usd) : "N/A"}
+              subtitle={`USD spent in ${summary.window_label || selectedWindowLabel}`}
               color={metricColors.success}
             />
             <MetricCard
-              title="User Budget"
+              title="User Budget (Today)"
               value={
                 summary.budget_user.percent !== null
                   ? formatPercent(summary.budget_user.percent)
@@ -1031,7 +1059,7 @@ function AdminPage() {
               }
             />
             <MetricCard
-              title="Global Budget"
+              title="Global Budget (Today)"
               value={
                 summary.budget_global.percent !== null
                   ? formatPercent(summary.budget_global.percent)
@@ -1049,9 +1077,9 @@ function AdminPage() {
               }
             />
             <MetricCard
-              title="Latency P95"
+              title="Latency P95 (Window)"
               value={`${summary.latency_ms.p95}ms`}
-              subtitle={`P50: ${summary.latency_ms.p50}ms`}
+              subtitle={`P50: ${summary.latency_ms.p50}ms in ${summary.window_label || selectedWindowLabel}`}
               color={metricColors.accent}
             />
           </div>
@@ -1059,10 +1087,15 @@ function AdminPage() {
           {/* Top Fiches Section - using data from summary */}
           <Card>
             <Card.Header>
-              <h3 className="admin-section-title ui-section-title">Top Performing Fiches (Today)</h3>
+              <h3 className="admin-section-title ui-section-title">
+                Top Performing Fiches ({summary.window_label || selectedWindowLabel})
+              </h3>
             </Card.Header>
             <Card.Body>
-              <TopFichesTable fiches={summary.top_fiches_today} />
+              <TopFichesTable
+                fiches={summary.top_fiches}
+                windowLabel={summary.window_label || selectedWindowLabel}
+              />
             </Card.Body>
           </Card>
 
@@ -1119,22 +1152,14 @@ function AdminPage() {
                     // Extract just the unique part from email for cleaner display
                     const emailId = demoUser.email.split('@')[0].replace('demo+', '');
                     return (
-                      <div key={demoUser.id} className="demo-account-card" style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '20px 24px',
-                        background: 'linear-gradient(135deg, rgba(26,20,16,0.6) 0%, rgba(26,20,16,0.3) 100%)',
-                        border: '1px solid rgba(243,234,217,0.1)',
-                        borderRadius: '12px',
-                      }}>
-                        <div className="demo-account-info" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <span className="demo-account-name" style={{ fontWeight: 600, fontSize: '16px', color: '#F3EAD9' }}>
+                      <div key={demoUser.id} className="demo-account-card">
+                        <div className="demo-account-info">
+                          <span className="demo-account-name">
                             {demoUser.display_name || "Demo Account"}
                           </span>
-                          <span className="demo-account-email" style={{ fontSize: '13px', color: 'rgba(181,164,142,0.5)', fontFamily: 'monospace' }}>{emailId}</span>
+                          <span className="demo-account-email">{emailId}</span>
                         </div>
-                        <div className="demo-account-actions" style={{ display: 'flex', gap: '12px' }}>
+                        <div className="demo-account-actions">
                           <Button
                             variant="primary"
                             onClick={() => handleStartDemo(demoUser.id)}
@@ -1159,17 +1184,6 @@ function AdminPage() {
                     className="demo-add-button"
                     onClick={handleCreateDemo}
                     disabled={createDemoMutation.isPending}
-                    style={{
-                      width: '100%',
-                      background: 'transparent',
-                      border: '2px dashed rgba(243,234,217,0.15)',
-                      borderRadius: '12px',
-                      padding: '16px',
-                      color: 'rgba(181,164,142,0.4)',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: 500,
-                    }}
                   >
                     + New demo account
                   </button>

@@ -35,8 +35,10 @@ class OpsTopFiche(BaseModel):
 class OpsSummary(BaseModel):
     """Operations summary with all KPIs."""
 
-    runs_today: int
-    cost_today_usd: Optional[float]
+    window: str
+    window_label: str
+    runs: int
+    cost_usd: Optional[float]
     budget_user: BudgetInfo
     budget_global: BudgetInfo
     active_users_24h: int
@@ -44,6 +46,11 @@ class OpsSummary(BaseModel):
     fiches_scheduled: int
     latency_ms: LatencyStats
     errors_last_hour: int
+    top_fiches: List[OpsTopFiche]
+
+    # Backward-compatible aliases (deprecated).
+    runs_today: int
+    cost_today_usd: Optional[float]
     top_fiches_today: List[OpsTopFiche]
 
 

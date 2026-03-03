@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -23,7 +24,33 @@ from zerg.models.models import ThreadMessage as ThreadMessageModel
 from zerg.models.models import User as UserModel
 
 
-def _today_date_utc() -> datetime.date:
+def _window_start_date(today: date, window: str) -> date:
+    if window == "today":
+        return today
+    if window == "7d":
+        return today - timedelta(days=6)
+    if window == "30d":
+        return today - timedelta(days=29)
+    raise ValueError("Unsupported window")
+
+
+def _window_label(window: str) -> str:
+    if window == "today":
+        return "Today"
+    if window == "7d":
+        return "Last 7 Days"
+    if window == "30d":
+        return "Last 30 Days"
+    raise ValueError("Unsupported window")
+
+
+def _apply_window_filter(query, dt_column, today: date, start_date: date, window: str):
+    if window == "today":
+        return query.filter(func.date(dt_column) == today)
+    return query.filter(func.date(dt_column) >= start_date)
+
+
+def _today_date_utc() -> date:
     return datetime.now(timezone.utc).date()
 
 
@@ -45,27 +72,31 @@ def _percentile(values: List[int], p: float) -> Optional[int]:
     return int(d0 + d1)
 
 
-def get_summary(db: Session, current_user: UserModel) -> Dict[str, Any]:
+def get_summary(db: Session, current_user: UserModel, window: str = "today") -> Dict[str, Any]:
     """Compute the primary KPIs for the Ops summary widget/page."""
     today = _today_date_utc()
     now = _now_utc()
+    start_date = _window_start_date(today, window)
+    label = _window_label(window)
 
-    # Runs today (started)
-    runs_today_q = db.query(func.count(RunModel.id)).filter(RunModel.started_at.isnot(None), func.date(RunModel.started_at) == today)
-    runs_today = int(runs_today_q.scalar() or 0)
+    # Runs in selected window (started)
+    runs_q = db.query(func.count(RunModel.id)).filter(RunModel.started_at.isnot(None))
+    runs_q = _apply_window_filter(runs_q, RunModel.started_at, today, start_date, window)
+    runs = int(runs_q.scalar() or 0)
 
-    # Cost today (finished with known cost)
-    cost_sum_q = db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0)).filter(
-        RunModel.finished_at.isnot(None), func.date(RunModel.finished_at) == today
-    )
+    # Cost in selected window (finished with known cost)
+    cost_sum_q = db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0)).filter(RunModel.finished_at.isnot(None))
+    cost_sum_q = _apply_window_filter(cost_sum_q, RunModel.finished_at, today, start_date, window)
+
     cost_count_q = db.query(func.count(RunModel.id)).filter(
         RunModel.finished_at.isnot(None),
-        func.date(RunModel.finished_at) == today,
         RunModel.total_cost_usd.isnot(None),
     )
+    cost_count_q = _apply_window_filter(cost_count_q, RunModel.finished_at, today, start_date, window)
+
     known_cost_count = int(cost_count_q.scalar() or 0)
-    cost_today_usd_val = float(cost_sum_q.scalar() or 0.0)
-    cost_today_usd: Optional[float] = cost_today_usd_val if known_cost_count > 0 else None
+    cost_usd_val = float(cost_sum_q.scalar() or 0.0)
+    cost_usd: Optional[float] = cost_usd_val if known_cost_count > 0 else None
 
     # Budgets
     settings = get_settings()
@@ -118,17 +149,14 @@ def get_summary(db: Session, current_user: UserModel) -> Dict[str, Any]:
     fiches_total = int(db.query(func.count(FicheModel.id)).scalar() or 0)
     fiches_scheduled = int(db.query(func.count(FicheModel.id)).filter(FicheModel.schedule.isnot(None)).scalar() or 0)
 
-    # Latency: p50/p95 for successful runs today
-    durations_rows = (
-        db.query(RunModel.duration_ms)
-        .filter(
-            RunModel.duration_ms.isnot(None),
-            RunModel.started_at.isnot(None),
-            func.date(RunModel.started_at) == today,
-            RunModel.status == "success",
-        )
-        .all()
+    # Latency: p50/p95 for successful runs in selected window
+    durations_rows = db.query(RunModel.duration_ms).filter(
+        RunModel.duration_ms.isnot(None),
+        RunModel.started_at.isnot(None),
+        RunModel.status == "success",
     )
+    durations_rows = _apply_window_filter(durations_rows, RunModel.started_at, today, start_date, window).all()
+
     durations = [int(r[0]) for r in durations_rows if r[0] is not None]
     latency_p50 = _percentile(durations, 50) or 0
     latency_p95 = _percentile(durations, 95) or 0
@@ -146,12 +174,14 @@ def get_summary(db: Session, current_user: UserModel) -> Dict[str, Any]:
         or 0
     )
 
-    # Top fiches today: run count, cost sum (nullable), p95 duration
-    top_fiches = get_top_fiches(db, window="today", limit=5)
+    # Top fiches in selected window: run count, cost sum (nullable), p95 duration
+    top_fiches = get_top_fiches(db, window=window, limit=5)
 
     return {
-        "runs_today": runs_today,
-        "cost_today_usd": cost_today_usd,
+        "window": window,
+        "window_label": label,
+        "runs": runs,
+        "cost_usd": cost_usd,
         "budget_user": {
             "limit_cents": user_budget_cents,
             "used_usd": user_used_usd,
@@ -167,6 +197,10 @@ def get_summary(db: Session, current_user: UserModel) -> Dict[str, Any]:
         "fiches_scheduled": fiches_scheduled,
         "latency_ms": {"p50": latency_p50, "p95": latency_p95},
         "errors_last_hour": errors_last_hour,
+        "top_fiches": top_fiches,
+        # Backward-compatible aliases (deprecated).
+        "runs_today": runs,
+        "cost_today_usd": cost_usd,
         "top_fiches_today": top_fiches,
     }
 
@@ -282,7 +316,7 @@ def get_top_fiches(db: Session, window: str = "today", limit: int = 5) -> List[D
     Supports "today", "7d", and "30d".
     """
     today = _today_date_utc()
-    start_date: Optional[datetime.date] = None
+    start_date: Optional[date] = None
     if window == "7d":
         start_date = today - timedelta(days=6)
     elif window == "30d":

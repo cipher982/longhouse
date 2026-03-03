@@ -31,6 +31,7 @@
 
 /* Pages */
 @import url("./profile-admin.css");
+@import url("./admin-ops.css");
 @import url("./settings.css");
 @import url("./css/fiche-settings.css");
 @import url("./marketing-mode.css");

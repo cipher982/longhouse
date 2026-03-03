@@ -86,6 +86,11 @@ describeContract('Backend API Contract Integration', () => {
       expect(result.data).toBeTruthy();
 
       // Validate the actual contract shape we depend on
+      expect(result.data).toHaveProperty('window');
+      expect(result.data).toHaveProperty('window_label');
+      expect(result.data).toHaveProperty('runs');
+      expect(result.data).toHaveProperty('cost_usd');
+      expect(result.data).toHaveProperty('top_fiches');
       expect(result.data).toHaveProperty('runs_today');
       expect(result.data).toHaveProperty('cost_today_usd');
       expect(result.data).toHaveProperty('budget_user');
@@ -98,6 +103,8 @@ describeContract('Backend API Contract Integration', () => {
       expect(result.data.budget_user).toHaveProperty('percent');
 
       // Validate types
+      expect(typeof result.data.window).toBe('string');
+      expect(typeof result.data.runs).toBe('number');
       expect(typeof result.data.runs_today).toBe('number');
       expect(typeof result.data.errors_last_hour).toBe('number');
     });
