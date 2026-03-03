@@ -93,8 +93,8 @@ export default function OikosChatPage() {
       });
 
       if (result.sessionId) {
-        // Navigate to Forum with session selected and chat open
-        navigate(`/forum?session=${result.sessionId}&chat=true`);
+        // Forum is temporarily disabled; route directly to session detail resume mode.
+        navigate(`/timeline/${result.sessionId}?resume=1`);
       }
     },
     [showSessionPicker, navigate]

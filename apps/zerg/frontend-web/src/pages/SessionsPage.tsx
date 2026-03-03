@@ -150,13 +150,10 @@ function ProviderIcon({ provider }: { provider: string }) {
   }
 }
 
-function getDurationColor(startedAt: string, endedAt: string | null): string | undefined {
-  if (!endedAt) return undefined;
-  const diffMs = parseUTC(endedAt).getTime() - parseUTC(startedAt).getTime();
-  const diffMins = diffMs / 60000;
-  if (diffMins < 5) return undefined;
-  if (diffMins < 60) return "var(--color-brand-primary)";
-  if (diffMins < 180) return "var(--color-brand-accent)";
+function getTurnsColor(turns: number): string | undefined {
+  if (turns < 5) return undefined;
+  if (turns < 15) return "var(--color-brand-primary)";
+  if (turns < 30) return "var(--color-brand-accent)";
   return "var(--color-intent-error)";
 }
 
@@ -392,15 +389,9 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
 
       <div className="session-card-footer">
         <div className="session-card-stats">
-          <span className="session-stat">{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
+          <span className="session-stat" style={{ color: getTurnsColor(turnCount) }}>{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
           <span className="session-stat-separator">&middot;</span>
           <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
-          {session.ended_at && (
-            <>
-              <span className="session-stat-separator">&middot;</span>
-              <span className="session-stat" style={{ color: getDurationColor(session.started_at, session.ended_at) }}>{formatDuration(session.started_at, session.ended_at)}</span>
-            </>
-          )}
           <span className="session-stat-separator">&middot;</span>
           <span className="session-stat session-stat--secondary">Started {formatRelativeTime(session.started_at)}</span>
         </div>
@@ -844,11 +835,6 @@ export default function SessionsPage() {
                       : `${liveCount} active · ${liveTotal} total (last 7 days)`
                   }
                 </div>
-              </div>
-              <div className="sessions-live-actions">
-                <Button variant="ghost" size="sm" onClick={() => navigate("/forum")}>
-                  Open full map
-                </Button>
               </div>
             </div>
             <div className="sessions-live-body">

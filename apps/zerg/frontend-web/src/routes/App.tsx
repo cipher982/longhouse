@@ -32,7 +32,6 @@ import { AuthGuard } from "../lib/auth";
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
 const ChatPage = lazy(() => import("../pages/ChatPage"));
 const OikosChatPage = lazy(() => import("../pages/OikosChatPage"));
-const ForumPage = lazy(() => import("../pages/ForumPage"));
 const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
 import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -77,6 +76,27 @@ function DemoApp() {
 function LandingAliasRedirect() {
   const location = useLocation();
   return <Navigate to={{ pathname: "/", search: location.search }} replace />;
+}
+
+function LegacyForumRedirect() {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const sessionId = params.get("session");
+  const shouldResume = params.get("chat") === "true";
+
+  if (sessionId) {
+    return (
+      <Navigate
+        to={{
+          pathname: `/timeline/${sessionId}`,
+          search: shouldResume ? "?resume=1" : "",
+        }}
+        replace
+      />
+    );
+  }
+
+  return <Navigate to="/timeline" replace />;
 }
 
 export default function App() {
@@ -268,9 +288,7 @@ export default function App() {
           path: "/forum",
           element: (
             <ErrorBoundary>
-              <Suspense fallback={<PageLoader />}>
-                <ForumPage />
-              </Suspense>
+              <LegacyForumRedirect />
             </ErrorBoundary>
           )
         },

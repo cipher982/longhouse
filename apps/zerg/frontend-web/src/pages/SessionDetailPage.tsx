@@ -414,6 +414,8 @@ export default function SessionDetailPage() {
     return Number.isFinite(parsed) ? parsed : null;
   }, [searchParams]);
 
+  const shouldAutoResume = useMemo(() => searchParams.get("resume") === "1", [searchParams]);
+
   // Fetch session and events
   const { data: session, isLoading: sessionLoading, error: sessionError } =
     useAgentSession(sessionId || null);
@@ -443,6 +445,26 @@ export default function SessionDetailPage() {
 
   // Resume chat state
   const [showResume, setShowResume] = useState(false);
+
+  // Legacy forum redirects can pass ?resume=1 to drop directly into chat mode.
+  // Consume it once and strip it from URL so close/back behavior stays predictable.
+  useEffect(() => {
+    if (!shouldAutoResume || !session) return;
+
+    if (session.provider === "claude") {
+      setShowResume(true);
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete("resume");
+    navigate(
+      {
+        pathname: location.pathname,
+        search: next.toString() ? `?${next.toString()}` : "",
+      },
+      { replace: true }
+    );
+  }, [shouldAutoResume, session, searchParams, navigate, location.pathname]);
 
   // Event role filter
   const [eventFilter, setEventFilter] = useState<"all" | "messages" | "tools">("all");

@@ -231,12 +231,11 @@ test('auth + timeline loads with session rows', async ({ authedContext, instance
 });
 
 // ---------------------------------------------------------------------------
-// Test 2: Forum page loads
+// Test 2: Legacy forum route redirects to timeline
 // ---------------------------------------------------------------------------
 
-test('forum page loads without auth errors', async ({ authedContext }) => {
-  // Generous budget: container wait(5s) + title(5s) + row data(20s) + overhead
-  // The active sessions endpoint needs DB warmup time on fresh reprovision.
+test('forum route redirects to timeline without auth errors', async ({ authedContext }) => {
+  // Budget includes auth checks + redirect + timeline render.
   test.setTimeout(45_000);
 
   const page = await authedContext.newPage();
@@ -250,67 +249,40 @@ test('forum page loads without auth errors', async ({ authedContext }) => {
   });
 
   await page.goto('/forum', { waitUntil: 'domcontentloaded' });
-
-  // Wait for the forum container (appears quickly once React mounts)
-  await page
-    .locator('.forum-map-grid, .forum-session-list, .forum-map-page')
-    .first()
-    .waitFor({ timeout: 5_000 })
-    .catch(async () => {
-      // Fallback: just wait for the spinner to clear
-      await page.waitForFunction(
-        () => !document.querySelector('[class*="spinner"], [class*="Spinner"]'),
-        { timeout: 5_000 },
-      ).catch(() => {});
-    });
+  await expect(page).toHaveURL(/\/timeline(\/.*)?(\?.*)?$/, { timeout: 10_000 });
 
   if (authErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'forum-auth',
-      `Auth failures on /forum: ${authErrors.join(', ')}`,
+      'forum-redirect-auth',
+      `Auth failures while loading /forum redirect: ${authErrors.join(', ')}`,
     );
   }
 
   if (serverErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'forum-500',
-      `Server errors on /forum: ${serverErrors.join(', ')}`,
+      'forum-redirect-500',
+      `Server errors while loading /forum redirect: ${serverErrors.join(', ')}`,
     );
   }
 
   if (consoleErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'forum-console',
-      `JS errors on /forum: ${consoleErrors.join(' | ')}`,
+      'forum-redirect-console',
+      `JS errors while loading /forum redirect: ${consoleErrors.join(' | ')}`,
     );
   }
 
-  // The page title "The Forum" should be visible
-  await expect(page.getByText('The Forum')).toBeVisible({ timeout: 5_000 });
-
-  // Wait for session rows or an explicit empty/loading state (fresh instances can have no data)
-  await page.waitForFunction(() => {
-    const row = document.querySelector('.forum-session-row');
-    const empty = document.querySelector('.forum-task-empty');
-    return Boolean(row || empty);
-  }, { timeout: 20_000 }).catch(async () => {
-    await failWithScreenshot(page, 'forum-empty', 'Forum page shows no session rows — data not loading or empty state missing.');
-  });
-
-  const rowCount = await page.locator('.forum-session-row').count();
-  if (rowCount === 0) {
-    const emptyText = (await page.locator('.forum-task-empty').textContent()) ?? '';
-    if (emptyText.includes('Loading')) {
-      await page.close();
-      return;
-    }
-    await expect(page.getByText('No sessions found in the last 7 days.')).toBeVisible();
-    await page.close();
-    return;
-  }
+  // Ensure timeline shell mounted after redirect.
+  await page
+    .locator('.sessions-page, .sessions-hero-empty, .session-card')
+    .first()
+    .waitFor({ timeout: 10_000 })
+    .catch(async () => {
+      await failWithScreenshot(page, 'forum-redirect-empty', 'Redirect from /forum did not render timeline content.');
+    });
 
   await page.close();
 });
