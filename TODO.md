@@ -55,6 +55,11 @@ Notes (2026-03-03):
     - `sudo INSTANCE_ALLOWLIST=david-stripetest /usr/local/bin/zerg-ops backup`
     - `sudo INSTANCE_ALLOWLIST=david010 /usr/local/bin/zerg-ops backup`
   - Verified remote artifacts present on Bremen and archive byte size match for `david010` (`2214878372` local == remote)
+- Dead-man switch enabled:
+  - Added `zerg-ops monitor` mode (freshness + offsite presence/size checks)
+  - Deployed `zerg-ops-monitor.service` + `zerg-ops-monitor.timer` on `zerg` (every 6 hours)
+  - Manual monitor run verifies both active instances with `checked_instances=2`
+  - Optional alert hook supported via `ALERT_WEBHOOK_URL` in `/etc/zerg-ops.env` (not configured yet)
 
 ---
 

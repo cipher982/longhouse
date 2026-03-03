@@ -52,10 +52,40 @@ DOCKER_PRUNE_UNTIL_HOURS="${DOCKER_PRUNE_UNTIL_HOURS:-240}"
 REMOTE_SSH_TARGET="${REMOTE_SSH_TARGET:-}"
 REMOTE_BASE_PATH="${REMOTE_BASE_PATH:-}"
 REMOTE_KEEP_SNAPSHOTS="${REMOTE_KEEP_SNAPSHOTS:-30}"
+MONITOR_MAX_AGE_HOURS="${MONITOR_MAX_AGE_HOURS:-30}"
+MONITOR_REQUIRE_REMOTE="${MONITOR_REQUIRE_REMOTE:-auto}"
+ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-}"
 LOCK_FILE="${LOCK_FILE:-/run/zerg-ops.lock}"
 
 log() {
   echo "[zerg-ops $(date -u +"%Y-%m-%dT%H:%M:%SZ")] $*"
+}
+
+ssh_cmd() {
+  ssh -n "$@"
+}
+
+send_alert_webhook() {
+  local message="$1"
+  [[ -n "$ALERT_WEBHOOK_URL" ]] || return 0
+
+  local payload
+  payload="$(
+    python3 - "$message" <<'PY'
+import json
+import socket
+import sys
+
+msg = sys.argv[1]
+host = socket.gethostname()
+body = f"[zerg-ops monitor] {host}: {msg}"
+print(json.dumps({"text": body, "content": body}, separators=(",", ":")))
+PY
+  )"
+
+  if ! curl -fsS -m 15 -H "Content-Type: application/json" -d "$payload" "$ALERT_WEBHOOK_URL" >/dev/null; then
+    log "WARNING alert webhook delivery failed"
+  fi
 }
 
 die() {
@@ -326,12 +356,19 @@ remote_enabled() {
   [[ -n "$REMOTE_SSH_TARGET" && -n "$REMOTE_BASE_PATH" ]]
 }
 
+monitor_remote_required() {
+  case "${MONITOR_REQUIRE_REMOTE:-auto}" in
+    auto|AUTO|"") remote_enabled ;;
+    *) is_true "$MONITOR_REQUIRE_REMOTE" ;;
+  esac
+}
+
 remote_prune_instance() {
   local instance="$1"
   local remote_dir="${REMOTE_BASE_PATH%/}/$instance"
   local stale
   stale="$(
-    ssh "$REMOTE_SSH_TARGET" \
+    ssh_cmd "$REMOTE_SSH_TARGET" \
       "cd '$remote_dir' 2>/dev/null || exit 0; ls -1t longhouse.*.sqlite.* 2>/dev/null | awk 'NR>${REMOTE_KEEP_SNAPSHOTS}'" \
       || true
   )"
@@ -341,7 +378,7 @@ remote_prune_instance() {
     [[ -n "$file" ]] || continue
     ts="${file#longhouse.}"
     ts="${ts%.sqlite.*}"
-    ssh "$REMOTE_SSH_TARGET" \
+    ssh_cmd "$REMOTE_SSH_TARGET" \
       "rm -f '$remote_dir/$file' '$remote_dir/longhouse.$ts.manifest.json'" \
       || true
     log "remote pruned $instance/$file"
@@ -356,7 +393,7 @@ remote_sync_snapshot() {
   remote_enabled || return 0
 
   local remote_dir="${REMOTE_BASE_PATH%/}/$instance"
-  ssh "$REMOTE_SSH_TARGET" "mkdir -p '$remote_dir'"
+  ssh_cmd "$REMOTE_SSH_TARGET" "mkdir -p '$remote_dir'"
   rsync -az "$archive_path" "$manifest_path" "$REMOTE_SSH_TARGET:$remote_dir/"
   log "remote sync complete for $instance -> ${REMOTE_SSH_TARGET}:$remote_dir"
 
@@ -528,6 +565,137 @@ verify_latest_all() {
   fi
 }
 
+hours_since_timestamp() {
+  local timestamp_utc="$1"
+  python3 - "$timestamp_utc" <<'PY'
+import datetime
+import sys
+
+ts = sys.argv[1]
+dt = datetime.datetime.strptime(ts, "%Y%m%dT%H%M%SZ").replace(
+    tzinfo=datetime.timezone.utc
+)
+now = datetime.datetime.now(datetime.timezone.utc)
+print(int((now - dt).total_seconds() // 3600))
+PY
+}
+
+manifest_get_archive_name() {
+  local manifest_path="$1"
+  python3 - "$manifest_path" <<'PY'
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+print(manifest["archive_name"])
+PY
+}
+
+monitor_instance() {
+  local instance="$1"
+  local instance_dir="$BACKUP_ROOT/$instance"
+  local latest_archive ts manifest age_hours
+
+  latest_archive="$(ls -1t "$instance_dir"/longhouse.*.sqlite.* 2>/dev/null | head -n1 || true)"
+  if [[ -z "$latest_archive" ]]; then
+    log "ERROR monitor instance=$instance no local archive found"
+    return 1
+  fi
+
+  ts="$(basename "$latest_archive")"
+  ts="${ts#longhouse.}"
+  ts="${ts%.sqlite.*}"
+  manifest="$instance_dir/longhouse.$ts.manifest.json"
+  if [[ ! -f "$manifest" ]]; then
+    log "ERROR monitor instance=$instance missing local manifest longhouse.$ts.manifest.json"
+    return 1
+  fi
+
+  age_hours="$(hours_since_timestamp "$ts")"
+  if (( age_hours > MONITOR_MAX_AGE_HOURS )); then
+    log "ERROR monitor instance=$instance backup_age_hours=$age_hours threshold=$MONITOR_MAX_AGE_HOURS"
+    return 1
+  fi
+
+  if monitor_remote_required; then
+    if ! remote_enabled; then
+      log "ERROR monitor instance=$instance remote required but REMOTE_* not configured"
+      return 1
+    fi
+
+    local archive_name local_archive local_size remote_dir remote_archive remote_manifest remote_size
+    archive_name="$(manifest_get_archive_name "$manifest")"
+    local_archive="$instance_dir/$archive_name"
+    if [[ ! -f "$local_archive" ]]; then
+      log "ERROR monitor instance=$instance local archive missing $archive_name"
+      return 1
+    fi
+
+    remote_dir="${REMOTE_BASE_PATH%/}/$instance"
+    remote_archive="$remote_dir/$archive_name"
+    remote_manifest="$remote_dir/longhouse.$ts.manifest.json"
+
+    if ! ssh_cmd "$REMOTE_SSH_TARGET" "test -f '$remote_archive' && test -f '$remote_manifest'"; then
+      log "ERROR monitor instance=$instance remote archive/manifest missing for ts=$ts"
+      return 1
+    fi
+
+    local_size="$(stat_bytes "$local_archive")"
+    remote_size="$(
+      ssh_cmd "$REMOTE_SSH_TARGET" \
+        "if stat -c%s '$remote_archive' >/dev/null 2>&1; then stat -c%s '$remote_archive'; else stat -f%z '$remote_archive'; fi"
+    )"
+
+    if [[ "$local_size" != "$remote_size" ]]; then
+      log "ERROR monitor instance=$instance remote_size_mismatch local=$local_size remote=$remote_size archive=$archive_name"
+      return 1
+    fi
+  fi
+
+  log "monitor ok instance=$instance age_hours=$age_hours archive=$(basename "$latest_archive")"
+  return 0
+}
+
+monitor_all() {
+  local fail=0 count=0 instance
+
+  discover_monitor_instances() {
+    if [[ -n "$INSTANCE_ALLOWLIST" ]]; then
+      discover_allowlist_instances | sort -u
+      return
+    fi
+    {
+      discover_live_instances
+      discover_backup_instances
+    } | awk 'NF > 0' | sort -u
+  }
+
+  while IFS= read -r instance; do
+    [[ -n "$instance" ]] || continue
+    count=$((count + 1))
+    if ! monitor_instance "$instance"; then
+      fail=$((fail + 1))
+    fi
+  done < <(discover_monitor_instances)
+
+  if (( count == 0 )); then
+    local msg="monitor found no instances to check (live or backup)"
+    log "ERROR $msg"
+    send_alert_webhook "$msg"
+    return 1
+  fi
+
+  if (( fail > 0 )); then
+    local msg="monitor failures=$fail checked_instances=$count"
+    log "ERROR $msg"
+    send_alert_webhook "$msg"
+    return 1
+  fi
+
+  log "monitor success checked_instances=$count"
+  return 0
+}
+
 cleanup_legacy_artifacts() {
   mkdir -p "$BACKUP_ROOT" "$TMP_BACKUP_DIR"
 
@@ -627,6 +795,7 @@ Usage:
   zerg-ops run      Cleanup + backup + verify + prune + report
   zerg-ops backup   Backup + optional verify + prune
   zerg-ops verify   Verify latest archive per instance
+  zerg-ops monitor  Backup freshness + offsite presence/size check
   zerg-ops cleanup  Legacy cleanup + prune + docker cleanup + report
   zerg-ops report   Print disk + backup summary
 USAGE
@@ -667,6 +836,9 @@ main() {
       ;;
     verify)
       verify_latest_all
+      ;;
+    monitor)
+      monitor_all
       ;;
     cleanup)
       cleanup_legacy_artifacts

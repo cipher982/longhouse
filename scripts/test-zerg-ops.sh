@@ -68,6 +68,8 @@ main() {
   export REMOTE_SSH_TARGET=
   export REMOTE_BASE_PATH=
   export REMOTE_KEEP_SNAPSHOTS=30
+  export MONITOR_MAX_AGE_HOURS=30
+  export MONITOR_REQUIRE_REMOTE=false
 
   local round
   for round in 1 2 3; do
@@ -78,6 +80,7 @@ main() {
   done
 
   bash "$OPS_SCRIPT" verify >/dev/null
+  bash "$OPS_SCRIPT" monitor >/dev/null
 
   local instance count manifests latest ts manifest restore expected_sha actual_sha
   for instance in alice bob; do
