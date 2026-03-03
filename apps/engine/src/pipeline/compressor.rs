@@ -387,6 +387,37 @@ mod tests {
     }
 
     #[test]
+    fn test_payload_environment_is_not_hardcoded_production() {
+        // The environment field must come from the machine name config,
+        // not the hardcoded "production" string we replaced.
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "s1".to_string(),
+            ..Default::default()
+        };
+        let payload = build_payload("test-id", &events, &meta, "/path", "claude");
+        // Whatever the value is, it must not be the old hardcoded sentinel
+        assert_ne!(
+            payload.environment, "production",
+            "environment should be machine name (from MACHINE_NAME global or hostname), not hardcoded 'production'"
+        );
+    }
+
+    #[test]
+    fn test_payload_environment_is_non_empty() {
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "s1".to_string(),
+            ..Default::default()
+        };
+        let payload = build_payload("test-id", &events, &meta, "/path", "claude");
+        assert!(
+            !payload.environment.is_empty(),
+            "environment field must not be empty"
+        );
+    }
+
+    #[test]
     fn test_streaming_compress_roundtrip() {
         let events = make_test_events();
         let meta = SessionMetadata {

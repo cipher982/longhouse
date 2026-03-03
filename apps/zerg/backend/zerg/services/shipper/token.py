@@ -210,6 +210,25 @@ def save_zerg_url(url: str, claude_config_dir: Path | None = None) -> None:
             raise
 
 
+def sanitize_machine_name(name: str) -> str:
+    """Sanitize a machine name to be safe for shell args and XML.
+
+    - Strips leading/trailing whitespace
+    - Replaces whitespace runs with hyphens (safe for systemd ExecStart)
+    - Strips XML-significant characters (& < >) to avoid breaking plist
+    - Collapses multiple hyphens
+    - Truncates to 64 chars
+    """
+    import re
+
+    name = name.strip()
+    name = re.sub(r"\s+", "-", name)
+    name = re.sub(r"[&<>\"']", "", name)
+    name = re.sub(r"-{2,}", "-", name)
+    name = name.strip("-")
+    return name[:64] or "unknown"
+
+
 def save_machine_name(name: str, claude_config_dir: Path | None = None) -> None:
     """Save the machine name label to ~/.claude/longhouse-machine-name."""
     import sys

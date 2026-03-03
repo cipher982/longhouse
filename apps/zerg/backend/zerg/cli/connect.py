@@ -38,6 +38,7 @@ from zerg.services.shipper import install_hooks
 from zerg.services.shipper import install_mcp_server
 from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
+from zerg.services.shipper import sanitize_machine_name
 from zerg.services.shipper import save_machine_name
 from zerg.services.shipper import save_token
 from zerg.services.shipper import save_zerg_url
@@ -472,6 +473,12 @@ def connect(
         "--status",
         help="Check the status of the background service",
     ),
+    machine_name: str = typer.Option(
+        None,
+        "--machine-name",
+        "-m",
+        help="Name for this machine in session labels (skips interactive prompt when using --install)",
+    ),
 ) -> None:
     """Continuous: watch and ship sessions to Longhouse via Rust engine.
 
@@ -529,7 +536,7 @@ def connect(
         return
 
     if install:
-        _handle_install(url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval)
+        _handle_install(url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval, machine_name=machine_name)
         return
 
     # Normal connect mode — exec longhouse-engine (replaces this process)
@@ -819,6 +826,7 @@ def _handle_install(
     claude_dir: str | None,
     poll: bool,
     interval: int,
+    machine_name: str | None = None,
 ) -> None:
     """Handle --install flag."""
     # Persist url/token BEFORE installing the service so the engine
@@ -828,18 +836,22 @@ def _handle_install(
     if token:
         save_token(token, config_dir)
 
-    # Prompt for machine name — sessions from this machine will be tagged with it.
+    # Determine machine name — prompt interactively unless already provided.
     default_name = socket.gethostname()
-    typer.echo("")
-    machine_name = (
-        typer.prompt(
-            "Name this machine (used to label your sessions in Longhouse)",
-            default=default_name,
-        ).strip()
-        or default_name
-    )
-    save_machine_name(machine_name, config_dir)
-    typer.secho(f"  Machine: {machine_name}", fg=typer.colors.CYAN)
+    if machine_name:
+        resolved_name = sanitize_machine_name(machine_name)
+    else:
+        typer.echo("")
+        raw = (
+            typer.prompt(
+                "Name this machine (used to label your sessions in Longhouse)",
+                default=default_name,
+            ).strip()
+            or default_name
+        )
+        resolved_name = sanitize_machine_name(raw)
+    save_machine_name(resolved_name, config_dir)
+    typer.secho(f"  Machine: {resolved_name}", fg=typer.colors.CYAN)
 
     typer.echo("Installing engine service...")
     typer.echo(f"  URL: {url}")
@@ -849,7 +861,7 @@ def _handle_install(
             url=url,
             token=token,
             claude_dir=claude_dir,
-            machine_name=machine_name,
+            machine_name=resolved_name,
         )
         typer.echo("")
         typer.secho(f"[OK] {result['message']}", fg=typer.colors.GREEN)

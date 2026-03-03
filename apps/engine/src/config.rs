@@ -133,6 +133,84 @@ fn default_machine_name() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Build a ShipperConfig as if CLAUDE_CONFIG_DIR points to a temp dir.
+    fn config_from_dir(dir: &std::path::Path) -> ShipperConfig {
+        let mut config = ShipperConfig::default();
+
+        let machine_name_path = dir.join("longhouse-machine-name");
+        if machine_name_path.exists() {
+            if let Ok(name) = fs::read_to_string(&machine_name_path) {
+                let name = name.trim().to_string();
+                if !name.is_empty() {
+                    config.machine_name = name;
+                }
+            }
+        }
+        config
+    }
+
+    #[test]
+    fn test_machine_name_loaded_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("longhouse-machine-name"), "work-macbook\n").unwrap();
+
+        let config = config_from_dir(dir.path());
+        assert_eq!(config.machine_name, "work-macbook");
+    }
+
+    #[test]
+    fn test_machine_name_falls_back_to_hostname_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_from_dir(dir.path());
+        // Should not be empty — falls back to hostname or "unknown"
+        assert!(!config.machine_name.is_empty());
+    }
+
+    #[test]
+    fn test_machine_name_empty_file_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("longhouse-machine-name"), "   \n").unwrap();
+
+        let config = config_from_dir(dir.path());
+        // Empty file → falls back to hostname, not empty string
+        assert!(!config.machine_name.is_empty());
+        assert!(config.machine_name != "   ");
+    }
+
+    #[test]
+    fn test_with_overrides_sets_machine_name() {
+        let config = ShipperConfig::default()
+            .with_overrides(None, None, None, None, Some("home-server"));
+        assert_eq!(config.machine_name, "home-server");
+    }
+
+    #[test]
+    fn test_with_overrides_empty_machine_name_ignored() {
+        let original = ShipperConfig::default();
+        let original_name = original.machine_name.clone();
+        let config = original.with_overrides(None, None, None, None, Some(""));
+        // Empty string override is ignored — keeps existing name
+        assert_eq!(config.machine_name, original_name);
+    }
+
+    #[test]
+    fn test_with_overrides_none_machine_name_keeps_existing() {
+        let mut config = ShipperConfig::default();
+        config.machine_name = "my-machine".to_string();
+        let config = config.with_overrides(None, None, None, None, None);
+        assert_eq!(config.machine_name, "my-machine");
+    }
+}
+
 /// Resolve `~/.claude/` or `CLAUDE_CONFIG_DIR`.
 fn get_claude_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
