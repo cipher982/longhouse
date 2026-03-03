@@ -54,9 +54,13 @@ def get_frontend_errors(current_user: UserModel = Depends(require_admin)):
 
 
 @router.get("/summary", response_model=OpsSummary)
-def get_summary(current_user: UserModel = Depends(require_admin), db: Session = Depends(get_db)):
+def get_summary(
+    window: str = Query("today", pattern="^(today|7d|30d)$"),
+    current_user: UserModel = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """Return primary KPIs for the Ops dashboard (admin-only)."""
-    return svc_get_summary(db, current_user)
+    return svc_get_summary(db, current_user, window=window)
 
 
 @router.get("/timeseries", response_model=TimeSeriesResponse)

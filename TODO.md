@@ -15,6 +15,19 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
+
+Status (2026-03-03): In progress.
+
+**Problem:** Time-window selection in Admin does not affect the summary API call. UI says "Last 30 Days" while cards still show "Runs Today"/"Cost Today", which is misleading. Styling is also degraded due to malformed CSS blocks and inline style drift.
+
+- [ ] Write first-principles improvement spec (metrics semantics, labels, layout, accessibility, mobile behavior)
+- [ ] Add window-aware ops summary API (`today|7d|30d`) and align response naming with selected window
+- [ ] Rework Admin operations section to clearly separate window-scoped metrics from fixed-window metrics (for example `errors_last_hour`)
+- [ ] Replace broken admin ops styling with valid, scoped, responsive CSS (remove inline style overrides)
+- [ ] Update frontend/backend tests for the new contract and behavior
+- [ ] Run `make test` and `make test-e2e`, then ship + post-deploy `make qa-live`
+
 ---
 
 ## [Infra] Zerg backup + restore drill via unified zerg-ops (size: 3)

@@ -33,46 +33,79 @@ vi.mock("../../lib/auth", () => ({
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
-const mockOpsSummary = {
-  runs_today: 45,
-  cost_today_usd: 1.23,
-  budget_user: {
-    limit_cents: 5000,
-    used_usd: 1.23,
-    percent: 24.6,
-  },
-  budget_global: {
-    limit_cents: 10000,
-    used_usd: 3.45,
-    percent: 34.5,
-  },
-  active_users_24h: 5,
-  fiches_total: 12,
-  fiches_scheduled: 3,
-  latency_ms: {
-    p50: 250,
-    p95: 800,
-  },
-  errors_last_hour: 2,
-  top_fiches_today: [
-    {
-      fiche_id: 1,
-      name: "Test Fiche",
-      owner_email: "test@example.com",
-      runs: 50,
-      cost_usd: 0.125,
-      p95_ms: 300,
+function buildOpsSummary(window: "today" | "7d" | "30d") {
+  const byWindow = {
+    today: { runs: 45, cost: 1.23, label: "Today" },
+    "7d": { runs: 78, cost: 5.67, label: "Last 7 Days" },
+    "30d": { runs: 123, cost: 9.87, label: "Last 30 Days" },
+  }[window];
+
+  return {
+    window,
+    window_label: byWindow.label,
+    runs: byWindow.runs,
+    cost_usd: byWindow.cost,
+    // Backward-compatible aliases
+    runs_today: byWindow.runs,
+    cost_today_usd: byWindow.cost,
+    top_fiches: [
+      {
+        fiche_id: 1,
+        name: "Test Fiche",
+        owner_email: "test@example.com",
+        runs: 50,
+        cost_usd: 0.125,
+        p95_ms: 300,
+      },
+      {
+        fiche_id: 2,
+        name: "Helper Fiche",
+        owner_email: "helper@example.com",
+        runs: 30,
+        cost_usd: 0.089,
+        p95_ms: 250,
+      },
+    ],
+    top_fiches_today: [
+      {
+        fiche_id: 1,
+        name: "Test Fiche",
+        owner_email: "test@example.com",
+        runs: 50,
+        cost_usd: 0.125,
+        p95_ms: 300,
+      },
+      {
+        fiche_id: 2,
+        name: "Helper Fiche",
+        owner_email: "helper@example.com",
+        runs: 30,
+        cost_usd: 0.089,
+        p95_ms: 250,
+      },
+    ],
+    budget_user: {
+      limit_cents: 5000,
+      used_usd: 1.23,
+      percent: 24.6,
     },
-    {
-      fiche_id: 2,
-      name: "Helper Fiche",
-      owner_email: "helper@example.com",
-      runs: 30,
-      cost_usd: 0.089,
-      p95_ms: 250,
+    budget_global: {
+      limit_cents: 10000,
+      used_usd: 3.45,
+      percent: 34.5,
     },
-  ],
-};
+    active_users_24h: 5,
+    fiches_total: 12,
+    fiches_scheduled: 3,
+    latency_ms: {
+      p50: 250,
+      p95: 800,
+    },
+    errors_last_hour: 2,
+  };
+}
+
+const mockOpsSummary = buildOpsSummary("30d");
 
 function renderAdminPage() {
   // Mock localStorage.zerg_jwt that AdminPage expects
@@ -113,9 +146,15 @@ describe("AdminPage", () => {
       const url = typeof input === "string" ? input : input.toString();
 
       if (url.includes(`${config.apiBaseUrl}/ops/summary`)) {
+        const summaryWindow = url.includes("window=7d")
+          ? "7d"
+          : url.includes("window=today")
+            ? "today"
+            : "30d";
+
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(mockOpsSummary),
+          json: () => Promise.resolve(buildOpsSummary(summaryWindow)),
         });
       }
       if (url.includes(`${config.apiBaseUrl}/admin/super-admin-status`)) {
@@ -150,7 +189,7 @@ describe("AdminPage", () => {
 
     // Wait for data to load
     await waitFor(() => {
-      expect(screen.getByText("45")).toBeInTheDocument(); // runs_today
+      expect(screen.getByText("123")).toBeInTheDocument(); // runs in default 30d window
     });
 
     const errorsHeading = screen.getAllByText("Errors (1h)")[0];
@@ -158,12 +197,12 @@ describe("AdminPage", () => {
     expect(errorsCard).not.toBeNull();
     expect(within(errorsCard as Element).getByText("2")).toBeInTheDocument();
 
-    const costHeading = screen.getAllByText("Cost Today")[0];
+    const costHeading = screen.getAllByText("Cost (Window)")[0];
     const costCard = costHeading.closest(".metric-card");
     expect(costCard).not.toBeNull();
-    expect(within(costCard as Element).getByText("$1.2300")).toBeInTheDocument();
+    expect(within(costCard as Element).getByText("$9.8700")).toBeInTheDocument();
 
-    const userBudgetHeading = screen.getAllByText("User Budget")[0];
+    const userBudgetHeading = screen.getAllByText("User Budget (Today)")[0];
     const userBudgetCard = userBudgetHeading.closest(".metric-card");
     expect(userBudgetCard).not.toBeNull();
     expect(within(userBudgetCard as Element).getByText("24.6%"))
@@ -189,13 +228,24 @@ describe("AdminPage", () => {
 
     // Wait for initial data load
     await waitFor(() => {
-      expect(screen.getAllByText("45").length).toBeGreaterThan(0); // today runs
+      expect(screen.getAllByText("123").length).toBeGreaterThan(0); // default 30d runs
     });
 
     const select = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
     await user.selectOptions(select, "7d");
 
-    expect(select.value).toBe("7d");
+    await waitFor(() => {
+      expect(select.value).toBe("7d");
+      expect(screen.getByText("78")).toBeInTheDocument();
+      expect(screen.getByText("Top Performing Fiches (Last 7 Days)")).toBeInTheDocument();
+    });
+
+    expect(
+      mockFetch.mock.calls.some(([input]) => {
+        const url = typeof input === "string" ? input : input.toString();
+        return url.includes(`${config.apiBaseUrl}/ops/summary?window=7d`);
+      })
+    ).toBe(true);
   });
 
   it("handles API errors gracefully", async () => {
@@ -274,7 +324,7 @@ describe("AdminPage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByText("45").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("123").length).toBeGreaterThan(0);
     });
   });
 });

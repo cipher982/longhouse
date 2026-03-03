@@ -1,0 +1,347 @@
+@layer pages {
+  .ops-admin-page {
+    width: 100%;
+  }
+
+  .ops-admin-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+  }
+
+  .ops-admin-page .window-selector {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ops-admin-page .admin-window-label {
+    margin-right: 0;
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    letter-spacing: 0.02em;
+  }
+
+  .ops-admin-page .admin-window-select {
+    min-width: 150px;
+    height: 36px;
+  }
+
+  .ops-metrics-note {
+    display: grid;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--color-brand-primary) 10%, transparent), transparent 55%),
+      var(--color-surface-card);
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+  }
+
+  .ops-metrics-note strong {
+    color: var(--color-text-primary);
+    font-weight: 600;
+  }
+
+  .ops-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-4);
+    margin-bottom: 0;
+  }
+
+  .ops-admin-page .metric-card {
+    --metric-accent: var(--color-text-secondary);
+    position: relative;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--metric-accent) 36%, var(--color-border-primary));
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--metric-accent) 12%, transparent), transparent 42%),
+      var(--color-surface-card);
+  }
+
+  .ops-admin-page .metric-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 4px;
+    background: var(--metric-accent);
+    opacity: 0.9;
+  }
+
+  .ops-admin-page .metric-card .ui-card-header {
+    padding-bottom: var(--space-2);
+  }
+
+  .ops-admin-page .metric-title {
+    margin: 0;
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: color-mix(in srgb, var(--metric-accent) 70%, var(--color-text-secondary));
+  }
+
+  .ops-admin-page .metric-value {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: 1.75rem;
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ops-admin-page .metric-subtitle {
+    margin-top: var(--space-1);
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
+  .ops-admin-page .admin-section-title {
+    margin: 0;
+  }
+
+  .ops-admin-page .admin-section-description {
+    margin: 0 0 var(--space-3);
+  }
+
+  .ops-admin-page .admin-empty-state {
+    padding: var(--space-6);
+    text-align: center;
+    color: var(--color-text-muted);
+  }
+
+  .ops-admin-page .system-info {
+    padding: 0;
+  }
+
+  .ops-admin-page .info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--space-3);
+  }
+
+  .ops-admin-page .info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-surface-card) 88%, transparent);
+  }
+
+  .ops-admin-page .info-label {
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-muted);
+  }
+
+  .ops-admin-page .info-value {
+    color: var(--color-text-primary);
+    font-weight: 600;
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ops-admin-page .admin-devtools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--space-3);
+  }
+
+  .ops-admin-page .admin-devtools-link {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .ops-admin-page .admin-devtool-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    height: 100%;
+    padding: var(--space-4);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-card);
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .ops-admin-page .admin-devtool-card:hover {
+    border-color: var(--color-brand-primary);
+  }
+
+  .ops-admin-page .admin-devtool-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ops-admin-page .admin-devtool-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-brand-primary) 18%, transparent);
+    font-size: 0.95rem;
+  }
+
+  .ops-admin-page .admin-devtool-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+
+  .ops-admin-page .admin-devtool-desc {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+
+  .ops-admin-page .admin-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--space-4);
+  }
+
+  .ops-admin-page .action-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .ops-admin-page .action-description {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+
+  .ops-admin-page .demo-empty-state {
+    padding: var(--space-6);
+    text-align: center;
+    border: 1px dashed color-mix(in srgb, var(--color-brand-primary) 45%, var(--color-border-primary));
+    border-radius: var(--radius-md);
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--color-brand-primary) 12%, transparent), transparent 60%),
+      var(--color-surface-card);
+  }
+
+  .ops-admin-page .demo-empty-state p {
+    margin: 0 0 var(--space-4);
+    color: var(--color-text-muted);
+  }
+
+  .ops-admin-page .demo-accounts-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .ops-admin-page .demo-account-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--color-brand-primary) 8%, transparent), transparent 65%),
+      var(--color-surface-card);
+  }
+
+  .ops-admin-page .demo-account-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .ops-admin-page .demo-account-name {
+    color: var(--color-text-primary);
+    font-weight: 600;
+  }
+
+  .ops-admin-page .demo-account-email {
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+  }
+
+  .ops-admin-page .demo-account-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .ops-admin-page .demo-add-button {
+    width: 100%;
+    padding: var(--space-3);
+    border: 1px dashed color-mix(in srgb, var(--color-text-muted) 36%, transparent);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-weight: 500;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .ops-admin-page .demo-add-button:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-brand-primary) 64%, var(--color-border-primary));
+    color: var(--color-text-primary);
+    background: color-mix(in srgb, var(--color-brand-primary) 10%, transparent);
+  }
+
+  .ops-admin-page .demo-add-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  @media (width <= 1100px) {
+    .ops-metrics-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ops-admin-page .window-selector {
+      width: 100%;
+      justify-content: flex-end;
+    }
+  }
+
+  @media (width <= 720px) {
+    .ops-admin-page .window-selector {
+      justify-content: flex-start;
+    }
+
+    .ops-admin-page .admin-window-select {
+      width: 100%;
+    }
+
+    .ops-metrics-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .ops-admin-page .demo-account-card {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .ops-admin-page .demo-account-actions {
+      width: 100%;
+      justify-content: flex-start;
+    }
+
+    .ops-admin-page .info-item {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+}
