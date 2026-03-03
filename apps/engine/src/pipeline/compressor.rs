@@ -225,11 +225,14 @@ pub fn content_encoding(algo: CompressionAlgo) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+    use std::path::{Path, PathBuf};
+
     use super::*;
     use crate::pipeline::parser::Role;
     use chrono::Utc;
     use flate2::read::GzDecoder;
-    use std::io::Read;
 
     fn make_test_events() -> Vec<ParsedEvent> {
         vec![
@@ -377,5 +380,123 @@ mod tests {
         let payload = build_payload("test-id", &events, &meta, "/path", "claude");
         let raw_json = payload.events[0].raw_json.expect("raw_json should be present");
         assert_eq!(raw_json, events[0].raw_line.as_deref().unwrap());
+    }
+
+    fn golden_fixture(provider: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("golden")
+            .join(provider)
+            .join("basic.jsonl")
+    }
+
+    fn read_source_line_without_newline(path: &Path, offset: u64) -> String {
+        let file = std::fs::File::open(path).expect("open fixture");
+        let mut reader = BufReader::new(file);
+        reader
+            .seek(SeekFrom::Start(offset))
+            .expect("seek to source offset");
+
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read source line");
+        while line.ends_with('\n') || line.ends_with('\r') {
+            line.pop();
+        }
+        line
+    }
+
+    fn raw_lines_from_compressed_payload(compressed: &[u8]) -> BTreeMap<u64, String> {
+        let mut decoder = GzDecoder::new(compressed);
+        let mut json_str = String::new();
+        decoder
+            .read_to_string(&mut json_str)
+            .expect("decompress payload");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&json_str).expect("payload must be valid json");
+        let events = payload["events"]
+            .as_array()
+            .expect("payload.events must be an array");
+
+        let mut by_offset = BTreeMap::new();
+        for event in events {
+            let Some(raw_json) = event["raw_json"].as_str() else {
+                continue;
+            };
+            let offset = event["source_offset"]
+                .as_u64()
+                .expect("event.source_offset must be u64");
+            let prev = by_offset.insert(offset, raw_json.to_string());
+            assert!(
+                prev.is_none(),
+                "raw_json should appear once per source_offset; duplicate at {}",
+                offset
+            );
+        }
+        by_offset
+    }
+
+    fn assert_fixture_roundtrip(provider: &str) {
+        let path = golden_fixture(provider);
+        let parsed = crate::pipeline::parser::parse_session_file(&path, 0).expect("parse fixture");
+        assert!(
+            !parsed.events.is_empty(),
+            "fixture must produce events for roundtrip validation"
+        );
+
+        let source_path = path.to_string_lossy().to_string();
+        let compressed = build_and_compress(
+            &parsed.metadata.session_id,
+            &parsed.events,
+            &parsed.metadata,
+            &source_path,
+            provider,
+        )
+        .expect("build and compress payload");
+
+        let actual = raw_lines_from_compressed_payload(&compressed);
+        assert!(
+            !actual.is_empty(),
+            "payload must include at least one raw_json line"
+        );
+
+        let unique_event_offsets: BTreeSet<u64> =
+            parsed.events.iter().map(|e| e.source_offset).collect();
+        assert_eq!(
+            actual.len(),
+            unique_event_offsets.len(),
+            "each event-bearing source line must roundtrip with one raw_json entry"
+        );
+
+        // Byte-for-byte line fidelity: every shipped raw_json line must equal
+        // the source file line at the same byte offset.
+        for (offset, raw_json) in &actual {
+            let expected = read_source_line_without_newline(&path, *offset);
+            assert_eq!(
+                raw_json, &expected,
+                "raw_json mismatch at source_offset={}",
+                offset
+            );
+        }
+
+        // "Unship back to log": reconstruct event-bearing lines from payload raw_json.
+        let actual_log = actual.values().cloned().collect::<Vec<_>>().join("\n");
+        let expected_log = actual
+            .keys()
+            .map(|offset| read_source_line_without_newline(&path, *offset))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(actual_log, expected_log);
+    }
+
+    #[test]
+    fn test_ship_unship_roundtrip_claude_fixture() {
+        assert_fixture_roundtrip("claude");
+    }
+
+    #[test]
+    fn test_ship_unship_roundtrip_codex_fixture() {
+        assert_fixture_roundtrip("codex");
     }
 }
