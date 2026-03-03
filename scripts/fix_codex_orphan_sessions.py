@@ -42,7 +42,6 @@ import argparse
 import subprocess
 import sys
 import tempfile
-from datetime import timedelta
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -53,35 +52,74 @@ import sqlalchemy as sa
 
 REPO_ROOT = Path(__file__).parent.parent
 BACKEND_DIR = REPO_ROOT / "apps" / "zerg" / "backend"
+PROD_CONTAINER = "longhouse-david010"
 
 
 def get_prod_db(tmp_dir: str) -> str:
-    """Copy the prod SQLite DB from zerg server to a local temp path."""
-    print("📥 Copying prod DB from zerg server...")
+    """Copy a consistent prod SQLite snapshot from zerg to a local temp path."""
+    print("📥 Copying prod DB snapshot from zerg server...")
     local_path = f"{tmp_dir}/agents_prod.db"
+
+    # Use SQLite backup API inside the container so we don't copy a live
+    # WAL-backed file byte-for-byte mid-write.
     subprocess.run(
-        ["ssh", "zerg", "docker exec longhouse-david010 cat /data/longhouse.db"],
-        stdout=open(local_path, "wb"),
+        [
+            "ssh",
+            "zerg",
+            (
+                f"docker exec {PROD_CONTAINER} python3 -c "
+                "\"import sqlite3;"
+                "src=sqlite3.connect('/data/longhouse.db');"
+                "dst=sqlite3.connect('/tmp/longhouse.snapshot.db');"
+                "src.backup(dst);"
+                "dst.close();"
+                "src.close()\""
+            ),
+        ],
         check=True,
     )
+    subprocess.run(
+        ["ssh", "zerg", f"docker cp {PROD_CONTAINER}:/tmp/longhouse.snapshot.db /tmp/longhouse.snapshot.db"],
+        check=True,
+    )
+    subprocess.run(["scp", "zerg:/tmp/longhouse.snapshot.db", local_path], check=True)
+    subprocess.run(["ssh", "zerg", "rm -f /tmp/longhouse.snapshot.db"], check=True)
+    subprocess.run(["ssh", "zerg", f"docker exec {PROD_CONTAINER} rm -f /tmp/longhouse.snapshot.db"], check=True)
+
     print(f"   Copied to {local_path}")
     return local_path
 
 
 def push_prod_db(local_path: str) -> None:
-    """Push the modified DB back to the prod container via bind-mount path."""
+    """Push the modified DB back to prod using SQLite backup API (atomic-ish)."""
     print("📤 Pushing modified DB back to zerg server...")
-    # Copy to the host bind-mount path (container sees this as /data/longhouse.db)
     subprocess.run(
         ["scp", local_path, "zerg:/tmp/longhouse_fixed.db"],
         check=True,
     )
     subprocess.run(
-        ["ssh", "zerg", "sudo cp /tmp/longhouse_fixed.db "
-         "/var/lib/docker/data/longhouse/david010/longhouse.db"],
+        ["ssh", "zerg", f"docker cp /tmp/longhouse_fixed.db {PROD_CONTAINER}:/tmp/longhouse_fixed.db"],
+        check=True,
+    )
+    # Replace live DB contents via SQLite backup API instead of raw file copy.
+    subprocess.run(
+        [
+            "ssh",
+            "zerg",
+            (
+                f"docker exec {PROD_CONTAINER} python3 -c "
+                "\"import sqlite3;"
+                "src=sqlite3.connect('/tmp/longhouse_fixed.db');"
+                "dst=sqlite3.connect('/data/longhouse.db');"
+                "src.backup(dst);"
+                "dst.close();"
+                "src.close()\""
+            ),
+        ],
         check=True,
     )
     subprocess.run(["ssh", "zerg", "rm /tmp/longhouse_fixed.db"], check=True)
+    subprocess.run(["ssh", "zerg", f"docker exec {PROD_CONTAINER} rm -f /tmp/longhouse_fixed.db"], check=True)
     print("   Done.")
 
 
@@ -202,28 +240,122 @@ def find_and_merge_orphans(engine: sa.Engine, dry_run: bool) -> int:
             if dry_run:
                 continue
 
-            # Re-parent events
+            # Re-parent events safely. Canonical sessions may already contain
+            # some rows (same source_path/source_offset/event_hash), so direct
+            # UPDATE can violate ix_events_dedup. Copy with INSERT OR IGNORE,
+            # then delete orphan rows.
+            conn.execute(sa.text("""
+                INSERT OR IGNORE INTO events (
+                    session_id,
+                    role,
+                    content_text,
+                    tool_name,
+                    tool_input_json,
+                    tool_output_text,
+                    tool_call_id,
+                    timestamp,
+                    source_path,
+                    source_offset,
+                    event_hash,
+                    schema_version,
+                    raw_json
+                )
+                SELECT
+                    :canonical,
+                    role,
+                    content_text,
+                    tool_name,
+                    tool_input_json,
+                    tool_output_text,
+                    tool_call_id,
+                    timestamp,
+                    source_path,
+                    source_offset,
+                    event_hash,
+                    schema_version,
+                    raw_json
+                FROM events
+                WHERE session_id = :orphan
+            """), {"canonical": canonical_id, "orphan": orphan_id})
             conn.execute(sa.text(
-                "UPDATE events SET session_id = :canonical WHERE session_id = :orphan"
-            ), {"canonical": canonical_id, "orphan": orphan_id})
+                "DELETE FROM events WHERE session_id = :orphan"
+            ), {"orphan": orphan_id})
 
-            # Re-parent embeddings
+            # Re-parent embeddings safely. Canonical sessions may already have
+            # rows for (kind, chunk_index, model), so direct UPDATE can hit the
+            # uq_session_emb unique constraint. Copy with INSERT OR IGNORE, then
+            # delete orphan rows.
+            conn.execute(sa.text("""
+                INSERT OR IGNORE INTO session_embeddings (
+                    session_id,
+                    kind,
+                    chunk_index,
+                    event_index_start,
+                    event_index_end,
+                    model,
+                    dims,
+                    embedding,
+                    content_hash,
+                    created_at
+                )
+                SELECT
+                    :canonical,
+                    kind,
+                    chunk_index,
+                    event_index_start,
+                    event_index_end,
+                    model,
+                    dims,
+                    embedding,
+                    content_hash,
+                    created_at
+                FROM session_embeddings
+                WHERE session_id = :orphan
+            """), {"canonical": canonical_id, "orphan": orphan_id})
             conn.execute(sa.text(
-                "UPDATE session_embeddings SET session_id = :canonical WHERE session_id = :orphan"
-            ), {"canonical": canonical_id, "orphan": orphan_id})
+                "DELETE FROM session_embeddings WHERE session_id = :orphan"
+            ), {"orphan": orphan_id})
 
-            # Update canonical session counters
+            # Recompute canonical counters from merged event rows so duplicates
+            # ignored above don't inflate denormalized session stats.
+            canonical_user_count = conn.execute(sa.text("""
+                SELECT COUNT(*) FROM events
+                WHERE session_id = :sid
+                  AND role = 'user'
+                  AND LOWER(TRIM(COALESCE(content_text, ''))) != 'warmup'
+            """), {"sid": canonical_id}).scalar() or 0
+
+            canonical_assistant_count = conn.execute(sa.text("""
+                SELECT COUNT(*) FROM events
+                WHERE session_id = :sid
+                  AND role = 'assistant'
+                  AND tool_name IS NULL
+            """), {"sid": canonical_id}).scalar() or 0
+
+            canonical_tool_calls = conn.execute(sa.text("""
+                SELECT COUNT(*) FROM events
+                WHERE session_id = :sid
+                  AND role = 'assistant'
+                  AND tool_name IS NOT NULL
+            """), {"sid": canonical_id}).scalar() or 0
+
+            canonical_ended_at = conn.execute(sa.text("""
+                SELECT MAX(timestamp) FROM events WHERE session_id = :sid
+            """), {"sid": canonical_id}).scalar()
+
             conn.execute(sa.text("""
                 UPDATE sessions
                 SET
-                    user_messages = user_messages + :u,
-                    assistant_messages = assistant_messages + :a,
-                    ended_at = MAX(COALESCE(ended_at, started_at),
-                                   (SELECT MAX(timestamp) FROM events WHERE session_id = :canonical))
+                    user_messages = :u,
+                    assistant_messages = :a,
+                    tool_calls = :t,
+                    ended_at = COALESCE(:ended_at, ended_at)
                 WHERE id = :canonical
             """), {
-                "u": user_count,
-                "a": assistant_count,
+                "u": canonical_user_count,
+                "a": canonical_assistant_count,
+                "t": canonical_tool_calls,
+                "ended_at": canonical_ended_at,
                 "canonical": canonical_id,
             })
 

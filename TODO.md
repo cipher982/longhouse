@@ -19,7 +19,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Infra] Parser fidelity: remove raw_json 32KB cap (size: 4)
 
-Status (2026-03-02): In progress.
+Status (2026-03-03): Done.
 
 **Problem:** `raw_json` in the events table is supposed to be the complete original JSONL source line — the authoritative cloud copy of the user's session. It's currently hard-capped at 32KB (`MAX_RAW_LINE_BYTES` in `apps/engine/src/pipeline/compressor.rs`). A single image-containing Codex message can be 1–10MB of base64. Those lines get truncated, which means Longhouse is NOT a complete copy of the session. This violates the core product promise.
 
@@ -57,6 +57,12 @@ Notes (2026-03-02):
   - `make test` → 444 backend tests passed, 96 control-plane tests passed, 9 engine parser tests passed
   - `make test-e2e` → 59 core E2E + 4 a11y passed
   - Live ingest check (synthetic image-like payload): posted a 1,200,093-byte `raw_json` line to `https://david010.longhouse.ai/api/agents/ingest`; DB `LENGTH(raw_json)` matched exactly (`1200093`)
+
+Notes (2026-03-03):
+- Fixed a second Codex session-id drift path: removed stale `file_state`/spool `session_id` overrides in `apps/engine/src/shipper.rs` and `apps/engine/src/main.rs` so parser-resolved canonical IDs always win on incremental parses.
+- Added `test_stale_stored_codex_session_id_is_not_reused` regression coverage.
+- Backfilled live instance (`david010`) orphan split sessions again after the fix; current DB check shows `provider='codex' AND project IS NULL` count is `0`.
+- Hardened `scripts/fix_codex_orphan_sessions.py` for dedup-safe reparenting and WAL-safe prod snapshot/restore via SQLite backup API.
 
 ---
 
