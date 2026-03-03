@@ -210,7 +210,13 @@ coolify app logs longhouse-control-plane               # Control plane
 
 ## apps/sauron - Scheduler (Folded In)
 
-Sauron is not a separate service; scheduled jobs run inside the standard Longhouse instance service (per-user). The `sauron-jobs` repo pattern remains a power-user path (optional jobs pack), but OSS onboarding should not depend on it. If the user is asking about his jobs or sauron, take a look at ~/git/sauron-jobs and they should be running 24/7 on the instance and sending him emails.
+Sauron is not a separate service; scheduled jobs run inside the standard Longhouse instance service (per-user). The `sauron-jobs` repo pattern remains a power-user path (optional jobs pack), but OSS onboarding should not depend on it.
+
+**If asked about jobs, sauron, or job failures: read `~/git/sauron-jobs/AGENTS.md` first.** Key facts:
+- Jobs run in `longhouse-david010` on zerg (single authoritative instance, control-plane provisioned)
+- Job-specific secrets live in `/data/secrets.env` on the host (loaded by `manifest.py` at startup)
+- The provisioner already injects `extra_hosts: host.docker.internal:host-gateway` — if a container is missing it, it's a zombie from before the provisioner was built; kill it
+- There must only ever be ONE instance running sauron-jobs; duplicate instances = duplicate scheduled jobs
 
 ## apps/runner - Native Runner Daemon
 
