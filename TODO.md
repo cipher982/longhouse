@@ -48,7 +48,13 @@ Notes (2026-03-03):
   - Timer verified active: `zerg-ops.timer` (next run scheduled)
   - Manual `zerg-ops run` + `zerg-ops verify` passed for active instances (`david010`, `david-stripetest`)
   - Latest `david010` manifest records `events=987073`, `sessions=10787`, `verified_restore=true`
-- Synology offsite path remains optional and not enabled yet because passwordless SSH from `zerg` to `drose@100.98.103.56` is not configured.
+- Offsite enabled on 2026-03-03:
+  - Root-runner SSH key configured on `zerg` (`/root/.ssh/longhouse_bremen_backup`) and authorized on Bremen `drose`
+  - Remote target configured: `REMOTE_SSH_TARGET=drose@100.98.103.56`, `REMOTE_BASE_PATH=/volume1/drose/backups/zerg-longhouse`
+  - Verified scoped runs:
+    - `sudo INSTANCE_ALLOWLIST=david-stripetest /usr/local/bin/zerg-ops backup`
+    - `sudo INSTANCE_ALLOWLIST=david010 /usr/local/bin/zerg-ops backup`
+  - Verified remote artifacts present on Bremen and archive byte size match for `david010` (`2214878372` local == remote)
 
 ---
 
