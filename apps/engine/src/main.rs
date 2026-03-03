@@ -498,7 +498,7 @@ async fn cmd_ship(
                 }
             };
 
-            if parse_result.events.is_empty() {
+            if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
                 return None;
             }
 
@@ -507,12 +507,13 @@ async fn cmd_ship(
 
             // Always compress (this is the real work we're benchmarking).
             // For dry-run, drop the result immediately to save memory.
-            let compressed = match pipeline::compressor::build_and_compress_with(
+            let compressed = match pipeline::compressor::build_and_compress_with_source_lines(
                 &parse_result.metadata.session_id,
                 &parse_result.events,
                 &parse_result.metadata,
                 &path_str,
                 "claude",
+                Some(&parse_result.source_lines),
                 algo,
             ) {
                 Ok(c) => {
@@ -692,17 +693,18 @@ async fn cmd_ship(
                 }
             };
 
-            if parse_result.events.is_empty() {
+            if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
                 spool.mark_shipped(entry.id)?;
                 continue;
             }
 
-            let compressed = pipeline::compressor::build_and_compress_with(
+            let compressed = pipeline::compressor::build_and_compress_with_source_lines(
                 &parse_result.metadata.session_id,
                 &parse_result.events,
                 &parse_result.metadata,
                 &entry.file_path,
                 &entry.provider,
+                Some(&parse_result.source_lines),
                 algo,
             )?;
 
@@ -930,22 +932,25 @@ fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> 
     if compress {
         let compress_start = Instant::now();
         let source_path = path.to_string_lossy();
-        let compressed = pipeline::compressor::build_and_compress(
+        let compressed = pipeline::compressor::build_and_compress_with_source_lines(
             "test-session-id",
             &result.events,
             &result.metadata,
             &source_path,
             "claude",
+            Some(&result.source_lines),
+            CompressionAlgo::Gzip,
         )?;
         let compress_elapsed = compress_start.elapsed();
 
         // Calculate uncompressed size for ratio
-        let payload = pipeline::compressor::build_payload(
+        let payload = pipeline::compressor::build_payload_with_source_lines(
             "test-session-id",
             &result.events,
             &result.metadata,
             &source_path,
             "claude",
+            Some(&result.source_lines),
         );
         let uncompressed = serde_json::to_vec(&payload)?;
 

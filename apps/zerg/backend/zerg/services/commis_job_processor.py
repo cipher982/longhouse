@@ -150,6 +150,7 @@ def _ingest_workspace_session(
     from zerg.services.agents_store import AgentsStore
     from zerg.services.agents_store import EventIngest
     from zerg.services.agents_store import SessionIngest
+    from zerg.services.agents_store import SourceLineIngest
     from zerg.services.session_continuity import encode_cwd_for_claude
     from zerg.services.session_continuity import get_claude_config_dir
     from zerg.services.shipper.parser import extract_session_metadata
@@ -176,14 +177,47 @@ def _ingest_workspace_session(
     session_file = max(candidates, key=lambda p: p.stat().st_mtime)
     logger.info(f"Ingesting workspace session from {session_file} for job {job_id}")
 
-    # Parse using shipper parser
-    events = list(parse_session_file(session_file))
-    if not events:
-        logger.debug(f"No events parsed from {session_file} for job {job_id}")
-        return
-
     metadata = extract_session_metadata(session_file)
     source_path = str(session_file)
+
+    # Lossless source-line archive (includes metadata and future unknown line types).
+    source_lines: list[SourceLineIngest] = []
+    with session_file.open("rb") as fh:
+        offset = 0
+        for raw in fh:
+            raw_line = raw.rstrip(b"\r\n").decode("utf-8", errors="replace")
+            source_lines.append(
+                SourceLineIngest(
+                    source_path=source_path,
+                    source_offset=offset,
+                    raw_json=raw_line,
+                )
+            )
+            offset += len(raw)
+
+    if not source_lines:
+        logger.debug(f"No source lines found in {session_file} for job {job_id}")
+        return
+
+    # Parse using shipper parser. If parsing fails or schema drifts, still ingest
+    # source_lines so export remains lossless.
+    try:
+        events = list(parse_session_file(session_file))
+    except Exception as exc:
+        logger.warning(
+            "Failed to parse workspace session %s for job %s; ingesting source lines only: %s",
+            session_file,
+            job_id,
+            exc,
+        )
+        events = []
+    if not events:
+        logger.info(
+            "No parseable events for workspace session %s (job %s); ingesting %d source lines only",
+            session_file,
+            job_id,
+            len(source_lines),
+        )
 
     # Convert ParsedEvents to EventIngest
     event_ingests = [
@@ -203,7 +237,8 @@ def _ingest_workspace_session(
 
     # Determine timestamps
     timestamps = [e.timestamp for e in events if e.timestamp]
-    started_at = metadata.started_at or (min(timestamps) if timestamps else datetime.now(timezone.utc))
+    fallback_started = job_started_at if job_started_at.tzinfo else job_started_at.replace(tzinfo=timezone.utc)
+    started_at = metadata.started_at or (min(timestamps) if timestamps else fallback_started)
     ended_at = metadata.ended_at or (max(timestamps) if timestamps else None)
 
     # Use deterministic session ID based on source file to prevent duplicates on re-ingest.
@@ -225,6 +260,7 @@ def _ingest_workspace_session(
         ended_at=ended_at,
         provider_session_id=provider_session_id,
         events=event_ingests,
+        source_lines=source_lines,
     )
 
     with db_session() as db:

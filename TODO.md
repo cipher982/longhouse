@@ -21,18 +21,18 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 Status (2026-03-02): Done.
 
-**Goal:** Add an automated engine test that validates shipped `raw_json` can be reconstructed byte-for-byte for both Claude and Codex fixtures.
+**Goal:** Add automated tests that validate ship→unship can reconstruct the full log byte-for-byte for both Claude and Codex fixtures.
 
 - [x] Add Claude fixture roundtrip assertion
 - [x] Add Codex fixture roundtrip assertion
-- [x] Assert reconstructed lines from payload `raw_json` exactly match source lines for all shipped/event-bearing offsets
+- [x] Assert reconstructed lines from payload archive exactly match source lines for all source offsets
 
 Notes (2026-03-02):
 - Added engine payload contract tests in `apps/engine/src/pipeline/compressor.rs`:
   - `test_ship_unship_roundtrip_claude_fixture`
   - `test_ship_unship_roundtrip_codex_fixture`
 - Contract path: parse fixture → build+gzip payload → decompress payload → reconstruct log lines from shipped `raw_json` + `source_offset` → assert byte-for-byte equality with source file lines at those offsets.
-- Clarification: this validates exact roundtrip for **shipped/event-bearing lines**. Metadata-only or intentionally skipped lines are not part of current ingest payloads.
+- Clarification: this now validates exact roundtrip for **all source lines** via `source_lines`, including metadata/unknown-schema lines.
 
 ---
 

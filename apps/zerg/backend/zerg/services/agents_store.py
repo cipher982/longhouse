@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSourceLine
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,14 @@ class EventIngest(BaseModel):
     raw_json: Optional[str] = Field(None, description="Original JSONL line for lossless archiving")
 
 
+class SourceLineIngest(BaseModel):
+    """Schema for ingesting a source line archive row."""
+
+    source_path: str = Field(..., description="Original source file path")
+    source_offset: int = Field(..., description="Byte offset in source file")
+    raw_json: str = Field(..., description="Original source line without trailing newline")
+
+
 class SessionIngest(BaseModel):
     """Schema for ingesting a session with events."""
 
@@ -68,6 +77,7 @@ class SessionIngest(BaseModel):
     provider_session_id: Optional[str] = Field(None, description="Provider-specific session ID (e.g., Claude Code session UUID)")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (isSidechain:true in JSONL)")
     events: List[EventIngest] = Field(default_factory=list, description="Session events")
+    source_lines: List[SourceLineIngest] = Field(default_factory=list, description="Lossless source-line archive")
 
 
 class IngestResult(BaseModel):
@@ -266,6 +276,10 @@ class AgentsStore:
         )
         return hashlib.sha256(content.encode()).hexdigest()
 
+    def _compute_line_hash(self, raw_json: str) -> str:
+        """Compute a stable hash for source-line archive rows."""
+        return hashlib.sha256(raw_json.encode()).hexdigest()
+
     def ingest_session(self, data: SessionIngest) -> IngestResult:
         """Ingest a session with events, handling deduplication.
 
@@ -369,6 +383,41 @@ class AgentsStore:
             else:
                 events_skipped += 1
 
+        # Insert source-line archive rows.
+        # If caller did not provide source_lines, fall back to event-bearing raw_json
+        # for backward compatibility with older shippers.
+        source_lines = list(data.source_lines)
+        if not source_lines:
+            dedup_lines: dict[tuple[str, int], str] = {}
+            for event_data in data.events:
+                if event_data.raw_json and event_data.source_path and event_data.source_offset is not None:
+                    dedup_lines.setdefault((event_data.source_path, int(event_data.source_offset)), event_data.raw_json)
+            source_lines = [
+                SourceLineIngest(source_path=source_path, source_offset=source_offset, raw_json=raw_json)
+                for (source_path, source_offset), raw_json in dedup_lines.items()
+            ]
+
+        source_lines_upserted = 0
+        for line_data in source_lines:
+            line_hash = self._compute_line_hash(line_data.raw_json)
+            stmt = sqlite_insert(AgentSourceLine).values(
+                session_id=session_id,
+                source_path=line_data.source_path,
+                source_offset=int(line_data.source_offset),
+                raw_json=line_data.raw_json,
+                line_hash=line_hash,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["session_id", "source_path", "source_offset"],
+                set_={
+                    "raw_json": line_data.raw_json,
+                    "line_hash": line_hash,
+                },
+            )
+            result = self.db.execute(stmt)
+            if result.rowcount and result.rowcount > 0:
+                source_lines_upserted += 1
+
         # Update session counts; reset needs_embedding when new events arrive so
         # incremental embedding picks up events added after the initial pass.
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -388,7 +437,13 @@ class AgentsStore:
 
         self.db.commit()
 
-        logger.info(f"Ingested session {session_id}: {events_inserted} inserted, {events_skipped} skipped (duplicates)")
+        logger.info(
+            "Ingested session %s: events inserted=%s skipped=%s source_lines_upserted=%s",
+            session_id,
+            events_inserted,
+            events_skipped,
+            source_lines_upserted,
+        )
 
         return IngestResult(
             session_id=session_id,
@@ -740,6 +795,31 @@ class AgentsStore:
             return None
 
         # Query events ordered by source_offset for correct file order
+        source_lines = (
+            self.db.query(AgentSourceLine)
+            .filter(AgentSourceLine.session_id == session_id)
+            .order_by(AgentSourceLine.source_path.asc(), AgentSourceLine.source_offset.asc())
+            .all()
+        )
+        if source_lines:
+            # Most sessions map to one source_path. In mixed-path edge cases,
+            # export the dominant path (most rows) for stable replay.
+            path_counts: dict[str, int] = {}
+            for row in source_lines:
+                path_counts[row.source_path] = path_counts.get(row.source_path, 0) + 1
+            primary_path = max(path_counts.items(), key=lambda item: item[1])[0]
+            if len(path_counts) > 1:
+                logger.warning(
+                    "Session %s has %d source paths in archive; exporting primary path %s",
+                    session_id,
+                    len(path_counts),
+                    primary_path,
+                )
+            lines = [row.raw_json for row in source_lines if row.source_path == primary_path]
+            content = "\n".join(lines) + "\n" if lines else ""
+            return content.encode("utf-8"), session
+
+        # Legacy fallback path: rebuild from events only.
         events = (
             self.db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id)

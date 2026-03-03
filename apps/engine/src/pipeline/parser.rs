@@ -67,6 +67,13 @@ pub struct ParsedEvent {
     pub raw_line: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ParsedSourceLine {
+    pub source_offset: u64,
+    /// Full source line bytes decoded as UTF-8, without trailing newline.
+    pub raw_line: String,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct SessionMetadata {
     pub session_id: String,
@@ -82,6 +89,7 @@ pub struct SessionMetadata {
 
 pub struct ParseResult {
     pub events: Vec<ParsedEvent>,
+    pub source_lines: Vec<ParsedSourceLine>,
     pub last_good_offset: u64,
     pub metadata: SessionMetadata,
     /// Number of records that appeared to contain parseable content.
@@ -299,6 +307,7 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     if bytes_to_read == 0 {
         return Ok(ParseResult {
             events: Vec::new(),
+            source_lines: Vec::new(),
             last_good_offset: offset,
             candidate_records: 0,
             metadata: SessionMetadata {
@@ -386,6 +395,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
             tracing::debug!(path = %path.display(), error = %e, "Failed to parse Gemini JSON");
             return Ok(ParseResult {
                 events: Vec::new(),
+                source_lines: Vec::new(),
                 last_good_offset: file_size,
                 candidate_records: 0,
                 metadata: SessionMetadata {
@@ -520,6 +530,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
 
     Ok(ParseResult {
         events,
+        source_lines: Vec::new(),
         last_good_offset: file_size,
         candidate_records,
         metadata,
@@ -610,6 +621,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     } else {
         return Ok(ParseResult {
             events: Vec::new(),
+            source_lines: Vec::new(),
             last_good_offset: offset,
             candidate_records: 0,
             metadata: SessionMetadata {
@@ -620,6 +632,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     };
 
     let mut events = Vec::new();
+    let mut source_lines = Vec::new();
     let mut metadata = SessionMetadata {
         session_id: session_id.to_string(),
         ..Default::default()
@@ -647,6 +660,13 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         let line_bytes = &data[line_start..line_end];
         pos = line_end + 1;
 
+        if let Ok(line_str) = std::str::from_utf8(line_bytes) {
+            source_lines.push(ParsedSourceLine {
+                source_offset: line_offset,
+                raw_line: line_str.to_string(),
+            });
+        }
+
         // Skip empty/whitespace lines
         let trimmed = trim_bytes(line_bytes);
         if trimmed.is_empty() {
@@ -673,7 +693,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
 
         // Extract events — pass raw bytes, convert to string only when needed
-        let line_str = std::str::from_utf8(trimmed).unwrap_or("");
+        let line_str = std::str::from_utf8(line_bytes).unwrap_or("");
         extract_events(
             &obj,
             session_id,
@@ -698,6 +718,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
 
     Ok(ParseResult {
         events,
+        source_lines,
         last_good_offset,
         candidate_records: candidate_lines,
         metadata,
@@ -720,6 +741,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     let reader = BufReader::with_capacity(64 * 1024, file);
 
     let mut events = Vec::new();
+    let mut source_lines = Vec::new();
     let mut metadata = SessionMetadata {
         session_id: session_id.to_string(),
         ..Default::default()
@@ -742,6 +764,11 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
         // BufReader.lines() strips \n, so add 1 for the newline byte
         current_offset += line.len() as u64 + 1;
 
+        source_lines.push(ParsedSourceLine {
+            source_offset: line_offset,
+            raw_line: line.clone(),
+        });
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -763,7 +790,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
             &obj,
             session_id,
             line_offset,
-            trimmed,
+            &line,
             &mut events,
         );
     }
@@ -782,6 +809,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
 
     Ok(ParseResult {
         events,
+        source_lines,
         last_good_offset: current_offset,
         candidate_records: candidate_lines,
         metadata,
@@ -1561,6 +1589,22 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].content_text.as_deref(), Some("real message"));
+    }
+
+    #[test]
+    fn test_source_lines_capture_full_lines_including_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_meta = r#"  {"type":"progress","timestamp":"2026-01-01T00:00:00Z"}  "#;
+        let raw_user = r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:01Z","message":{"content":"hello"}}"#;
+        let path = make_jsonl_file(dir.path(), "test-session.jsonl", &[raw_meta, raw_user]);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1, "metadata lines should not become events");
+        assert_eq!(result.source_lines.len(), 2, "all source lines should be archived");
+        assert_eq!(result.source_lines[0].source_offset, 0);
+        assert_eq!(result.source_lines[0].raw_line, raw_meta);
+        assert_eq!(result.source_lines[1].source_offset, (raw_meta.len() + 1) as u64);
+        assert_eq!(result.source_lines[1].raw_line, raw_user);
     }
 
     #[test]

@@ -488,6 +488,31 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("events table migration skipped (table may not exist yet)", exc_info=True)
 
+    # source_lines table migrations (full source-line archive for lossless export)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS source_lines (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id CHAR(36) NOT NULL,
+                        source_path TEXT NOT NULL,
+                        source_offset BIGINT NOT NULL,
+                        raw_json TEXT NOT NULL,
+                        line_hash VARCHAR(64) NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                        CONSTRAINT uq_source_line_pos UNIQUE (session_id, source_path, source_offset)
+                    )
+                    """
+                )
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_source_lines_session_offset ON source_lines(session_id, source_offset)"))
+            conn.commit()
+    except Exception:
+        logger.debug("source_lines table migration skipped", exc_info=True)
+
     # job_runs table migrations
     try:
         with engine.connect() as conn:
