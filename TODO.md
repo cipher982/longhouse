@@ -17,16 +17,28 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
-Status (2026-03-03): In progress.
+Status (2026-03-03): Done.
 
 **Problem:** Time-window selection in Admin does not affect the summary API call. UI says "Last 30 Days" while cards still show "Runs Today"/"Cost Today", which is misleading. Styling is also degraded due to malformed CSS blocks and inline style drift.
 
-- [ ] Write first-principles improvement spec (metrics semantics, labels, layout, accessibility, mobile behavior)
-- [ ] Add window-aware ops summary API (`today|7d|30d`) and align response naming with selected window
-- [ ] Rework Admin operations section to clearly separate window-scoped metrics from fixed-window metrics (for example `errors_last_hour`)
-- [ ] Replace broken admin ops styling with valid, scoped, responsive CSS (remove inline style overrides)
-- [ ] Update frontend/backend tests for the new contract and behavior
-- [ ] Run `make test` and `make test-e2e`, then ship + post-deploy `make qa-live`
+- [x] Write first-principles improvement spec (metrics semantics, labels, layout, accessibility, mobile behavior)
+- [x] Add window-aware ops summary API (`today|7d|30d`) and align response naming with selected window
+- [x] Rework Admin operations section to clearly separate window-scoped metrics from fixed-window metrics (for example `errors_last_hour`)
+- [x] Replace broken admin ops styling with valid, scoped, responsive CSS (remove inline style overrides)
+- [x] Update frontend/backend tests for the new contract and behavior
+- [x] Run `make test` and `make test-e2e`, then ship + post-deploy `make qa-live`
+
+Notes (2026-03-03):
+- Spec: `docs/specs/admin-operations-dashboard-revamp.md`
+- Backend: `/api/ops/summary` now accepts `window=today|7d|30d`, returns canonical window-scoped fields (`window`, `window_label`, `runs`, `cost_usd`, `top_fiches`) and backward-compatible aliases.
+- Frontend: Admin page now binds window selector to query key/API call, updates KPI/top-fiche labels by selected window, and explicitly labels fixed realtime metrics.
+- Styling: moved admin operations polish into scoped stylesheet `apps/zerg/frontend-web/src/styles/admin-ops.css`; removed inline demo card/button styles.
+- Validation:
+  - `cd apps/zerg/backend && ./run_backend_tests_lite.sh tests_lite/test_ops_summary_window.py` ✅
+  - `cd apps/zerg/frontend-web && bunx vitest run src/pages/__tests__/AdminPage.test.tsx` ✅
+  - `make test` ✅
+  - `make test-e2e` ✅
+  - `make qa-live` after deploy ✅ (8/8 passed against `https://david010.longhouse.ai`)
 
 ---
 
