@@ -49,8 +49,7 @@ pub fn prepare_file(
         }
     };
 
-    // Detect truncation — must happen before deciding whether to restore
-    // stored session_id, since truncation resets offset to 0.
+    // Detect truncation before parse dispatch.
     let offset = if file_size < current_offset {
         tracing::warn!(
             "File truncated: {} (was {}, now {}), resetting",
@@ -67,32 +66,13 @@ pub fn prepare_file(
         current_offset
     };
 
-    // For incremental parses (offset > 0), the session_meta line is before the
-    // parse window, so collect_metadata never sees it. Read the canonical
-    // session_id stored from the first successful ship so all incremental
-    // shipments land on the same Longhouse session.
-    // Only do this after truncation handling — a truncated file resets to
-    // offset=0 and must re-read session_meta fresh.
-    let stored_session_id: Option<String> = if offset > 0 {
-        file_state
-            .get_session(&path_str)?
-            .and_then(|s| s.session_id)
-    } else {
-        None
-    };
-
-    let mut parse_result = match parser::parse_session_file(path, offset) {
+    let parse_result = match parser::parse_session_file(path, offset) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("Skip {}: {}", path_str, e);
             return Ok(None);
         }
     };
-
-    // Apply canonical session_id for incremental parses.
-    if let Some(sid) = stored_session_id {
-        parse_result.metadata.session_id = sid;
-    }
 
     if parse_result.events.is_empty() {
         // Heuristic: if the file has substantial content and the parser found
@@ -297,7 +277,7 @@ pub async fn replay_spool_batch(
             continue;
         }
 
-        let mut parse_result = match parser::parse_session_file(&path, entry.start_offset) {
+        let parse_result = match parser::parse_session_file(&path, entry.start_offset) {
             Ok(r) => r,
             Err(e) => {
                 spool.mark_failed(entry.id, &e.to_string())?;
@@ -305,15 +285,6 @@ pub async fn replay_spool_batch(
                 continue;
             }
         };
-
-        // If start_offset > 0, session_meta is before the parse window.
-        // Use the session_id stored in the spool entry to keep all incremental
-        // shipments on the same session.
-        if entry.start_offset > 0 {
-            if let Some(ref sid) = entry.session_id {
-                parse_result.metadata.session_id = sid.clone();
-            }
-        }
 
         if parse_result.events.is_empty() {
             spool.mark_shipped(entry.id)?;
@@ -524,6 +495,38 @@ mod tests {
         assert_eq!(item.session_id, "cccccccc-1111-2222-3333-444455556666");
         assert_eq!(item.event_count, 2); // user + assistant messages
         assert_eq!(item.provider, "codex");
+    }
+
+    #[test]
+    fn test_stale_stored_codex_session_id_is_not_reused() {
+        let (_tmp, conn) = make_db();
+        let session_meta = r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#;
+        let user_line = r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"}]}}"#;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-2026-02-15T10-00-00-foo.jsonl");
+        std::fs::write(&path, format!("{}\n{}\n", session_meta, user_line)).unwrap();
+
+        // Simulate stale file_state from a previous bugged ship:
+        // offset points after session_meta, but stored session_id is wrong.
+        let stale_session_id = "0d07131e-36c0-52f0-8bc6-3d52985240d8";
+        let offset = (session_meta.len() + 1) as u64;
+        let fs = FileState::new(&conn);
+        fs.set_offset(
+            &path.to_string_lossy(),
+            offset,
+            stale_session_id,
+            stale_session_id,
+            "codex",
+        )
+        .unwrap();
+
+        let result = prepare_file(&path, "codex", CompressionAlgo::Gzip, &conn).unwrap();
+        assert!(result.is_some(), "Codex file should still prepare from incremental offset");
+        let item = result.unwrap();
+
+        // Parser-resolved canonical ID must win over stale file_state.
+        assert_eq!(item.session_id, "cccccccc-1111-2222-3333-444455556666");
     }
 
     // ---------------------------------------------------------------
