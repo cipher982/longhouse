@@ -50,6 +50,7 @@ async function ingestSession(
     id: string;
     provider: string;
     project: string;
+    environment: string;
     provider_session_id: string;
   }> = {},
 ): Promise<string> {
@@ -60,7 +61,7 @@ async function ingestSession(
     data: {
       id: sessionId,
       provider: overrides.provider || 'claude',
-      environment: 'development',
+      environment: overrides.environment || 'e2e-machine',
       project: overrides.project || 'sessions-e2e',
       device_id: 'e2e-device',
       cwd: '/tmp',
@@ -367,5 +368,81 @@ test.describe('Sessions Navigation', () => {
 
     // Should navigate to timeline page
     await expect(page).toHaveURL('/timeline');
+  });
+});
+
+test.describe('Machine Filter', () => {
+  test('filters API returns machines list', async ({ request }) => {
+    // Ingest sessions with distinct machine names
+    const machineA = `e2e-machine-a-${randomUUID().slice(0, 8)}`;
+    const machineB = `e2e-machine-b-${randomUUID().slice(0, 8)}`;
+
+    await ingestSession(request, { environment: machineA, project: 'machine-filter-e2e' });
+    await ingestSession(request, { environment: machineB, project: 'machine-filter-e2e' });
+
+    const resp = await request.get('/api/agents/filters?days_back=1');
+    expect(resp.ok()).toBe(true);
+
+    const data = await resp.json();
+    expect(data).toHaveProperty('machines');
+    expect(Array.isArray(data.machines)).toBe(true);
+    expect(data.machines).toContain(machineA);
+    expect(data.machines).toContain(machineB);
+  });
+
+  test('machine filter dropdown appears in filter panel', async ({ page, request }) => {
+    const machineName = `e2e-machine-${randomUUID().slice(0, 8)}`;
+    await ingestSession(request, { environment: machineName, project: 'machine-ui-e2e' });
+
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await ensureDemoProviders(page);
+
+    // Filter panel should have a machine select
+    const filterPanel = page.locator('#filter-panel');
+    const machineSelect = filterPanel.locator('select[aria-label="machine"]');
+    await expect(machineSelect).toBeVisible({ timeout: 8000 });
+  });
+
+  test('selecting a machine updates the URL', async ({ page, request }) => {
+    const machineName = `e2e-select-${randomUUID().slice(0, 8)}`;
+    await ingestSession(request, { environment: machineName, project: 'machine-url-e2e' });
+
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await ensureDemoProviders(page);
+
+    const filterPanel = page.locator('#filter-panel');
+    const machineSelect = filterPanel.locator('select[aria-label="machine"]');
+
+    // Wait for the machine option to appear (filters poll from API)
+    await expect(machineSelect.locator(`option[value="${machineName}"]`)).toHaveCount(1, { timeout: 10000 });
+
+    await machineSelect.selectOption(machineName);
+    await expect(page).toHaveURL(new RegExp(`environment=${machineName}`));
+  });
+
+  test('machine filter shows only sessions from that machine', async ({ page, request }) => {
+    const machineToken = `filter-machine-${randomUUID().slice(0, 8)}`;
+    const otherToken = `other-machine-${randomUUID().slice(0, 8)}`;
+
+    await ingestSession(request, { environment: machineToken, project: 'machine-filter-sessions' });
+    await ingestSession(request, { environment: otherToken, project: 'machine-filter-other' });
+
+    // Navigate with machine filter pre-applied
+    await page.goto(`/timeline?environment=${machineToken}`);
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    // Should show the filtered machine's sessions
+    const cards = page.locator('.session-card');
+    await expect(cards.first()).toBeVisible({ timeout: 10000 });
+
+    // All visible cards should belong to the filtered machine project
+    const allCards = await cards.all();
+    for (const card of allCards) {
+      const text = await card.textContent();
+      // The project name is visible on each card
+      expect(text).toContain('machine-filter-sessions');
+    }
   });
 });

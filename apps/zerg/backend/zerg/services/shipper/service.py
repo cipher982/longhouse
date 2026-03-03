@@ -31,6 +31,7 @@ import os
 import shutil
 import subprocess
 import sys
+import xml.sax.saxutils as saxutils
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -217,7 +218,7 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     if config.machine_name:
         args += ["--machine-name", config.machine_name]
 
-    program_args = "\n".join(f"        <string>{arg}</string>" for arg in args)
+    program_args = "\n".join(f"        <string>{saxutils.escape(str(arg))}</string>" for arg in args)
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
