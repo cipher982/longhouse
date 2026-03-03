@@ -57,36 +57,30 @@ main() {
   create_db "$live_root/alice/longhouse.db" 2 5
   create_db "$live_root/bob/longhouse.db" 1 3
 
-  export LIVE_ROOT="$live_root"
-  export BACKUP_ROOT="$backup_root"
-  export TMP_BACKUP_DIR="$tmp_root"
-  export KEEP_SNAPSHOTS=2
-  export VERIFY_ON_BACKUP=true
-  export ENABLE_DOCKER_PRUNE=false
-  export ROOT_WARN_PCT=100
-  export INSTANCE_ALLOWLIST=
-  export REMOTE_SSH_TARGET=
-  export REMOTE_BASE_PATH=
-  export REMOTE_KEEP_SNAPSHOTS=30
-  export MONITOR_MAX_AGE_HOURS=30
-  export MONITOR_REQUIRE_REMOTE=false
+  local common_args=(
+    --live-root "$live_root"
+    --backup-root "$backup_root"
+    --tmp-backup-dir "$tmp_root"
+    --no-offsite
+    --no-docker-prune
+  )
 
   local round
-  for round in 1 2 3; do
+  for round in $(seq 1 16); do
     create_db "$live_root/alice/longhouse.db" "$((2 + round))" "$((5 + round))"
     create_db "$live_root/bob/longhouse.db" "$((1 + round))" "$((3 + round))"
-    bash "$OPS_SCRIPT" backup >/dev/null
+    bash "$OPS_SCRIPT" backup "${common_args[@]}" >/dev/null
     sleep 1
   done
 
-  bash "$OPS_SCRIPT" verify >/dev/null
-  bash "$OPS_SCRIPT" monitor >/dev/null
+  bash "$OPS_SCRIPT" verify "${common_args[@]}" >/dev/null
+  bash "$OPS_SCRIPT" monitor "${common_args[@]}" >/dev/null
 
   local instance count manifests latest ts manifest restore expected_sha actual_sha
   for instance in alice bob; do
     count="$(ls -1 "$backup_root/$instance"/longhouse.*.sqlite.* 2>/dev/null | wc -l | tr -d ' ')"
     manifests="$(ls -1 "$backup_root/$instance"/longhouse.*.manifest.json 2>/dev/null | wc -l | tr -d ' ')"
-    [[ "$count" == "2" ]] || fail "expected 2 archives for $instance, got $count"
+    [[ "$count" == "14" ]] || fail "expected 14 archives for $instance, got $count"
     [[ "$manifests" == "$count" ]] || fail "manifest/archive count mismatch for $instance"
 
     latest="$(ls -1t "$backup_root/$instance"/longhouse.*.sqlite.* | head -n1)"
