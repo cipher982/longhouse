@@ -18,6 +18,9 @@ pub struct ShipperConfig {
     pub timeout_seconds: u64,
     pub max_retries_429: u32,
     pub base_backoff_seconds: f64,
+    /// Human-readable machine label (set by user during `longhouse connect --install`).
+    /// Stored in `~/.claude/longhouse-machine-name`. Defaults to hostname.
+    pub machine_name: String,
 }
 
 impl Default for ShipperConfig {
@@ -31,6 +34,7 @@ impl Default for ShipperConfig {
             timeout_seconds: 60,
             max_retries_429: 5,
             base_backoff_seconds: 1.0,
+            machine_name: default_machine_name(),
         }
     }
 }
@@ -40,6 +44,17 @@ impl ShipperConfig {
     pub fn from_env() -> Result<Self> {
         let claude_dir = get_claude_dir()?;
         let mut config = Self::default();
+
+        // Read machine name from file (set during --install)
+        let machine_name_path = claude_dir.join("longhouse-machine-name");
+        if machine_name_path.exists() {
+            if let Ok(name) = std::fs::read_to_string(&machine_name_path) {
+                let name = name.trim().to_string();
+                if !name.is_empty() {
+                    config.machine_name = name;
+                }
+            }
+        }
 
         // Read URL from file
         let url_path = claude_dir.join("longhouse-url");
@@ -82,6 +97,7 @@ impl ShipperConfig {
         token: Option<&str>,
         db_path: Option<&Path>,
         workers: Option<usize>,
+        machine_name: Option<&str>,
     ) -> Self {
         if let Some(u) = url {
             self.api_url = u.to_string();
@@ -97,8 +113,24 @@ impl ShipperConfig {
                 self.workers = w;
             }
         }
+        if let Some(m) = machine_name {
+            if !m.is_empty() {
+                self.machine_name = m.to_string();
+            }
+        }
         self
     }
+}
+
+/// Default machine name: read from hostname command.
+fn default_machine_name() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Resolve `~/.claude/` or `CLAUDE_CONFIG_DIR`.

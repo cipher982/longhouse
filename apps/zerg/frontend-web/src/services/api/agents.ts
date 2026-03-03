@@ -162,6 +162,7 @@ export interface AgentActiveSessionFilters {
 export interface AgentFiltersResponse {
   projects: string[];
   providers: string[];
+  machines: string[];
 }
 
 // ---------------------------------------------------------------------------

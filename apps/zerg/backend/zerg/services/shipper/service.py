@@ -80,6 +80,7 @@ class ServiceConfig:
     spool_replay_secs: int = 30
     log_dir: str | None = None
     compression: str = "zstd"
+    machine_name: str | None = None
 
 
 def detect_platform() -> Platform:
@@ -213,6 +214,8 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
         "--compression",
         config.compression,
     ]
+    if config.machine_name:
+        args += ["--machine-name", config.machine_name]
 
     program_args = "\n".join(f"        <string>{arg}</string>" for arg in args)
 
@@ -260,6 +263,7 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
     log_dir = _resolve_log_dir(config)
     claude_dir = _resolve_claude_dir(config.claude_dir)
 
+    machine_name_arg = f" --machine-name {config.machine_name}" if config.machine_name else ""
     exec_start = (
         f"{engine} connect"
         f" --flush-ms {config.flush_ms}"
@@ -267,6 +271,7 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
         f" --spool-replay-secs {config.spool_replay_secs}"
         f" --log-dir {log_dir}"
         f" --compression {config.compression}"
+        f"{machine_name_arg}"
     )
 
     return f"""[Unit]
@@ -296,6 +301,7 @@ def install_service(
     spool_replay_secs: int = 30,
     log_dir: str | None = None,
     compression: str = "zstd",
+    machine_name: str | None = None,
     # Legacy params accepted but ignored (kept for backwards compat during transition)
     _poll_mode: bool = False,
     _interval: int = 30,
@@ -324,6 +330,7 @@ def install_service(
         spool_replay_secs=spool_replay_secs,
         log_dir=log_dir,
         compression=compression,
+        machine_name=machine_name,
     )
 
     # Ensure log directory exists

@@ -210,6 +210,48 @@ def save_zerg_url(url: str, claude_config_dir: Path | None = None) -> None:
             raise
 
 
+def save_machine_name(name: str, claude_config_dir: Path | None = None) -> None:
+    """Save the machine name label to ~/.claude/longhouse-machine-name."""
+    import sys
+    import tempfile
+
+    machine_path = _get_machine_name_path(claude_config_dir)
+    machine_path.parent.mkdir(parents=True, exist_ok=True)
+    content = name.strip() + "\n"
+
+    if sys.platform == "win32":
+        machine_path.write_text(content)
+    else:
+        fd, tmp_path = tempfile.mkstemp(
+            dir=machine_path.parent,
+            prefix=".machine-name-",
+            suffix=".tmp",
+        )
+        try:
+            os.write(fd, content.encode())
+            os.fchmod(fd, 0o600)
+            os.close(fd)
+            os.rename(tmp_path, machine_path)
+        except Exception:
+            os.close(fd)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+
+def _get_machine_name_path(claude_config_dir: Path | None = None) -> Path:
+    """Get the path to the machine name file."""
+    if claude_config_dir is None:
+        config_dir = os.getenv("CLAUDE_CONFIG_DIR")
+        if config_dir:
+            claude_config_dir = Path(config_dir).expanduser()
+        else:
+            claude_config_dir = Path.home() / ".claude"
+    return claude_config_dir / "longhouse-machine-name"
+
+
 def _get_url_path(claude_config_dir: Path | None = None) -> Path:
     """Get the path to the Longhouse URL file."""
     if claude_config_dir is None:

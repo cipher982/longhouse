@@ -46,7 +46,6 @@ import "../styles/sessions.css";
 
 const DAYS_OPTIONS = [7, 14, 30, 60, 90] as const;
 const PAGE_SIZE = 50;
-const ENVIRONMENT_OPTIONS = ["production", "commis", "development", "test"] as const;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -100,14 +99,65 @@ function groupSessionsByDay(sessions: AgentSession[]): Map<string, AgentSession[
 function getProviderColor(provider: string): string {
   switch (provider) {
     case "claude":
-      return "var(--color-brand-accent)"; // Orange
+      return "var(--color-provider-claude)";
     case "codex":
-      return "var(--color-intent-success)"; // Green
+      return "var(--color-provider-codex)";
     case "gemini":
-      return "var(--color-neon-cyan)"; // Cyan
+      return "var(--color-provider-gemini)";
+    case "zai":
+      return "var(--color-provider-zai)";
     default:
-      return "var(--color-text-secondary)";
+      return "var(--color-provider-default)";
   }
+}
+
+function ProviderIcon({ provider }: { provider: string }) {
+  const color = getProviderColor(provider);
+  const svgProps = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", "aria-hidden": true as const, style: { color, flexShrink: 0 } };
+
+  switch (provider) {
+    case "claude":
+      return (
+        <svg {...svgProps}>
+          <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill="currentColor" />
+        </svg>
+      );
+    case "codex":
+      return (
+        <svg {...svgProps}>
+          <path d="M12 2a2.5 2.5 0 010 5 2.5 2.5 0 01-4.33 2.5A2.5 2.5 0 012 12a2.5 2.5 0 015.67 2.5A2.5 2.5 0 0112 17a2.5 2.5 0 014.33 2.5A2.5 2.5 0 0122 12a2.5 2.5 0 01-5.67-2.5A2.5 2.5 0 0112 7a2.5 2.5 0 010-5z" fill="currentColor" opacity="0.9" />
+        </svg>
+      );
+    case "gemini":
+      return (
+        <svg {...svgProps}>
+          <path d="M12 2C12 10 14 12 22 12C14 12 12 14 12 22C12 14 10 12 2 12C10 12 12 10 12 2Z" fill="currentColor" />
+        </svg>
+      );
+    case "zai":
+      return (
+        <svg {...svgProps}>
+          <path d="M6 6h12v2.5L8.5 18H18v2H6v-2.5L15.5 8H6z" fill="currentColor" />
+        </svg>
+      );
+    default:
+      return (
+        <svg {...svgProps} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="4 17 10 11 4 5" />
+          <line x1="12" y1="19" x2="20" y2="19" />
+        </svg>
+      );
+  }
+}
+
+function getDurationColor(startedAt: string, endedAt: string | null): string | undefined {
+  if (!endedAt) return undefined;
+  const diffMs = parseUTC(endedAt).getTime() - parseUTC(startedAt).getTime();
+  const diffMins = diffMs / 60000;
+  if (diffMins < 5) return undefined;
+  if (diffMins < 60) return "var(--color-brand-primary)";
+  if (diffMins < 180) return "var(--color-brand-accent)";
+  return "var(--color-intent-error)";
 }
 
 function isValidTitle(name: string | null | undefined): name is string {
@@ -279,7 +329,11 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
 
   return (
-    <Card className={`session-card${isActive ? " session-card--active" : ""}`} onClick={onClick}>
+    <Card
+      className={`session-card${isActive ? " session-card--active" : ""}`}
+      onClick={onClick}
+      style={!isActive ? { borderLeftColor: getProviderColor(session.provider) } : undefined}
+    >
       {/* Primary: project/repo identifier */}
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
@@ -289,11 +343,8 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
       {/* Secondary: provider + branch metadata */}
       <div className="session-card-meta">
         <span className="session-card-provider-badge">
-          <span
-            className="provider-dot"
-            style={{ backgroundColor: getProviderColor(session.provider) }}
-          />
-          <span className="provider-name">{session.provider}</span>
+          <ProviderIcon provider={session.provider} />
+          <span className="provider-name" style={{ color: getProviderColor(session.provider) }}>{session.provider}</span>
         </span>
         {session.git_branch && (
           <span className="session-card-branch-badge">
@@ -347,7 +398,7 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
           {session.ended_at && (
             <>
               <span className="session-stat-separator">&middot;</span>
-              <span className="session-stat">{formatDuration(session.started_at, session.ended_at)}</span>
+              <span className="session-stat" style={{ color: getDurationColor(session.started_at, session.ended_at) }}>{formatDuration(session.started_at, session.ended_at)}</span>
             </>
           )}
           <span className="session-stat-separator">&middot;</span>
@@ -378,7 +429,7 @@ function SessionGroup({ title, sessions, onSessionClick, highlightQuery, isSeman
     <div className="session-group">
       <div className="session-group-header">
         <span className="session-group-title">{title}</span>
-        <Badge variant="neutral">{sessions.length}</Badge>
+        <Badge variant="neutral" className="session-group-count">{sessions.length}</Badge>
       </div>
       <div className="session-group-list">
         {sessions.map((session) => (
@@ -455,6 +506,7 @@ export default function SessionsPage() {
   const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack);
   const projectOptions = filtersData?.projects || [];
   const providerOptions = filtersData?.providers || [];
+  const machineOptions = filtersData?.machines || [];
 
   // Debounce — longer when AI search is on to avoid hammering the embedding API per keystroke
   const [aiSearchPending, setAiSearchPending] = useState(false);
@@ -1021,10 +1073,11 @@ export default function SessionsPage() {
               loading={filtersLoading}
             />
             <FilterSelect
-              label="environment"
+              label="machine"
               value={environment}
-              options={[...ENVIRONMENT_OPTIONS]}
+              options={machineOptions}
               onChange={setEnvironment}
+              loading={filtersLoading}
             />
             <DaysSelect value={daysBack} onChange={setDaysBack} />
             <label className="sessions-filter-toggle-label">
