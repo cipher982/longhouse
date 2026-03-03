@@ -198,10 +198,6 @@ def get_summary(db: Session, current_user: UserModel, window: str = "today") -> 
         "latency_ms": {"p50": latency_p50, "p95": latency_p95},
         "errors_last_hour": errors_last_hour,
         "top_fiches": top_fiches,
-        # Backward-compatible aliases (deprecated).
-        "runs_today": runs,
-        "cost_today_usd": cost_usd,
-        "top_fiches_today": top_fiches,
     }
 
 

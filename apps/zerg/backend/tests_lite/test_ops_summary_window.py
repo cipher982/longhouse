@@ -165,9 +165,5 @@ def test_ops_summary_window_scopes_runs_cost_and_labels(tmp_path, monkeypatch):
         assert seven["top_fiches"][0]["runs"] == 3
         assert thirty["top_fiches"][0]["runs"] == 4
 
-        # Backward-compatible aliases mirror canonical values
-        assert today["runs_today"] == today["runs"]
-        assert seven["cost_today_usd"] == seven["cost_usd"]
-        assert thirty["top_fiches_today"] == thirty["top_fiches"]
     finally:
         api_app_ref.dependency_overrides.clear()
