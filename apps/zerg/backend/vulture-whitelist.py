@@ -12,9 +12,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session as DBSession  # noqa: F401
+    from zerg.channels.plugins.telegram import TelegramChannel  # noqa: F401
+    from zerg.channels.types import ChannelMessageEvent  # noqa: F401
 
 # Used as string type annotations in embedding_cache.py and embeddings.py
 DBSession  # noqa: F811
+# Used as string type annotations in telegram_bridge.py
+TelegramChannel  # noqa: F811
+ChannelMessageEvent  # noqa: F811
 
 # SQLAlchemy event handlers require connection_record in signature
 connection_record = None

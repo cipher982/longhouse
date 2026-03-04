@@ -193,6 +193,11 @@ class Settings:  # noqa: D401 – simple data container
     oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
     oikos_tool_output_preview_chars: int  # Preview size for stored tool outputs
 
+    # Telegram channel integration ------------------------------------
+    telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
+    telegram_webhook_url: str | None = None  # TELEGRAM_WEBHOOK_URL (e.g. https://your-domain/api/webhooks/channels/telegram)
+    telegram_webhook_secret: str | None = None  # TELEGRAM_WEBHOOK_SECRET for request validation
+
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def llm_available(self) -> bool:
@@ -501,6 +506,10 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Oikos tool output storage
         oikos_tool_output_max_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_MAX_CHARS", "8000")),
         oikos_tool_output_preview_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
+        # Telegram channel
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
+        telegram_webhook_url=os.getenv("TELEGRAM_WEBHOOK_URL"),
+        telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET"),
     )
 
 
