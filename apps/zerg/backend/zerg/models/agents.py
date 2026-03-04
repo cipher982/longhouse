@@ -201,6 +201,8 @@ class AgentEvent(AgentsBase):
 
     # Raw storage for lossless archiving (original JSONL line)
     raw_json = Column(Text, nullable=True)
+    event_uuid = Column(String(255), nullable=True, index=True)  # Raw line uuid (Claude/Codex/Gemini event id)
+    parent_event_uuid = Column(String(255), nullable=True, index=True)  # Raw parent linkage id (Claude parentUuid)
 
     # Relationships
     session = relationship("AgentSession", back_populates="events")
@@ -217,6 +219,15 @@ class AgentEvent(AgentsBase):
             unique=True,
             postgresql_where=(source_path.isnot(None)),
             sqlite_where=(source_path.isnot(None)),
+        ),
+        Index(
+            "ix_events_session_branch_uuid",
+            "session_id",
+            "branch_id",
+            "event_uuid",
+            unique=True,
+            postgresql_where=(event_uuid.isnot(None)),
+            sqlite_where=(event_uuid.isnot(None)),
         ),
         Index("ix_events_session_timestamp", "session_id", "timestamp"),
         Index("ix_events_session_branch_timestamp", "session_id", "branch_id", "timestamp"),

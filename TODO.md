@@ -54,6 +54,23 @@ Notes:
 - 2026-03-04: `longhouse doctor` now checks Claude retention/sync risk (`cleanupPeriodDays`, Stop-hook presence) and warns when retention is short/default or hooks are missing.
 - 2026-03-04: Context-mode search regression is covered end-to-end (`tests_lite/test_sessions_search_context_mode.py`) proving forensic includes pre-compact facts while active_context excludes stale pre-boundary facts.
 
+## [Product] Claude Rewind DAG Fidelity (size: 3)
+
+Status (2026-03-04): In progress (lineage storage landed; DAG-driven branching still pending).
+
+**Goal:** Match real Claude `/rewind` behavior when branching is represented by `uuid`/`parentUuid` graph relationships (not only source-offset rewrites/truncation).
+
+**Implementation spec:**
+- [x] Persist raw event lineage IDs (`uuid`, `parentUuid`) on `events` for every ingested line when present
+- [x] Add branch-scoped dedupe for lineage IDs so replay retries do not duplicate events while branch prefix copy remains valid
+- [ ] Detect branch forks from lineage graph divergence even when no same-offset rewrite/truncation is observed
+- [ ] Align head-branch selection with Claude `leafUuid`/DAG head semantics when available
+- [ ] Add real-transcript regression fixture coverage for high-rewind sessions (multiple parent fan-outs)
+
+Notes:
+- 2026-03-04: Real transcript analysis on local Claude session `bf3c1a89-...` showed `summary=26`, `compact_boundary=1`, and ~25 parent fan-out branch points in raw JSONL while offset-only rewind detection produced a single stored branch, confirming the remaining fidelity gap.
+- 2026-03-04: Added `event_uuid` + `parent_event_uuid` columns/index/migration path and ingest extraction in `AgentsStore`; coverage in `tests_lite/test_event_lineage_ingest.py`.
+
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 
 Status (2026-03-04): Done.
