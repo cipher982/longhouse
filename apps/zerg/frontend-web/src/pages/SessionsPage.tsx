@@ -270,52 +270,158 @@ function getLiveSessionTitle(session: ActiveSession): string {
 // Filter Components
 // ---------------------------------------------------------------------------
 
-interface FilterSelectProps {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
-  loading?: boolean;
-}
-
-function FilterSelect({ label, value, options, onChange, loading }: FilterSelectProps) {
+function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void }) {
   return (
-    <select
-      className="sessions-filter-select"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label={label}
-      disabled={loading}
-    >
-      <option value="">All {label}s</option>
-      {options.map((opt) => (
-        <option key={opt} value={opt}>
-          {opt}
-        </option>
-      ))}
-    </select>
+    <div className="sessions-filter-chip">
+      <span className="sessions-filter-chip-label">{label}</span>
+      <button
+        type="button"
+        className="sessions-filter-chip-dismiss"
+        onClick={onDismiss}
+        aria-label={`Remove ${label} filter`}
+      >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+    </div>
   );
 }
 
-interface DaysSelectProps {
-  value: number;
-  onChange: (value: number) => void;
+function FilterSection({
+  label,
+  value,
+  options,
+  onChange,
+  loading,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+  loading?: boolean;
+}) {
+  if (options.length === 0 && !loading) return null;
+  return (
+    <div className="filter-section" data-filter-section={label.toLowerCase()}>
+      <div className="filter-section-label">{label}</div>
+      <div className="filter-section-options">
+        <button
+          type="button"
+          className={`filter-option-btn${!value ? " filter-option-btn--active" : ""}`}
+          onClick={() => onChange("")}
+        >
+          All
+        </button>
+        {options.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            className={`filter-option-btn${value === opt ? " filter-option-btn--active" : ""}`}
+            onClick={() => onChange(opt)}
+            data-filter-option={opt}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
-function DaysSelect({ value, onChange }: DaysSelectProps) {
+function DaysSection({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   return (
-    <select
-      className="sessions-filter-select"
-      value={value}
-      onChange={(e) => onChange(Number(e.target.value))}
-      aria-label="Days back"
+    <div className="filter-section" data-filter-section="time">
+      <div className="filter-section-label">Time window</div>
+      <div className="filter-section-options">
+        {DAYS_OPTIONS.map((days) => (
+          <button
+            key={days}
+            type="button"
+            className={`filter-option-btn${value === days ? " filter-option-btn--active" : ""}`}
+            onClick={() => onChange(days)}
+            data-filter-option={`${days}d`}
+          >
+            {days}d
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface FilterPopoverProps {
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+  project: string; setProject: (v: string) => void; projectOptions: string[];
+  provider: string; setProvider: (v: string) => void; providerOptions: string[];
+  environment: string; setEnvironment: (v: string) => void; machineOptions: string[];
+  daysBack: number; setDaysBack: (v: number) => void;
+  hideAutonomous: boolean; setHideAutonomous: (v: boolean) => void;
+  filtersLoading: boolean;
+}
+
+function FilterPopover({
+  anchorRef, onClose,
+  project, setProject, projectOptions,
+  provider, setProvider, providerOptions,
+  environment, setEnvironment, machineOptions,
+  daysBack, setDaysBack,
+  hideAutonomous, setHideAutonomous,
+  filtersLoading,
+}: FilterPopoverProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+
+  useEffect(() => {
+    if (!anchorRef.current) return;
+    const rect = anchorRef.current.getBoundingClientRect();
+    setPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+  }, [anchorRef]);
+
+  useEffect(() => {
+    const handleDown = (e: MouseEvent) => {
+      if (
+        ref.current && !ref.current.contains(e.target as Node) &&
+        anchorRef.current && !anchorRef.current.contains(e.target as Node)
+      ) {
+        onClose();
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", handleDown);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleDown);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [onClose, anchorRef]);
+
+  if (!pos) return null;
+
+  return (
+    <div
+      ref={ref}
+      id="filter-panel"
+      role="dialog"
+      aria-label="Session filters"
+      className="sessions-filter-popover"
+      style={{ top: pos.top, right: pos.right }}
     >
-      {DAYS_OPTIONS.map((days) => (
-        <option key={days} value={days}>
-          Last {days} days
-        </option>
-      ))}
-    </select>
+      <FilterSection label="Provider" value={provider} options={providerOptions} onChange={setProvider} loading={filtersLoading} />
+      <FilterSection label="Machine" value={environment} options={machineOptions} onChange={setEnvironment} loading={filtersLoading} />
+      <FilterSection label="Project" value={project} options={projectOptions} onChange={setProject} loading={filtersLoading} />
+      <DaysSection value={daysBack} onChange={setDaysBack} />
+      <label className="sessions-filter-toggle-label">
+        <input
+          type="checkbox"
+          checked={!hideAutonomous}
+          onChange={(e) => setHideAutonomous(!e.target.checked)}
+        />
+        show autonomous
+      </label>
+    </div>
   );
 }
 
@@ -370,8 +476,8 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
             {session.git_branch}
           </span>
         )}
-        {session.environment && session.environment !== "production" && (
-          <span className={`environment-badge environment-badge--${session.environment}`}>
+        {session.environment && (
+          <span className="environment-badge">
             {session.environment}
           </span>
         )}
@@ -498,15 +604,8 @@ export default function SessionsPage() {
     return s === "recent" ? "recent" : "relevant";
   });
 
-  // Collapsible filters — open by default if URL has active filters
-  const hasUrlFilters = !!(
-    searchParams.get("project") ||
-    searchParams.get("provider") ||
-    searchParams.get("environment") ||
-    (searchParams.get("days_back") && Number(searchParams.get("days_back")) !== 14) ||
-    searchParams.get("hide_autonomous") === "false"
-  );
-  const [filtersOpen, setFiltersOpen] = useState(hasUrlFilters);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const filterBtnRef = useRef<HTMLButtonElement>(null);
   const [recallOpen, setRecallOpen] = useState(false);
   const [liveViewOpen, setLiveViewOpen] = useState(false);
 
@@ -677,7 +776,7 @@ export default function SessionsPage() {
     setDaysBack(14);
     setSearchQuery("");
     setAiSearch(false);
-    setFiltersOpen(false);
+    setPopoverOpen(false);
   }, []);
 
 
@@ -947,7 +1046,6 @@ export default function SessionsPage() {
                   strokeLinejoin="round"
                   aria-hidden="true"
                 >
-                  {/* Sparkles icon */}
                   <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
                   <path d="M20 3v4" />
                   <path d="M22 5h-4" />
@@ -998,6 +1096,18 @@ export default function SessionsPage() {
               </div>
             )}
           </div>
+
+          {/* Active filter chips */}
+          {(provider || environment || project || daysBack !== 14 || !hideAutonomous) && (
+            <div className="sessions-filter-chips">
+              {provider && <FilterChip label={provider} onDismiss={() => setProvider("")} />}
+              {environment && <FilterChip label={environment} onDismiss={() => setEnvironment("")} />}
+              {project && <FilterChip label={project} onDismiss={() => setProject("")} />}
+              {daysBack !== 14 && <FilterChip label={`${daysBack}d`} onDismiss={() => setDaysBack(14)} />}
+              {!hideAutonomous && <FilterChip label="show auto" onDismiss={() => setHideAutonomous(true)} />}
+            </div>
+          )}
+
           <div className="sessions-toolbar-actions">
             <Button variant="ghost" size="sm" onClick={handleClearFilters} disabled={!hasFilters}>
               Clear
@@ -1020,10 +1130,11 @@ export default function SessionsPage() {
               <span>Recall</span>
             </button>
             <button
+              ref={filterBtnRef}
               type="button"
-              className={`sessions-filter-toggle${filtersOpen ? " sessions-filter-toggle--open" : ""}`}
-              onClick={() => setFiltersOpen((v) => !v)}
-              aria-expanded={filtersOpen}
+              className={`sessions-filter-toggle${popoverOpen ? " sessions-filter-toggle--open" : ""}`}
+              onClick={() => setPopoverOpen((v) => !v)}
+              aria-expanded={popoverOpen}
               aria-controls="filter-panel"
               aria-label={`Filters${activeFilterCount > 0 ? ` (${activeFilterCount} active)` : ""}`}
             >
@@ -1039,40 +1150,18 @@ export default function SessionsPage() {
           </div>
         </div>
 
-        {/* Collapsible Filter Panel */}
-        {filtersOpen && (
-          <div id="filter-panel" role="region" aria-label="Session filters" className="sessions-filter-panel">
-            <FilterSelect
-              label="project"
-              value={project}
-              options={projectOptions}
-              onChange={setProject}
-              loading={filtersLoading}
-            />
-            <FilterSelect
-              label="provider"
-              value={provider}
-              options={providerOptions}
-              onChange={setProvider}
-              loading={filtersLoading}
-            />
-            <FilterSelect
-              label="machine"
-              value={environment}
-              options={machineOptions}
-              onChange={setEnvironment}
-              loading={filtersLoading}
-            />
-            <DaysSelect value={daysBack} onChange={setDaysBack} />
-            <label className="sessions-filter-toggle-label">
-              <input
-                type="checkbox"
-                checked={!hideAutonomous}
-                onChange={(e) => setHideAutonomous(!e.target.checked)}
-              />
-              show autonomous
-            </label>
-          </div>
+        {/* Filter Popover */}
+        {popoverOpen && (
+          <FilterPopover
+            anchorRef={filterBtnRef}
+            onClose={() => setPopoverOpen(false)}
+            project={project} setProject={setProject} projectOptions={projectOptions}
+            provider={provider} setProvider={setProvider} providerOptions={providerOptions}
+            environment={environment} setEnvironment={setEnvironment} machineOptions={machineOptions}
+            daysBack={daysBack} setDaysBack={setDaysBack}
+            hideAutonomous={hideAutonomous} setHideAutonomous={setHideAutonomous}
+            filtersLoading={filtersLoading}
+          />
         )}
 
         {/* Recall Panel */}
