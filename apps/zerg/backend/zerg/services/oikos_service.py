@@ -33,6 +33,8 @@ from zerg.models.models import Thread as ThreadModel
 from zerg.prompts import build_oikos_prompt
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_context import reset_seq
+from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
+from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 from zerg.services.thread_service import ThreadService
 from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
@@ -930,33 +932,16 @@ class OikosService:
                                 context=contextvars.Context(),
                             )
 
-                # Emit waiting event (similar to deferred but semantically different)
-                await emit_run_event(
+                await emit_oikos_waiting_and_run_updated(
                     db=self.db,
                     run_id=run.id,
-                    event_type="oikos_waiting",
-                    payload={
-                        "fiche_id": fiche.id,
-                        "thread_id": thread.id,
-                        "job_id": job_id,
-                        "message": interrupt_message,
-                        "owner_id": owner_id,
-                        "message_id": message_id,
-                        "close_stream": False,  # Keep SSE open for resume
-                        "trace_id": effective_trace_id,
-                    },
-                )
-
-                await emit_run_event(
-                    db=self.db,
-                    run_id=run.id,
-                    event_type="run_updated",
-                    payload={
-                        "fiche_id": fiche.id,
-                        "status": "waiting",
-                        "thread_id": thread.id,
-                        "owner_id": owner_id,
-                    },
+                    fiche_id=fiche.id,
+                    thread_id=thread.id,
+                    owner_id=owner_id,
+                    message_id=message_id,
+                    message=interrupt_message,
+                    trace_id=effective_trace_id,
+                    job_id=job_id,
                 )
 
                 logger.info(f"Oikos run {run.id} interrupted (WAITING for commis job {job_id})")
@@ -1165,19 +1150,15 @@ class OikosService:
             await emit_stream_control(self.db, run, "close", "error", owner_id)
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
-            await emit_run_event(
+            await emit_failed_run_updated(
                 db=self.db,
                 run_id=run.id,
-                event_type="run_updated",
-                payload={
-                    "fiche_id": fiche.id,
-                    "status": "failed",
-                    "finished_at": end_time.isoformat(),
-                    "duration_ms": duration_ms,
-                    "error": str(e),
-                    "thread_id": thread.id,
-                    "owner_id": owner_id,
-                },
+                fiche_id=fiche.id,
+                thread_id=thread.id,
+                owner_id=owner_id,
+                finished_at_iso=end_time.isoformat(),
+                duration_ms=duration_ms,
+                error=str(e),
             )
             reset_seq(run.id)
 

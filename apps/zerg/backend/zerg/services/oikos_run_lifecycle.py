@@ -14,6 +14,86 @@ from sqlalchemy.orm import Session
 from zerg.models.models import CommisJob
 
 
+async def emit_oikos_waiting_and_run_updated(
+    db: Session,
+    *,
+    run_id: int,
+    fiche_id: int,
+    thread_id: int,
+    owner_id: int,
+    message_id: str,
+    message: str,
+    trace_id: str | None = None,
+    job_id: int | None = None,
+    job_ids: list[int] | None = None,
+) -> None:
+    """Emit oikos_waiting followed by run_updated(waiting)."""
+    from zerg.services.event_store import emit_run_event
+
+    payload: dict[str, Any] = {
+        "fiche_id": fiche_id,
+        "thread_id": thread_id,
+        "message": message,
+        "owner_id": owner_id,
+        "message_id": message_id,
+        "close_stream": False,
+    }
+    if trace_id:
+        payload["trace_id"] = trace_id
+    if job_ids:
+        payload["job_ids"] = job_ids
+    else:
+        payload["job_id"] = job_id
+
+    await emit_run_event(
+        db=db,
+        run_id=run_id,
+        event_type="oikos_waiting",
+        payload=payload,
+    )
+    await emit_run_event(
+        db=db,
+        run_id=run_id,
+        event_type="run_updated",
+        payload={
+            "fiche_id": fiche_id,
+            "status": "waiting",
+            "thread_id": thread_id,
+            "owner_id": owner_id,
+        },
+    )
+
+
+async def emit_failed_run_updated(
+    db: Session,
+    *,
+    run_id: int,
+    fiche_id: int,
+    thread_id: int,
+    owner_id: int,
+    finished_at_iso: str,
+    duration_ms: int,
+    error: str,
+) -> None:
+    """Emit standardized run_updated payload for failed runs."""
+    from zerg.services.event_store import emit_run_event
+
+    await emit_run_event(
+        db=db,
+        run_id=run_id,
+        event_type="run_updated",
+        payload={
+            "fiche_id": fiche_id,
+            "status": "failed",
+            "finished_at": finished_at_iso,
+            "duration_ms": duration_ms,
+            "error": error,
+            "thread_id": thread_id,
+            "owner_id": owner_id,
+        },
+    )
+
+
 async def emit_stream_control_for_pending_commiss(
     db: Session,
     run: Any,

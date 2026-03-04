@@ -35,6 +35,7 @@ Notes:
   - frontend route helper test locks `/forum` -> `/timeline` redirect semantics
   - backend tests assert `spawn_commis`/`spawn_workspace_commis` always persist `execution_mode=workspace`
 - 2026-03-03: Began monolith split (Phase 1) by extracting shared pending-commis stream lifecycle helper to `services/oikos_run_lifecycle.py` and wiring `oikos_service.py` + `commis_resume.py` to use it.
+- 2026-03-03: Extended Phase 1 lifecycle extraction with shared helpers for `oikos_waiting + run_updated(waiting)` and standardized failed `run_updated` payloads; both `oikos_service.py` and `commis_resume.py` now call the shared helpers.
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
