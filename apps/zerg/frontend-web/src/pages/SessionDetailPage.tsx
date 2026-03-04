@@ -152,17 +152,45 @@ function parseLonghouseOutput(text: string): {
   exitCode: number | null;
   output: string;
 } | null {
-  // Pattern: optional "Chunk ID: ...\n", optional "Wall time: N.N seconds\n",
-  // optional "Process exited with code N\n", optional "Original token count: N\n",
-  // then "Output:\n<actual>"
-  const match = text.match(
-    /^(?:Chunk ID: \w+\n)?(?:Wall time: ([\d.]+) seconds\n)?(?:Process exited with code (\d+)\n)?(?:Original token count: \d+\n)?Output:\n([\s\S]*)$/
-  );
-  if (!match) return null;
+  const normalized = text.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  let index = 0;
+  let sawWrapperMetadata = false;
+  let wallTime: string | null = null;
+  let exitCode: number | null = null;
+
+  if (lines[index]?.startsWith("Chunk ID: ")) {
+    sawWrapperMetadata = true;
+    index += 1;
+  }
+
+  const wallMatch = lines[index]?.match(/^Wall time: ([\d.]+) seconds$/);
+  if (wallMatch) {
+    sawWrapperMetadata = true;
+    wallTime = `${wallMatch[1]}s`;
+    index += 1;
+  }
+
+  const exitMatch = lines[index]?.match(/^Process exited with code (\d+)$/);
+  if (exitMatch) {
+    sawWrapperMetadata = true;
+    exitCode = parseInt(exitMatch[1], 10);
+    index += 1;
+  }
+
+  if (/^Original token count: \d+$/.test(lines[index] ?? "")) {
+    sawWrapperMetadata = true;
+    index += 1;
+  }
+
+  if (lines[index] !== "Output:" || !sawWrapperMetadata) {
+    return null;
+  }
+
   return {
-    wallTime: match[1] ? `${match[1]}s` : null,
-    exitCode: match[2] != null ? parseInt(match[2], 10) : null,
-    output: match[3] ?? text,
+    wallTime,
+    exitCode,
+    output: lines.slice(index + 1).join("\n"),
   };
 }
 
@@ -195,6 +223,7 @@ type ToolInteraction = {
 
 /** A batch of parallel tool calls (same-second timestamp cluster). */
 type ToolBatch = {
+  key: string;
   interactions: ToolInteraction[];
   timestamp: string;
 };
@@ -329,7 +358,14 @@ function buildTimelineItems(events: AgentEvent[]): {
       }
     }
     if (batch.length >= 2) {
-      groupedItems.push({ kind: "tool_batch", batch: { interactions: batch, timestamp: item.interaction.timestamp } });
+      groupedItems.push({
+        kind: "tool_batch",
+        batch: {
+          key: `batch:${batch[0].anchorId}`,
+          interactions: batch,
+          timestamp: item.interaction.timestamp,
+        },
+      });
     } else {
       groupedItems.push(item);
     }
@@ -548,24 +584,31 @@ function ToolInteractionCard({
 
 interface ToolBatchCardProps {
   batch: ToolBatch;
+  isExpanded: boolean;
   expandedTools: Set<string>;
+  onToggleBatch: () => void;
   onToggleTool: (key: string) => void;
 }
 
-function ToolBatchCard({ batch, expandedTools, onToggleTool }: ToolBatchCardProps) {
-  const [batchExpanded, setBatchExpanded] = useState(false);
+function ToolBatchCard({
+  batch,
+  isExpanded,
+  expandedTools,
+  onToggleBatch,
+  onToggleTool,
+}: ToolBatchCardProps) {
   const { interactions, timestamp } = batch;
 
   return (
     <div className="event-item event-tool-batch">
       <button
         className="tool-batch-header"
-        onClick={() => setBatchExpanded((v) => !v)}
-        aria-expanded={batchExpanded}
+        onClick={onToggleBatch}
+        aria-expanded={isExpanded}
       >
         <div className="tool-batch-label">
           <span className="tool-batch-badge">⚡ {interactions.length} parallel</span>
-          {!batchExpanded && (
+          {!isExpanded && (
             <div className="tool-batch-chips">
               {interactions.map((ia) => {
                 const info = getToolDisplayInfo(ia.toolName);
@@ -592,11 +635,11 @@ function ToolBatchCard({ batch, expandedTools, onToggleTool }: ToolBatchCardProp
         </div>
         <div className="event-tool-meta">
           <span className="event-time">{formatTime(timestamp)}</span>
-          <span className="expand-icon">{batchExpanded ? "▼" : "▶"}</span>
+          <span className="expand-icon">{isExpanded ? "▼" : "▶"}</span>
         </div>
       </button>
 
-      {batchExpanded && (
+      {isExpanded && (
         <div className="tool-batch-body">
           {interactions.map((ia) => (
             <ToolInteractionCard
@@ -703,7 +746,16 @@ export default function SessionDetailPage() {
 
   // Expand/collapse state keyed by interaction key (string)
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set());
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
+
+  const toolBatches = useMemo(
+    () =>
+      timelineItems
+        .filter((item): item is { kind: "tool_batch"; batch: ToolBatch } => item.kind === "tool_batch")
+        .map((item) => item.batch),
+    [timelineItems]
+  );
 
   const toggleTool = (key: string) => {
     setExpandedTools((prev) => {
@@ -717,14 +769,47 @@ export default function SessionDetailPage() {
     });
   };
 
+  const toggleBatch = (key: string) => {
+    setExpandedBatches((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  // If a tool is programmatically expanded (deep-link / expand-all), ensure its parent batch is visible.
+  useEffect(() => {
+    if (toolBatches.length === 0) return;
+    setExpandedBatches((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const batch of toolBatches) {
+        const hasExpandedTool = batch.interactions.some((interaction) => expandedTools.has(interaction.key));
+        if (hasExpandedTool && !next.has(batch.key)) {
+          next.add(batch.key);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [expandedTools, toolBatches]);
+
   const allExpanded =
-    toolItems.length > 0 && toolItems.every((i) => expandedTools.has(i.key));
+    toolItems.length > 0 &&
+    toolItems.every((i) => expandedTools.has(i.key)) &&
+    toolBatches.every((batch) => expandedBatches.has(batch.key));
 
   const toggleAll = () => {
     if (allExpanded) {
       setExpandedTools(new Set());
+      setExpandedBatches(new Set());
     } else {
       setExpandedTools(new Set(toolItems.map((i) => i.key)));
+      setExpandedBatches(new Set(toolBatches.map((batch) => batch.key)));
     }
   };
 
@@ -801,18 +886,22 @@ export default function SessionDetailPage() {
   useEffect(() => {
     if (!highlightEventId || events.length === 0) return;
     const anchorId = eventIdToAnchor.get(highlightEventId) ?? highlightEventId;
+    const toolItem = toolItems.find((i) => i.anchorId === anchorId);
+    if (toolItem) {
+      setExpandedTools((prev) => {
+        if (prev.has(toolItem.key)) return prev;
+        const next = new Set(prev);
+        next.add(toolItem.key);
+        return next;
+      });
+    }
     const domId = `event-${anchorId}`;
     const target = document.getElementById(domId);
-    if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "center" });
-      setHighlightedAnchorId(domId);
-      // Auto-expand the highlighted tool card
-      const toolItem = toolItems.find((i) => i.anchorId === anchorId);
-      if (toolItem) {
-        setExpandedTools((prev) => new Set([...prev, toolItem.key]));
-      }
-    }
-  }, [highlightEventId, events, eventIdToAnchor, toolItems]);
+    if (!target || highlightedAnchorId === domId) return;
+
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedAnchorId(domId);
+  }, [highlightEventId, events, eventIdToAnchor, toolItems, expandedBatches, highlightedAnchorId]);
 
   // Back navigation
   const handleBack = () => {
@@ -1118,9 +1207,11 @@ export default function SessionDetailPage() {
                 if (item.kind === "tool_batch") {
                   return (
                     <ToolBatchCard
-                      key={item.batch.timestamp + item.batch.interactions[0].key}
+                      key={item.batch.key}
                       batch={item.batch}
+                      isExpanded={expandedBatches.has(item.batch.key)}
                       expandedTools={expandedTools}
+                      onToggleBatch={() => toggleBatch(item.batch.key)}
                       onToggleTool={toggleTool}
                     />
                   );
