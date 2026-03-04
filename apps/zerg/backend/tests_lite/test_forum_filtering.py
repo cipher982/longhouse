@@ -285,7 +285,7 @@ def test_presence_idle_does_not_resume_snoozed(tmp_path):
 
 
 def test_presence_invalid_state_is_noop(tmp_path):
-    """Unknown presence states are ignored (no DB write, no state transitions)."""
+    """Truly unknown presence states are ignored (no DB write, no state transitions)."""
     factory = _make_db(tmp_path, "invalid_presence_state.db")
     sid = _seed(factory, user_state="snoozed")
 
@@ -293,7 +293,7 @@ def test_presence_invalid_state_is_noop(tmp_path):
     try:
         resp = client.post(
             "/agents/presence",
-            json={"session_id": sid, "state": "blocked", "tool_name": "bash", "provider": "claude"},
+            json={"session_id": sid, "state": "totally_unknown_state", "tool_name": "bash", "provider": "claude"},
             headers={"X-Device-Token": "dev"},
         )
         assert resp.status_code == 204

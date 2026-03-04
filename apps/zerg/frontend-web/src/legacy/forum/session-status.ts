@@ -1,4 +1,4 @@
-export type KnownPresenceState = "thinking" | "running" | "idle";
+export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
 
 export type SessionActivitySnapshot = {
   status: string;
@@ -7,7 +7,13 @@ export type SessionActivitySnapshot = {
 };
 
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
-  if (state === "thinking" || state === "running" || state === "idle") {
+  if (
+    state === "thinking" ||
+    state === "running" ||
+    state === "idle" ||
+    state === "needs_user" ||
+    state === "blocked"
+  ) {
     return state;
   }
   return null;
@@ -19,7 +25,13 @@ export function hasUnknownPresenceState(state: string | null | undefined): boole
 
 export function isSessionActive(session: SessionActivitySnapshot): boolean {
   const presenceState = normalizePresenceState(session.presence_state);
-  if (presenceState === "thinking" || presenceState === "running") {
+  // All non-idle known states mean the session is live (just paused differently)
+  if (
+    presenceState === "thinking" ||
+    presenceState === "running" ||
+    presenceState === "needs_user" ||
+    presenceState === "blocked"
+  ) {
     return true;
   }
   if (session.ended_at != null) {

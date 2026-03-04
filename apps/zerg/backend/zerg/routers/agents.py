@@ -296,8 +296,8 @@ class ActiveSessionResponse(UTCBaseModel):
     message_count: int = Field(..., description="Total user + assistant messages")
     tool_calls: int = Field(..., description="Tool call count")
     # Real-time presence fields (populated when hook signals are available)
-    presence_state: Optional[str] = Field(None, description="Real-time state: thinking|running|idle")
-    presence_tool: Optional[str] = Field(None, description="Tool currently executing (when state=running)")
+    presence_state: Optional[str] = Field(None, description="Real-time state: thinking|running|idle|needs_user|blocked")
+    presence_tool: Optional[str] = Field(None, description="Tool currently executing (when state=running or blocked)")
     presence_updated_at: Optional[datetime] = Field(None, description="When presence was last signalled")
     # User-driven bucket
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
@@ -2088,7 +2088,7 @@ async def list_active_sessions(
             # response (Stop hook ships transcript), so a session with fresh presence is
             # actively in progress even though ended_at is non-null.
             if presence_fresh:
-                derived_status = "working" if presence.state in ("thinking", "running") else "idle"
+                derived_status = "working" if presence.state in ("thinking", "running", "needs_user", "blocked") else "idle"
             elif s.ended_at:
                 derived_status = "completed"
             else:

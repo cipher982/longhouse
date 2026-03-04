@@ -1,13 +1,21 @@
 """Session presence ingest endpoint.
 
 Receives real-time state signals from Claude Code hooks:
-  - UserPromptSubmit → state=thinking
-  - PreToolUse       → state=running (tool_name set)
-  - PostToolUse      → state=thinking
-  - Stop             → state=idle
+  - UserPromptSubmit  → state=thinking
+  - PreToolUse        → state=running    (tool_name set)
+  - PostToolUse       → state=thinking
+  - Stop              → state=idle
+  - PermissionRequest → state=blocked    (tool_name set — waiting on that tool)
+  - Notification/idle_prompt        → state=needs_user
+  - Notification/elicitation_dialog → state=needs_user
+  - Notification/permission_prompt  → state=blocked
 
 One row per session_id, upserted on each call. Stale rows (>10 min) are
 treated as gone by the active sessions endpoint.
+
+Auto-resume: only thinking/running signal genuine resumption of work and
+auto-resume snoozed sessions. blocked/needs_user are pause states — the
+user must come back deliberately.
 
 Authentication: same X-Agents-Token / device token as ingest.
 """
@@ -38,14 +46,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
-VALID_STATES = {"thinking", "running", "idle"}
+VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
+
+# States that store tool_name (session is actively blocked on a specific tool)
+_STATES_WITH_TOOL = {"running", "blocked"}
+
+# States that trigger auto-resume of snoozed sessions (genuine work restart)
+_AUTO_RESUME_STATES = {"thinking", "running"}
 
 
 class PresenceIn(BaseModel):
     """Payload from a Claude Code hook."""
 
     session_id: str
-    state: str  # thinking | running | idle
+    state: str  # thinking | running | idle | needs_user | blocked
     tool_name: Optional[str] = None
     cwd: Optional[str] = None
     provider: Optional[str] = "claude"
@@ -74,7 +88,7 @@ async def upsert_presence(
         .values(
             session_id=payload.session_id,
             state=payload.state,
-            tool_name=payload.tool_name if payload.state == "running" else None,
+            tool_name=payload.tool_name if payload.state in _STATES_WITH_TOOL else None,
             cwd=payload.cwd,
             project=project,
             provider=payload.provider or "claude",
@@ -84,7 +98,7 @@ async def upsert_presence(
             index_elements=["session_id"],
             set_={
                 "state": payload.state,
-                "tool_name": payload.tool_name if payload.state == "running" else None,
+                "tool_name": payload.tool_name if payload.state in _STATES_WITH_TOOL else None,
                 "cwd": payload.cwd,
                 "project": project,
                 "updated_at": now,
@@ -93,9 +107,9 @@ async def upsert_presence(
     )
     db.execute(stmt)
 
-    # Auto-resume snoozed sessions when they emit a new active signal.
-    # A snoozed session signaling again means the user is back — show it.
-    if payload.state in ("thinking", "running"):
+    # Auto-resume snoozed sessions on genuine work-restart signals only.
+    # blocked/needs_user are pause states — user must come back deliberately.
+    if payload.state in _AUTO_RESUME_STATES:
         try:
             from uuid import UUID
 

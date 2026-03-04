@@ -23,13 +23,19 @@ describe("forum session status helpers", () => {
     expect(normalizePresenceState("thinking")).toBe("thinking");
     expect(normalizePresenceState("running")).toBe("running");
     expect(normalizePresenceState("idle")).toBe("idle");
-    expect(normalizePresenceState("blocked")).toBeNull();
+    // After implementation: blocked and needs_user are known states
+    expect(normalizePresenceState("blocked")).toBe("blocked");
+    expect(normalizePresenceState("needs_user")).toBe("needs_user");
+    expect(normalizePresenceState(null)).toBeNull();
+    expect(normalizePresenceState("totally_unknown")).toBeNull();
   });
 
-  it("flags unsupported future states", () => {
-    expect(hasUnknownPresenceState("blocked")).toBe(true);
-    expect(hasUnknownPresenceState("needs_user")).toBe(true);
+  it("does not flag blocked/needs_user as unknown after implementation", () => {
+    // These were previously unknown; after implementation they must be known
+    expect(hasUnknownPresenceState("blocked")).toBe(false);
+    expect(hasUnknownPresenceState("needs_user")).toBe(false);
     expect(hasUnknownPresenceState(null)).toBe(false);
+    expect(hasUnknownPresenceState("future_state")).toBe(true);
   });
 
   it("treats thinking/running as active regardless of status", () => {
@@ -37,10 +43,20 @@ describe("forum session status helpers", () => {
     expect(isSessionActive(makeSession({ status: "completed", presence_state: "thinking" }))).toBe(true);
   });
 
+  it("treats blocked and needs_user as active (session is live, user action needed)", () => {
+    // blocked: waiting for permission — session is still running, just paused
+    expect(isSessionActive(makeSession({ status: "idle", presence_state: "blocked" }))).toBe(true);
+    expect(isSessionActive(makeSession({ status: "completed", presence_state: "blocked" }))).toBe(true);
+    // needs_user: waiting for input — session is still running, just idle waiting
+    expect(isSessionActive(makeSession({ status: "idle", presence_state: "needs_user" }))).toBe(true);
+    expect(isSessionActive(makeSession({ status: "completed", presence_state: "needs_user" }))).toBe(true);
+  });
+
   it("falls back to status when presence is absent or unknown", () => {
     expect(isSessionActive(makeSession({ status: "working", presence_state: null }))).toBe(true);
-    expect(isSessionActive(makeSession({ status: "working", presence_state: "blocked" }))).toBe(true);
-    expect(isSessionActive(makeSession({ status: "idle", presence_state: "blocked" }))).toBe(false);
+    // truly unknown state (not blocked/needs_user) → fall back to status
+    expect(isSessionActive(makeSession({ status: "working", presence_state: "future_unknown" }))).toBe(true);
+    expect(isSessionActive(makeSession({ status: "idle", presence_state: "future_unknown" }))).toBe(false);
   });
 
   it("marks ended sessions inactive and completed", () => {
@@ -58,5 +74,20 @@ describe("forum session status helpers", () => {
     expect(isSessionIdle(active)).toBe(false);
     expect(sessionActivitySortKey(active)).toBeLessThan(sessionActivitySortKey(idle));
     expect(sessionActivitySortKey(idle)).toBeLessThan(sessionActivitySortKey(completed));
+  });
+
+  it("blocked and needs_user sort as active (sort key 0)", () => {
+    const blocked = makeSession({ status: "idle", presence_state: "blocked" });
+    const needsUser = makeSession({ status: "idle", presence_state: "needs_user" });
+    const idle = makeSession({ status: "idle", presence_state: "idle" });
+
+    expect(sessionActivitySortKey(blocked)).toBe(0);
+    expect(sessionActivitySortKey(needsUser)).toBe(0);
+    expect(sessionActivitySortKey(blocked)).toBeLessThan(sessionActivitySortKey(idle));
+  });
+
+  it("blocked and needs_user are not idle", () => {
+    expect(isSessionIdle(makeSession({ status: "idle", presence_state: "blocked" }))).toBe(false);
+    expect(isSessionIdle(makeSession({ status: "idle", presence_state: "needs_user" }))).toBe(false);
   });
 });
