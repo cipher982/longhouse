@@ -147,9 +147,12 @@ def main():
     parser.add_argument("--name", "-n", action="append", help="Capture specific screenshot(s)")
     parser.add_argument("--list", "-l", action="store_true", help="List available screenshots")
     parser.add_argument("--validate", "-v", action="store_true", help="Validate existing screenshots")
+    parser.add_argument("--base-url", help="Override base URL from manifest (e.g. http://localhost:47200)")
     args = parser.parse_args()
 
     manifest = load_manifest()
+    if args.base_url:
+        manifest["base_url"] = args.base_url
 
     if args.list:
         list_screenshots(manifest)
