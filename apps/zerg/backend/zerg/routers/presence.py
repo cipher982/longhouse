@@ -83,12 +83,25 @@ async def upsert_presence(
 
     now = datetime.now(timezone.utc)
 
+    insert_tool_name = payload.tool_name if payload.state in _STATES_WITH_TOOL else None
+
+    # On conflict: blocked state preserves existing tool_name when the incoming
+    # payload has none (Notification/permission_prompt doesn't carry tool context,
+    # but a prior PermissionRequest already set the correct tool).
+    # running always uses the new value; all other states clear it.
+    if payload.state == "blocked" and payload.tool_name is None:
+        update_tool_name = SessionPresence.tool_name  # keep existing
+    elif payload.state in _STATES_WITH_TOOL:
+        update_tool_name = payload.tool_name
+    else:
+        update_tool_name = None
+
     stmt = (
         sqlite_insert(SessionPresence)
         .values(
             session_id=payload.session_id,
             state=payload.state,
-            tool_name=payload.tool_name if payload.state in _STATES_WITH_TOOL else None,
+            tool_name=insert_tool_name,
             cwd=payload.cwd,
             project=project,
             provider=payload.provider or "claude",
@@ -98,7 +111,7 @@ async def upsert_presence(
             index_elements=["session_id"],
             set_={
                 "state": payload.state,
-                "tool_name": payload.tool_name if payload.state in _STATES_WITH_TOOL else None,
+                "tool_name": update_tool_name,
                 "cwd": payload.cwd,
                 "project": project,
                 "updated_at": now,

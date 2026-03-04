@@ -354,3 +354,78 @@ def test_valid_states_includes_new_states():
     assert "thinking" in VALID_STATES
     assert "running" in VALID_STATES
     assert "idle" in VALID_STATES
+
+
+def test_blocked_permission_request_then_notification_preserves_tool_name(client, tmp_path):
+    """PermissionRequest (blocked+tool) followed by Notification/permission_prompt (blocked, no tool)
+    must NOT clobber the tool_name set by the first event."""
+    engine, SessionLocal = _make_db(tmp_path)
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = override_db
+    with TestClient(api_app) as c:
+        sid = str(uuid4())
+        # PermissionRequest fires first — carries tool_name
+        c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "tool_name": "Bash", "cwd": "/tmp"},
+            headers=_auth_headers(),
+        )
+        # Notification/permission_prompt fires second — no tool_name
+        c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "cwd": "/tmp"},
+            headers=_auth_headers(),
+        )
+        db = SessionLocal()
+        row = db.query(SessionPresence).filter(SessionPresence.session_id == sid).first()
+        assert row is not None
+        assert row.tool_name == "Bash", (
+            f"tool_name should be preserved after Notification/permission_prompt, got {row.tool_name!r}"
+        )
+        db.close()
+    api_app.dependency_overrides.clear()
+    engine.dispose()
+
+
+def test_blocked_notification_then_permission_request_sets_tool_name(client, tmp_path):
+    """Notification/permission_prompt (no tool) then PermissionRequest (with tool) — tool name wins."""
+    engine, SessionLocal = _make_db(tmp_path)
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = override_db
+    with TestClient(api_app) as c:
+        sid = str(uuid4())
+        # Notification fires first — no tool_name
+        c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "cwd": "/tmp"},
+            headers=_auth_headers(),
+        )
+        # PermissionRequest fires second — carries tool_name
+        c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "tool_name": "Bash", "cwd": "/tmp"},
+            headers=_auth_headers(),
+        )
+        db = SessionLocal()
+        row = db.query(SessionPresence).filter(SessionPresence.session_id == sid).first()
+        assert row is not None
+        assert row.tool_name == "Bash", (
+            f"tool_name should be set by PermissionRequest, got {row.tool_name!r}"
+        )
+        db.close()
+    api_app.dependency_overrides.clear()
+    engine.dispose()
