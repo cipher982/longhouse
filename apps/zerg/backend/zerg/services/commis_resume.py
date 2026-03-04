@@ -35,6 +35,7 @@ from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.services.oikos_context import reset_seq
+from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 
 logger = logging.getLogger(__name__)
 
@@ -505,20 +506,7 @@ async def resume_oikos_batch(
         )
 
         # Emit stream_control based on pending commiss
-        from zerg.services.oikos_service import emit_stream_control
-
-        pending_commiss_count = (
-            db.query(CommisJob)
-            .filter(
-                CommisJob.oikos_run_id == run.id,
-                CommisJob.status.in_(["queued", "running"]),
-            )
-            .count()
-        )
-        if pending_commiss_count > 0:
-            await emit_stream_control(db, run, "keep_open", "commiss_pending", owner_id, ttl_ms=120_000)
-        else:
-            await emit_stream_control(db, run, "close", "all_complete", owner_id)
+        await emit_stream_control_for_pending_commiss(db, run, owner_id, ttl_ms=120_000)
 
         await emit_run_event(
             db=db,
@@ -1026,20 +1014,7 @@ async def _continue_oikos_langgraph_free(
         )
 
         # Emit stream_control based on pending commiss
-        from zerg.services.oikos_service import emit_stream_control
-
-        pending_commiss_count = (
-            db.query(CommisJob)
-            .filter(
-                CommisJob.oikos_run_id == run.id,
-                CommisJob.status.in_(["queued", "running"]),
-            )
-            .count()
-        )
-        if pending_commiss_count > 0:
-            await emit_stream_control(db, run, "keep_open", "commiss_pending", owner_id, ttl_ms=120_000)
-        else:
-            await emit_stream_control(db, run, "close", "all_complete", owner_id)
+        await emit_stream_control_for_pending_commiss(db, run, owner_id, ttl_ms=120_000)
 
         await emit_run_event(
             db=db,
