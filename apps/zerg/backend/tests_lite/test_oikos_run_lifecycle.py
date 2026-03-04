@@ -4,9 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from zerg.services.oikos_run_lifecycle import emit_cancelled_run_updated
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
+from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 
 
@@ -163,6 +165,94 @@ async def test_emit_failed_run_updated(monkeypatch):
                 "error": "boom",
                 "thread_id": 15,
                 "owner_id": 23,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emit_success_run_updated(monkeypatch):
+    calls = []
+
+    async def _fake_emit_run_event(*, db, run_id, event_type, payload):
+        calls.append(
+            {
+                "db": db,
+                "run_id": run_id,
+                "event_type": event_type,
+                "payload": payload,
+            }
+        )
+
+    monkeypatch.setattr("zerg.services.event_store.emit_run_event", _fake_emit_run_event)
+
+    db = object()
+    await emit_success_run_updated(
+        db=db,
+        run_id=13,
+        fiche_id=21,
+        thread_id=34,
+        owner_id=55,
+        finished_at_iso="2026-03-03T13:00:00+00:00",
+        duration_ms=222,
+    )
+
+    assert calls == [
+        {
+            "db": db,
+            "run_id": 13,
+            "event_type": "run_updated",
+            "payload": {
+                "fiche_id": 21,
+                "status": "success",
+                "finished_at": "2026-03-03T13:00:00+00:00",
+                "duration_ms": 222,
+                "thread_id": 34,
+                "owner_id": 55,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emit_cancelled_run_updated(monkeypatch):
+    calls = []
+
+    async def _fake_emit_run_event(*, db, run_id, event_type, payload):
+        calls.append(
+            {
+                "db": db,
+                "run_id": run_id,
+                "event_type": event_type,
+                "payload": payload,
+            }
+        )
+
+    monkeypatch.setattr("zerg.services.event_store.emit_run_event", _fake_emit_run_event)
+
+    db = object()
+    await emit_cancelled_run_updated(
+        db=db,
+        run_id=14,
+        fiche_id=22,
+        thread_id=35,
+        owner_id=56,
+        finished_at_iso="2026-03-03T13:05:00+00:00",
+        duration_ms=333,
+    )
+
+    assert calls == [
+        {
+            "db": db,
+            "run_id": 14,
+            "event_type": "run_updated",
+            "payload": {
+                "fiche_id": 22,
+                "status": "cancelled",
+                "finished_at": "2026-03-03T13:05:00+00:00",
+                "duration_ms": 333,
+                "thread_id": 35,
+                "owner_id": 56,
             },
         }
     ]
