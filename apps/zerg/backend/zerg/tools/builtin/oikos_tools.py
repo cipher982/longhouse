@@ -167,6 +167,7 @@ _OIKOS_UTILITY_TOOL_LIST = [
     "runner_create_enroll_token",
     # Communication
     "send_email",
+    "send_telegram",
     # Knowledge
     "knowledge_search",
     # Memory (persistent across sessions)

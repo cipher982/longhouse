@@ -99,6 +99,9 @@ class TelegramBridge:
             )
             return
 
+        # Persist chat_id so Oikos can proactively reach the user later
+        await self._persist_chat_id(owner_id, chat_id)
+
         # Send typing indicator and keep refreshing it while Oikos runs
         typing_task = asyncio.create_task(self._keep_typing(chat_id))
         try:
@@ -194,6 +197,19 @@ class TelegramBridge:
         return False
 
     # --- Helpers ---
+
+    async def _persist_chat_id(self, owner_id: int, telegram_chat_id: str) -> None:
+        """Store telegram_chat_id in user.context so Oikos tools can reach the user."""
+        from zerg.models.user import User as UserModel
+
+        with db_session() as db:
+            user = db.query(UserModel).filter(UserModel.id == owner_id).first()
+            if user and str((user.context or {}).get("telegram_chat_id", "")) != str(telegram_chat_id):
+                ctx = dict(user.context or {})
+                ctx["telegram_chat_id"] = str(telegram_chat_id)
+                user.context = ctx
+                db.commit()
+                logger.info("TelegramBridge: stored chat_id %s for user %s", telegram_chat_id, owner_id)
 
     async def _send(self, chat_id: str, text: str) -> None:
         """Send an HTML-formatted message to a Telegram chat."""
