@@ -424,6 +424,19 @@ def initialize_database(engine: Engine = None) -> None:
     # Migrate existing tables: add columns that create_all() won't ALTER into place
     _migrate_agents_columns(target_engine)
 
+    if target_engine.dialect.name == "sqlite":
+        # Keep a ledger table ready for explicit heavy migrations.
+        from zerg.db_migrations import ensure_migration_ledger
+        from zerg.db_migrations import pending_heavy_migration_names
+
+        ensure_migration_ledger(target_engine)
+        pending = pending_heavy_migration_names(target_engine)
+        if pending:
+            logger.warning(
+                "Pending heavy SQLite migrations detected (%s). " "Run `longhouse migrate --apply` to complete legacy data upgrades.",
+                ", ".join(pending),
+            )
+
     # SQLite-only: ensure FTS5 index for agent events
     if target_engine.dialect.name == "sqlite":
         _ensure_agents_fts(target_engine)
@@ -438,7 +451,7 @@ def initialize_database(engine: Engine = None) -> None:
 
 
 def _migrate_agents_columns(engine: Engine) -> None:
-    """Add columns to existing SQLite tables that create_all() cannot ALTER in.
+    """Run lightweight startup-safe SQLite schema migrations.
 
     SQLite's CREATE TABLE IF NOT EXISTS is a no-op on existing tables, so new
     model columns are invisible to existing deployments until added here.
@@ -582,22 +595,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE events ADD COLUMN event_uuid VARCHAR(255)"))
             if columns and "parent_event_uuid" not in columns:
                 conn.execute(text("ALTER TABLE events ADD COLUMN parent_event_uuid VARCHAR(255)"))
-            conn.execute(
-                text(
-                    """
-                    UPDATE events
-                    SET branch_id = (
-                        SELECT b.id
-                        FROM session_branches b
-                        WHERE b.session_id = events.session_id
-                          AND b.is_head = 1
-                        ORDER BY b.id DESC
-                        LIMIT 1
-                    )
-                    WHERE branch_id IS NULL
-                    """
-                )
-            )
             dedup_idx_sql_row = conn.execute(
                 text(
                     """
@@ -653,83 +650,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
             source_lines_exists = (
                 conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_lines' LIMIT 1")).fetchone() is not None
             )
-            if source_lines_exists:
-                source_line_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(source_lines)"))}
-                needs_rebuild = "branch_id" not in source_line_columns or "revision" not in source_line_columns
-            else:
-                needs_rebuild = False
-
-            if source_lines_exists and needs_rebuild:
-                conn.execute(text("DROP TABLE IF EXISTS source_lines_new"))
-                conn.execute(
-                    text(
-                        """
-                        CREATE TABLE source_lines_new (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            session_id CHAR(36) NOT NULL,
-                            source_path TEXT NOT NULL,
-                            source_offset BIGINT NOT NULL,
-                            branch_id INTEGER NOT NULL,
-                            revision INTEGER NOT NULL DEFAULT 1,
-                            is_branch_copy INTEGER NOT NULL DEFAULT 0,
-                            raw_json TEXT NOT NULL,
-                            line_hash VARCHAR(64) NOT NULL,
-                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
-                        )
-                        """
-                    )
-                )
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO source_lines_new (
-                            id,
-                            session_id,
-                            source_path,
-                            source_offset,
-                            branch_id,
-                            revision,
-                            is_branch_copy,
-                            raw_json,
-                            line_hash,
-                            created_at
-                        )
-                        SELECT
-                            sl.id,
-                            sl.session_id,
-                            sl.source_path,
-                            sl.source_offset,
-                            COALESCE(
-                                (
-                                    SELECT b.id
-                                    FROM session_branches b
-                                    WHERE b.session_id = sl.session_id
-                                      AND b.is_head = 1
-                                    ORDER BY b.id DESC
-                                    LIMIT 1
-                                ),
-                                (
-                                    SELECT b2.id
-                                    FROM session_branches b2
-                                    WHERE b2.session_id = sl.session_id
-                                    ORDER BY b2.id DESC
-                                    LIMIT 1
-                                ),
-                                1
-                            ) AS branch_id,
-                            1 AS revision,
-                            0 AS is_branch_copy,
-                            sl.raw_json,
-                            sl.line_hash,
-                            COALESCE(sl.created_at, CURRENT_TIMESTAMP)
-                        FROM source_lines sl
-                        """
-                    )
-                )
-                conn.execute(text("DROP TABLE source_lines"))
-                conn.execute(text("ALTER TABLE source_lines_new RENAME TO source_lines"))
-
             if not source_lines_exists:
                 conn.execute(
                     text(
@@ -750,6 +670,15 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         """
                     )
                 )
+            else:
+                source_line_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(source_lines)"))}
+                if source_line_columns and "branch_id" not in source_line_columns:
+                    # Lightweight compatibility add. Full legacy rebuild is explicit via `longhouse migrate`.
+                    conn.execute(text("ALTER TABLE source_lines ADD COLUMN branch_id INTEGER"))
+                if source_line_columns and "revision" not in source_line_columns:
+                    conn.execute(text("ALTER TABLE source_lines ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"))
+                if source_line_columns and "is_branch_copy" not in source_line_columns:
+                    conn.execute(text("ALTER TABLE source_lines ADD COLUMN is_branch_copy INTEGER NOT NULL DEFAULT 0"))
 
             conn.execute(
                 text(
@@ -775,9 +704,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
-            source_line_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(source_lines)"))}
-            if source_line_columns and "is_branch_copy" not in source_line_columns:
-                conn.execute(text("ALTER TABLE source_lines ADD COLUMN is_branch_copy INTEGER NOT NULL DEFAULT 0"))
             conn.commit()
     except Exception:
         logger.debug("source_lines table migration skipped", exc_info=True)
