@@ -261,6 +261,79 @@ def _check_shipper() -> list[CheckResult]:
     else:
         results.append(CheckResult(FAIL, "Device token not configured", "Run: longhouse auth"))
 
+    # Claude settings.json retention + hook guardrails
+    settings_path = claude_dir / "settings.json"
+    settings_data: dict | None = None
+    if settings_path.exists():
+        try:
+            parsed = json_mod.loads(settings_path.read_text() or "{}")
+            if isinstance(parsed, dict):
+                settings_data = parsed
+            else:
+                results.append(CheckResult(WARN, "Claude settings.json has unexpected shape", "Expected top-level JSON object"))
+        except Exception as exc:
+            results.append(CheckResult(WARN, "Claude settings.json is unreadable", str(exc)))
+    else:
+        results.append(CheckResult(WARN, "Claude settings.json not found", "Run: longhouse connect --install"))
+
+    if settings_data is not None:
+        cleanup_days = settings_data.get("cleanupPeriodDays")
+        if cleanup_days is None:
+            results.append(
+                CheckResult(
+                    WARN,
+                    "cleanupPeriodDays not set (Claude default is ~30 days)",
+                    "Set cleanupPeriodDays to 90+ to reduce transcript-loss risk",
+                )
+            )
+        elif not isinstance(cleanup_days, int):
+            results.append(CheckResult(WARN, f"cleanupPeriodDays has invalid type ({type(cleanup_days).__name__})"))
+        elif cleanup_days < 30:
+            results.append(
+                CheckResult(
+                    WARN,
+                    f"cleanupPeriodDays={cleanup_days} days (very short retention)",
+                    "Increase cleanupPeriodDays to 90+ for safer historical sync",
+                )
+            )
+        elif cleanup_days < 90:
+            results.append(
+                CheckResult(
+                    WARN,
+                    f"cleanupPeriodDays={cleanup_days} days",
+                    "Consider 90+ days for better replay/archive safety",
+                )
+            )
+        else:
+            results.append(CheckResult(PASS, f"cleanupPeriodDays={cleanup_days} days"))
+
+        hooks_obj = settings_data.get("hooks") or {}
+        stop_entries = hooks_obj.get("Stop") or []
+        has_longhouse_stop = False
+        if isinstance(stop_entries, list):
+            for entry in stop_entries:
+                if not isinstance(entry, dict):
+                    continue
+                for hook in entry.get("hooks", []):
+                    if not isinstance(hook, dict):
+                        continue
+                    command = hook.get("command")
+                    if isinstance(command, str) and "longhouse-" in command:
+                        has_longhouse_stop = True
+                        break
+                if has_longhouse_stop:
+                    break
+        if has_longhouse_stop:
+            results.append(CheckResult(PASS, "Claude Stop hook includes Longhouse shipper"))
+        else:
+            results.append(
+                CheckResult(
+                    WARN,
+                    "Claude Stop hook missing Longhouse shipper",
+                    "Run: longhouse connect --install",
+                )
+            )
+
     # Engine log (rolling daily files: engine.log.YYYY-MM-DD)
     log_dir = claude_dir / "logs"
     engine_logs = sorted(log_dir.glob("engine.log.*")) if log_dir.is_dir() else []
