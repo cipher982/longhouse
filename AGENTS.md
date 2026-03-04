@@ -129,14 +129,13 @@ Import from `../components/ui`. **Check here before building custom UI.**
 7. **Backend README required** — pyproject.toml needs it; don't delete `apps/zerg/backend/README.md`.
 8. **Stripe key rotation** — Use `~/git/me/mytech/scripts/update-stripe-key.sh sk_live_...`. It validates against Stripe before touching anything, then updates Coolify and redeploys.
 9. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
-9. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `apps/zerg/backend/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
-10. **Deploy requires GHCR build** — Push triggers `runtime-image.yml` (path-filtered). Must wait for build before pulling on zerg. Use `gh run watch <id>` to wait. Marketing + control plane pull the same image via Coolify.
-11. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
-12. **Do NOT add `extra_body={"metadata": ...}` to LLM calls** — Instance calls go directly to providers (Groq, OpenAI, z.ai), NOT through the LiteLLM proxy. Groq rejects `metadata` with 400. The proxy at `llm.drose.io` is personal-dev only, not used by user instances. New models must be added to `~/git/litellm-proxy/config.yaml` AND `hooks/model_hints.py` (for personal-dev proxy use).
-13. **DB provider config overrides env vars** — `get_llm_client_with_db_fallback()` checks `LlmProviderConfig` table first. Stale rows with wrong keys cause silent 401s. Check DB before debugging API auth failures.
-14. **Zerg host backups/cleanup are unified under `zerg-ops`** — source of truth is `scripts/zerg-ops.sh`, deployed to `/usr/local/bin/zerg-ops`. It is intentionally code-configured (no `/etc/zerg-ops.env` contract). For scoped checks use CLI `--instance`, and offsite uses SSH alias `longhouse-offsite` configured on the host.
-15. **Demo rows are keyed by `provider_session_id` prefix, not `device_id`** — demo cleanup/refresh logic uses `provider_session_id LIKE 'demo-%'`.
-16. **Hot-reload stale demo fix path** — In dev (`AUTH_DISABLED=1`), run `POST /api/agents/demo?replace=true` to wipe and reseed demo rows. Response includes `sessions_failed` and `sessions_deleted` for visibility.
+10. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `apps/zerg/backend/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
+11. **Deploy requires GHCR build** — Push triggers `runtime-image.yml` (path-filtered). Must wait for build before pulling on zerg. Use `gh run watch <id>` to wait. Marketing + control plane pull the same image via Coolify.
+12. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
+13. **Do NOT add `extra_body={"metadata": ...}` to LLM calls** — Instance calls go directly to providers (Groq, OpenAI, z.ai), NOT through the LiteLLM proxy. Groq rejects `metadata` with 400. The proxy at `llm.drose.io` is personal-dev only, not used by user instances. New models must be added to `~/git/litellm-proxy/config.yaml` AND `hooks/model_hints.py` (for personal-dev proxy use).
+14. **DB provider config overrides env vars** — `get_llm_client_with_db_fallback()` checks `LlmProviderConfig` table first. Stale rows with wrong keys cause silent 401s. Check DB before debugging API auth failures.
+15. **Zerg host backups/cleanup are unified under `zerg-ops`** — source of truth is `scripts/zerg-ops.sh`, deployed to `/usr/local/bin/zerg-ops`. It is intentionally code-configured (no `/etc/zerg-ops.env` contract). For scoped checks use CLI `--instance`, and offsite uses SSH alias `longhouse-offsite` configured on the host.
+16. **Demo seed/reset identity + repair path** — demo rows are identified by `provider_session_id LIKE 'demo-%'` (not `device_id`). In dev (`AUTH_DISABLED=1`), run `POST /api/agents/demo?replace=true` to wipe/reseed stale rows. Response includes `sessions_failed` and `sessions_deleted`.
 
 ## Pushing Changes
 
@@ -255,7 +254,7 @@ Rule of thumb: if an OSS user wouldn't need it, put it in `sauron-jobs/`.
 ## Demo & Seed Data
 
 Two separate things exist — don't conflate or rebuild:
-- **Fast to Fun** (onboarding): `services/demo_sessions.py` — seeds 2 sessions via empty state button
+- **Fast to Fun** (onboarding): `services/demo_sessions.py` — seeds timeline demo sessions (currently 7) via empty-state CTA / `POST /api/agents/demo`
 - **Showcase** (demos/videos): `scripts/build_demo_db.py` — builds full DB with scenarios
 
 ## Misc
