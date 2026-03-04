@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Product] Compaction Fidelity + Active Context Semantics (size: 4)
 
-Status (2026-03-04): In progress (slice 1 landed: compaction metadata ingest).
+Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events context mode).
 
 **Goal:** Preserve full transcript fidelity while accurately modeling what Claude can still "remember" after `/compact`.
 
@@ -32,8 +32,9 @@ Status (2026-03-04): In progress (slice 1 landed: compaction metadata ingest).
   - [ ] Parse high-volume `progress` records as first-class events (deferred until default timeline/query mode can hide noise)
 - [ ] Add `compaction_boundary` derivation during ingest/projection (boundary anchored to source offset + timestamp)
 - [ ] Add context modes in read/query APIs:
-  - [ ] `forensic` = all facts (full timeline)
-  - [ ] `active_context` = latest compaction summary + post-boundary turns
+  - [x] `/api/agents/sessions/{id}/events` supports `context_mode=forensic|active_context`
+  - [ ] Extend `context_mode` semantics to search/recall/session-tool surfaces (MCP + API list/search endpoints)
+  - [ ] `active_context` projection should anchor by explicit boundary source offset/timestamp (current slice anchors by latest boundary event id)
 - [ ] Keep pre-compaction turns visible in timeline/search by default (no destructive pruning)
 - [ ] In UI, mark pre-compaction facts as "outside active model context" instead of hiding/deleting
 - [ ] Add retention/sync guardrails so source transcripts are archived before local cleanup windows can delete them (for example Claude `cleanupPeriodDays` default)
@@ -45,6 +46,7 @@ Status (2026-03-04): In progress (slice 1 landed: compaction metadata ingest).
 
 Notes:
 - 2026-03-04: Rust + Python parsers now emit compaction-adjacent records as `system` events; `progress` remains intentionally skipped for now to avoid timeline noise until query modes land.
+- 2026-03-04: Added `context_mode` projection for session events API/store (`forensic` default, `active_context` from latest compact/summary boundary); this is projection-only and does not mutate stored history.
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 

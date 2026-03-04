@@ -695,6 +695,27 @@ class AgentsStore:
             False,
         )
 
+    def _latest_compaction_boundary_event_id(self, session_id: UUID) -> int | None:
+        """Return latest compaction boundary event id for active-context projection.
+
+        Detects both explicit system compact boundaries and legacy summary rows
+        via raw_json shape. Returns None when no boundary markers exist.
+        """
+        stmt = (
+            select(func.max(AgentEvent.id))
+            .where(AgentEvent.session_id == session_id)
+            .where(AgentEvent.role == "system")
+            .where(
+                or_(
+                    AgentEvent.raw_json.ilike('%"subtype"%compact_boundary%'),
+                    AgentEvent.raw_json.ilike('%"subtype"%microcompact_boundary%'),
+                    AgentEvent.raw_json.ilike('%"type"%summary%'),
+                )
+            )
+        )
+        result = self.db.execute(stmt).scalar()
+        return int(result) if result is not None else None
+
     def get_session_events(
         self,
         session_id: UUID,
@@ -702,11 +723,17 @@ class AgentsStore:
         roles: Optional[List[str]] = None,
         tool_name: Optional[str] = None,
         query: Optional[str] = None,
+        context_mode: str = "forensic",
         limit: int = 100,
         offset: int = 0,
     ) -> List[AgentEvent]:
         """Get events for a session with optional filtering."""
         stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
+
+        if context_mode == "active_context":
+            boundary_id = self._latest_compaction_boundary_event_id(session_id)
+            if boundary_id is not None:
+                stmt = stmt.where(AgentEvent.id >= boundary_id)
 
         if roles:
             stmt = stmt.where(AgentEvent.role.in_(roles))
@@ -730,9 +757,15 @@ class AgentsStore:
         roles: Optional[List[str]] = None,
         tool_name: Optional[str] = None,
         query: Optional[str] = None,
+        context_mode: str = "forensic",
     ) -> int:
         """Count events for a session with the same filters as get_session_events."""
         stmt = select(func.count()).select_from(AgentEvent).where(AgentEvent.session_id == session_id)
+
+        if context_mode == "active_context":
+            boundary_id = self._latest_compaction_boundary_event_id(session_id)
+            if boundary_id is not None:
+                stmt = stmt.where(AgentEvent.id >= boundary_id)
 
         if roles:
             stmt = stmt.where(AgentEvent.role.in_(roles))

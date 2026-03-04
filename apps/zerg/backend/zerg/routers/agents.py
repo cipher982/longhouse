@@ -2360,6 +2360,7 @@ async def get_session_events(
     roles: Optional[str] = Query(None, description="Comma-separated roles to filter"),
     tool_name: Optional[str] = Query(None, description="Exact tool name filter, e.g. Bash"),
     query: Optional[str] = Query(None, description="Content search within session events"),
+    context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
@@ -2379,12 +2380,18 @@ async def get_session_events(
 
     # Parse roles filter
     role_list = [r.strip() for r in roles.split(",")] if roles else None
+    if context_mode not in {"forensic", "active_context"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="context_mode must be one of: forensic, active_context",
+        )
 
     events = store.get_session_events(
         session_id,
         roles=role_list,
         tool_name=tool_name,
         query=query,
+        context_mode=context_mode,
         limit=limit,
         offset=offset,
     )
@@ -2394,6 +2401,7 @@ async def get_session_events(
         roles=role_list,
         tool_name=tool_name,
         query=query,
+        context_mode=context_mode,
     )
 
     return EventsListResponse(
