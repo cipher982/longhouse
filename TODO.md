@@ -17,20 +17,24 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Infra] Migration Hardening (startup-safe + preflight + ledger) (size: 3)
 
-Status (2026-03-04): In progress.
+Status (2026-03-04): Done.
 
 **Goal:** Prevent long startup stalls/timeouts from heavy SQLite rewrites while keeping legacy instance upgrades deterministic.
 
-- [ ] Move heavy legacy rewrites out of `initialize_database()` startup path
-- [ ] Add explicit migration ledger + idempotent runner (`longhouse migrate`)
-- [ ] Run migration preflight before control-plane reprovision
-- [ ] Add tests for pending/ran migration planning and reprovision preflight behavior
-- [ ] Validate with `make test` and `make test-e2e`
+- [x] Move heavy legacy rewrites out of `initialize_database()` startup path
+- [x] Add explicit migration ledger + idempotent runner (`longhouse migrate`)
+- [x] Run migration preflight before control-plane reprovision
+- [x] Add tests for pending/ran migration planning and reprovision preflight behavior
+- [x] Validate with `make test` and `make test-e2e`
 
 Notes:
 - Heavy operations include global `events.branch_id` backfill and `source_lines` table rebuild.
 - Startup should run lightweight schema/index guards only and report pending heavy migrations instead of executing them inline.
 - Reprovision preflight should apply heavy migrations against instance data before container boot.
+- 2026-03-04: Added explicit heavy migration runner + ledger in `zerg/db_migrations.py` and new CLI entrypoint `longhouse migrate` (plan/apply mode).
+- 2026-03-04: `initialize_database()` now stays startup-safe and warns on pending heavy migrations instead of running them inline.
+- 2026-03-04: Control-plane `POST /api/instances/{id}/reprovision` now runs migration preflight before deprovision/provision and aborts safely on preflight failure.
+- 2026-03-04: Coverage added in `tests_lite/test_db_migrations.py` and control-plane reprovision/provisioner tests; full verification passed with `make test` and `make test-e2e`.
 
 ## [Product] Compaction Fidelity + Active Context Semantics (size: 4)
 
