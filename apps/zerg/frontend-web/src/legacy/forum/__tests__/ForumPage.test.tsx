@@ -2,15 +2,15 @@ import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import ForumPage from "../../legacy/forum/ForumPage";
-import { TestRouter } from "../../test/test-utils";
+import ForumPage from "../ForumPage";
+import { TestRouter } from "../../../test/test-utils";
 
-vi.mock("../../legacy/forum/ForumCanvas", () => ({
+vi.mock("../ForumCanvas", () => ({
   ForumCanvas: () => <div data-testid="forum-canvas" />,
 }));
 
 const useActiveSessionsMock = vi.fn();
-vi.mock("../../hooks/useActiveSessions", () => ({
+vi.mock("../../../hooks/useActiveSessions", () => ({
   useActiveSessions: (options: unknown) => useActiveSessionsMock(options),
 }));
 
