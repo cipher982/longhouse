@@ -48,7 +48,8 @@ HOOK_SCRIPT = """\
 #!/bin/bash
 # Longhouse unified hook — presence outbox write + transcript ship
 # Installed by: longhouse connect --install
-# Registered on: Stop, UserPromptSubmit, PreToolUse, PostToolUse
+# Registered on: Stop, UserPromptSubmit, PreToolUse, PostToolUse,
+#                PermissionRequest, Notification
 # Presence: no network — writes to local outbox, daemon handles upload.
 # Stop also runs longhouse-engine ship (local binary, ships transcript).
 INPUT=$(cat)
@@ -58,13 +59,14 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 # Parse all fields in a single jq call using unit-separator (\\x1f) as delimiter.
 # @tsv would split on spaces inside field values; \\x1f is safe for paths/tool names.
-IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT <<< "$(
+IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE <<< "$(
   printf '%s' "$INPUT" | jq -r '[
     (.hook_event_name // ""),
     (.session_id // ""),
     (.tool_name // ""),
     (.cwd // ""),
-    (.transcript_path // "")
+    (.transcript_path // ""),
+    (.notification_type // "")
   ] | join("\\u001f")'
 )"
 
@@ -76,6 +78,14 @@ case "$EVENT" in
   PreToolUse)                     STATE="running" ;;
   PostToolUse|PostToolUseFailure) STATE="thinking" ;;
   Stop)                           STATE="idle" ;;
+  PermissionRequest)              STATE="blocked" ;;
+  Notification)
+    case "$NOTIF_TYPE" in
+      idle_prompt|elicitation_dialog) STATE="needs_user" ;;
+      permission_prompt)              STATE="blocked" ;;
+      *)                              exit 0 ;;
+    esac
+    ;;
   *)                              exit 0 ;;
 esac
 
@@ -373,7 +383,14 @@ def install_hooks(
     hooks_obj["Stop"] = _merge_hooks_for_event(stop_list, stop_entry)
 
     # Lifecycle events: sync (outbox write <2ms, silent)
-    for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure"):
+    for event in (
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "PermissionRequest",
+        "Notification",
+    ):
         raw = hooks_obj.get(event, [])
         event_list = raw if isinstance(raw, list) else []
         hooks_obj[event] = _merge_hooks_for_event(event_list, lifecycle_entry)
@@ -386,7 +403,9 @@ def install_hooks(
     # 5. Write settings back
     # ------------------------------------------------------------------
     _write_settings(settings_path, settings)
-    actions.append(f"Updated {settings_path} with Stop, UserPromptSubmit, PreToolUse, PostToolUse, and SessionStart hooks")
+    actions.append(
+        f"Updated {settings_path} with Stop, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Notification, and SessionStart hooks"
+    )
 
     logger.info("Installed Longhouse hooks in %s", config_dir)
     return actions
