@@ -1262,6 +1262,152 @@
     padding: var(--space-2) 0;
   }
 
+  /* Tool metadata row (duration, exit code, wall time) */
+
+  .tool-meta-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+  }
+
+  .tool-duration {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono);
+  }
+
+  .tool-exit-code {
+    font-size: 10px;
+    font-family: var(--font-family-mono);
+    font-weight: var(--font-weight-medium);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    line-height: 1.4;
+  }
+
+  .tool-exit-code--ok {
+    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
+    color: var(--color-intent-success);
+  }
+
+  .tool-exit-code--err {
+    background: color-mix(in srgb, var(--color-intent-error) 15%, transparent);
+    color: var(--color-intent-error);
+  }
+
+  .tool-output-meta {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    margin-bottom: var(--space-2);
+  }
+
+  .tool-output-meta-item {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono);
+  }
+
+  /* MCP namespace tag */
+
+  .tool-mcp-ns {
+    font-size: 10px;
+    color: var(--color-text-muted);
+    background: var(--surface-glass-2);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
+    font-family: var(--font-family-mono);
+    flex-shrink: 0;
+  }
+
+  /* Parallel batch card */
+
+  .event-tool-batch {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .tool-batch-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: var(--space-2) var(--space-4);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--color-text-primary);
+    text-align: left;
+    transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .tool-batch-header:hover {
+    background: var(--surface-glass-2);
+  }
+
+  .tool-batch-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .tool-batch-badge {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-brand-primary);
+    background: color-mix(in srgb, var(--color-brand-primary) 12%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+    flex-shrink: 0;
+  }
+
+  .tool-batch-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    align-items: center;
+  }
+
+  .tool-batch-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--font-size-xs);
+    font-family: var(--font-family-mono);
+    color: var(--color-text-muted);
+    background: var(--surface-glass-2);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tool-batch-chip-icon {
+    font-size: 10px;
+    font-weight: var(--font-weight-bold);
+    flex-shrink: 0;
+  }
+
+  .tool-batch-body {
+    border-top: 1px solid var(--border-glass-1);
+  }
+
+  .tool-batch-body .event-item {
+    border-bottom: 1px solid var(--border-glass-1);
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+
+  .tool-batch-body .event-item:last-child {
+    border-bottom: none;
+  }
+
   /* ---------------------------------------------------------------------------
    * Session Detail Filters
    * ---------------------------------------------------------------------------*/
