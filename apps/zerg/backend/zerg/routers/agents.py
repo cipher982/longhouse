@@ -277,7 +277,7 @@ class SessionPreviewResponse(BaseModel):
 
 
 class ActiveSessionResponse(UTCBaseModel):
-    """Response for active session summary (Forum UI)."""
+    """Response for active session summary (Live Sessions UI)."""
 
     id: str = Field(..., description="Session UUID")
     project: Optional[str] = Field(None, description="Project name")
@@ -2277,8 +2277,8 @@ async def set_session_action(
     """Set user-driven bucket state for a session (park/snooze/archive/resume).
 
     - park: keep visible but visually dimmed; user is aware, not acting
-    - snooze: hide from Forum until the session signals again
-    - archive: hide from Forum permanently (still searchable)
+    - snooze: hide from live sessions view until the session signals again
+    - archive: hide from live sessions view permanently (still searchable)
     - resume: return to active (un-park/snooze/archive)
     """
     action_to_state = {"park": "parked", "snooze": "snoozed", "archive": "archived", "resume": "active"}

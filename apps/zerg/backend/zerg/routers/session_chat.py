@@ -1,4 +1,4 @@
-"""Session chat router for Forum drop-in functionality.
+"""Session chat router for live-session drop-in functionality.
 
 Enables interactive chat with Claude Code sessions via turn-by-turn resume.
 Each message spawns: claude --resume {id} -p "message" --output-format stream-json

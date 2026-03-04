@@ -37,6 +37,7 @@ Notes:
 - 2026-03-03: Began monolith split (Phase 1) by extracting shared pending-commis stream lifecycle helper to `services/oikos_run_lifecycle.py` and wiring `oikos_service.py` + `commis_resume.py` to use it.
 - 2026-03-03: Extended Phase 1 lifecycle extraction with shared helpers for `oikos_waiting + run_updated(waiting)` and standardized failed `run_updated` payloads; both `oikos_service.py` and `commis_resume.py` now call the shared helpers.
 - 2026-03-03: Added shared error lifecycle helper (`error` event + `stream_control:close(error)`) and replaced duplicate error-emission blocks in both oikos and commis resume paths.
+- 2026-03-03: Removed remaining backend “Forum UI” naming in active-session and session-action docs/comments (`agents.py`, `session_chat.py`) to align on “live sessions”.
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
