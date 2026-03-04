@@ -11,8 +11,8 @@ set -e
 cd "$(dirname "$0")/.."
 
 DEMO_DB_PATH="${DEMO_DB_PATH:-$PWD/data/demo/longhouse-demo.db}"
-BACKEND_PORT=47300
-FRONTEND_PORT=47200
+BACKEND_PORT=47399
+FRONTEND_PORT=47398
 BASE_URL="http://localhost:$FRONTEND_PORT"
 BACKEND_PID=""
 FRONTEND_PID=""

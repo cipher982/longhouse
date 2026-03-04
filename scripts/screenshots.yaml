@@ -24,7 +24,7 @@ screenshots:
 
   session-detail-preview:
     description: Session detail view with events, tool calls expanded
-    # Resolves {first_session_id} via API at capture time
-    url: /timeline/{first_session_id}?marketing=true
+    # Resolves {featured_session_id} to the completed session with most tool calls
+    url: /timeline/{featured_session_id}?marketing=true
     viewport: { width: 1400, height: 900 }
     output: public/images/landing/session-detail-preview.png
