@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { setSessionAction } from "../services/api/agents";
-import type { UserStateAction } from "../services/api/agents";
-import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../components/ui";
-import { PresenceBadge, PresenceHero } from "../components/PresenceBadge";
-import { SessionChat } from "../components/SessionChat";
-import { ForumCanvas } from "../legacy/forum/ForumCanvas";
-import { useActiveSessions } from "../hooks/useActiveSessions";
+import { setSessionAction } from "../../services/api/agents";
+import type { UserStateAction } from "../../services/api/agents";
+import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../../components/ui";
+import { PresenceBadge, PresenceHero } from "../../components/PresenceBadge";
+import { SessionChat } from "../../components/SessionChat";
+import { ForumCanvas } from "./ForumCanvas";
+import { useActiveSessions } from "../../hooks/useActiveSessions";
 import {
   buildForumStateFromSessions,
   getSessionDisplayTitle,
   getSessionRoomLabel,
-} from "../legacy/forum/session-mapper";
+} from "./session-mapper";
 import {
   hasUnknownPresenceState,
   isSessionActive,
@@ -20,9 +20,9 @@ import {
   isSessionInactive,
   normalizePresenceState,
   sessionActivitySortKey,
-} from "../legacy/forum/session-status";
-import { parseUTC } from "../lib/dateUtils";
-import "../styles/forum.css";
+} from "./session-status";
+import { parseUTC } from "../../lib/dateUtils";
+import "../../styles/forum.css";
 
 function formatRelativeTime(timestamp: string): string {
   const ts = parseUTC(timestamp).getTime();
