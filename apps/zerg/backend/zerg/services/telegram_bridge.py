@@ -63,7 +63,7 @@ class TelegramBridge:
 
     # --- Callbacks ---
 
-    def _on_message(self, event: "ChannelMessageEvent", _context: object) -> None:
+    def _on_message(self, event: "ChannelMessageEvent") -> None:
         """Sync callback from channel – schedules async handling."""
         asyncio.create_task(self._handle_message(event))
 
@@ -197,14 +197,20 @@ class TelegramBridge:
 
     async def _send(self, chat_id: str, text: str) -> None:
         """Send an HTML-formatted message to a Telegram chat."""
-
         msg: ChannelMessage = {
             "channel_id": "telegram",
             "to": chat_id,
             "text": text,
             "parse_mode": "html",
         }
-        await self._channel.send_message(msg)
+        result = await self._channel.send_message(msg)
+        if not result.get("success"):
+            logger.warning(
+                "TelegramBridge: send failed to chat %s: %s (code=%s)",
+                chat_id,
+                result.get("error"),
+                result.get("error_code"),
+            )
 
     async def _keep_typing(self, chat_id: str) -> None:
         """Send typing action repeatedly until cancelled."""
@@ -264,17 +270,25 @@ def _format_for_telegram(text: str) -> str:
     # Strikethrough: ~~text~~
     text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
 
-    # --- Step 4: restore code placeholders ---
+    # --- Step 4: restore code placeholders (HTML-escape content before wrapping) ---
     def _restore(match: re.Match) -> str:
         idx = int(match.group(1))
         raw = placeholders[idx]
         # Was it a fenced block or inline?
         if raw.startswith("```"):
-            inner = re.sub(r"^```(?:[\w+-]*)?\n?", "", raw).rstrip("`").rstrip()
-            return f"<pre>{inner}</pre>"
+            inner = re.sub(r"^```(?:[\w+-]*)?\n?", "", raw)
+            # Strip trailing fence exactly (don't rstrip backticks from content)
+            if inner.endswith("```"):
+                inner = inner[:-3]
+            inner = inner.rstrip("\n")
         else:
-            inner = raw.strip("`")
-            return f"<code>{inner}</code>"
+            # Strip exactly one leading and trailing backtick
+            inner = raw[1:-1] if raw.startswith("`") and raw.endswith("`") else raw
+
+        # HTML-escape code content so < > & don't break Telegram HTML parser
+        inner = inner.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        tag = "pre" if raw.startswith("```") else "code"
+        return f"<{tag}>{inner}</{tag}>"
 
     text = re.sub(r"\x00(\d+)\x00", _restore, text)
 

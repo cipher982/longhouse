@@ -53,9 +53,9 @@ def _make_channel() -> MagicMock:
 
 
 async def _dispatch(channel: MagicMock, event: dict) -> None:
-    """Trigger the registered on_message callbacks directly."""
+    """Trigger the registered on_message callbacks with single arg (matches plugin API)."""
     for cb in channel._callbacks:
-        cb(event, None)
+        cb(event)  # plugin calls handler(event) — one arg only
     # Let the created tasks run
     await asyncio.sleep(0)
     # Run pending tasks
@@ -109,6 +109,20 @@ class TestFormatForTelegram:
     def test_strikethrough(self):
         result = _format_for_telegram("~~deleted~~")
         assert "<s>deleted</s>" in result
+
+    def test_code_block_content_html_escaped(self):
+        """Code content with < > & must be escaped so Telegram HTML parser doesn't choke."""
+        result = _format_for_telegram("```\na < b && b > c\n```")
+        assert "&lt;" in result
+        assert "&gt;" in result
+        assert "&amp;" in result
+        # Should be wrapped in <pre>
+        assert "<pre>" in result
+
+    def test_inline_code_content_html_escaped(self):
+        result = _format_for_telegram("`a < b`")
+        assert "<code>" in result
+        assert "&lt;" in result
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +196,24 @@ class TestTelegramBridgeRouting:
         assert sent["to"] == "777"
         assert "Here is your answer!" in sent["text"]
         assert sent.get("parse_mode") == "html"
+
+    async def test_send_failure_logged(self):
+        """Delivery failure from channel should be logged, not silently dropped."""
+        ch = _make_channel()
+        ch.send_message = AsyncMock(return_value={"success": False, "error": "Forbidden", "error_code": "FORBIDDEN"})
+        bridge = TelegramBridge(ch)
+        bridge.start()
+
+        with (
+            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=1)),
+            patch.object(bridge, "_run_oikos", new=AsyncMock(return_value="reply")),
+            patch("zerg.services.telegram_bridge.logger") as mock_log,
+        ):
+            await _dispatch(ch, _make_event("hi", chat_id="555"))
+
+        mock_log.warning.assert_called()
+        warning_msg = str(mock_log.warning.call_args)
+        assert "555" in warning_msg or "send failed" in warning_msg.lower()
 
     async def test_oikos_error_sends_error_message(self):
         ch = _make_channel()
