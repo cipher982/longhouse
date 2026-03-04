@@ -233,6 +233,116 @@ test.describe('Sessions Page', () => {
   });
 });
 
+test.describe('Filter Chips and Popover', () => {
+  test('selecting a filter creates a chip in the toolbar', async ({ page }) => {
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await ensureDemoProviders(page);
+
+    // Select provider filter via popover
+    await page.locator('[data-filter-section="provider"] [data-filter-option="claude"]').click();
+
+    // Chip should appear in the toolbar
+    const chip = page.locator('.sessions-filter-chip', { hasText: 'claude' });
+    await expect(chip).toBeVisible();
+  });
+
+  test('dismissing a chip clears the filter and removes the chip', async ({ page }) => {
+    await page.goto('/timeline?provider=claude');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    // Chip should be visible
+    const chip = page.locator('.sessions-filter-chip', { hasText: 'claude' });
+    await expect(chip).toBeVisible();
+
+    // Click the dismiss button
+    await chip.locator('.sessions-filter-chip-dismiss').click();
+
+    // Chip should be gone and URL cleared
+    await expect(chip).toHaveCount(0);
+    await expect(page).toHaveURL('/timeline');
+  });
+
+  test('multiple active filters show multiple chips', async ({ page, request }) => {
+    const machineName = `e2e-multichip-${randomUUID().slice(0, 8)}`;
+    await ingestSession(request, { environment: machineName, project: 'multichip-e2e', provider: 'claude' });
+
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await ensureDemoProviders(page);
+
+    // Select provider
+    await page.locator('[data-filter-section="provider"] [data-filter-option="claude"]').click();
+
+    // Open popover again to select machine
+    await page.locator('button[aria-controls="filter-panel"]').click();
+    const machineBtn = page.locator(`[data-filter-section="machine"] [data-filter-option="${machineName}"]`);
+    await expect(machineBtn).toHaveCount(1, { timeout: 8000 });
+    await machineBtn.click();
+
+    // Both chips should be visible
+    await expect(page.locator('.sessions-filter-chip', { hasText: 'claude' })).toBeVisible();
+    await expect(page.locator('.sessions-filter-chip', { hasText: machineName })).toBeVisible();
+
+    // URL should have both params
+    await expect(page).toHaveURL(/provider=claude/);
+    await expect(page).toHaveURL(new RegExp(`environment=${machineName}`));
+  });
+
+  test('Escape closes the filter popover', async ({ page }) => {
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await ensureDemoProviders(page);
+
+    // Popover is open (ensureDemoProviders opened it)
+    await expect(page.locator('#filter-panel')).toBeVisible();
+
+    // Press Escape
+    await page.keyboard.press('Escape');
+
+    await expect(page.locator('#filter-panel')).toHaveCount(0);
+  });
+
+  test('clicking outside the popover closes it', async ({ page }) => {
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await ensureDemoProviders(page);
+
+    await expect(page.locator('#filter-panel')).toBeVisible();
+
+    // Click the page title (far from the popover and filter button)
+    await page.locator('.section-header-title').click();
+
+    await expect(page.locator('#filter-panel')).toHaveCount(0);
+  });
+
+  test('non-default days filter creates a chip', async ({ page }) => {
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await ensureDemoProviders(page);
+
+    // Select 30d in the popover
+    await page.locator('[data-filter-section="time"] [data-filter-option="30d"]').click();
+
+    // Chip should appear
+    const chip = page.locator('.sessions-filter-chip', { hasText: '30d' });
+    await expect(chip).toBeVisible();
+
+    // URL should update
+    await expect(page).toHaveURL(/days_back=30/);
+  });
+
+  test('filter button badge shows active filter count', async ({ page }) => {
+    await page.goto('/timeline?provider=claude&days_back=30');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    // Filter button badge should show 2
+    const badge = page.locator('button[aria-controls="filter-panel"] .sessions-filter-badge');
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText('2');
+  });
+});
+
 test.describe('Session Detail Page', () => {
   test('Shows error for invalid session ID', async ({ page }) => {
     // Navigate to a non-existent session
