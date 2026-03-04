@@ -9,6 +9,7 @@ from zerg.database import Base
 from zerg.database import make_engine
 from zerg.models.models import CommisJob
 from zerg.models.user import User
+from zerg.tools.builtin import oikos_commis_job_tools
 from zerg.tools.builtin import oikos_tools
 
 
@@ -34,8 +35,8 @@ async def test_spawn_workspace_commis_creates_workspace_job_in_scratch_mode(tmp_
     with SessionLocal() as db:
         user = _create_user(db)
         resolver = SimpleNamespace(db=db, owner_id=user.id)
-        monkeypatch.setattr(oikos_tools, "get_credential_resolver", lambda: resolver)
-        monkeypatch.setattr(oikos_tools, "get_oikos_context", lambda: None)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_credential_resolver", lambda: resolver)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_oikos_context", lambda: None)
 
         result = await oikos_tools.spawn_workspace_commis_async(
             task="Investigate flaky tests",
@@ -59,8 +60,8 @@ async def test_spawn_workspace_commis_keeps_workspace_mode_and_repo_config(tmp_p
     with SessionLocal() as db:
         user = _create_user(db, email="commis-workspace@example.com")
         resolver = SimpleNamespace(db=db, owner_id=user.id)
-        monkeypatch.setattr(oikos_tools, "get_credential_resolver", lambda: resolver)
-        monkeypatch.setattr(oikos_tools, "get_oikos_context", lambda: None)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_credential_resolver", lambda: resolver)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_oikos_context", lambda: None)
 
         result = await oikos_tools.spawn_workspace_commis_async(
             task="Update docs",
