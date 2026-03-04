@@ -1,6 +1,8 @@
 """Commis artifact access tools extracted from oikos_tools."""
 
 import logging
+from datetime import datetime
+from datetime import timezone
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.services.commis_artifact_store import CommisArtifactStore
@@ -9,6 +11,241 @@ from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 
 logger = logging.getLogger(__name__)
+
+
+async def check_commis_status_async(job_id: str | None = None) -> str:
+    """Check the status of a specific commis or list all active commiss."""
+    from zerg.crud import crud
+
+    resolver = get_credential_resolver()
+    if not resolver:
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot check commis status - no credential context available",
+        )
+
+    db = resolver.db
+
+    try:
+        if job_id is not None:
+            job_id_int = int(job_id)
+            job = (
+                db.query(crud.CommisJob)
+                .filter(
+                    crud.CommisJob.id == job_id_int,
+                    crud.CommisJob.owner_id == resolver.owner_id,
+                )
+                .first()
+            )
+            if not job:
+                return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
+
+            from zerg.utils.time import utc_now_naive
+
+            elapsed_str = "N/A"
+            if job.started_at:
+                elapsed = (utc_now_naive() - job.started_at).total_seconds()
+                if elapsed >= 3600:
+                    elapsed_str = f"{int(elapsed / 3600)}h {int((elapsed % 3600) / 60)}m"
+                elif elapsed >= 60:
+                    elapsed_str = f"{int(elapsed / 60)}m {int(elapsed % 60)}s"
+                else:
+                    elapsed_str = f"{int(elapsed)}s"
+
+            lines = [
+                f"Commis Job {job.id}:",
+                f"  Status: {job.status.upper()}",
+                f"  Task: {job.task[:100]}{'...' if len(job.task) > 100 else ''}",
+                f"  Model: {job.model}",
+                f"  Created: {job.created_at.isoformat() if job.created_at else 'N/A'}",
+            ]
+            if job.started_at:
+                lines.append(f"  Started: {job.started_at.isoformat()}")
+                lines.append(f"  Elapsed: {elapsed_str}")
+            if job.finished_at:
+                lines.append(f"  Finished: {job.finished_at.isoformat()}")
+            if job.status in ["success", "failed"]:
+                lines.append(f"\nUse read_commis_result({job.id}) to get the full result.")
+            if job.error:
+                lines.append(f"\nError: {job.error[:200]}{'...' if len(job.error) > 200 else ''}")
+            return "\n".join(lines)
+
+        active_jobs = (
+            db.query(crud.CommisJob)
+            .filter(
+                crud.CommisJob.owner_id == resolver.owner_id,
+                crud.CommisJob.status.in_(["queued", "running"]),
+            )
+            .order_by(crud.CommisJob.created_at.desc())
+            .limit(20)
+            .all()
+        )
+        if not active_jobs:
+            return "No active commiss. All commiss have completed or there are none running."
+
+        lines = [f"Active Commiss ({len(active_jobs)}):\n"]
+        for job in active_jobs:
+            status_icon = "⏳" if job.status == "queued" else "⋯"
+            task_preview = job.task[:60] + "..." if len(job.task) > 60 else job.task
+            lines.append(f"- Job {job.id} [{status_icon} {job.status.upper()}]")
+            lines.append(f"  {task_preview}\n")
+
+        lines.append("Use check_commis_status(job_id) for details on a specific commis.")
+        return "\n".join(lines)
+
+    except ValueError:
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
+    except Exception as e:
+        logger.exception(f"Failed to check commis status: {job_id}")
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error checking commis status: {e}")
+
+
+def check_commis_status(job_id: str | None = None) -> str:
+    """Sync wrapper for check_commis_status_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(check_commis_status_async(job_id))
+
+
+async def cancel_commis_async(job_id: str) -> str:
+    """Cancel a running or queued commis job."""
+    from zerg.crud import crud
+
+    resolver = get_credential_resolver()
+    if not resolver:
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot cancel commis - no credential context available",
+        )
+
+    db = resolver.db
+
+    try:
+        job_id_int = int(job_id)
+        job = (
+            db.query(crud.CommisJob)
+            .filter(
+                crud.CommisJob.id == job_id_int,
+                crud.CommisJob.owner_id == resolver.owner_id,
+            )
+            .first()
+        )
+
+        if not job:
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
+        if job.status in ["success", "failed", "cancelled"]:
+            return f"Commis job {job_id} is already {job.status} and cannot be cancelled."
+
+        job.status = "cancelled"
+        job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        job.error = "Cancelled by user"
+        db.commit()
+
+        logger.info(f"Commis job {job_id} cancelled by user")
+        return f"Commis job {job_id} has been cancelled. It may take a moment for the commis to stop."
+
+    except ValueError:
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
+    except Exception as e:
+        logger.exception(f"Failed to cancel commis: {job_id}")
+        db.rollback()
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error cancelling commis: {e}")
+
+
+def cancel_commis(job_id: str) -> str:
+    """Sync wrapper for cancel_commis_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(cancel_commis_async(job_id))
+
+
+async def wait_for_commis_async(
+    job_id: str,
+    *,
+    _tool_call_id: str | None = None,
+) -> str:
+    """Wait for a specific commis to complete (blocking)."""
+    from zerg.crud import crud
+    from zerg.managers.fiche_runner import FicheInterrupted
+
+    resolver = get_credential_resolver()
+    if not resolver:
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot wait for commis - no credential context available",
+        )
+
+    db = resolver.db
+
+    try:
+        job_id_int = int(job_id)
+        job = (
+            db.query(crud.CommisJob)
+            .filter(
+                crud.CommisJob.id == job_id_int,
+                crud.CommisJob.owner_id == resolver.owner_id,
+            )
+            .first()
+        )
+        if not job:
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
+
+        def _acknowledge_completed_job() -> None:
+            if job.acknowledged:
+                return
+            job.acknowledged = True
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.warning(f"Failed to acknowledge commis job {job.id}", exc_info=True)
+
+        if job.status == "cancelled":
+            _acknowledge_completed_job()
+            return f"Commis job {job_id} was cancelled."
+        if job.status == "failed":
+            _acknowledge_completed_job()
+            return f"Commis job {job_id} failed: {job.error or 'Unknown error'}"
+        if job.status == "success":
+            _acknowledge_completed_job()
+            if job.commis_id:
+                try:
+                    artifact_store = CommisArtifactStore()
+                    metadata = artifact_store.get_commis_metadata(job.commis_id)
+                    summary = metadata.get("summary")
+                    if summary:
+                        return f"Commis job {job_id} completed:\n\n{summary}"
+                    result = artifact_store.get_commis_result(job.commis_id)
+                    return f"Commis job {job_id} completed:\n\n{result}"
+                except FileNotFoundError:
+                    return f"Commis job {job_id} completed but result not found."
+            return f"Commis job {job_id} completed."
+
+        logger.info(f"[WAIT-FOR-COMMIS] Blocking for job {job_id} (status: {job.status})")
+        raise FicheInterrupted(
+            {
+                "type": "wait_for_commis",
+                "job_id": job_id_int,
+                "task": job.task[:100],
+                "tool_call_id": _tool_call_id,
+                "message": f"Waiting for commis job {job_id} to complete...",
+            }
+        )
+
+    except FicheInterrupted:
+        raise
+    except ValueError:
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
+    except Exception as e:
+        logger.exception(f"Failed to wait for commis: {job_id}")
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error waiting for commis: {e}")
+
+
+def wait_for_commis(job_id: str) -> str:
+    """Sync wrapper for wait_for_commis_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(wait_for_commis_async(job_id))
 
 
 def format_duration(duration_ms: int) -> str:
