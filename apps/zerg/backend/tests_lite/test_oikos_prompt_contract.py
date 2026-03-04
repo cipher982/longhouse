@@ -18,6 +18,14 @@ def test_prompt_teaches_workspace_first_spawn_contract():
     assert "(DEPRECATED)" not in BASE_OIKOS_PROMPT
 
 
+def test_prompt_defines_explicit_dispatch_lanes():
+    assert "Dispatch Contract" in BASE_OIKOS_PROMPT
+    assert "Direct response" in BASE_OIKOS_PROMPT
+    assert "Quick-tool execution" in BASE_OIKOS_PROMPT
+    assert "CLI delegation (`spawn_workspace_commis`)" in BASE_OIKOS_PROMPT
+    assert "Prefer Direct → Quick-tool → CLI delegation" in BASE_OIKOS_PROMPT
+
+
 def test_prompt_uses_wait_for_commis_not_removed_wait_parameter():
     assert "wait_for_commis(job_id)" in BASE_OIKOS_PROMPT
     assert "wait parameter" not in BASE_OIKOS_PROMPT
@@ -28,6 +36,12 @@ def test_prompt_uses_wait_for_commis_not_removed_wait_parameter():
 def test_tool_descriptions_match_prompt_semantics():
     workspace_description = _tool_description("spawn_workspace_commis")
     assert "PRIMARY" in workspace_description
+
+
+def test_prompt_documents_backend_intent_mapping_for_spawn():
+    assert "backend intent mapping" in BASE_OIKOS_PROMPT.lower()
+    for backend in ("zai", "codex", "gemini", "bedrock", "anthropic"):
+        assert f"`{backend}`" in BASE_OIKOS_PROMPT
 
 
 def test_oikos_tool_names_do_not_include_removed_spawn_alias():
