@@ -233,10 +233,10 @@ class TelegramChannel(WebhookChannel):
         # Create application for receiving updates
         self._application = Application.builder().token(bot_token).build()
 
-        # Register message handler
+        # Register message handler — includes commands so /start, /link etc. reach the bridge
         self._application.add_handler(
             MessageHandler(
-                filters.ALL & ~filters.COMMAND,
+                filters.ALL,
                 self._handle_telegram_message,
             )
         )
