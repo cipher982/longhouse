@@ -43,6 +43,7 @@ Notes:
 - 2026-03-03: Began structural `commis_resume.py` split by extracting commis update content/queue helpers into `services/commis_updates.py` with new focused tests.
 - 2026-03-03: Quarantined forum UI surface further by moving `pages/ForumPage.tsx` into `legacy/forum/ForumPage.tsx`; route remains redirect-only and tests now import from legacy path.
 - 2026-03-03: Removed dead `frontend-web/src/styles/forum-map.css` placeholder (unused import surface).
+- 2026-03-03: Continued `commis_resume.py` split by extracting inbox follow-up polling/scheduling into `services/commis_inbox_followup.py` and wiring callbacks from resume path with dedicated unit tests.
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
