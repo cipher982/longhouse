@@ -33,6 +33,7 @@ from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.services.commis_inbox_followup import INBOX_QUEUED_RESULT
 from zerg.services.commis_inbox_followup import schedule_inbox_followup_after_run
+from zerg.services.commis_inbox_prompt import build_commis_inbox_synthetic_task
 from zerg.services.commis_updates import queue_commis_update
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
@@ -1196,25 +1197,13 @@ async def trigger_commis_inbox_run(
         await emit_stream_control(db, original_run, "keep_open", "continuation_start", owner_id, ttl_ms=180_000)
 
         # Build synthetic task for oikos
-        if commis_result == INBOX_QUEUED_RESULT:
-            synthetic_task = (
-                "[Commis inbox] One or more background commiss completed while another response was running.\n\n"
-                "Please review the latest internal commis updates in the thread and summarize them clearly for the user."
-            )
-        elif commis_status == "failed":
-            synthetic_task = (
-                f"[Commis inbox] A background commis failed.\n\n"
-                f"Original task: {commis_task[:200]}\n\n"
-                f"Error: {commis_error or 'Unknown error'}\n\n"
-                f"Please acknowledge the failure and explain what happened to the user."
-            )
-        else:
-            synthetic_task = (
-                f"[Commis inbox] A background commis has completed and returned results.\n\n"
-                f"Original task: {commis_task[:200]}\n\n"
-                f"Commis result:\n{commis_result}\n\n"
-                f"Please synthesize these findings and present them clearly to the user."
-            )
+        synthetic_task = build_commis_inbox_synthetic_task(
+            commis_result=commis_result,
+            commis_status=commis_status,
+            commis_task=commis_task,
+            commis_error=commis_error,
+            queued_result_sentinel=INBOX_QUEUED_RESULT,
+        )
 
         # Run oikos with the synthetic task
         oikos_service = OikosService(db)
