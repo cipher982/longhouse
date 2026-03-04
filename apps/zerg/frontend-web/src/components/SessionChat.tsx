@@ -1,5 +1,5 @@
 /**
- * SessionChat - Interactive chat with Claude Code sessions via Forum drop-in.
+ * SessionChat - Interactive chat with Claude Code sessions via timeline drop-in.
  *
  * Features:
  * - Streaming assistant response via SSE

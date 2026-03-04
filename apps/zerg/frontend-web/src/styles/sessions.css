@@ -262,27 +262,9 @@
   }
 
   .sessions-live-body {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-    gap: var(--space-4);
-    align-items: stretch;
-  }
-
-  .sessions-live-map {
-    position: relative;
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--border-glass-1);
-    overflow: hidden;
-    min-height: 260px;
-  }
-
-  .sessions-live-map .forum-map-canvas {
-    min-height: 260px;
-    border-radius: inherit;
-  }
-
-  .sessions-live-map .forum-map-hud {
-    font-size: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
   }
 
   .sessions-live-empty {
@@ -306,7 +288,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    max-height: 320px;
+    max-height: 360px;
     overflow: auto;
   }
 
@@ -343,11 +325,6 @@
     background: color-mix(in srgb, var(--color-intent-success) 10%, transparent);
   }
 
-  .sessions-live-row--selected {
-    border-color: var(--color-brand-primary);
-    box-shadow: var(--shadow-sm);
-  }
-
   .sessions-live-row-title {
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-semibold);
@@ -370,13 +347,8 @@
   }
 
   @media (max-width: 900px) {
-    .sessions-live-body {
-      grid-template-columns: 1fr;
-    }
-
-    .sessions-live-map,
-    .sessions-live-map .forum-map-canvas {
-      min-height: 220px;
+    .sessions-live-list {
+      max-height: 320px;
     }
   }
 

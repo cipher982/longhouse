@@ -6,13 +6,13 @@ import type { UserStateAction } from "../services/api/agents";
 import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../components/ui";
 import { PresenceBadge, PresenceHero } from "../components/PresenceBadge";
 import { SessionChat } from "../components/SessionChat";
-import { ForumCanvas } from "../forum/ForumCanvas";
+import { ForumCanvas } from "../legacy/forum/ForumCanvas";
 import { useActiveSessions } from "../hooks/useActiveSessions";
 import {
   buildForumStateFromSessions,
   getSessionDisplayTitle,
   getSessionRoomLabel,
-} from "../forum/session-mapper";
+} from "../legacy/forum/session-mapper";
 import {
   hasUnknownPresenceState,
   isSessionActive,
@@ -20,7 +20,7 @@ import {
   isSessionInactive,
   normalizePresenceState,
   sessionActivitySortKey,
-} from "../forum/session-status";
+} from "../legacy/forum/session-status";
 import { parseUTC } from "../lib/dateUtils";
 import "../styles/forum.css";
 

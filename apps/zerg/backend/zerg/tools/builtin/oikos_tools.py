@@ -35,12 +35,10 @@ async def spawn_commis_async(
     task: str,
     model: str | None = None,
     backend: str | None = None,
-    execution_mode: str = "workspace",
     git_repo: str | None = None,
     resume_session_id: str | None = None,
     *,
     _tool_call_id: str | None = None,  # Internal: passed by _call_tool_async for idempotency
-    _skip_interrupt: bool = False,  # Internal: legacy param, now ignored
     _return_structured: bool = False,  # Internal: return dict instead of string for oikos_react_engine
     _skills: list[str] | None = None,  # Internal: resolved skill content for commis prompt injection
 ) -> str | dict:
@@ -53,12 +51,9 @@ async def spawn_commis_async(
         task: Natural language description of what the commis should do
         model: Optional model override for the commis
         backend: Optional backend override (zai/codex/gemini/bedrock/anthropic)
-        execution_mode: "workspace" (default) runs headless CLI agent in a git
-            workspace. "standard" is deprecated (requires LEGACY_STANDARD_MODE=1).
-            Accepts "local" and "cloud" for backward compatibility.
-        git_repo: Git repository URL (required if execution_mode="workspace").
-            The repo is cloned, agent makes changes, and diff is captured.
-        resume_session_id: Session UUID to resume (workspace mode only).
+        git_repo: Optional Git repository URL for repo workspace mode.
+            If omitted, the commis uses a scratch workspace.
+        resume_session_id: Session UUID to resume in workspace mode.
             Enables cross-environment session continuity.
 
     Returns:
@@ -70,18 +65,6 @@ async def spawn_commis_async(
         spawn_commis("Continue work", git_repo="...", resume_session_id="abc-123")
     """
     from zerg.models.models import CommisJob
-
-    # Validate execution_mode and git_repo combination
-    # Accept both old names (local, cloud) and new names (standard, workspace) for backward compat
-    valid_modes = {"local", "cloud", "standard", "workspace"}
-    if execution_mode not in valid_modes:
-        return tool_error(
-            ErrorType.VALIDATION_ERROR,
-            f"execution_mode must be 'standard' or 'workspace', got '{execution_mode}'",
-        )
-
-    # Workspace mode (cloud is alias) uses git_repo if provided.
-    # Without git_repo, a scratch workspace (temp dir) is created instead.
 
     # Get database session from credential resolver context
     resolver = get_credential_resolver()
@@ -103,20 +86,17 @@ async def spawn_commis_async(
     commis_model = model
     commis_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
 
-    # Build execution config for workspace mode (cloud is alias for backward compat)
-    job_config = None
-    if execution_mode in ("cloud", "workspace"):
-        job_config = {
-            "execution_mode": "workspace",  # Normalize to new name
-        }
-        if backend:
-            job_config["backend"] = backend
-        if git_repo:
-            job_config["git_repo"] = git_repo
-        if resume_session_id:
-            job_config["resume_session_id"] = resume_session_id
-        if _skills:
-            job_config["skills"] = _skills
+    # All commis execute through workspace mode. Without git_repo this becomes
+    # a scratch workspace (ephemeral temp dir) in CommisJobProcessor.
+    job_config = {"execution_mode": "workspace"}
+    if backend:
+        job_config["backend"] = backend
+    if git_repo:
+        job_config["git_repo"] = git_repo
+    if resume_session_id:
+        job_config["resume_session_id"] = resume_session_id
+    if _skills:
+        job_config["skills"] = _skills
 
     try:
         # IDEMPOTENCY: Prevent duplicate commiss on retry/resume.
@@ -258,51 +238,15 @@ async def spawn_commis_async(
         return tool_error(ErrorType.EXECUTION_ERROR, f"Error spawning commis: {e}")
 
 
-async def spawn_standard_commis_async(
-    task: str,
-    model: str | None = None,
-    backend: str | None = None,
-    *,
-    _tool_call_id: str | None = None,
-    _return_structured: bool = False,
-) -> str | dict:
-    """Spawn a commis for general tasks.
-
-    DEPRECATED: Standard mode is deprecated. This now routes to workspace mode
-    (the job processor will force workspace unless LEGACY_STANDARD_MODE=1 is set).
-    Prefer spawn_workspace_commis for all new usage.
-
-    Args:
-        task: Natural language description of what the commis should do
-        model: LLM model for the commis (optional)
-
-    Returns:
-        The commis's result after completion
-    """
-    logger.warning("spawn_standard_commis_async is deprecated — standard mode is being removed. " "Use spawn_workspace_commis instead.")
-    return await spawn_commis_async(
-        task=task,
-        model=model,
-        backend=backend,
-        execution_mode="standard",
-        git_repo=None,
-        _tool_call_id=_tool_call_id,
-        _return_structured=_return_structured,
-    )
-
-
 def spawn_commis(
     task: str,
     model: str | None = None,
     backend: str | None = None,
 ) -> str:
-    """Spawn a commis (deprecated standard mode wrapper).
-
-    DEPRECATED: Use spawn_workspace_commis instead.
-    """
+    """Spawn a commis in scratch workspace mode (legacy alias)."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(spawn_standard_commis_async(task, model, backend))
+    return run_async_safely(spawn_commis_async(task=task, model=model, backend=backend))
 
 
 async def spawn_workspace_commis_async(
@@ -378,7 +322,6 @@ async def spawn_workspace_commis_async(
         task=task,
         model=model,
         backend=backend,
-        execution_mode="workspace",
         git_repo=git_repo,
         resume_session_id=resume_session_id,
         _tool_call_id=_tool_call_id,
@@ -1471,11 +1414,11 @@ def request_session_selection(
 TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=spawn_commis,
-        coroutine=spawn_standard_commis_async,
+        coroutine=spawn_commis_async,
         name="spawn_commis",
         description="DEPRECATED: Use spawn_workspace_commis instead. "
-        "This tool uses the legacy standard mode which is being removed. "
-        "Standard mode jobs are forced to workspace mode unless LEGACY_STANDARD_MODE=1 is set.",
+        "Compatibility alias that runs commis in scratch workspace mode "
+        "(no git repo clone).",
     ),
     StructuredTool.from_function(
         func=spawn_workspace_commis,
