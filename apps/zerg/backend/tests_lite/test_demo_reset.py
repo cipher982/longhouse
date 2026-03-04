@@ -1,24 +1,28 @@
 """Tests for DELETE /agents/demo (demo session reset endpoint).
 
 Covers:
-- Endpoint deletes sessions with device_id='demo-mac'
+- Endpoint deletes sessions with provider_session_id LIKE 'demo-%'
 - Endpoint does NOT delete real sessions
 - Endpoint returns 403 when AUTH_DISABLED is False
 - Endpoint returns count of deleted sessions
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
-from zerg.models.agents import AgentSession, AgentsBase
+from zerg.database import Base
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 
 
 def _make_db(tmp_path, name="demo_reset.db"):
@@ -29,12 +33,13 @@ def _make_db(tmp_path, name="demo_reset.db"):
     return make_sessionmaker(engine)
 
 
-def _seed(factory, *, device_id):
+def _seed(factory, *, device_id, provider_session_id=None):
     db = factory()
     s = AgentSession(
         provider="claude",
         environment="production",
         device_id=device_id,
+        provider_session_id=provider_session_id,
         started_at=datetime.now(timezone.utc),
         ended_at=datetime.now(timezone.utc),
         user_messages=1,
@@ -73,10 +78,10 @@ def _count(factory):
 
 
 def test_demo_reset_deletes_demo_sessions(tmp_path):
-    """DELETE /agents/demo removes sessions with device_id='demo-mac'."""
+    """DELETE /agents/demo removes sessions with provider_session_id LIKE 'demo-%'."""
     factory = _make_db(tmp_path, "del_demo.db")
-    _seed(factory, device_id="demo-mac")
-    _seed(factory, device_id="demo-mac")
+    _seed(factory, device_id="laptop-1", provider_session_id="demo-claude-01")
+    _seed(factory, device_id="demo-mac", provider_session_id="demo-codex-02")
     assert _count(factory) == 2
 
     client = _client(factory)
@@ -92,18 +97,19 @@ def test_demo_reset_deletes_demo_sessions(tmp_path):
 
 
 def test_demo_reset_preserves_real_sessions(tmp_path):
-    """DELETE /agents/demo does not touch sessions with other device_ids."""
+    """DELETE /agents/demo does not touch non-demo provider_session_id rows."""
     factory = _make_db(tmp_path, "preserve_real.db")
-    _seed(factory, device_id="demo-mac")
-    _seed(factory, device_id="laptop-abc")
-    assert _count(factory) == 2
+    _seed(factory, device_id="laptop-abc", provider_session_id="demo-claude-01")
+    _seed(factory, device_id="demo-mac", provider_session_id="real-session-123")
+    _seed(factory, device_id="demo-mac", provider_session_id=None)
+    assert _count(factory) == 3
 
     client = _client(factory)
     try:
         resp = client.delete("/agents/demo", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200
         assert resp.json()["sessions_created"] == 1
-        assert _count(factory) == 1
+        assert _count(factory) == 2
     finally:
         from zerg.main import api_app
         api_app.dependency_overrides.clear()

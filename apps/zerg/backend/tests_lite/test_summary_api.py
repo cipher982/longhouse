@@ -8,15 +8,16 @@ Covers:
 Uses in-memory SQLite with inline setup (no shared conftest).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
 
-from zerg.database import get_db, make_engine, make_sessionmaker
-from zerg.models.agents import AgentSession, AgentsBase
-
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,11 +32,11 @@ def _make_db(tmp_path):
     return make_sessionmaker(engine)
 
 
-def _seed_session(db, *, summary=None, summary_title=None, project="test-project"):
+def _seed_session(db, *, summary=None, summary_title=None, project="test-project", environment="production"):
     """Create a session with optional summary fields."""
     session = AgentSession(
         provider="claude",
-        environment="production",
+        environment=environment,
         project=project,
         started_at=datetime.now(timezone.utc),
         ended_at=datetime.now(timezone.utc),
@@ -83,6 +84,7 @@ def test_list_sessions_includes_summary(tmp_path):
             db,
             summary="Implemented JWT auth and rate limiting.",
             summary_title="Auth and Rate Limiting",
+            environment="work-macbook",
         )
     finally:
         db.close()
@@ -95,6 +97,7 @@ def test_list_sessions_includes_summary(tmp_path):
         session = data["sessions"][0]
         assert session["summary"] == "Implemented JWT auth and rate limiting."
         assert session["summary_title"] == "Auth and Rate Limiting"
+        assert session["environment"] == "work-macbook"
 
 
 def test_get_session_includes_summary(tmp_path):
@@ -106,6 +109,7 @@ def test_get_session_includes_summary(tmp_path):
             db,
             summary="Fixed critical database bug.",
             summary_title="Database Bug Fix",
+            environment="work-laptop",
         )
         session_id = str(session.id)
     finally:
@@ -117,6 +121,7 @@ def test_get_session_includes_summary(tmp_path):
         data = resp.json()
         assert data["summary"] == "Fixed critical database bug."
         assert data["summary_title"] == "Database Bug Fix"
+        assert data["environment"] == "work-laptop"
 
 
 def test_summary_null_when_missing(tmp_path):

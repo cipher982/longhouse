@@ -417,27 +417,21 @@ async def lifespan(app: FastAPI):
                     "DISCORD_WEBHOOK_URL not set — waitlist signups will return 503. " "Set this env var to enable waitlist collection."
                 )
 
-        # Demo mode: auto-seed demo sessions if DB is empty
+        # Demo mode: ensure demo sessions exist (top-up missing sessions).
         if _settings.demo_mode and not _settings.testing:
             try:
-                from sqlalchemy import text
-
                 from zerg.database import get_session_factory
-                from zerg.services.agents_store import AgentsStore
-                from zerg.services.demo_sessions import build_demo_agent_sessions
+                from zerg.services.demo_seed import seed_missing_demo_sessions
 
                 session_factory = get_session_factory()
                 with session_factory() as db:
-                    row = db.execute(text("SELECT COUNT(*) FROM sessions")).scalar()
-                    if row == 0:
-                        demo_sessions = build_demo_agent_sessions()
-                        store = AgentsStore(db)
-                        for session in demo_sessions:
-                            store.ingest_session(session)
-                        db.commit()
-                        logger.info("Demo mode: seeded %d demo sessions", len(demo_sessions))
+                    seeded_count, failed_count = seed_missing_demo_sessions(db)
+                    if seeded_count > 0:
+                        logger.info("Demo mode: seeded %d demo sessions", seeded_count)
+                    elif failed_count > 0:
+                        logger.warning("Demo mode: demo seed had %d failures (see per-session errors above)", failed_count)
                     else:
-                        logger.info("Demo mode: %d sessions already present, skipping seed", row)
+                        logger.info("Demo mode: demo sessions already present, skipping seed")
             except Exception as e:
                 logger.warning(f"Demo mode auto-seed failed (non-fatal): {e}")
 
@@ -455,34 +449,46 @@ async def lifespan(app: FastAPI):
         )
         if _should_seed:
             try:
-                from sqlalchemy import text
+                from sqlalchemy import or_
 
                 from zerg.database import get_session_factory
-                from zerg.services.agents_store import AgentsStore
-                from zerg.services.demo_sessions import build_demo_agent_sessions
+                from zerg.models.agents import AgentSession
+                from zerg.services.demo_seed import DEMO_PROVIDER_SESSION_PREFIX
+                from zerg.services.demo_seed import seed_missing_demo_sessions
 
                 session_factory = get_session_factory()
                 with session_factory() as db:
-                    # BEGIN IMMEDIATE acquires a write lock upfront, preventing
-                    # concurrent processes from racing past the COUNT check.
-                    db.execute(text("BEGIN IMMEDIATE"))
-                    session_count = db.execute(text("SELECT COUNT(*) FROM sessions")).scalar()
-                    if session_count == 0:
-                        demo_sessions = build_demo_agent_sessions()
-                        store = AgentsStore(db)
-                        for session in demo_sessions:
-                            store.ingest_session(session)
-                        store.rebuild_fts()
-                        # Single commit after the full loop — if any ingest
-                        # fails the entire batch rolls back atomically.
-                        db.commit()
-                        logger.info(
-                            "First-run: seeded %d demo sessions (set SKIP_DEMO_SEED=1 to disable)",
-                            len(demo_sessions),
+                    # Only auto-seed when the timeline has no real sessions yet.
+                    has_real_sessions = (
+                        db.query(AgentSession.id)
+                        .filter(
+                            or_(
+                                AgentSession.provider_session_id.is_(None),
+                                ~AgentSession.provider_session_id.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"),
+                            )
                         )
+                        .limit(1)
+                        .first()
+                        is not None
+                    )
+                    if not has_real_sessions:
+                        seeded_count, failed_count = seed_missing_demo_sessions(db)
+                        if seeded_count > 0:
+                            logger.info(
+                                "First-run: seeded %d demo sessions (set SKIP_DEMO_SEED=1 to disable)",
+                                seeded_count,
+                            )
+                        elif failed_count > 0:
+                            logger.warning(
+                                "First-run demo seed had %d failures (see per-session errors above)",
+                                failed_count,
+                            )
+                        else:
+                            logger.info("First-run: demo sessions already present, skipping seed")
                     else:
-                        # Release the IMMEDIATE lock without changes.
-                        db.rollback()
+                        logger.info(
+                            "First-run: real sessions already present, skipping demo seed",
+                        )
             except Exception as e:
                 logger.warning(f"First-run demo seed failed (non-fatal): {e}")
 

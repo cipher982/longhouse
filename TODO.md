@@ -15,6 +15,25 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Tech Debt] Demo seed/reset reliability + session environment fidelity (size: 2)
+
+Status (2026-03-03): Done.
+
+**Goal:** Remove demo workflow friction and fix missing machine/environment metadata in timeline APIs.
+
+- [x] Document dev SQLite path (`~/.longhouse/dev.db`) in AGENTS quick-reference
+- [x] Make `DELETE /api/agents/demo` delete demo rows by `provider_session_id LIKE 'demo-%'` (not `device_id`)
+- [x] Add per-session error logging in demo seed path so partial failures are observable
+- [x] Fix `SessionResponse.environment` mapping so API responses no longer return `null` for valid rows
+- [x] Add/adjust tests for reset filtering and environment serialization
+
+Notes:
+- Triggered by 2026-03-03 timeline polish retro; most lost time came from silent seed failures + stale demo reset semantics.
+- 2026-03-03: Added shared demo seeding helper (`seed_missing_demo_sessions`) to top-up missing demo sessions and emit per-session failure logs; wired into startup auto-seed and `POST /api/agents/demo`.
+- 2026-03-03: `DELETE /api/agents/demo` now keys off `provider_session_id LIKE 'demo-%'`, decoupled from `device_id`.
+- 2026-03-03: Restored `environment` in all session API response mappers (`/agents/sessions`, hybrid/semantic, and `/agents/sessions/{id}`).
+- Validation: `make test` ✅ (513 lite backend + 96 control-plane + 9 engine tests).
+
 ## [Tech Debt] Longhouse simplification wave (Commis/Oikos/Forum) (size: 8)
 
 Status (2026-03-03): In progress.
