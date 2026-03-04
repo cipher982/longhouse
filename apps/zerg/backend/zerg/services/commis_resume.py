@@ -37,6 +37,7 @@ from zerg.models.models import Run
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
+from zerg.services.oikos_run_lifecycle import emit_oikos_complete_success
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 from zerg.services.oikos_run_lifecycle import emit_success_run_updated
@@ -490,23 +491,19 @@ async def resume_oikos_batch(
             "reasoning_tokens": runner.usage_reasoning_tokens,
         }
 
-        await emit_run_event(
+        await emit_oikos_complete_success(
             db=db,
             run_id=run.id,
-            event_type="oikos_complete",
-            payload={
-                "fiche_id": fiche.id,
-                "thread_id": thread.id,
-                "result": final_response or "(No result)",
-                "status": "success",
-                "duration_ms": duration_ms,
-                "debug_url": f"/oikos/{run.id}",
-                "owner_id": owner_id,
-                "message_id": message_id,
-                "usage": usage_payload,
-                "batch_size": len(commis_results),
-                "trace_id": trace_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            message_id=message_id,
+            result=final_response or "(No result)",
+            duration_ms=duration_ms,
+            debug_url=f"/oikos/{run.id}",
+            usage=usage_payload,
+            batch_size=len(commis_results),
+            trace_id=trace_id,
         )
 
         # Emit stream_control based on pending commiss
@@ -953,22 +950,18 @@ async def _continue_oikos_langgraph_free(
             "reasoning_tokens": runner.usage_reasoning_tokens,
         }
 
-        await emit_run_event(
+        await emit_oikos_complete_success(
             db=db,
             run_id=run.id,
-            event_type="oikos_complete",
-            payload={
-                "fiche_id": fiche.id,
-                "thread_id": thread.id,
-                "result": final_response or "(No result)",
-                "status": "success",
-                "duration_ms": duration_ms,
-                "debug_url": f"/oikos/{run.id}",
-                "owner_id": owner_id,
-                "message_id": message_id,
-                "usage": usage_payload,
-                "trace_id": trace_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            message_id=message_id,
+            result=final_response or "(No result)",
+            duration_ms=duration_ms,
+            debug_url=f"/oikos/{run.id}",
+            usage=usage_payload,
+            trace_id=trace_id,
         )
 
         # Emit stream_control based on pending commiss
