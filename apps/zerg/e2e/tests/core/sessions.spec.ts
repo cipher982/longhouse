@@ -16,21 +16,20 @@ async function ensureDemoProviders(page: Page): Promise<void> {
   if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
     const loadDemo = page.getByRole('button', { name: /Load demo/i });
     await loadDemo.click();
-    // Wait for toolbar to appear (hero state is replaced by normal timeline)
     await page.waitForSelector('.sessions-toolbar', { timeout: 15000 });
   }
 
-  // Open filter panel if collapsed
-  const filterPanel = page.locator('#filter-panel');
-  if (!(await filterPanel.isVisible().catch(() => false))) {
-    const toggleBtn = page.locator('button[aria-controls="filter-panel"]');
-    if (await toggleBtn.isVisible()) {
-      await toggleBtn.click();
+  // Open filter popover to check available providers
+  const filterBtn = page.locator('button[aria-controls="filter-panel"]');
+  if (await filterBtn.isVisible()) {
+    const filterPanel = page.locator('#filter-panel');
+    if (!(await filterPanel.isVisible().catch(() => false))) {
+      await filterBtn.click();
     }
   }
 
-  const providerSelect = page.locator('select[aria-label="provider"]');
-  const hasClaude = await providerSelect.locator('option[value="claude"]').count();
+  const claudeOption = page.locator('[data-filter-section="provider"] [data-filter-option="claude"]');
+  const hasClaude = await claudeOption.count();
   if (hasClaude > 0) {
     return;
   }
@@ -41,7 +40,7 @@ async function ensureDemoProviders(page: Page): Promise<void> {
     await loadDemo.click();
   }
 
-  await expect(providerSelect.locator('option[value="claude"]')).toHaveCount(1, { timeout: 15000 });
+  await expect(claudeOption).toHaveCount(1, { timeout: 15000 });
 }
 
 async function ingestSession(
@@ -122,20 +121,19 @@ test.describe('Sessions Page', () => {
     // Filter toggle should be present
     await expect(page.locator('button[aria-controls="filter-panel"]')).toBeVisible();
 
-    // Filter panel should be open (ensureDemoProviders opened it)
+    // Filter popover should be open (ensureDemoProviders opened it)
     const filterPanel = page.locator('#filter-panel');
     await expect(filterPanel).toBeVisible();
-    await expect(filterPanel.locator('select').first()).toBeVisible();
+    await expect(filterPanel.locator('[data-filter-section]').first()).toBeVisible();
   });
 
   test('Filter by provider updates URL', async ({ page }) => {
     await page.goto('/timeline');
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    // Select a provider filter
     await ensureDemoProviders(page);
-    const providerSelect = page.locator('select[aria-label="provider"]');
-    await providerSelect.selectOption('claude');
+    const claudeBtn = page.locator('[data-filter-section="provider"] [data-filter-option="claude"]');
+    await claudeBtn.click();
 
     // URL should update with provider param
     await expect(page).toHaveURL(/provider=claude/);
@@ -398,10 +396,10 @@ test.describe('Machine Filter', () => {
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
     await ensureDemoProviders(page);
 
-    // Filter panel should have a machine select
+    // Filter popover should have a machine section with the ingested machine name
     const filterPanel = page.locator('#filter-panel');
-    const machineSelect = filterPanel.locator('select[aria-label="machine"]');
-    await expect(machineSelect).toBeVisible({ timeout: 8000 });
+    const machineSection = filterPanel.locator('[data-filter-section="machine"]');
+    await expect(machineSection).toBeVisible({ timeout: 8000 });
   });
 
   test('selecting a machine updates the URL', async ({ page, request }) => {
@@ -413,12 +411,12 @@ test.describe('Machine Filter', () => {
     await ensureDemoProviders(page);
 
     const filterPanel = page.locator('#filter-panel');
-    const machineSelect = filterPanel.locator('select[aria-label="machine"]');
 
-    // Wait for the machine option to appear (filters poll from API)
-    await expect(machineSelect.locator(`option[value="${machineName}"]`)).toHaveCount(1, { timeout: 10000 });
+    // Wait for the machine option button to appear (filters poll from API)
+    const machineBtn = filterPanel.locator(`[data-filter-section="machine"] [data-filter-option="${machineName}"]`);
+    await expect(machineBtn).toHaveCount(1, { timeout: 10000 });
 
-    await machineSelect.selectOption(machineName);
+    await machineBtn.click();
     await expect(page).toHaveURL(new RegExp(`environment=${machineName}`));
   });
 

@@ -353,16 +353,129 @@
   }
 
   /* ---------------------------------------------------------------------------
-   * Collapsible Filter Panel
+   * Filter Chips (active filters shown inline in toolbar)
    * ---------------------------------------------------------------------------*/
 
-  .sessions-filter-panel {
+  .sessions-filter-chips {
     display: flex;
+    align-items: center;
+    gap: var(--space-2);
     flex-wrap: wrap;
-    gap: var(--space-3);
-    padding: var(--space-3) 0;
   }
 
+  .sessions-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 3px 6px 3px 10px;
+    background: color-mix(in srgb, var(--color-brand-primary) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-brand-primary) 35%, transparent);
+    border-radius: var(--radius-full);
+    color: var(--color-brand-primary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    white-space: nowrap;
+  }
+
+  .sessions-filter-chip-label {
+    line-height: 1;
+  }
+
+  .sessions-filter-chip-dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.65;
+    border-radius: var(--radius-full);
+    padding: 0;
+    transition: opacity var(--motion-duration-fast) var(--motion-easing-standard),
+      background var(--motion-duration-fast) var(--motion-easing-standard);
+    font-family: inherit;
+  }
+
+  .sessions-filter-chip-dismiss:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
+  }
+
+  /* ---------------------------------------------------------------------------
+   * Filter Popover
+   * ---------------------------------------------------------------------------*/
+
+  .sessions-filter-popover {
+    position: fixed;
+    background: var(--color-surface-elevated);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    z-index: var(--z-index-dropdown);
+    width: 320px;
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .filter-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .filter-section-label {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .filter-section-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .filter-option-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-1) var(--space-2-5);
+    background: var(--surface-glass-2);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-full);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    font-family: var(--font-family-base);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    white-space: nowrap;
+  }
+
+  .filter-option-btn:hover {
+    border-color: var(--color-border-primary);
+    color: var(--color-text-primary);
+  }
+
+  .filter-option-btn--active {
+    background: color-mix(in srgb, var(--color-brand-primary) 15%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-primary) 45%, transparent);
+    color: var(--color-brand-primary);
+  }
+
+  .filter-option-btn--active:hover {
+    background: color-mix(in srgb, var(--color-brand-primary) 22%, transparent);
+  }
+
+  /* Autonomous checkbox row inside popover */
   .sessions-filter-toggle-label {
     display: flex;
     align-items: center;
@@ -376,48 +489,20 @@
     cursor: pointer;
     white-space: nowrap;
     user-select: none;
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .sessions-filter-toggle-label:has(input:checked) {
     color: var(--color-text-primary);
-    border-color: var(--color-accent-blue);
-  }
-
-  .sessions-filter-toggle-label input[type="checkbox"] {
-    accent-color: var(--color-accent-blue);
-    width: 14px;
-    height: 14px;
-    cursor: pointer;
-  }
-
-  .sessions-filter-select {
-    padding: var(--space-2) var(--space-3);
-    padding-right: var(--space-8);
-    background: var(--surface-glass-2);
-    border: 1px solid var(--border-glass-1);
-    border-radius: var(--radius-md);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    cursor: pointer;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right var(--space-2) center;
-    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .sessions-filter-select:hover {
     border-color: var(--color-border-primary);
   }
 
-  .sessions-filter-select:focus {
-    outline: none;
-    border-color: var(--color-brand-primary);
-  }
-
-  .sessions-filter-select:focus-visible {
-    outline: 2px solid var(--color-brand-primary);
-    outline-offset: 1px;
+  .sessions-filter-toggle-label input[type="checkbox"] {
+    accent-color: var(--color-brand-primary);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
   }
 
   /* ---------------------------------------------------------------------------
