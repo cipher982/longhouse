@@ -655,6 +655,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                             source_offset BIGINT NOT NULL,
                             branch_id INTEGER NOT NULL,
                             revision INTEGER NOT NULL DEFAULT 1,
+                            is_branch_copy INTEGER NOT NULL DEFAULT 0,
                             raw_json TEXT NOT NULL,
                             line_hash VARCHAR(64) NOT NULL,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -673,6 +674,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                             source_offset,
                             branch_id,
                             revision,
+                            is_branch_copy,
                             raw_json,
                             line_hash,
                             created_at
@@ -701,6 +703,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                                 1
                             ) AS branch_id,
                             1 AS revision,
+                            0 AS is_branch_copy,
                             sl.raw_json,
                             sl.line_hash,
                             COALESCE(sl.created_at, CURRENT_TIMESTAMP)
@@ -722,6 +725,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                             source_offset BIGINT NOT NULL,
                             branch_id INTEGER NOT NULL,
                             revision INTEGER NOT NULL DEFAULT 1,
+                            is_branch_copy INTEGER NOT NULL DEFAULT 0,
                             raw_json TEXT NOT NULL,
                             line_hash VARCHAR(64) NOT NULL,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -755,6 +759,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
+            source_line_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(source_lines)"))}
+            if source_line_columns and "is_branch_copy" not in source_line_columns:
+                conn.execute(text("ALTER TABLE source_lines ADD COLUMN is_branch_copy INTEGER NOT NULL DEFAULT 0"))
             conn.commit()
     except Exception:
         logger.debug("source_lines table migration skipped", exc_info=True)

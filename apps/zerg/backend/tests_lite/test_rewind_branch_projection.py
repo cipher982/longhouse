@@ -134,7 +134,6 @@ def test_rewind_branch_head_vs_forensic_projection(tmp_path):
             line0,
             line10_old,
             line20_old,
-            line0,
             line10_new,
             line30_new,
         ]
