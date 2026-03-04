@@ -105,12 +105,47 @@ class AgentSession(AgentsBase):
     is_sidechain = Column(Integer, nullable=False, server_default=text("0"))
 
     # Relationships
+    branches = relationship("AgentSessionBranch", back_populates="session", cascade="all, delete-orphan")
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")
     source_lines = relationship("AgentSourceLine", back_populates="session", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_sessions_project_started", "project", "started_at"),
         Index("ix_sessions_provider_started", "provider", "started_at"),
+    )
+
+
+class AgentSessionBranch(AgentsBase):
+    """Branch metadata for rewind-aware session projections."""
+
+    __tablename__ = "session_branches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _fk_ref = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    session_id = Column(
+        GUID(),
+        ForeignKey(_fk_ref, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    parent_branch_id = Column(Integer, nullable=True)
+    branched_at_source_path = Column(Text, nullable=True)
+    branched_at_offset = Column(BigInteger, nullable=True)
+    branch_reason = Column(String(32), nullable=False, server_default=text("'root'"))
+    is_head = Column(Integer, nullable=False, server_default=text("0"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    session = relationship("AgentSession", back_populates="branches")
+
+    __table_args__ = (
+        Index("ix_session_branches_session_created", "session_id", "created_at"),
+        Index(
+            "ix_session_branches_head",
+            "session_id",
+            unique=True,
+            postgresql_where=(is_head == 1),
+            sqlite_where=(is_head == 1),
+        ),
     )
 
 
@@ -159,6 +194,7 @@ class AgentEvent(AgentsBase):
     source_path = Column(Text, nullable=True)  # Original file path (e.g., ~/.claude/projects/.../session.jsonl)
     source_offset = Column(BigInteger, nullable=True)  # Byte offset in source file
     event_hash = Column(String(64), nullable=True, index=True)  # SHA-256 of event content
+    branch_id = Column(Integer, nullable=True, index=True)  # Session branch head at ingest time
 
     # Schema versioning for format evolution
     schema_version = Column(Integer, default=1)
@@ -174,6 +210,7 @@ class AgentEvent(AgentsBase):
         Index(
             "ix_events_dedup",
             "session_id",
+            "branch_id",
             "source_path",
             "source_offset",
             "event_hash",
@@ -182,6 +219,7 @@ class AgentEvent(AgentsBase):
             sqlite_where=(source_path.isnot(None)),
         ),
         Index("ix_events_session_timestamp", "session_id", "timestamp"),
+        Index("ix_events_session_branch_timestamp", "session_id", "branch_id", "timestamp"),
         Index("ix_events_role_tool", "role", "tool_name"),
     )
 
@@ -205,6 +243,8 @@ class AgentSourceLine(AgentsBase):
     )
     source_path = Column(Text, nullable=False)
     source_offset = Column(BigInteger, nullable=False)
+    branch_id = Column(Integer, nullable=False, index=True)
+    revision = Column(Integer, nullable=False, server_default=text("1"))
     raw_json = Column(Text, nullable=False)
     line_hash = Column(String(64), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -212,8 +252,9 @@ class AgentSourceLine(AgentsBase):
     session = relationship("AgentSession", back_populates="source_lines")
 
     __table_args__ = (
-        UniqueConstraint("session_id", "source_path", "source_offset", name="uq_source_line_pos"),
-        Index("ix_source_lines_session_offset", "session_id", "source_offset"),
+        UniqueConstraint("session_id", "branch_id", "source_path", "source_offset", "revision", name="uq_source_line_revision"),
+        UniqueConstraint("session_id", "branch_id", "source_path", "source_offset", "line_hash", name="uq_source_line_hash"),
+        Index("ix_source_lines_session_offset", "session_id", "branch_id", "source_offset"),
     )
 
 

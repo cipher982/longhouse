@@ -113,8 +113,8 @@ def test_duplicate_event_sqlite_no_pending_rollback(tmp_path):
         assert result3.events_inserted == 1
         assert result3.events_skipped == 0
 
-        # 5. Verify final state - 2 events total (1 original + 1 new, duplicate skipped)
-        events = store.get_session_events(session_id)
+        # 5. Verify final state on active head branch.
+        events = store.get_session_events(session_id, branch_mode="head")
         assert len(events) == 2
 
 
@@ -180,9 +180,13 @@ def test_duplicate_event_different_hash(tmp_path):
             )
         )
 
-        # Should insert because hash is different
+        # Should insert because hash is different.
         assert result2.events_inserted == 1
         assert result2.events_skipped == 0
 
-        events = store.get_session_events(session_id)
-        assert len(events) == 2
+        # Without source-line data, ingest cannot detect rewind semantics.
+        head_events = store.get_session_events(session_id, branch_mode="head")
+        assert len(head_events) == 2
+
+        all_events = store.get_session_events(session_id, branch_mode="all")
+        assert len(all_events) == 2

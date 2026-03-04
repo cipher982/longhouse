@@ -478,37 +478,263 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
+    # session_branches table migrations
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS session_branches (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id CHAR(36) NOT NULL,
+                        parent_branch_id INTEGER,
+                        branched_at_source_path TEXT,
+                        branched_at_offset BIGINT,
+                        branch_reason VARCHAR(32) NOT NULL DEFAULT 'root',
+                        is_head INTEGER NOT NULL DEFAULT 0,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_session_branches_session_created " "ON session_branches(session_id, created_at)")
+            )
+            conn.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS ix_session_branches_head " "ON session_branches(session_id) WHERE is_head = 1")
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO session_branches (
+                        session_id,
+                        parent_branch_id,
+                        branched_at_source_path,
+                        branched_at_offset,
+                        branch_reason,
+                        is_head
+                    )
+                    SELECT
+                        s.id,
+                        NULL,
+                        NULL,
+                        NULL,
+                        'root',
+                        1
+                    FROM sessions s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM session_branches b WHERE b.session_id = s.id
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE session_branches
+                    SET is_head = 0
+                    WHERE is_head = 1
+                      AND id NOT IN (
+                        SELECT MAX(id)
+                        FROM session_branches
+                        WHERE is_head = 1
+                        GROUP BY session_id
+                      )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE session_branches
+                    SET is_head = 1
+                    WHERE id IN (
+                        SELECT latest.id
+                        FROM (
+                            SELECT session_id, MAX(id) AS id
+                            FROM session_branches
+                            GROUP BY session_id
+                        ) latest
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM session_branches heads
+                            WHERE heads.session_id = latest.session_id
+                              AND heads.is_head = 1
+                        )
+                    )
+                    """
+                )
+            )
+            conn.commit()
+    except Exception:
+        logger.debug("session_branches table migration skipped", exc_info=True)
+
     # events table migrations
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(events)"))}
             if columns and "tool_call_id" not in columns:
                 conn.execute(text("ALTER TABLE events ADD COLUMN tool_call_id VARCHAR(255)"))
-                conn.commit()
+            if columns and "branch_id" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN branch_id INTEGER"))
+            conn.execute(
+                text(
+                    """
+                    UPDATE events
+                    SET branch_id = (
+                        SELECT b.id
+                        FROM session_branches b
+                        WHERE b.session_id = events.session_id
+                          AND b.is_head = 1
+                        ORDER BY b.id DESC
+                        LIMIT 1
+                    )
+                    WHERE branch_id IS NULL
+                    """
+                )
+            )
+            conn.execute(text("DROP INDEX IF EXISTS ix_events_dedup"))
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS ix_events_dedup
+                    ON events(session_id, branch_id, source_path, source_offset, event_hash)
+                    WHERE source_path IS NOT NULL
+                    """
+                )
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_events_session_branch_timestamp " "ON events(session_id, branch_id, timestamp)")
+            )
+            conn.commit()
     except Exception:
         logger.debug("events table migration skipped (table may not exist yet)", exc_info=True)
 
     # source_lines table migrations (full source-line archive for lossless export)
     try:
         with engine.connect() as conn:
+            source_lines_exists = (
+                conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_lines' LIMIT 1")).fetchone() is not None
+            )
+            if source_lines_exists:
+                source_line_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(source_lines)"))}
+                needs_rebuild = "branch_id" not in source_line_columns or "revision" not in source_line_columns
+            else:
+                needs_rebuild = False
+
+            if source_lines_exists and needs_rebuild:
+                conn.execute(text("DROP TABLE IF EXISTS source_lines_new"))
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE source_lines_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            session_id CHAR(36) NOT NULL,
+                            source_path TEXT NOT NULL,
+                            source_offset BIGINT NOT NULL,
+                            branch_id INTEGER NOT NULL,
+                            revision INTEGER NOT NULL DEFAULT 1,
+                            raw_json TEXT NOT NULL,
+                            line_hash VARCHAR(64) NOT NULL,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO source_lines_new (
+                            id,
+                            session_id,
+                            source_path,
+                            source_offset,
+                            branch_id,
+                            revision,
+                            raw_json,
+                            line_hash,
+                            created_at
+                        )
+                        SELECT
+                            sl.id,
+                            sl.session_id,
+                            sl.source_path,
+                            sl.source_offset,
+                            COALESCE(
+                                (
+                                    SELECT b.id
+                                    FROM session_branches b
+                                    WHERE b.session_id = sl.session_id
+                                      AND b.is_head = 1
+                                    ORDER BY b.id DESC
+                                    LIMIT 1
+                                ),
+                                (
+                                    SELECT b2.id
+                                    FROM session_branches b2
+                                    WHERE b2.session_id = sl.session_id
+                                    ORDER BY b2.id DESC
+                                    LIMIT 1
+                                ),
+                                1
+                            ) AS branch_id,
+                            1 AS revision,
+                            sl.raw_json,
+                            sl.line_hash,
+                            COALESCE(sl.created_at, CURRENT_TIMESTAMP)
+                        FROM source_lines sl
+                        """
+                    )
+                )
+                conn.execute(text("DROP TABLE source_lines"))
+                conn.execute(text("ALTER TABLE source_lines_new RENAME TO source_lines"))
+
+            if not source_lines_exists:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS source_lines (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            session_id CHAR(36) NOT NULL,
+                            source_path TEXT NOT NULL,
+                            source_offset BIGINT NOT NULL,
+                            branch_id INTEGER NOT NULL,
+                            revision INTEGER NOT NULL DEFAULT 1,
+                            raw_json TEXT NOT NULL,
+                            line_hash VARCHAR(64) NOT NULL,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
+                )
+
             conn.execute(
                 text(
                     """
-                    CREATE TABLE IF NOT EXISTS source_lines (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        session_id CHAR(36) NOT NULL,
-                        source_path TEXT NOT NULL,
-                        source_offset BIGINT NOT NULL,
-                        raw_json TEXT NOT NULL,
-                        line_hash VARCHAR(64) NOT NULL,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-                        CONSTRAINT uq_source_line_pos UNIQUE (session_id, source_path, source_offset)
-                    )
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_source_line_revision
+                    ON source_lines(session_id, branch_id, source_path, source_offset, revision)
                     """
                 )
             )
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_source_lines_session_offset ON source_lines(session_id, source_offset)"))
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_source_line_hash
+                    ON source_lines(session_id, branch_id, source_path, source_offset, line_hash)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_source_lines_session_offset
+                    ON source_lines(session_id, branch_id, source_offset)
+                    """
+                )
+            )
             conn.commit()
     except Exception:
         logger.debug("source_lines table migration skipped", exc_info=True)

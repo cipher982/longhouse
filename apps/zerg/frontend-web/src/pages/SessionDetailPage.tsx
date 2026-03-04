@@ -439,6 +439,7 @@ export default function SessionDetailPage() {
   // Fetch session and events
   const { data: session, isLoading: sessionLoading, error: sessionError } =
     useAgentSession(sessionId || null);
+  const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
   const {
     data: eventsPagesData,
     isLoading: eventsLoading,
@@ -446,7 +447,10 @@ export default function SessionDetailPage() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useAgentSessionEventsInfinite(sessionId || null, { limit: EVENTS_PAGE_SIZE });
+  } = useAgentSessionEventsInfinite(sessionId || null, {
+    limit: EVENTS_PAGE_SIZE,
+    branch_mode: showAbandonedBranches ? "all" : "head",
+  });
 
   const events = useMemo(
     () => eventsPagesData?.pages.flatMap((page) => page.events) || [],
@@ -455,6 +459,10 @@ export default function SessionDetailPage() {
   const totalEvents = useMemo(
     () => eventsPagesData?.pages[0]?.total ?? events.length,
     [eventsPagesData, events.length]
+  );
+  const abandonedEvents = useMemo(
+    () => eventsPagesData?.pages[0]?.abandoned_events ?? 0,
+    [eventsPagesData]
   );
 
   // Build merged timeline view-model
@@ -820,6 +828,32 @@ export default function SessionDetailPage() {
               <div className="timeline-context-hint" role="note">
                 {outsideActiveCount} event{outsideActiveCount !== 1 ? "s are" : " is"} outside active model context
                 (pre-compact forensic history).
+              </div>
+            )}
+            {!showAbandonedBranches && abandonedEvents > 0 && (
+              <div className="timeline-context-hint" role="note">
+                {abandonedEvents} event{abandonedEvents !== 1 ? "s are" : " is"} on abandoned rewind branches
+                (dangling state, not active).{" "}
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => setShowAbandonedBranches(true)}
+                >
+                  Show abandoned branches
+                </button>
+              </div>
+            )}
+            {showAbandonedBranches && (
+              <div className="timeline-context-hint" role="note">
+                Showing forensic branch history (head + abandoned branches). Abandoned rows remain auditable but are not
+                part of the active model context.{" "}
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => setShowAbandonedBranches(false)}
+                >
+                  Show head only
+                </button>
               </div>
             )}
 

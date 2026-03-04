@@ -121,11 +121,15 @@ export interface AgentEvent {
   tool_call_id: string | null;
   timestamp: string;
   in_active_context?: boolean;
+  branch_id?: number | null;
+  is_head_branch?: boolean;
 }
 
 export interface AgentEventsListResponse {
   events: AgentEvent[];
   total: number;
+  branch_mode?: "head" | "all";
+  abandoned_events?: number;
 }
 
 export interface AgentSessionFilters {
@@ -261,13 +265,14 @@ export async function fetchAgentSession(sessionId: string): Promise<AgentSession
  */
 export async function fetchAgentSessionEvents(
   sessionId: string,
-  options: { roles?: string; limit?: number; offset?: number } = {}
+  options: { roles?: string; limit?: number; offset?: number; branch_mode?: "head" | "all" } = {}
 ): Promise<AgentEventsListResponse> {
   const params = new URLSearchParams();
 
   if (options.roles) params.set("roles", options.roles);
   if (options.limit) params.set("limit", String(options.limit));
   if (options.offset) params.set("offset", String(options.offset));
+  if (options.branch_mode) params.set("branch_mode", options.branch_mode);
 
   const queryString = params.toString();
   const path = `/agents/sessions/${sessionId}/events${queryString ? `?${queryString}` : ""}`;
