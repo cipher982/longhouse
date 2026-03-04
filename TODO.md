@@ -42,6 +42,7 @@ Notes:
 - 2026-03-03: Added shared helper for successful `oikos_complete` emission (with optional `trace_id`/`batch_size`) and replaced duplicate completion payload blocks in `oikos_service.py` + `commis_resume.py`.
 - 2026-03-03: Began structural `commis_resume.py` split by extracting commis update content/queue helpers into `services/commis_updates.py` with new focused tests.
 - 2026-03-03: Quarantined forum UI surface further by moving `pages/ForumPage.tsx` into `legacy/forum/ForumPage.tsx`; route remains redirect-only and tests now import from legacy path.
+- 2026-03-03: Removed dead `frontend-web/src/styles/forum-map.css` placeholder (unused import surface).
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
