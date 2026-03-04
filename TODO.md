@@ -35,14 +35,14 @@ Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events con
   - [x] `/api/agents/sessions/{id}/events` supports `context_mode=forensic|active_context`
   - [x] Extend `context_mode` semantics to search/recall/session-tool surfaces (MCP + API list/search endpoints)
   - [x] `active_context` projection should anchor by explicit boundary source offset/timestamp
-- [ ] Keep pre-compaction turns visible in timeline/search by default (no destructive pruning)
+- [x] Keep pre-compaction turns visible in timeline/search by default (no destructive pruning)
 - [x] In UI, mark pre-compaction facts as "outside active model context" instead of hiding/deleting
 - [x] Add retention/sync guardrails so source transcripts are archived before local cleanup windows can delete them (for example Claude `cleanupPeriodDays` default)
 
 **Acceptance tests:**
 - [ ] Real Claude transcript with repeated summary lines still roundtrips byte-for-byte in source archive
 - [x] Compaction-only append does not create fake conversational events
-- [ ] `forensic` query returns pre-compact fact; `active_context` query excludes it unless reintroduced later
+- [x] `forensic` query returns pre-compact fact; `active_context` query excludes it unless reintroduced later
 
 Notes:
 - 2026-03-04: Rust + Python parsers now emit compaction-adjacent records as `system` events; `progress` remains intentionally skipped for now to avoid timeline noise until query modes land.
@@ -52,6 +52,7 @@ Notes:
 - 2026-03-04: Session detail timeline now marks forensic rows outside the active context boundary (compaction pre-history remains visible with explicit "outside active model context" badges).
 - 2026-03-04: Added regression test proving compaction-only append rows (`summary` + `compact_boundary`) do not inflate user/assistant turn counts (`tests_lite/test_ingest_session_counts.py`).
 - 2026-03-04: `longhouse doctor` now checks Claude retention/sync risk (`cleanupPeriodDays`, Stop-hook presence) and warns when retention is short/default or hooks are missing.
+- 2026-03-04: Context-mode search regression is covered end-to-end (`tests_lite/test_sessions_search_context_mode.py`) proving forensic includes pre-compact facts while active_context excludes stale pre-boundary facts.
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 
