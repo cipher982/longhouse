@@ -31,11 +31,30 @@ def load_manifest():
 
 
 def resolve_url_templates(url: str, base_url: str) -> str:
-    """Replace {first_session_id} and similar placeholders with live API data."""
+    """Replace {featured_session_id} / {first_session_id} placeholders.
+
+    {featured_session_id} picks the completed session with the most tool_calls
+    — better for marketing as it shows a dense, interesting event timeline.
+    """
+    api_url = base_url.replace("://localhost:47200", "://localhost:47300")
+
+    if "{featured_session_id}" in url:
+        try:
+            resp = urllib.request.urlopen(f"{api_url}/api/agents/sessions?days_back=30&limit=50")
+            sessions = json.loads(resp.read()).get("sessions", [])
+            best = max(
+                (s for s in sessions if s.get("ended_at")),
+                key=lambda s: s.get("tool_calls", 0),
+                default=sessions[0] if sessions else None,
+            )
+            if best:
+                return url.replace("{featured_session_id}", best["id"])
+        except Exception as e:
+            print(f"  Warning: Could not resolve featured session ID: {e}")
+        return url.replace("{featured_session_id}", "")
+
     if "{first_session_id}" not in url:
         return url
-    api_url = base_url.replace("://localhost:47200", "://localhost:47300")
-    api_url = api_url.replace("://localhost:30080", "://localhost:30080")
     try:
         resp = urllib.request.urlopen(f"{api_url}/api/agents/sessions?days_back=30&limit=1")
         data = json.loads(resp.read())
