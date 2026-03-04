@@ -598,16 +598,32 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
-            conn.execute(text("DROP INDEX IF EXISTS ix_events_dedup"))
-            conn.execute(
+            dedup_idx_sql_row = conn.execute(
                 text(
                     """
-                    CREATE UNIQUE INDEX IF NOT EXISTS ix_events_dedup
-                    ON events(session_id, branch_id, source_path, source_offset, event_hash)
-                    WHERE source_path IS NOT NULL
+                    SELECT sql
+                    FROM sqlite_master
+                    WHERE type = 'index' AND name = 'ix_events_dedup'
+                    LIMIT 1
                     """
                 )
-            )
+            ).fetchone()
+            dedup_needs_rebuild = True
+            if dedup_idx_sql_row and isinstance(dedup_idx_sql_row[0], str):
+                normalized = " ".join(dedup_idx_sql_row[0].lower().split())
+                expected_fragment = "on events(session_id, branch_id, source_path, source_offset, event_hash)"
+                dedup_needs_rebuild = expected_fragment not in normalized
+            if dedup_needs_rebuild:
+                conn.execute(text("DROP INDEX IF EXISTS ix_events_dedup"))
+                conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS ix_events_dedup
+                        ON events(session_id, branch_id, source_path, source_offset, event_hash)
+                        WHERE source_path IS NOT NULL
+                        """
+                    )
+                )
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_events_session_branch_timestamp " "ON events(session_id, branch_id, timestamp)")
             )
