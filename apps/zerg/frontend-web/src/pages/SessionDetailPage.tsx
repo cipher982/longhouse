@@ -83,6 +83,10 @@ function truncatePath(path: string | null, maxLen: number = 50): string {
   return "~/" + parts.slice(-3).join("/");
 }
 
+function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
+  return event?.in_active_context === false;
+}
+
 function getToolDisplayInfo(toolName: string): { icon: string; color: string } {
   switch (toolName.toLowerCase()) {
     case "bash":
@@ -251,13 +255,19 @@ interface UserMessageProps {
 }
 
 function UserMessage({ event, isHighlighted }: UserMessageProps) {
+  const outsideActiveContext = isOutsideActiveContext(event);
   return (
     <div
       id={`event-${event.id}`}
-      className={`event-item event-user${isHighlighted ? " event-highlight" : ""}`}
+      className={`event-item event-user${outsideActiveContext ? " event-outside-active" : ""}${isHighlighted ? " event-highlight" : ""}`}
     >
       <div className="event-header">
-        <span className="event-role event-role-user">You</span>
+        <div className="event-role-group">
+          <span className="event-role event-role-user">You</span>
+          {outsideActiveContext && (
+            <span className="event-context-badge">Outside active model context</span>
+          )}
+        </div>
         <span className="event-time">{formatTime(event.timestamp)}</span>
       </div>
       <div className="event-content user-content">
@@ -273,13 +283,19 @@ interface AssistantMessageProps {
 }
 
 function AssistantMessage({ event, isHighlighted }: AssistantMessageProps) {
+  const outsideActiveContext = isOutsideActiveContext(event);
   return (
     <div
       id={`event-${event.id}`}
-      className={`event-item event-assistant${isHighlighted ? " event-highlight" : ""}`}
+      className={`event-item event-assistant${outsideActiveContext ? " event-outside-active" : ""}${isHighlighted ? " event-highlight" : ""}`}
     >
       <div className="event-header">
-        <span className="event-role event-role-assistant">AI</span>
+        <div className="event-role-group">
+          <span className="event-role event-role-assistant">AI</span>
+          {outsideActiveContext && (
+            <span className="event-context-badge">Outside active model context</span>
+          )}
+        </div>
         <span className="event-time">{formatTime(event.timestamp)}</span>
       </div>
       <div className="event-content assistant-content">
@@ -304,6 +320,7 @@ function ToolInteractionCard({
 }: ToolInteractionCardProps) {
   const { toolName, callEvent, resultEvent, pairing } = interaction;
   const toolInfo = getToolDisplayInfo(toolName);
+  const outsideActiveContext = isOutsideActiveContext(callEvent) || isOutsideActiveContext(resultEvent);
 
   const hasInput =
     callEvent?.tool_input_json != null &&
@@ -336,7 +353,7 @@ function ToolInteractionCard({
   return (
     <div
       id={`event-${interaction.anchorId}`}
-      className={`event-item event-tool ${isExpanded ? "expanded" : ""}${isHighlighted ? " event-highlight" : ""}`}
+      className={`event-item event-tool ${isExpanded ? "expanded" : ""}${outsideActiveContext ? " event-outside-active" : ""}${isHighlighted ? " event-highlight" : ""}`}
     >
       <button
         className="event-tool-header"
@@ -351,6 +368,9 @@ function ToolInteractionCard({
             {toolInfo.icon}
           </span>
           <span className="tool-name">{toolName}</span>
+          {outsideActiveContext && (
+            <span className="event-context-badge">Outside active model context</span>
+          )}
           {isPending && <span className="tool-pending-badge">…</span>}
           {!isExpanded && summary && (
             <span className="tool-summary">{summary}</span>
@@ -546,6 +566,10 @@ export default function SessionDetailPage() {
     }
     return events.some((event) => event.id === highlightEventId);
   }, [highlightEventId, events]);
+  const outsideActiveCount = useMemo(
+    () => events.filter((event) => event.in_active_context === false).length,
+    [events]
+  );
 
   // For deep-link anchors, auto-fetch additional pages until the target event appears
   // or we exhaust pagination.
@@ -792,6 +816,12 @@ export default function SessionDetailPage() {
                 Loading more events to locate anchor `{highlightEventId}`…
               </div>
             )}
+            {outsideActiveCount > 0 && (
+              <div className="timeline-context-hint" role="note">
+                {outsideActiveCount} event{outsideActiveCount !== 1 ? "s are" : " is"} outside active model context
+                (pre-compact forensic history).
+              </div>
+            )}
 
             {timelineItems.length > 0 && (
               <div className="session-detail-filters">
@@ -884,14 +914,20 @@ export default function SessionDetailPage() {
                   );
                 }
                 // Unknown role
+                const outsideActiveContext = isOutsideActiveContext(event);
                 return (
                   <div
                     key={event.id}
                     id={`event-${event.id}`}
-                    className={`event-item event-unknown${isHighlighted ? " event-highlight" : ""}`}
+                    className={`event-item event-unknown${outsideActiveContext ? " event-outside-active" : ""}${isHighlighted ? " event-highlight" : ""}`}
                   >
                     <div className="event-header">
-                      <span className="event-role">{event.role}</span>
+                      <div className="event-role-group">
+                        <span className="event-role">{event.role}</span>
+                        {outsideActiveContext && (
+                          <span className="event-context-badge">Outside active model context</span>
+                        )}
+                      </div>
                       <span className="event-time">{formatTime(event.timestamp)}</span>
                     </div>
                     <div className="event-content">{event.content_text || "(no content)"}</div>

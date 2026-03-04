@@ -36,7 +36,7 @@ Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events con
   - [x] Extend `context_mode` semantics to search/recall/session-tool surfaces (MCP + API list/search endpoints)
   - [x] `active_context` projection should anchor by explicit boundary source offset/timestamp
 - [ ] Keep pre-compaction turns visible in timeline/search by default (no destructive pruning)
-- [ ] In UI, mark pre-compaction facts as "outside active model context" instead of hiding/deleting
+- [x] In UI, mark pre-compaction facts as "outside active model context" instead of hiding/deleting
 - [ ] Add retention/sync guardrails so source transcripts are archived before local cleanup windows can delete them (for example Claude `cleanupPeriodDays` default)
 
 **Acceptance tests:**
@@ -49,6 +49,7 @@ Notes:
 - 2026-03-04: Added `context_mode` projection for session events API/store (`forensic` default, `active_context` from latest compact/summary boundary); this is projection-only and does not mutate stored history.
 - 2026-03-04: Active-context boundary now derives from explicit compaction marker metadata (`source_path`, `source_offset`, `timestamp`) instead of latest boundary event id; stale same-path events before the boundary offset are excluded.
 - 2026-03-04: Added `context_mode` support to search + recall + MCP session tools (`search_sessions`, `get_session_detail`, `get_session_events`, `recall`) and `/api/agents/sessions` + `/api/agents/sessions/semantic` + `/api/agents/recall`.
+- 2026-03-04: Session detail timeline now marks forensic rows outside the active context boundary (compaction pre-history remains visible with explicit "outside active model context" badges).
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 

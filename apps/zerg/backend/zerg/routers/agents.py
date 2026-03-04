@@ -322,6 +322,10 @@ class EventResponse(UTCBaseModel):
     tool_output_text: Optional[str] = Field(None, description="Tool output")
     tool_call_id: Optional[str] = Field(None, description="Cross-provider call/result linkage ID")
     timestamp: datetime = Field(..., description="Event timestamp")
+    in_active_context: bool = Field(
+        True,
+        description="True when event is inside the current active model context boundary",
+    )
 
 
 class EventsListResponse(BaseModel):
@@ -2505,6 +2509,7 @@ async def get_session_events(
         limit=limit,
         offset=offset,
     )
+    boundary = store.get_active_context_boundary(session_id)
 
     total = store.count_session_events(
         session_id,
@@ -2525,6 +2530,7 @@ async def get_session_events(
                 tool_output_text=e.tool_output_text,
                 tool_call_id=e.tool_call_id,
                 timestamp=e.timestamp,
+                in_active_context=store.is_event_in_active_context(e, boundary) if boundary is not None else True,
             )
             for e in events
         ],
