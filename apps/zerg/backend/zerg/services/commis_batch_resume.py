@@ -18,6 +18,7 @@ from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.services.commis_runner import RunnerFactory
 from zerg.services.commis_runner import default_runner_factory as _default_runner_factory
+from zerg.services.commis_timing import compute_duration_ms
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
@@ -151,7 +152,7 @@ async def resume_oikos_batch(
 
         # Normal completion
         end_time = datetime.now(timezone.utc)
-        duration_ms = _compute_duration_ms(run.started_at, end_time=end_time)
+        duration_ms = compute_duration_ms(run.started_at, end_time=end_time)
 
         run.status = RunStatus.SUCCESS
         run.finished_at = end_time.replace(tzinfo=None)
@@ -342,7 +343,7 @@ async def resume_oikos_batch(
 
         # Update run status to WAITING (atomic with barrier reset above)
         run.status = RunStatus.WAITING
-        run.duration_ms = _compute_duration_ms(run.started_at)
+        run.duration_ms = compute_duration_ms(run.started_at)
         if runner.usage_total_tokens is not None:
             run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
         db.commit()  # Single commit: WAITING + barrier reset
@@ -370,7 +371,7 @@ async def resume_oikos_batch(
         logger.exception("Failed to batch resume oikos run %s: %s", run_id, e)
 
         end_time = datetime.now(timezone.utc)
-        duration_ms = _compute_duration_ms(run.started_at, end_time=end_time)
+        duration_ms = compute_duration_ms(run.started_at, end_time=end_time)
 
         run.status = RunStatus.FAILED
         run.error = str(e)
@@ -412,14 +413,3 @@ async def resume_oikos_batch(
         reset_oikos_context(_oikos_ctx_token)
         reset_emitter(_emitter_token)
         current_user_id_var.reset(_user_ctx_token)
-
-
-def _compute_duration_ms(started_at, *, end_time: datetime | None = None) -> int:
-    if started_at is None:
-        return 0
-    end_dt = end_time or datetime.now(timezone.utc)
-    try:
-        started_dt = started_at.replace(tzinfo=timezone.utc)
-    except Exception:
-        return 0
-    return max(0, int((end_dt - started_dt).total_seconds() * 1000))
