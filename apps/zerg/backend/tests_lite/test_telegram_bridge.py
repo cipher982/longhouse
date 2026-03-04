@@ -187,6 +187,7 @@ class TestTelegramBridgeRouting:
 
         with (
             patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
+            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
             patch.object(bridge, "_run_oikos", new=AsyncMock(return_value="Here is your answer!")),
         ):
             await _dispatch(ch, _make_event("what is 2+2?", chat_id="777"))
@@ -206,6 +207,7 @@ class TestTelegramBridgeRouting:
 
         with (
             patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=1)),
+            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
             patch.object(bridge, "_run_oikos", new=AsyncMock(return_value="reply")),
             patch("zerg.services.telegram_bridge.logger") as mock_log,
         ):
@@ -222,6 +224,7 @@ class TestTelegramBridgeRouting:
 
         with (
             patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=1)),
+            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
             patch.object(bridge, "_run_oikos", new=AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             await _dispatch(ch, _make_event("do something", chat_id="888"))
@@ -242,6 +245,7 @@ class TestTelegramBridgeRouting:
 
         with (
             patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=1)),
+            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
             patch.object(bridge, "_run_oikos", new=AsyncMock(side_effect=_slow_oikos)),
         ):
             await _dispatch(ch, _make_event("hi", chat_id="321"))

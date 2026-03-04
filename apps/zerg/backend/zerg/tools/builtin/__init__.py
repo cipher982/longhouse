@@ -33,8 +33,11 @@ from zerg.tools.builtin.session_tools import TOOLS as SESSION_TOOLS
 from zerg.tools.builtin.slack_tools import TOOLS as SLACK_TOOLS
 from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
 from zerg.tools.builtin.task_tools import TOOLS as TASK_TOOLS
+from zerg.tools.builtin.telegram_tools import send_telegram_tool as _TELEGRAM_TOOL
 from zerg.tools.builtin.web_fetch import TOOLS as WEB_FETCH_TOOLS
 from zerg.tools.builtin.web_search import TOOLS as WEB_SEARCH_TOOLS
+
+TELEGRAM_TOOLS = [_TELEGRAM_TOOL]
 
 # Personal tools (Traccar, WHOOP, Obsidian) are David-specific integrations,
 # not part of the OSS core. Gate behind PERSONAL_TOOLS_ENABLED env var.
@@ -68,6 +71,7 @@ BUILTIN_TOOLS = (
     + SMS_TOOLS
     + OIKOS_TOOLS
     + TASK_TOOLS
+    + TELEGRAM_TOOLS
     + WEB_FETCH_TOOLS
     + WEB_SEARCH_TOOLS
 )
