@@ -41,7 +41,7 @@ Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events con
 
 **Acceptance tests:**
 - [ ] Real Claude transcript with repeated summary lines still roundtrips byte-for-byte in source archive
-- [ ] Compaction-only append does not create fake conversational events
+- [x] Compaction-only append does not create fake conversational events
 - [ ] `forensic` query returns pre-compact fact; `active_context` query excludes it unless reintroduced later
 
 Notes:
@@ -50,6 +50,7 @@ Notes:
 - 2026-03-04: Active-context boundary now derives from explicit compaction marker metadata (`source_path`, `source_offset`, `timestamp`) instead of latest boundary event id; stale same-path events before the boundary offset are excluded.
 - 2026-03-04: Added `context_mode` support to search + recall + MCP session tools (`search_sessions`, `get_session_detail`, `get_session_events`, `recall`) and `/api/agents/sessions` + `/api/agents/sessions/semantic` + `/api/agents/recall`.
 - 2026-03-04: Session detail timeline now marks forensic rows outside the active context boundary (compaction pre-history remains visible with explicit "outside active model context" badges).
+- 2026-03-04: Added regression test proving compaction-only append rows (`summary` + `compact_boundary`) do not inflate user/assistant turn counts (`tests_lite/test_ingest_session_counts.py`).
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 

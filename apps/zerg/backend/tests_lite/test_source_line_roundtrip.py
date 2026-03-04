@@ -66,6 +66,45 @@ def test_export_session_jsonl_uses_source_lines_archive(tmp_path):
         db.close()
 
 
+def test_export_session_jsonl_preserves_repeated_summary_lines(tmp_path):
+    """Repeated compaction summary lines must roundtrip byte-for-byte."""
+    db = _make_store(tmp_path)
+    try:
+        store = AgentsStore(db)
+        source_path = "/tmp/claude-compaction-only.jsonl"
+        lines = [
+            '{"type":"summary","summary":"Compacted to summary A","leafUuid":"leaf-1"}',
+            '{"type":"summary","summary":"Compacted to summary B","leafUuid":"leaf-2"}',
+            '{"type":"summary","summary":"Compacted to summary C","leafUuid":"leaf-3"}',
+        ]
+
+        result = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="zerg",
+                device_id="dev-machine",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=datetime(2026, 3, 3, tzinfo=timezone.utc),
+                events=[],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=0, raw_json=lines[0]),
+                    SourceLineIngest(source_path=source_path, source_offset=72, raw_json=lines[1]),
+                    SourceLineIngest(source_path=source_path, source_offset=144, raw_json=lines[2]),
+                ],
+            )
+        )
+
+        exported = store.export_session_jsonl(result.session_id)
+        assert exported is not None
+        content_bytes, _session = exported
+        assert content_bytes.decode("utf-8") == "\n".join(lines) + "\n"
+    finally:
+        db.close()
+
+
 def test_export_session_jsonl_falls_back_to_event_raw_json_when_no_source_lines(tmp_path):
     """Backward compatibility: old shippers without source_lines still export."""
     db = _make_store(tmp_path)

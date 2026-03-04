@@ -120,3 +120,67 @@ def test_multiple_tool_calls_per_turn(tmp_path):
     assert session.user_messages == 1
     assert session.assistant_messages == 1
     assert session.tool_calls == 3
+
+
+def test_compaction_only_append_does_not_inflate_turn_counts(tmp_path):
+    """Appending compaction metadata should not create fake user/assistant turns."""
+    store, db = _make_store(tmp_path)
+    ts = _ts()
+    session_id = uuid4()
+
+    source_path = "/compaction/session.jsonl"
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=ts,
+            events=[
+                EventIngest(role="user", content_text="remember yellow", timestamp=ts, source_path=source_path, source_offset=0),
+                EventIngest(role="assistant", content_text="noted", timestamp=ts, source_path=source_path, source_offset=1),
+            ],
+        )
+    )
+
+    append_result = store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=ts,
+            ended_at=ts,
+            events=[
+                EventIngest(
+                    role="system",
+                    content_text="Session compacted to summary",
+                    timestamp=ts,
+                    source_path=source_path,
+                    source_offset=2,
+                    raw_json='{"type":"summary","summary":"Session compacted to summary","leafUuid":"leaf-1"}',
+                ),
+                EventIngest(
+                    role="system",
+                    content_text="Conversation compacted [trigger=auto]",
+                    timestamp=ts,
+                    source_path=source_path,
+                    source_offset=3,
+                    raw_json='{"type":"system","subtype":"compact_boundary","timestamp":"2026-02-22T00:00:00Z"}',
+                ),
+            ],
+        )
+    )
+    assert append_result.events_inserted == 2
+
+    from zerg.models.agents import AgentSession
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    assert session is not None
+    assert session.user_messages == 1
+    assert session.assistant_messages == 1
+    assert session.tool_calls == 0
