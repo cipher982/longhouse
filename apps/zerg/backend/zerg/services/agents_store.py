@@ -360,6 +360,24 @@ class AgentsStore:
         """Compute a stable hash for source-line archive rows."""
         return hashlib.sha256(raw_json.encode()).hexdigest()
 
+    def _extract_event_lineage(self, raw_json: str | None) -> tuple[str | None, str | None]:
+        """Extract provider-level lineage IDs from a raw JSONL line."""
+        if not raw_json:
+            return None, None
+        try:
+            obj = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return None, None
+        if not isinstance(obj, dict):
+            return None, None
+        event_uuid = obj.get("uuid")
+        parent_uuid = obj.get("parentUuid")
+        if not isinstance(event_uuid, str):
+            event_uuid = None
+        if not isinstance(parent_uuid, str):
+            parent_uuid = None
+        return event_uuid, parent_uuid
+
     def _normalize_source_lines_for_ingest(self, data: SessionIngest) -> list[SourceLineIngest]:
         """Return source lines for ingest, falling back to event raw_json rows."""
         source_lines = list(data.source_lines)
@@ -579,6 +597,8 @@ class AgentsStore:
                     event_hash=event.event_hash,
                     schema_version=event.schema_version,
                     raw_json=event.raw_json,
+                    event_uuid=event.event_uuid,
+                    parent_event_uuid=event.parent_event_uuid,
                 )
             )
         if event_copies:
@@ -689,6 +709,7 @@ class AgentsStore:
 
         for event_data in data.events:
             event_hash = self._compute_event_hash(event_data)
+            event_uuid, parent_event_uuid = self._extract_event_lineage(event_data.raw_json)
 
             stmt = sqlite_insert(AgentEvent).values(
                 session_id=session_id,
@@ -705,9 +726,11 @@ class AgentsStore:
                 event_hash=event_hash,
                 raw_json=event_data.raw_json,
                 schema_version=1,
+                event_uuid=event_uuid,
+                parent_event_uuid=parent_event_uuid,
             )
 
-            if event_data.source_path:
+            if event_data.source_path or event_uuid:
                 stmt = stmt.on_conflict_do_nothing()
 
             result = self.db.execute(stmt)

@@ -578,6 +578,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE events ADD COLUMN tool_call_id VARCHAR(255)"))
             if columns and "branch_id" not in columns:
                 conn.execute(text("ALTER TABLE events ADD COLUMN branch_id INTEGER"))
+            if columns and "event_uuid" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN event_uuid VARCHAR(255)"))
+            if columns and "parent_event_uuid" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN parent_event_uuid VARCHAR(255)"))
             conn.execute(
                 text(
                     """
@@ -606,6 +610,22 @@ def _migrate_agents_columns(engine: Engine) -> None:
             )
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_events_session_branch_timestamp " "ON events(session_id, branch_id, timestamp)")
+            )
+            conn.execute(
+                text(
+                    """
+                    DROP INDEX IF EXISTS ix_events_session_uuid
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS ix_events_session_branch_uuid
+                    ON events(session_id, branch_id, event_uuid)
+                    WHERE event_uuid IS NOT NULL
+                    """
+                )
             )
             conn.commit()
     except Exception:
