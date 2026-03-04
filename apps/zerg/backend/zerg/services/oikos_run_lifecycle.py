@@ -94,6 +94,62 @@ async def emit_failed_run_updated(
     )
 
 
+async def emit_success_run_updated(
+    db: Session,
+    *,
+    run_id: int,
+    fiche_id: int,
+    thread_id: int,
+    owner_id: int,
+    finished_at_iso: str,
+    duration_ms: int,
+) -> None:
+    """Emit standardized run_updated payload for successful runs."""
+    from zerg.services.event_store import emit_run_event
+
+    await emit_run_event(
+        db=db,
+        run_id=run_id,
+        event_type="run_updated",
+        payload={
+            "fiche_id": fiche_id,
+            "status": "success",
+            "finished_at": finished_at_iso,
+            "duration_ms": duration_ms,
+            "thread_id": thread_id,
+            "owner_id": owner_id,
+        },
+    )
+
+
+async def emit_cancelled_run_updated(
+    db: Session,
+    *,
+    run_id: int,
+    fiche_id: int,
+    thread_id: int,
+    owner_id: int,
+    finished_at_iso: str,
+    duration_ms: int,
+) -> None:
+    """Emit standardized run_updated payload for cancelled runs."""
+    from zerg.services.event_store import emit_run_event
+
+    await emit_run_event(
+        db=db,
+        run_id=run_id,
+        event_type="run_updated",
+        payload={
+            "fiche_id": fiche_id,
+            "status": "cancelled",
+            "finished_at": finished_at_iso,
+            "duration_ms": duration_ms,
+            "thread_id": thread_id,
+            "owner_id": owner_id,
+        },
+    )
+
+
 async def emit_error_event_and_close_stream(
     db: Session,
     run: Any,

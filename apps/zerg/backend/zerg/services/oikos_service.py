@@ -33,10 +33,12 @@ from zerg.models.models import Thread as ThreadModel
 from zerg.prompts import build_oikos_prompt
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_context import reset_seq
+from zerg.services.oikos_run_lifecycle import emit_cancelled_run_updated
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
+from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 from zerg.services.thread_service import ThreadService
 from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
 
@@ -1019,18 +1021,14 @@ class OikosService:
             await emit_stream_control_for_pending_commiss(self.db, run, owner_id, ttl_ms=120_000)
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
-            await emit_run_event(
+            await emit_success_run_updated(
                 db=self.db,
                 run_id=run.id,
-                event_type="run_updated",
-                payload={
-                    "fiche_id": fiche.id,
-                    "status": "success",
-                    "finished_at": end_time.isoformat(),
-                    "duration_ms": duration_ms,
-                    "thread_id": thread.id,
-                    "owner_id": owner_id,
-                },
+                fiche_id=fiche.id,
+                thread_id=thread.id,
+                owner_id=owner_id,
+                finished_at_iso=end_time.isoformat(),
+                duration_ms=duration_ms,
             )
             reset_seq(run.id)
 
@@ -1097,18 +1095,14 @@ class OikosService:
             await emit_stream_control(self.db, run, "close", "cancelled", owner_id)
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
-            await emit_run_event(
+            await emit_cancelled_run_updated(
                 db=self.db,
                 run_id=run.id,
-                event_type="run_updated",
-                payload={
-                    "fiche_id": fiche.id,
-                    "status": "cancelled",
-                    "finished_at": end_time.isoformat(),
-                    "duration_ms": duration_ms,
-                    "thread_id": thread.id,
-                    "owner_id": owner_id,
-                },
+                fiche_id=fiche.id,
+                thread_id=thread.id,
+                owner_id=owner_id,
+                finished_at_iso=end_time.isoformat(),
+                duration_ms=duration_ms,
             )
 
         except Exception as e:

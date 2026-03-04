@@ -39,6 +39,7 @@ from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
+from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 
 logger = logging.getLogger(__name__)
 
@@ -511,18 +512,14 @@ async def resume_oikos_batch(
         # Emit stream_control based on pending commiss
         await emit_stream_control_for_pending_commiss(db, run, owner_id, ttl_ms=120_000)
 
-        await emit_run_event(
+        await emit_success_run_updated(
             db=db,
             run_id=run.id,
-            event_type="run_updated",
-            payload={
-                "fiche_id": fiche.id,
-                "status": "success",
-                "finished_at": end_time.isoformat(),
-                "duration_ms": duration_ms,
-                "thread_id": thread.id,
-                "owner_id": owner_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            finished_at_iso=end_time.isoformat(),
+            duration_ms=duration_ms,
         )
 
         # Auto-summary -> Memory Files (async, best-effort)
@@ -977,18 +974,14 @@ async def _continue_oikos_langgraph_free(
         # Emit stream_control based on pending commiss
         await emit_stream_control_for_pending_commiss(db, run, owner_id, ttl_ms=120_000)
 
-        await emit_run_event(
+        await emit_success_run_updated(
             db=db,
             run_id=run.id,
-            event_type="run_updated",
-            payload={
-                "fiche_id": fiche.id,
-                "status": "success",
-                "finished_at": end_time.isoformat(),
-                "duration_ms": duration_ms,
-                "thread_id": thread.id,
-                "owner_id": owner_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            finished_at_iso=end_time.isoformat(),
+            duration_ms=duration_ms,
         )
 
         # Auto-summary -> Memory Files (async, best-effort)
