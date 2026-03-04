@@ -69,11 +69,12 @@ class SchedulerService:
 
     async def _run_barrier_reaper(self):
         """Execute the barrier reaper task."""
-        from zerg.services.commis_resume import reap_expired_barriers
+        from zerg.services.commis_barrier_reaper import reap_expired_barriers
+        from zerg.services.commis_resume import resume_oikos_batch
 
         try:
             with db_session(self.session_factory) as db:
-                result = await reap_expired_barriers(db)
+                result = await reap_expired_barriers(db=db, resume_batch=resume_oikos_batch)
                 if result.get("reaped", 0) > 0:
                     logger.info(f"Barrier reaper: reaped {result['reaped']} expired barriers")
         except Exception as e:
