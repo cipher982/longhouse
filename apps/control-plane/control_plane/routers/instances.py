@@ -354,6 +354,10 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         )
 
     provisioner = Provisioner()
+    try:
+        provisioner.run_migration_preflight(inst.subdomain, data_path=inst.data_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     provisioner.deprovision_instance(inst.container_name)
     result = provisioner.provision_instance(inst.subdomain, owner_email=user.email)
 

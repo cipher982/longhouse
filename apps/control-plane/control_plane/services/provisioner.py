@@ -169,6 +169,55 @@ class Provisioner:
         network = self.client.networks.get(settings.proxy_network)
         network.connect(container)
 
+    def run_migration_preflight(self, subdomain: str, *, data_path: str | None = None) -> str:
+        """Apply heavy DB migrations against instance data before reprovision.
+
+        Runs a one-shot container on the target data volume:
+        `python -m zerg.cli.main migrate --database-url sqlite:////data/longhouse.db --apply --json`
+        """
+        target_data_path = data_path or os.path.join(settings.instance_data_root, subdomain)
+        os.makedirs(target_data_path, exist_ok=True)
+
+        if os.geteuid() == 0:
+            os.chown(target_data_path, 1000, 1000)
+        else:
+            os.chmod(target_data_path, 0o777)
+
+        command = [
+            "python",
+            "-m",
+            "zerg.cli.main",
+            "migrate",
+            "--database-url",
+            "sqlite:////data/longhouse.db",
+            "--apply",
+            "--json",
+        ]
+
+        try:
+            output = self.client.containers.run(
+                image=settings.image,
+                command=command,
+                remove=True,
+                volumes={target_data_path: {"bind": "/data", "mode": "rw"}},
+                environment={
+                    "DATABASE_URL": "sqlite:////data/longhouse.db",
+                    "AUTH_DISABLED": "1",
+                },
+                extra_hosts={"host.docker.internal": "host-gateway"},
+            )
+        except docker.errors.ContainerError as exc:
+            stderr_value = getattr(exc, "stderr", None)
+            stdout_value = getattr(exc, "stdout", None)
+            stderr = stderr_value.decode("utf-8", errors="replace") if isinstance(stderr_value, (bytes, bytearray)) else ""
+            stdout = stdout_value.decode("utf-8", errors="replace") if isinstance(stdout_value, (bytes, bytearray)) else ""
+            detail = "\n".join(part for part in [stderr, stdout] if part).strip() or str(exc)
+            raise RuntimeError(f"Migration preflight failed for {subdomain}: {detail}") from exc
+
+        if isinstance(output, (bytes, bytearray)):
+            return output.decode("utf-8", errors="replace")
+        return str(output or "")
+
     def provision_instance(
         self,
         subdomain: str,

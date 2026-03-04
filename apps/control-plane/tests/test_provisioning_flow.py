@@ -141,6 +141,7 @@ def _mock_provisioner():
     )
     prov.deprovision_instance.return_value = None
     prov.wait_for_health.return_value = True
+    prov.run_migration_preflight.return_value = '{"pending_before":[],"pending_after":[]}'
     return prov
 
 
@@ -416,10 +417,26 @@ class TestInstancesAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "provisioning"
+        prov.run_migration_preflight.assert_called_once_with("inst1", data_path="/tmp/test-data/inst1")
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
         db_session.refresh(inst)
         assert inst.last_health_at is None
+
+    @patch("control_plane.routers.instances.Provisioner")
+    def test_reprovision_aborts_on_preflight_failure(self, MockProv, client, db_session):
+        prov = _mock_provisioner()
+        prov.run_migration_preflight.side_effect = RuntimeError("Migration preflight failed for inst1: boom")
+        MockProv.return_value = prov
+
+        user = _make_user(db_session)
+        inst = _make_instance(db_session, user, status="deprovisioned")
+
+        resp = client.post(f"/api/instances/{inst.id}/reprovision", headers=ADMIN_HEADERS)
+        assert resp.status_code == 500
+        assert "Migration preflight failed" in resp.json()["detail"]
+        prov.deprovision_instance.assert_not_called()
+        prov.provision_instance.assert_not_called()
 
     @patch("control_plane.routers.instances.Provisioner")
     def test_reprovision_blocked_during_deploy(self, MockProv, client, db_session):
@@ -935,6 +952,36 @@ class TestProvisionerClass:
             provisioner = Provisioner()
             with pytest.raises(RuntimeError, match="Health check failed"):
                 provisioner.wait_for_health("testuser", timeout=1)
+
+    @patch("control_plane.services.provisioner.docker.DockerClient")
+    def test_run_migration_preflight_success(self, MockDockerClient, tmp_path):
+        mock_client = MagicMock()
+        MockDockerClient.return_value = mock_client
+        mock_client.containers.run.return_value = b'{"pending_before":[],"pending_after":[]}'
+
+        provisioner = Provisioner()
+        output = provisioner.run_migration_preflight("testuser", data_path=str(tmp_path / "testuser"))
+
+        assert '"pending_after":[]' in output
+        mock_client.containers.run.assert_called_once()
+
+    @patch("control_plane.services.provisioner.docker.DockerClient")
+    def test_run_migration_preflight_failure_raises(self, MockDockerClient, tmp_path):
+        import docker.errors
+
+        mock_client = MagicMock()
+        MockDockerClient.return_value = mock_client
+        mock_client.containers.run.side_effect = docker.errors.ContainerError(
+            container=MagicMock(),
+            exit_status=1,
+            command="migrate",
+            image="ghcr.io/test/app:latest",
+            stderr=b"boom",
+        )
+
+        provisioner = Provisioner()
+        with pytest.raises(RuntimeError, match="Migration preflight failed"):
+            provisioner.run_migration_preflight("testuser", data_path=str(tmp_path / "testuser"))
 
 
 # ===========================================================================
