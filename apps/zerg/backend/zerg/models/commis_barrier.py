@@ -5,8 +5,8 @@ Implements the barrier synchronization pattern for multi-commis execution:
 - CommisBarrierJob: individual commis job in a barrier with result caching
 
 Two-Phase Commit Pattern:
-1. spawn_commis creates CommisJob with status='created' (not queued)
-2. After ALL spawn_commis processed, create CommisBarrier + CommisBarrierJob records
+1. spawn_workspace_commis creates CommisJob with status='created' (not queued)
+2. After ALL spawn_workspace_commis processed, create CommisBarrier + CommisBarrierJob records
 3. Atomic: flip all jobs from 'created' to 'queued'
 4. Commis can now pick them up (barrier guaranteed to exist)
 

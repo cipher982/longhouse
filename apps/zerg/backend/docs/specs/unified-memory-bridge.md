@@ -15,7 +15,7 @@ Meanwhile, commis output doesn't appear in the agent timeline — Longhouse's ow
 
 1. **All commis become CLI agent subprocesses** (workspace mode). Standard mode (in-process) is deprecated.
 2. **Commis sessions are ingested into the agent timeline** via direct `AgentsStore.ingest_session()` call (same store as the `/api/agents/ingest` endpoint).
-3. **Oikos becomes a thin coordinator** — direct LLM API calls for conversation, `spawn_commis` for real work. No custom tool execution engine.
+3. **Oikos becomes a thin coordinator** — direct LLM API calls for conversation, `spawn_workspace_commis` for real work. No custom tool execution engine.
 4. **The legacy harness is removed incrementally** — ~25K LOC of dead code cleared over time.
 5. **Semantic search added to Longhouse** — embeddings on ingest, replaces Life Hub MCP dependency.
 
@@ -77,11 +77,10 @@ Meanwhile, commis output doesn't appear in the agent timeline — Longhouse's ow
 - `tools/builtin/` (~60 tools, ~9.5K LOC) — **kept as modular toolbox**. Each agent configured with a subset. Tools are product features (email, Slack, GitHub, memory, sessions, etc.), not harness code.
 
 ### Migration steps
-1. Make workspace mode the default (and only) execution mode for commis
-2. Gate standard mode behind `LEGACY_STANDARD_MODE=1` env var (escape hatch)
-3. Update all tests that use standard mode to use workspace mode
-4. Remove standard mode code paths once stable
-5. Remove dead tool/skills/callback code incrementally
+1. Keep workspace mode as the only execution mode for commis
+2. Remove any remaining references to legacy standard/in-process mode
+3. Update remaining tests/docs to workspace-only semantics
+4. Remove dead tool/skills/callback code incrementally
 
 ### What stays
 - `services/commis_job_processor.py` — job queue consumer (refactored)
@@ -99,8 +98,8 @@ Meanwhile, commis output doesn't appear in the agent timeline — Longhouse's ow
 ### First-Principles Findings (2026-02-10)
 
 1. **Oikos prompt/tool contract drifted from runtime reality.**
-   - Prompt/docs still frame Oikos as an ops assistant that spawns `spawn_commis` for server checks.
-   - Runtime is workspace CLI delegation, and legacy `spawn_commis` semantics are ambiguous under workspace-only execution.
+   - Prompt/docs still framed Oikos as an ops assistant that spawns `spawn_commis` for server checks.
+   - Runtime is workspace CLI delegation, and `spawn_workspace_commis` is now the only supported spawn contract.
 
 2. **Commis backend choice is implicit, not user-intent driven.**
    - Hatch already supports multiple backends (`claude`/`codex`/`gemini`/`zai`), but Oikos does not expose a clean intent contract for selecting one.
@@ -153,7 +152,7 @@ This removes the current ambiguity where Oikos prompt examples and runtime const
 ### 3c: Tool Contract Cleanup
 
 - Make `spawn_workspace_commis` the canonical delegation tool in prompt + docs.
-- Keep `spawn_commis` only as a compatibility alias with explicit semantics (no "standard mode" behavior).
+- Remove `spawn_commis` from active contracts (runtime, schema, prompt, and tests).
 - Remove deprecated execution-mode vocabulary (`standard`, `cloud`, `local`) from user-facing docs.
 - Keep `wait_for_commis` as explicit opt-in blocking behavior; default remains async inbox.
 
@@ -206,6 +205,6 @@ Update Oikos prompt templates so they reflect actual product direction:
 
 1. Commis sessions appear in timeline within 30s of completion
 2. Standard mode fully removed, no regression in commis functionality
-3. Oikos works with only: LLM API, spawn_commis, session tools, contact_user
+3. Oikos works with only: LLM API, spawn_workspace_commis, session tools, contact_user
 4. Semantic search returns relevant results for "find where I did X"
 5. Total backend LOC reduced by ~20K+

@@ -4,7 +4,7 @@ These endpoints are called internally by the backend (not exposed to public API)
 to handle run resume when a oikos is interrupted and commis complete.
 
 Uses the LangGraph-free oikos resume pattern:
-- Oikos calls spawn_commis() and the loop raises FicheInterrupted
+- Oikos calls spawn_workspace_commis() and the loop raises FicheInterrupted
 - Run status becomes WAITING
 - Commis completes, calls resume endpoint
 - FicheRunner.run_continuation() continues execution
@@ -53,7 +53,7 @@ async def resume_run(
     """Resume a WAITING run when a commis completes.
 
     Called internally when a commis completes while the oikos run was
-    WAITING (interrupted by spawn_commis). Uses FicheRunner.run_continuation()
+    WAITING (interrupted by spawn_workspace_commis). Uses FicheRunner.run_continuation()
     to continue the oikos loop from persisted history.
 
     Args:

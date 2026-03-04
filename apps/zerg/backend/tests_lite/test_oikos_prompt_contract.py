@@ -1,6 +1,7 @@
 """Guardrails for Oikos prompt/tool contract drift."""
 
 from zerg.prompts.templates import BASE_OIKOS_PROMPT
+from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import TOOLS
 
 
@@ -27,3 +28,7 @@ def test_prompt_uses_wait_for_commis_not_removed_wait_parameter():
 def test_tool_descriptions_match_prompt_semantics():
     workspace_description = _tool_description("spawn_workspace_commis")
     assert "PRIMARY" in workspace_description
+
+
+def test_oikos_tool_names_do_not_include_removed_spawn_alias():
+    assert "spawn_commis" not in OIKOS_TOOL_NAMES

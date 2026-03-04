@@ -102,7 +102,7 @@ class OikosEmitter:
         try:
             # Handle structured results (dict) vs string results differently
             if isinstance(result, dict):
-                # Structured result (e.g., spawn_commis with job_id) - pass through
+                # Structured result (e.g., spawn_workspace_commis with job_id) - pass through
                 result_payload = result
             elif isinstance(result, str):
                 # String result - truncate and wrap for backward compatibility

@@ -121,7 +121,10 @@ class MessageArrayBuilder:
             self._skill_integration, self._skill_max = self._build_skill_integration(fiche)
             if self._skill_integration:
                 try:
-                    skills_prompt = self._skill_integration.get_prompt(include_content=False, max_skills=self._skill_max)
+                    skills_prompt = self._skill_integration.get_prompt(
+                        include_content=False,
+                        max_skills=self._skill_max,
+                    )
                     if skills_prompt:
                         system_content = f"{system_content}\n\n{skills_prompt}"
                         logger.debug("[Builder] Injected skills prompt for agent %s", self._agent.id)
@@ -481,7 +484,7 @@ def get_or_create_tool_message(
         tool_msg = ToolMessage(
             content=existing.content,
             tool_call_id=tool_call_id,
-            name=existing.name or "spawn_commis",
+            name=existing.name or "spawn_workspace_commis",
         )
         return tool_msg, False
 
@@ -493,7 +496,7 @@ def get_or_create_tool_message(
     tool_msg = ToolMessage(
         content=content,
         tool_call_id=tool_call_id,
-        name="spawn_commis",
+        name="spawn_workspace_commis",
     )
 
     ThreadService.save_new_messages(
