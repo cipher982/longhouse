@@ -11,6 +11,135 @@ from zerg.tools.error_envelope import tool_error
 logger = logging.getLogger(__name__)
 
 
+def format_duration(duration_ms: int) -> str:
+    """Format duration for human readability."""
+    if duration_ms < 1000:
+        return f"{duration_ms}ms"
+    elif duration_ms < 60000:
+        seconds = duration_ms / 1000
+        return f"{seconds:.1f}s"
+    else:
+        minutes = duration_ms // 60000
+        remaining_seconds = (duration_ms % 60000) // 1000
+        return f"{minutes}m {remaining_seconds}s"
+
+
+async def read_commis_result_async(job_id: str) -> str:
+    """Read the final result from a completed commis job."""
+    from zerg.crud import crud
+
+    resolver = get_credential_resolver()
+    if not resolver:
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot read commis result - no credential context available",
+        )
+
+    db = resolver.db
+
+    try:
+        job_id_int = int(job_id)
+        job = (
+            db.query(crud.CommisJob)
+            .filter(
+                crud.CommisJob.id == job_id_int,
+                crud.CommisJob.owner_id == resolver.owner_id,
+            )
+            .first()
+        )
+
+        if not job:
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
+        if not job.commis_id:
+            return tool_error(ErrorType.INVALID_STATE, f"Commis job {job_id} has not started execution yet")
+        if job.status not in ["success", "failed"]:
+            return tool_error(ErrorType.INVALID_STATE, f"Commis job {job_id} is not complete (status: {job.status})")
+
+        artifact_store = CommisArtifactStore()
+        result = artifact_store.get_commis_result(job.commis_id)
+        metadata = artifact_store.get_commis_metadata(job.commis_id, owner_id=resolver.owner_id)
+
+        duration_ms = metadata.get("duration_ms")
+        duration_info = f"\n\nExecution time: {format_duration(duration_ms)}" if duration_ms is not None else ""
+
+        return f"Result from commis job {job_id} (commis {job.commis_id}):{duration_info}\n\n{result}"
+
+    except ValueError:
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
+    except PermissionError:
+        return tool_error(ErrorType.PERMISSION_DENIED, f"Access denied to commis job {job_id}")
+    except FileNotFoundError:
+        return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found or has no result yet")
+    except Exception as e:
+        logger.exception(f"Failed to read commis result: {job_id}")
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error reading commis result: {e}")
+
+
+def read_commis_result(job_id: str) -> str:
+    """Sync wrapper for read_commis_result_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(read_commis_result_async(job_id))
+
+
+async def get_commis_evidence_async(job_id: str, budget_bytes: int = 32000) -> str:
+    """Compile evidence for a commis job within a byte budget."""
+    from zerg.crud import crud
+    from zerg.services.evidence_compiler import EvidenceCompiler
+
+    resolver = get_credential_resolver()
+    if not resolver:
+        return tool_error(
+            ErrorType.MISSING_CONTEXT,
+            "Cannot fetch evidence - no credential context available",
+        )
+
+    db = resolver.db
+    safe_budget = max(1024, min(int(budget_bytes or 0), 200_000))
+
+    try:
+        job_id_int = int(job_id)
+    except ValueError:
+        return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")
+
+    try:
+        job = (
+            db.query(crud.CommisJob)
+            .filter(
+                crud.CommisJob.id == job_id_int,
+                crud.CommisJob.owner_id == resolver.owner_id,
+            )
+            .first()
+        )
+        if not job:
+            return tool_error(ErrorType.NOT_FOUND, f"Commis job {job_id} not found")
+        if not job.commis_id:
+            return tool_error(ErrorType.INVALID_STATE, f"Commis job {job_id} has not started execution yet")
+
+        compiler = EvidenceCompiler(db=db)
+        evidence = compiler.compile_for_job(
+            job_id=job.id,
+            commis_id=job.commis_id,
+            owner_id=resolver.owner_id,
+            budget_bytes=safe_budget,
+        )
+
+        return f"Evidence for commis job {job_id} (commis {job.commis_id}, budget={safe_budget}B):\n\n{evidence}"
+
+    except PermissionError:
+        return tool_error(ErrorType.PERMISSION_DENIED, f"Access denied to commis job {job_id}")
+    except Exception as e:
+        logger.exception(f"Failed to compile evidence for commis job: {job_id}")
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error compiling evidence for commis job {job_id}: {e}")
+
+
+def get_commis_evidence(job_id: str, budget_bytes: int = 32000) -> str:
+    """Sync wrapper for get_commis_evidence_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(get_commis_evidence_async(job_id, budget_bytes))
+
+
 def _truncate_head_tail(content: str, max_bytes: int, head_size: int = 1024) -> str:
     """Truncate content using head+tail strategy with marker.
 
