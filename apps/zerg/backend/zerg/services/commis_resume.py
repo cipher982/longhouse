@@ -34,6 +34,7 @@ from zerg.models.commis_barrier import CommisBarrierJob
 from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
+from zerg.services.commis_updates import queue_commis_update
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
@@ -104,58 +105,6 @@ INBOX_QUEUED_RESULT = "(Queued commis updates available in thread)"
 INBOX_FOLLOWUP_TIMEOUT_S = 300
 INBOX_FOLLOWUP_SLEEP_S = 0.5
 INBOX_FOLLOWUP_MAX_SLEEP_S = 2.0
-
-
-def _build_commis_update_content(
-    *,
-    commis_job_id: int,
-    commis_task: str,
-    commis_status: str,
-    commis_result: str,
-    commis_error: str | None,
-) -> str:
-    if commis_status == "failed":
-        summary = f"Error: {commis_error or 'Unknown error'}"
-    else:
-        summary = f"Result: {commis_result[:500]}"
-    return (
-        "[Commis update]\n"
-        f"Job ID: {commis_job_id}\n"
-        f"Status: {commis_status}\n"
-        f"Task: {commis_task[:200]}\n"
-        f"{summary}\n\n"
-        "If you need full details, call get_commis_evidence(job_id=...)."
-    )
-
-
-def _queue_commis_update(
-    *,
-    db: Session,
-    thread_id: int,
-    commis_job_id: int,
-    commis_task: str,
-    commis_status: str,
-    commis_result: str,
-    commis_error: str | None,
-) -> None:
-    from zerg.crud import crud
-
-    context_content = _build_commis_update_content(
-        commis_job_id=commis_job_id,
-        commis_task=commis_task,
-        commis_status=commis_status,
-        commis_result=commis_result,
-        commis_error=commis_error,
-    )
-
-    crud.create_thread_message(
-        db=db,
-        thread_id=thread_id,
-        role="user",  # Use "user" role so Runner includes it
-        content=context_content,
-        processed=False,  # Unprocessed so it gets picked up
-        internal=True,  # Internal flag for UI filtering
-    )
 
 
 async def run_inbox_followup_after_run(
@@ -1196,7 +1145,7 @@ async def trigger_commis_inbox_run(
                     commis_job_id,
                     existing_continuation.id,
                 )
-                _queue_commis_update(
+                queue_commis_update(
                     db=db,
                     thread_id=thread.id,
                     commis_job_id=commis_job_id,
@@ -1270,7 +1219,7 @@ async def trigger_commis_inbox_run(
             existing = db.query(Run).filter(Run.continuation_of_run_id == original_run_id).first()
             if existing:
                 if existing.status == RunStatus.RUNNING:
-                    _queue_commis_update(
+                    queue_commis_update(
                         db=db,
                         thread_id=thread.id,
                         commis_job_id=commis_job_id,
