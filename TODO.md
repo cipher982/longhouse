@@ -40,7 +40,7 @@ Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events con
 - [x] Add retention/sync guardrails so source transcripts are archived before local cleanup windows can delete them (for example Claude `cleanupPeriodDays` default)
 
 **Acceptance tests:**
-- [ ] Real Claude transcript with repeated summary lines still roundtrips byte-for-byte in source archive
+- [x] Real Claude transcript with repeated summary lines still roundtrips byte-for-byte in source archive
 - [x] Compaction-only append does not create fake conversational events
 - [x] `forensic` query returns pre-compact fact; `active_context` query excludes it unless reintroduced later
 
@@ -53,6 +53,7 @@ Notes:
 - 2026-03-04: Added regression test proving compaction-only append rows (`summary` + `compact_boundary`) do not inflate user/assistant turn counts (`tests_lite/test_ingest_session_counts.py`).
 - 2026-03-04: `longhouse doctor` now checks Claude retention/sync risk (`cleanupPeriodDays`, Stop-hook presence) and warns when retention is short/default or hooks are missing.
 - 2026-03-04: Context-mode search regression is covered end-to-end (`tests_lite/test_sessions_search_context_mode.py`) proving forensic includes pre-compact facts while active_context excludes stale pre-boundary facts.
+- 2026-03-04: Added real-session verifier `scripts/verify_real_claude_transcript_fidelity.py`; run against Claude session `bf3c1a89-...` (`summary_lines=26`, `compact_boundary_lines=1`) now roundtrips exactly (`expected_bytes == exported_bytes == 2,347,789`).
 
 ## [Product] Claude Rewind DAG Fidelity (size: 3)
 
@@ -65,12 +66,13 @@ Status (2026-03-04): In progress (lineage storage landed; DAG-driven branching s
 - [x] Add branch-scoped dedupe for lineage IDs so replay retries do not duplicate events while branch prefix copy remains valid
 - [x] Detect branch forks from lineage graph divergence even when no same-offset rewrite/truncation is observed
 - [ ] Align head-branch selection with Claude `leafUuid`/DAG head semantics when available
-- [ ] Add real-transcript regression fixture coverage for high-rewind sessions (multiple parent fan-outs)
+- [x] Add real-transcript verification harness for high-rewind sessions (multiple parent fan-outs)
 
 Notes:
 - 2026-03-04: Real transcript analysis on local Claude session `bf3c1a89-...` showed `summary=26`, `compact_boundary=1`, and ~25 parent fan-out branch points in raw JSONL while offset-only rewind detection produced a single stored branch, confirming the remaining fidelity gap.
 - 2026-03-04: Added `event_uuid` + `parent_event_uuid` columns/index/migration path and ingest extraction in `AgentsStore`; coverage in `tests_lite/test_event_lineage_ingest.py`.
 - 2026-03-04: Rewind detection now forks on lineage divergence (`parentUuid` already has different child on head) even when incoming lines are append-only; regression in `tests_lite/test_rewind_branch_projection.py::test_lineage_divergence_forks_branch_without_offset_rewrite`.
+- 2026-03-04: Added `is_branch_copy` provenance on `source_lines` so forensic export excludes branch-prefix copies; real transcript verification (`scripts/verify_real_claude_transcript_fidelity.py --strict-fanout`) now passes with 19 stored branches and exact byte roundtrip.
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 

@@ -642,6 +642,7 @@ class AgentsStore:
                     source_offset=row_offset,
                     branch_id=to_branch_id,
                     revision=1,
+                    is_branch_copy=1,
                     raw_json=row.raw_json,
                     line_hash=row.line_hash,
                 )
@@ -842,6 +843,7 @@ class AgentsStore:
                 source_offset=source_offset,
                 branch_id=ingest_branch.id,
                 revision=revision,
+                is_branch_copy=0,
                 raw_json=line_data.raw_json,
                 line_hash=line_hash,
             )
@@ -1433,13 +1435,23 @@ class AgentsStore:
         head_branch_id = self.get_head_branch_id(session_id)
         if branch_mode == "head" and head_branch_id is not None:
             source_lines_query = source_lines_query.filter(AgentSourceLine.branch_id == head_branch_id)
-        source_lines = source_lines_query.order_by(
-            AgentSourceLine.branch_id.asc(),
-            AgentSourceLine.source_path.asc(),
-            AgentSourceLine.source_offset.asc(),
-            AgentSourceLine.revision.asc(),
-            AgentSourceLine.id.asc(),
-        ).all()
+        if branch_mode == "all":
+            # Forensic export should reflect the raw archive stream, not branch-prefix copies.
+            source_lines_query = source_lines_query.filter(
+                or_(
+                    AgentSourceLine.is_branch_copy.is_(None),  # legacy rows predating the column
+                    AgentSourceLine.is_branch_copy == 0,
+                )
+            )
+            source_lines = source_lines_query.order_by(AgentSourceLine.id.asc()).all()
+        else:
+            source_lines = source_lines_query.order_by(
+                AgentSourceLine.branch_id.asc(),
+                AgentSourceLine.source_path.asc(),
+                AgentSourceLine.source_offset.asc(),
+                AgentSourceLine.revision.asc(),
+                AgentSourceLine.id.asc(),
+            ).all()
         if source_lines:
             if branch_mode == "all":
                 lines = [row.raw_json for row in source_lines]

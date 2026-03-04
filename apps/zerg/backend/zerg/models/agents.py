@@ -256,6 +256,7 @@ class AgentSourceLine(AgentsBase):
     source_offset = Column(BigInteger, nullable=False)
     branch_id = Column(Integer, nullable=False, index=True)
     revision = Column(Integer, nullable=False, server_default=text("1"))
+    is_branch_copy = Column(Integer, nullable=False, server_default=text("0"))  # 1 when copied during rewind fork
     raw_json = Column(Text, nullable=False)
     line_hash = Column(String(64), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
