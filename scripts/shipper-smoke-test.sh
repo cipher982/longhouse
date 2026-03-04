@@ -50,12 +50,12 @@ cat > "$SESSION_FILE" << EOF_SESSION
 {"type":"assistant","uuid":"$(uuidgen)","timestamp":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","cwd":"/tmp/smoke-test","message":{"content":[{"type":"text","text":"Smoke test response"}]}}
 EOF_SESSION
 
-# 4. Test zerg ship
+# 4. Test ship command
 cd "$BACKEND_DIR"
 if [[ -n "$SHIPPER_TOKEN" ]]; then
-  SHIP_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run zerg ship --url "$BACKEND_URL" --claude-dir "$TEMP_CLAUDE_DIR" 2>&1 || true)
+  SHIP_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 else
-  SHIP_OUTPUT=$(uv run zerg ship --url "$BACKEND_URL" --claude-dir "$TEMP_CLAUDE_DIR" 2>&1 || true)
+  SHIP_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 fi
 echo "$SHIP_OUTPUT"
 
@@ -69,18 +69,18 @@ fi
 
 # 6. Test incremental ship (no new content)
 if [[ -n "$SHIPPER_TOKEN" ]]; then
-  SHIP2_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run zerg ship --url "$BACKEND_URL" --claude-dir "$TEMP_CLAUDE_DIR" 2>&1 || true)
+  SHIP2_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 else
-  SHIP2_OUTPUT=$(uv run zerg ship --url "$BACKEND_URL" --claude-dir "$TEMP_CLAUDE_DIR" 2>&1 || true)
+  SHIP2_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 fi
 echo "$SHIP2_OUTPUT"
 
 # 7. Add new content and ship again
 printf '{"type":"user","uuid":"%s","timestamp":"%s","cwd":"/tmp/smoke-test","message":{"content":"New message after first ship"}}\n' "$(uuidgen)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SESSION_FILE"
 if [[ -n "$SHIPPER_TOKEN" ]]; then
-  SHIP3_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run zerg ship --url "$BACKEND_URL" --claude-dir "$TEMP_CLAUDE_DIR" 2>&1 || true)
+  SHIP3_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 else
-  SHIP3_OUTPUT=$(uv run zerg ship --url "$BACKEND_URL" --claude-dir "$TEMP_CLAUDE_DIR" 2>&1 || true)
+  SHIP3_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 fi
 echo "$SHIP3_OUTPUT"
 
