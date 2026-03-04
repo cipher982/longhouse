@@ -32,6 +32,17 @@ def get_existing_demo_provider_session_ids(db: Session) -> set[str]:
     return {row[0] for row in rows if row[0]}
 
 
+def delete_demo_sessions(db: Session) -> int:
+    """Delete all demo sessions and return number of rows removed."""
+    deleted = (
+        db.query(AgentSession)
+        .filter(AgentSession.provider_session_id.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return int(deleted or 0)
+
+
 def seed_missing_demo_sessions(db: Session, now: datetime | None = None) -> tuple[int, int]:
     """Seed only missing demo sessions.
 

@@ -789,10 +789,13 @@ export default function SessionsPage() {
     setDemoLoading(true);
     setSeedError(null);
     try {
-      await seedDemoSessions();
+      const result = await seedDemoSessions();
       // Invalidate both sessions and filter options so new demo data appears
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
       queryClient.invalidateQueries({ queryKey: ["agent-session-filters"] });
+      if (result.sessions_failed > 0) {
+        setSeedError(`Loaded ${result.sessions_created} demo sessions, ${result.sessions_failed} failed. Check backend logs.`);
+      }
     } catch {
       setSeedError("Failed to load demo sessions. Please try again.");
     } finally {
