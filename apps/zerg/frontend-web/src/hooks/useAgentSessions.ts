@@ -63,7 +63,7 @@ export function useAgentSession(sessionId: string | null) {
  */
 export function useAgentSessionEvents(
   sessionId: string | null,
-  options: { roles?: string; limit?: number; offset?: number } = {}
+  options: { roles?: string; limit?: number; offset?: number; branch_mode?: "head" | "all" } = {}
 ) {
   return useQuery<AgentEventsListResponse>({
     queryKey: ["agent-session-events", sessionId, options],
@@ -81,17 +81,18 @@ export function useAgentSessionEvents(
  */
 export function useAgentSessionEventsInfinite(
   sessionId: string | null,
-  options: { roles?: string; limit?: number; enabled?: boolean } = {}
+  options: { roles?: string; limit?: number; enabled?: boolean; branch_mode?: "head" | "all" } = {}
 ) {
-  const { roles, limit = 1000, enabled = true } = options;
+  const { roles, limit = 1000, enabled = true, branch_mode = "head" } = options;
 
   return useInfiniteQuery<AgentEventsListResponse>({
-    queryKey: ["agent-session-events-infinite", sessionId, { roles, limit }],
+    queryKey: ["agent-session-events-infinite", sessionId, { roles, limit, branch_mode }],
     queryFn: ({ pageParam = 0 }) =>
       fetchAgentSessionEvents(sessionId!, {
         roles,
         limit,
         offset: Number(pageParam),
+        branch_mode,
       }),
     initialPageParam: 0,
     getNextPageParam: (lastPage, pages) => {

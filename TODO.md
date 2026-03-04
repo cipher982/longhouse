@@ -56,35 +56,39 @@ Notes:
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 
-Status (2026-03-04): Spec drafted, not implemented.
+Status (2026-03-04): Done.
 
 **Goal:** Handle `/rewind` as intentional branch history, not duplicate/corrupt event accumulation.
 
 **First-principles invariants:**
-- [ ] Rewind must never destroy previously shipped facts
-- [ ] Post-rewind "head" must be reconstructable deterministically
-- [ ] Abandoned branches remain auditable but do not pollute default active timeline
+- [x] Rewind must never destroy previously shipped facts
+- [x] Post-rewind "head" must be reconstructable deterministically
+- [x] Abandoned branches remain auditable but do not pollute default active timeline
 
 **Implementation spec:**
-- [ ] Make source-line storage append-only by revision (stop overwriting `(session_id, source_path, source_offset)` on conflict)
-- [ ] Detect rewrite-at-same-offset and file truncation as `rewind_candidate` signals
-- [ ] Introduce branch metadata for sessions (`branch_id`, `parent_branch_id`, `branched_at_offset`, `is_head`)
-- [ ] On rewind detection:
-  - [ ] Freeze prior head as abandoned branch
-  - [ ] Start new head branch from rewind point
-- [ ] Update event projection APIs:
-  - [ ] default timeline = head branch only
-  - [ ] optional "show abandoned" mode for forensic/debug
-- [ ] Add explicit UX language for "dangling state": events still exist, but are not on active branch
+- [x] Make source-line storage append-only by revision (stop overwriting `(session_id, source_path, source_offset)` on conflict)
+- [x] Detect rewrite-at-same-offset and file truncation as `rewind_candidate` signals
+- [x] Introduce branch metadata for sessions (`branch_id`, `parent_branch_id`, `branched_at_offset`, `is_head`)
+- [x] On rewind detection:
+  - [x] Freeze prior head as abandoned branch
+  - [x] Start new head branch from rewind point
+- [x] Update event projection APIs:
+  - [x] default timeline = head branch only
+  - [x] optional "show abandoned" mode for forensic/debug
+- [x] Add explicit UX language for "dangling state": events still exist, but are not on active branch
 
 **Acceptance tests:**
-- [ ] Rewind replay with rewritten line at same offset creates new head branch (not duplicate rows in active projection)
-- [ ] Forensic mode returns both pre- and post-rewind branches
-- [ ] Default timeline excludes abandoned-branch continuation after rewind point
-- [ ] Export "head only" and "full forensic" both pass deterministic reconstruction tests
+- [x] Rewind replay with rewritten line at same offset creates new head branch (not duplicate rows in active projection)
+- [x] Forensic mode returns both pre- and post-rewind branches
+- [x] Default timeline excludes abandoned-branch continuation after rewind point
+- [x] Export "head only" and "full forensic" both pass deterministic reconstruction tests
 
 Notes:
 - Real DB evidence already shows same `(session, path, offset)` with distinct content hashes; this task formalizes that into branch semantics.
+- 2026-03-04: Added `session_branches` + per-event/per-source-line `branch_id` with rewind detection on rewrite/truncation and append-only source-line revisions.
+- 2026-03-04: Events API now defaults to `branch_mode=head` and supports `branch_mode=all`; response includes `abandoned_events` and per-event `is_head_branch`.
+- 2026-03-04: Session detail UI now surfaces dangling-state language and a forensic toggle (“Show abandoned branches”).
+- 2026-03-04: Regression coverage added in `tests_lite/test_rewind_branch_projection.py` and `tests_lite/test_session_events_branch_mode.py`.
 
 ## [Tech Debt] Demo seed/reset reliability + session environment fidelity (size: 2)
 

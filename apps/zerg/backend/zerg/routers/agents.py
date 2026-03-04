@@ -326,6 +326,8 @@ class EventResponse(UTCBaseModel):
         True,
         description="True when event is inside the current active model context boundary",
     )
+    branch_id: Optional[int] = Field(None, description="Session branch ID for rewind-aware projections")
+    is_head_branch: bool = Field(True, description="True when event belongs to the active head branch")
 
 
 class EventsListResponse(BaseModel):
@@ -333,6 +335,8 @@ class EventsListResponse(BaseModel):
 
     events: List[EventResponse]
     total: int
+    branch_mode: str = Field("head", description="Branch projection mode: head|all")
+    abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
 
 
 class IngestResponse(BaseModel):
@@ -2475,6 +2479,7 @@ async def get_session_events(
     tool_name: Optional[str] = Query(None, description="Exact tool name filter, e.g. Bash"),
     query: Optional[str] = Query(None, description="Content search within session events"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
+    branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
@@ -2499,6 +2504,11 @@ async def get_session_events(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="context_mode must be one of: forensic, active_context",
         )
+    if branch_mode not in {"head", "all"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="branch_mode must be one of: head, all",
+        )
 
     events = store.get_session_events(
         session_id,
@@ -2506,10 +2516,12 @@ async def get_session_events(
         tool_name=tool_name,
         query=query,
         context_mode=context_mode,
+        branch_mode=branch_mode,
         limit=limit,
         offset=offset,
     )
-    boundary = store.get_active_context_boundary(session_id)
+    boundary = store.get_active_context_boundary(session_id, branch_mode=branch_mode)
+    head_branch_id = store.get_head_branch_id(session_id)
 
     total = store.count_session_events(
         session_id,
@@ -2517,7 +2529,19 @@ async def get_session_events(
         tool_name=tool_name,
         query=query,
         context_mode=context_mode,
+        branch_mode=branch_mode,
     )
+    abandoned_events = 0
+    if branch_mode == "head":
+        forensic_total = store.count_session_events(
+            session_id,
+            roles=role_list,
+            tool_name=tool_name,
+            query=query,
+            context_mode=context_mode,
+            branch_mode="all",
+        )
+        abandoned_events = max(0, forensic_total - total)
 
     return EventsListResponse(
         events=[
@@ -2531,16 +2555,21 @@ async def get_session_events(
                 tool_call_id=e.tool_call_id,
                 timestamp=e.timestamp,
                 in_active_context=store.is_event_in_active_context(e, boundary) if boundary is not None else True,
+                branch_id=e.branch_id,
+                is_head_branch=(head_branch_id is None or e.branch_id in {None, head_branch_id}),
             )
             for e in events
         ],
         total=total,
+        branch_mode=branch_mode,
+        abandoned_events=abandoned_events,
     )
 
 
 @router.get("/sessions/{session_id}/export")
 async def export_session(
     session_id: UUID,
+    branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
@@ -2551,7 +2580,13 @@ async def export_session(
     session metadata for the session continuity service.
     """
     store = AgentsStore(db)
-    result = store.export_session_jsonl(session_id)
+    if branch_mode not in {"head", "all"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="branch_mode must be one of: head, all",
+        )
+
+    result = store.export_session_jsonl(session_id, branch_mode=branch_mode)
 
     if not result:
         raise HTTPException(
@@ -2570,6 +2605,7 @@ async def export_session(
         "X-Provider-Session-ID": provider_session_id,
         "X-Session-Provider": session.provider,
         "X-Session-Project": session.project or "",
+        "X-Session-Branch-Mode": branch_mode,
     }
 
     return Response(

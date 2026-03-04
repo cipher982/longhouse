@@ -163,6 +163,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         include_tool_output: bool = True,
         max_content_chars: int = 400,
         context_mode: str = "forensic",
+        branch_mode: str = "head",
     ) -> str:
         """Full ordered replay of a session. Loads complete event stream in sequence.
 
@@ -180,12 +181,15 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             max_content_chars: Truncate content_text and tool_output_text at this length.
                 Truncated fields get _<field>_truncated=True and _<field>_full_chars=N added.
             context_mode: Context projection mode: forensic|active_context (default forensic).
+            branch_mode: Branch projection mode: head|all (default head).
         """
         # Validate session_id to prevent path injection
         if not _UUID_RE.match(session_id):
             return json.dumps({"error": "Invalid session_id format. Expected a UUID."})
         if context_mode not in {"forensic", "active_context"}:
             return json.dumps({"error": "context_mode must be one of: forensic, active_context"})
+        if branch_mode not in {"head", "all"}:
+            return json.dumps({"error": "branch_mode must be one of: head, all"})
 
         try:
             # Fetch session metadata
@@ -194,7 +198,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 return json.dumps({"error": f"Session not found: {meta_resp.status_code}"})
 
             # Fetch session events
-            params: dict = {"limit": max_events, "context_mode": context_mode}
+            params: dict = {"limit": max_events, "context_mode": context_mode, "branch_mode": branch_mode}
             if roles:
                 params["roles"] = roles
             events_resp = await client.get(
@@ -231,6 +235,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         offset: int = 0,
         max_content_chars: int = 400,
         context_mode: str = "forensic",
+        branch_mode: str = "head",
     ) -> str:
         """Surgical event search within a known session.
 
@@ -252,14 +257,17 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             offset: Pagination offset (default 0).
             max_content_chars: Truncate content fields at this length (default 400).
             context_mode: Context projection mode: forensic|active_context (default forensic).
+            branch_mode: Branch projection mode: head|all (default head).
         """
         if not _UUID_RE.match(session_id):
             return json.dumps({"error": "Invalid session_id format. Expected a UUID."})
         if context_mode not in {"forensic", "active_context"}:
             return json.dumps({"error": "context_mode must be one of: forensic, active_context"})
+        if branch_mode not in {"head", "all"}:
+            return json.dumps({"error": "branch_mode must be one of: head, all"})
 
         try:
-            params: dict = {"limit": limit, "offset": offset, "context_mode": context_mode}
+            params: dict = {"limit": limit, "offset": offset, "context_mode": context_mode, "branch_mode": branch_mode}
             if query:
                 params["query"] = query
             if tool_name:

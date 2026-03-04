@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -30,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,15 @@ class CompactionBoundary:
     timestamp: datetime
     source_path: str | None
     source_offset: int | None
+
+
+@dataclass(frozen=True)
+class RewindSignal:
+    """Detected rewind trigger in incoming source-line payload."""
+
+    source_path: str
+    source_offset: int
+    reason: str
 
 
 # ---------------------------------------------------------------------------
@@ -242,17 +253,19 @@ class AgentsStore:
         query: str,
         *,
         context_mode: str = "forensic",
+        branch_mode: str = "head",
     ) -> dict[UUID, dict[str, Any]]:
         """Return a match map keyed by session id for a query."""
         if not query or not session_ids:
             return {}
-        if context_mode == "active_context":
+        if context_mode == "active_context" or branch_mode == "head":
             matches: dict[UUID, dict[str, Any]] = {}
             for session_id in session_ids:
                 events = self.get_session_events(
                     session_id,
                     query=query,
-                    context_mode="active_context",
+                    context_mode=context_mode,
+                    branch_mode=branch_mode,
                     limit=1,
                     offset=0,
                 )
@@ -276,7 +289,13 @@ class AgentsStore:
             raise RuntimeError("FTS5 is required for session search but is not available.")
         return self._fts_match_map(session_ids, query)
 
-    def _fts_session_ids(self, query: str, *, context_mode: str = "forensic") -> Optional[list[UUID]]:
+    def _fts_session_ids(
+        self,
+        query: str,
+        *,
+        context_mode: str = "forensic",
+        branch_mode: str = "head",
+    ) -> Optional[list[UUID]]:
         """Return session ids matching the FTS query."""
         if not query:
             return None
@@ -296,14 +315,22 @@ class AgentsStore:
                     except ValueError:
                         continue
                 session_ids.append(session_id)
-            if context_mode != "active_context":
+            if context_mode != "active_context" and branch_mode != "head":
                 return session_ids
 
-            # Active-context projection: keep only sessions with a matching event
-            # that is still inside the latest compaction boundary window.
+            # Branch/head projection and active-context projection both require
+            # a second pass to confirm an in-scope event still exists.
             filtered: list[UUID] = []
             for session_id in session_ids:
-                if self.count_session_events(session_id, query=query, context_mode="active_context") > 0:
+                if (
+                    self.count_session_events(
+                        session_id,
+                        query=query,
+                        context_mode=context_mode,
+                        branch_mode=branch_mode,
+                    )
+                    > 0
+                ):
                     filtered.append(session_id)
             return filtered
         except Exception as exc:
@@ -333,6 +360,288 @@ class AgentsStore:
         """Compute a stable hash for source-line archive rows."""
         return hashlib.sha256(raw_json.encode()).hexdigest()
 
+    def _normalize_source_lines_for_ingest(self, data: SessionIngest) -> list[SourceLineIngest]:
+        """Return source lines for ingest, falling back to event raw_json rows."""
+        source_lines = list(data.source_lines)
+        if source_lines:
+            return source_lines
+
+        seen: set[tuple[str, int, str]] = set()
+        normalized: list[SourceLineIngest] = []
+        for event_data in data.events:
+            if not event_data.raw_json or not event_data.source_path or event_data.source_offset is None:
+                continue
+            key = (event_data.source_path, int(event_data.source_offset), event_data.raw_json)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(
+                SourceLineIngest(
+                    source_path=event_data.source_path,
+                    source_offset=int(event_data.source_offset),
+                    raw_json=event_data.raw_json,
+                )
+            )
+        return normalized
+
+    def _get_head_branch(self, session_id: UUID) -> AgentSessionBranch | None:
+        """Return the current head branch for a session."""
+        return (
+            self.db.query(AgentSessionBranch)
+            .filter(AgentSessionBranch.session_id == session_id)
+            .filter(AgentSessionBranch.is_head == 1)
+            .order_by(AgentSessionBranch.id.desc())
+            .first()
+        )
+
+    def _ensure_head_branch(self, session_id: UUID) -> AgentSessionBranch:
+        """Ensure a root/head branch exists for the session."""
+        head = self._get_head_branch(session_id)
+        if head is not None:
+            return head
+
+        root = AgentSessionBranch(
+            session_id=session_id,
+            parent_branch_id=None,
+            branched_at_source_path=None,
+            branched_at_offset=None,
+            branch_reason="root",
+            is_head=1,
+        )
+        self.db.add(root)
+        self.db.flush()
+        return root
+
+    def _list_branch_source_lines(
+        self,
+        session_id: UUID,
+        branch_id: int,
+        source_paths: set[str],
+    ) -> tuple[dict[tuple[str, int], AgentSourceLine], dict[str, int]]:
+        """Return latest line per (path, offset) and max offset per path for a branch."""
+        latest: dict[tuple[str, int], AgentSourceLine] = {}
+        max_offset_by_path: dict[str, int] = {}
+        if not source_paths:
+            return latest, max_offset_by_path
+
+        rows = (
+            self.db.query(AgentSourceLine)
+            .filter(AgentSourceLine.session_id == session_id)
+            .filter(AgentSourceLine.branch_id == branch_id)
+            .filter(AgentSourceLine.source_path.in_(sorted(source_paths)))
+            .all()
+        )
+        for row in rows:
+            key = (row.source_path, int(row.source_offset))
+            prev = latest.get(key)
+            if prev is None or int(row.revision) > int(prev.revision):
+                latest[key] = row
+            max_offset_by_path[row.source_path] = max(
+                max_offset_by_path.get(row.source_path, int(row.source_offset)),
+                int(row.source_offset),
+            )
+        return latest, max_offset_by_path
+
+    def _detect_rewind_signal(
+        self,
+        session_id: UUID,
+        head_branch_id: int,
+        source_lines: list[SourceLineIngest],
+    ) -> RewindSignal | None:
+        """Detect whether incoming lines rewrite prior offsets (rewind/truncation)."""
+        if not source_lines:
+            return None
+
+        source_paths = {line.source_path for line in source_lines}
+        latest_by_offset, max_offset_by_path = self._list_branch_source_lines(session_id, head_branch_id, source_paths)
+        if not latest_by_offset and not max_offset_by_path:
+            return None
+
+        lines_by_path: dict[str, list[int]] = defaultdict(list)
+        for line in source_lines:
+            line_offset = int(line.source_offset)
+            lines_by_path[line.source_path].append(line_offset)
+            existing = latest_by_offset.get((line.source_path, line_offset))
+            if existing is None:
+                continue
+            incoming_hash = self._compute_line_hash(line.raw_json)
+            if incoming_hash != existing.line_hash:
+                return RewindSignal(
+                    source_path=line.source_path,
+                    source_offset=line_offset,
+                    reason="rewrite",
+                )
+
+        rewind_candidate: RewindSignal | None = None
+        for source_path, offsets in lines_by_path.items():
+            if not offsets:
+                continue
+            incoming_max = max(offsets)
+            existing_max = max_offset_by_path.get(source_path)
+            if existing_max is None or incoming_max >= existing_max:
+                continue
+            candidate = RewindSignal(
+                source_path=source_path,
+                source_offset=min(offsets),
+                reason="truncation",
+            )
+            if rewind_candidate is None or candidate.source_offset < rewind_candidate.source_offset:
+                rewind_candidate = candidate
+        return rewind_candidate
+
+    def _fork_head_branch(
+        self,
+        session_id: UUID,
+        head: AgentSessionBranch,
+        signal: RewindSignal,
+    ) -> AgentSessionBranch:
+        """Fork current head branch and return the new head."""
+        head.is_head = 0
+        next_head = AgentSessionBranch(
+            session_id=session_id,
+            parent_branch_id=head.id,
+            branched_at_source_path=signal.source_path,
+            branched_at_offset=signal.source_offset,
+            branch_reason=signal.reason,
+            is_head=1,
+        )
+        self.db.add(next_head)
+        self.db.flush()
+        self._copy_branch_prefix(session_id, head.id, next_head.id, signal)
+        return next_head
+
+    def _copy_branch_prefix(
+        self,
+        session_id: UUID,
+        from_branch_id: int,
+        to_branch_id: int,
+        signal: RewindSignal,
+    ) -> None:
+        """Copy pre-rewind head state so the new branch remains fully reconstructable."""
+        parent_source_lines = (
+            self.db.query(AgentSourceLine)
+            .filter(AgentSourceLine.session_id == session_id)
+            .filter(AgentSourceLine.branch_id == from_branch_id)
+            .order_by(AgentSourceLine.source_path.asc(), AgentSourceLine.source_offset.asc(), AgentSourceLine.revision.asc())
+            .all()
+        )
+        latest_by_offset: dict[tuple[str, int], AgentSourceLine] = {}
+        for row in parent_source_lines:
+            key = (row.source_path, int(row.source_offset))
+            prev = latest_by_offset.get(key)
+            if prev is None or int(row.revision) > int(prev.revision):
+                latest_by_offset[key] = row
+
+        source_copies = []
+        for row in latest_by_offset.values():
+            row_offset = int(row.source_offset)
+            if row.source_path == signal.source_path and row_offset >= signal.source_offset:
+                continue
+            source_copies.append(
+                AgentSourceLine(
+                    session_id=session_id,
+                    source_path=row.source_path,
+                    source_offset=row_offset,
+                    branch_id=to_branch_id,
+                    revision=1,
+                    raw_json=row.raw_json,
+                    line_hash=row.line_hash,
+                )
+            )
+        if source_copies:
+            self.db.bulk_save_objects(source_copies)
+
+        parent_events = (
+            self.db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == from_branch_id)
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .all()
+        )
+        event_copies = []
+        for event in parent_events:
+            event_offset = int(event.source_offset) if event.source_offset is not None else None
+            if event.source_path == signal.source_path and event_offset is not None and event_offset >= signal.source_offset:
+                continue
+            event_copies.append(
+                AgentEvent(
+                    session_id=session_id,
+                    branch_id=to_branch_id,
+                    role=event.role,
+                    content_text=event.content_text,
+                    tool_name=event.tool_name,
+                    tool_input_json=event.tool_input_json,
+                    tool_output_text=event.tool_output_text,
+                    tool_call_id=event.tool_call_id,
+                    timestamp=event.timestamp,
+                    source_path=event.source_path,
+                    source_offset=event.source_offset,
+                    event_hash=event.event_hash,
+                    schema_version=event.schema_version,
+                    raw_json=event.raw_json,
+                )
+            )
+        if event_copies:
+            self.db.bulk_save_objects(event_copies)
+
+    def _resolve_ingest_branch(
+        self,
+        session_id: UUID,
+        source_lines: list[SourceLineIngest],
+    ) -> tuple[AgentSessionBranch, RewindSignal | None]:
+        """Return branch to ingest into, forking when rewind is detected."""
+        head = self._ensure_head_branch(session_id)
+        signal = self._detect_rewind_signal(session_id, head.id, source_lines)
+        if signal is None:
+            return head, None
+        return self._fork_head_branch(session_id, head, signal), signal
+
+    def _sync_session_counts_to_head(self, session_id: UUID, head_branch_id: int) -> None:
+        """Recompute denormalized session counts from the active head branch."""
+        session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if session_obj is None:
+            return
+
+        user_count = (
+            self.db.query(func.count())
+            .select_from(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(AgentEvent.role == "user")
+            .filter(
+                or_(
+                    AgentEvent.content_text.is_(None),
+                    func.lower(func.trim(AgentEvent.content_text)) != "warmup",
+                )
+            )
+            .scalar()
+            or 0
+        )
+        assistant_count = (
+            self.db.query(func.count())
+            .select_from(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(AgentEvent.role == "assistant")
+            .filter(AgentEvent.tool_name.is_(None))
+            .scalar()
+            or 0
+        )
+        tool_count = (
+            self.db.query(func.count())
+            .select_from(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(AgentEvent.role == "assistant")
+            .filter(AgentEvent.tool_name.isnot(None))
+            .scalar()
+            or 0
+        )
+
+        session_obj.user_messages = int(user_count)
+        session_obj.assistant_messages = int(assistant_count)
+        session_obj.tool_calls = int(tool_count)
+
     def ingest_session(self, data: SessionIngest) -> IngestResult:
         """Ingest a session with events, handling deduplication.
 
@@ -341,23 +650,16 @@ class AgentsStore:
         Returns:
             IngestResult with counts of inserted/skipped events.
         """
-        # Use UUID object - SQLAlchemy with_variant handles conversion
-        # For Postgres: UUID object stored as native UUID
-        # For SQLite: UUID object converted to string
         session_id = data.id if data.id else uuid4()
 
-        # Check if session exists
         existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
 
         if existing:
-            # Update existing session
             existing.ended_at = data.ended_at or existing.ended_at
-            # Once-true-stays-true: never clear a previously-set sidechain flag
             if data.is_sidechain:
                 existing.is_sidechain = 1
             session_created = False
         else:
-            # Create new session
             session = AgentSession(
                 id=session_id,
                 provider=data.provider,
@@ -376,22 +678,21 @@ class AgentsStore:
                 is_sidechain=1 if data.is_sidechain else 0,
             )
             self.db.add(session)
-            self.db.flush()  # Get the ID
+            self.db.flush()
             session_created = True
 
-        # Insert events with deduplication
+        source_lines = self._normalize_source_lines_for_ingest(data)
+        ingest_branch, rewind_signal = self._resolve_ingest_branch(session_id, source_lines)
+
         events_inserted = 0
         events_skipped = 0
-        user_count = 0
-        assistant_count = 0
-        tool_count = 0
 
         for event_data in data.events:
             event_hash = self._compute_event_hash(event_data)
 
-            # Use ON CONFLICT DO NOTHING for deduplication (SQLite)
             stmt = sqlite_insert(AgentEvent).values(
                 session_id=session_id,
+                branch_id=ingest_branch.id,
                 role=event_data.role,
                 content_text=event_data.content_text,
                 tool_name=event_data.tool_name,
@@ -406,83 +707,54 @@ class AgentsStore:
                 schema_version=1,
             )
 
-            # Handle deduplication - if source_path is set, use UPSERT
             if event_data.source_path:
-                # SQLite: ON CONFLICT DO NOTHING without explicit conflict target
-                #
-                # SQLite doesn't support targeting partial unique indexes directly in
-                # ON CONFLICT clauses. The ix_events_dedup partial index (with sqlite_where)
-                # will still prevent duplicates, but we can't explicitly target it.
-                #
-                # This means ANY unique constraint violation will be silently ignored,
-                # not just the dedup index. In practice this is safe because:
-                # 1. The 'id' column is auto-generated (no collision possible)
-                # 2. The only other unique constraint is ix_events_dedup
                 stmt = stmt.on_conflict_do_nothing()
 
-            # Execute insert
             result = self.db.execute(stmt)
             if result.rowcount > 0:
                 events_inserted += 1
-                # Track counts
-                if event_data.role == "user" and (event_data.content_text or "").strip().lower() != "warmup":
-                    user_count += 1
-                elif event_data.role == "assistant":
-                    if event_data.tool_name:
-                        # Tool-call events: count as tool, not as a conversation turn
-                        tool_count += 1
-                    else:
-                        assistant_count += 1
             else:
                 events_skipped += 1
 
-        # Insert source-line archive rows.
-        # If caller did not provide source_lines, fall back to event-bearing raw_json
-        # for backward compatibility with older shippers.
-        source_lines = list(data.source_lines)
-        if not source_lines:
-            dedup_lines: dict[tuple[str, int], str] = {}
-            for event_data in data.events:
-                if event_data.raw_json and event_data.source_path and event_data.source_offset is not None:
-                    dedup_lines.setdefault((event_data.source_path, int(event_data.source_offset)), event_data.raw_json)
-            source_lines = [
-                SourceLineIngest(source_path=source_path, source_offset=source_offset, raw_json=raw_json)
-                for (source_path, source_offset), raw_json in dedup_lines.items()
-            ]
+        source_paths = {line.source_path for line in source_lines}
+        latest_line_by_offset, _ = self._list_branch_source_lines(session_id, ingest_branch.id, source_paths)
+        latest_state: dict[tuple[str, int], tuple[int, str]] = {
+            key: (int(row.revision), row.line_hash) for key, row in latest_line_by_offset.items()
+        }
 
-        source_lines_upserted = 0
+        source_lines_inserted = 0
         for line_data in source_lines:
             line_hash = self._compute_line_hash(line_data.raw_json)
+            source_offset = int(line_data.source_offset)
+            key = (line_data.source_path, source_offset)
+            prev_revision, prev_hash = latest_state.get(key, (0, ""))
+            if prev_hash == line_hash:
+                continue
+
+            revision = prev_revision + 1
             stmt = sqlite_insert(AgentSourceLine).values(
                 session_id=session_id,
                 source_path=line_data.source_path,
-                source_offset=int(line_data.source_offset),
+                source_offset=source_offset,
+                branch_id=ingest_branch.id,
+                revision=revision,
                 raw_json=line_data.raw_json,
                 line_hash=line_hash,
             )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["session_id", "source_path", "source_offset"],
-                set_={
-                    "raw_json": line_data.raw_json,
-                    "line_hash": line_hash,
-                },
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["session_id", "branch_id", "source_path", "source_offset", "line_hash"],
             )
             result = self.db.execute(stmt)
             if result.rowcount and result.rowcount > 0:
-                source_lines_upserted += 1
+                latest_state[key] = (revision, line_hash)
+                source_lines_inserted += 1
 
-        # Update session counts; reset needs_embedding when new events arrive so
-        # incremental embedding picks up events added after the initial pass.
+        self._sync_session_counts_to_head(session_id, ingest_branch.id)
+
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
-        if session_obj:
-            session_obj.user_messages = (session_obj.user_messages or 0) + user_count
-            session_obj.assistant_messages = (session_obj.assistant_messages or 0) + assistant_count
-            session_obj.tool_calls = (session_obj.tool_calls or 0) + tool_count
-            if events_inserted > 0:
-                session_obj.needs_embedding = 1  # Re-embed; embed_session deduplicates via content_hash
+        if session_obj and events_inserted > 0:
+            session_obj.needs_embedding = 1
 
-        # Enqueue background summary + embedding tasks for any new events.
-        # Deduplication is handled inside enqueue_ingest_tasks; safe to call on every ingest.
         if events_inserted > 0:
             from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 
@@ -491,11 +763,13 @@ class AgentsStore:
         self.db.commit()
 
         logger.info(
-            "Ingested session %s: events inserted=%s skipped=%s source_lines_upserted=%s",
+            "Ingested session %s branch=%s rewind=%s events inserted=%s skipped=%s source_lines_inserted=%s",
             session_id,
+            ingest_branch.id,
+            rewind_signal.reason if rewind_signal else "none",
             events_inserted,
             events_skipped,
-            source_lines_upserted,
+            source_lines_inserted,
         )
 
         return IngestResult(
@@ -525,6 +799,7 @@ class AgentsStore:
         exclude_user_states: Optional[list[str]] = None,
         hide_autonomous: bool = True,
         context_mode: str = "forensic",
+        branch_mode: str = "head",
     ) -> tuple[List[AgentSession], int]:
         """List sessions with optional filters.
 
@@ -566,7 +841,7 @@ class AgentsStore:
 
         # Content search requires joining events
         if query:
-            session_ids = self._fts_session_ids(query, context_mode=context_mode)
+            session_ids = self._fts_session_ids(query, context_mode=context_mode, branch_mode=branch_mode)
             if session_ids is not None:
                 if not session_ids:
                     return [], 0
@@ -593,6 +868,16 @@ class AgentsStore:
         if not session_ids:
             return {}
 
+        heads_subq = (
+            select(
+                AgentSessionBranch.session_id.label("session_id"),
+                func.max(AgentSessionBranch.id).label("head_branch_id"),
+            )
+            .where(AgentSessionBranch.session_id.in_(session_ids))
+            .where(AgentSessionBranch.is_head == 1)
+            .group_by(AgentSessionBranch.session_id)
+            .subquery()
+        )
         rn = (
             func.row_number()
             .over(
@@ -608,9 +893,18 @@ class AgentsStore:
                 AgentEvent.content_text.label("content_text"),
                 rn,
             )
+            .select_from(AgentEvent)
+            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
             .where(AgentEvent.session_id.in_(session_ids))
             .where(AgentEvent.role == role)
             .where(AgentEvent.content_text.isnot(None))
+            .where(
+                or_(
+                    heads_subq.c.head_branch_id.is_(None),
+                    AgentEvent.branch_id.is_(None),
+                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
+                )
+            )
             .subquery()
         )
 
@@ -642,6 +936,16 @@ class AgentsStore:
         if not session_ids:
             return {}
 
+        heads_subq = (
+            select(
+                AgentSessionBranch.session_id.label("session_id"),
+                func.max(AgentSessionBranch.id).label("head_branch_id"),
+            )
+            .where(AgentSessionBranch.session_id.in_(session_ids))
+            .where(AgentSessionBranch.is_head == 1)
+            .group_by(AgentSessionBranch.session_id)
+            .subquery()
+        )
         rn = (
             func.row_number()
             .over(
@@ -657,9 +961,18 @@ class AgentsStore:
                 AgentEvent.content_text.label("content_text"),
                 rn,
             )
+            .select_from(AgentEvent)
+            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
             .where(AgentEvent.session_id.in_(session_ids))
             .where(AgentEvent.role == role)
             .where(AgentEvent.content_text.isnot(None))
+            .where(
+                or_(
+                    heads_subq.c.head_branch_id.is_(None),
+                    AgentEvent.branch_id.is_(None),
+                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
+                )
+            )
             .subquery()
         )
 
@@ -681,9 +994,28 @@ class AgentsStore:
         if not session_ids:
             return {}
 
+        heads_subq = (
+            select(
+                AgentSessionBranch.session_id.label("session_id"),
+                func.max(AgentSessionBranch.id).label("head_branch_id"),
+            )
+            .where(AgentSessionBranch.session_id.in_(session_ids))
+            .where(AgentSessionBranch.is_head == 1)
+            .group_by(AgentSessionBranch.session_id)
+            .subquery()
+        )
         stmt = (
             select(AgentEvent.session_id, func.max(AgentEvent.timestamp))
+            .select_from(AgentEvent)
+            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
             .where(AgentEvent.session_id.in_(session_ids))
+            .where(
+                or_(
+                    heads_subq.c.head_branch_id.is_(None),
+                    AgentEvent.branch_id.is_(None),
+                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
+                )
+            )
             .group_by(AgentEvent.session_id)
         )
         rows = self.db.execute(stmt).fetchall()
@@ -699,6 +1031,7 @@ class AgentsStore:
             .order_by(AgentEvent.timestamp.desc())
             .limit(last_n)
         )
+        stmt = self._apply_branch_mode_filter(stmt, session_id, "head")
         rows = list(self.db.execute(stmt).scalars().all())
         rows.reverse()
         return rows
@@ -767,16 +1100,17 @@ class AgentsStore:
         subtype = obj.get("subtype")
         return subtype in {"compact_boundary", "microcompact_boundary"}
 
-    def get_active_context_boundary(self, session_id: UUID) -> CompactionBoundary | None:
+    def get_active_context_boundary(self, session_id: UUID, *, branch_mode: str = "head") -> CompactionBoundary | None:
         """Return the latest compaction boundary marker for a session."""
-        rows = (
-            self.db.query(AgentEvent)
-            .filter(AgentEvent.session_id == session_id)
-            .filter(AgentEvent.role == "system")
-            .filter(AgentEvent.raw_json.isnot(None))
+        stmt = (
+            select(AgentEvent)
+            .where(AgentEvent.session_id == session_id)
+            .where(AgentEvent.role == "system")
+            .where(AgentEvent.raw_json.isnot(None))
             .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
-            .all()
         )
+        stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
+        rows = list(self.db.execute(stmt).scalars().all())
         for event in rows:
             if not self._is_compaction_boundary_raw_json(event.raw_json):
                 continue
@@ -835,6 +1169,31 @@ class AgentsStore:
             return stmt.where(or_(same_source_offset_predicate, not_same_source_predicate))
         return stmt.where(fallback_predicate)
 
+    def get_head_branch_id(self, session_id: UUID) -> int | None:
+        """Return head branch ID for a session, if available."""
+        row = (
+            self.db.query(AgentSessionBranch.id)
+            .filter(AgentSessionBranch.session_id == session_id)
+            .filter(AgentSessionBranch.is_head == 1)
+            .order_by(AgentSessionBranch.id.desc())
+            .first()
+        )
+        return int(row[0]) if row else None
+
+    def _apply_branch_mode_filter(self, stmt, session_id: UUID, branch_mode: str):
+        """Apply branch projection filter to an event query."""
+        if branch_mode == "all":
+            return stmt
+        head_branch_id = self.get_head_branch_id(session_id)
+        if head_branch_id is None:
+            return stmt
+        return stmt.where(
+            or_(
+                AgentEvent.branch_id == head_branch_id,
+                AgentEvent.branch_id.is_(None),  # legacy rows prior to branch migration
+            )
+        )
+
     def get_session_events(
         self,
         session_id: UUID,
@@ -843,14 +1202,16 @@ class AgentsStore:
         tool_name: Optional[str] = None,
         query: Optional[str] = None,
         context_mode: str = "forensic",
+        branch_mode: str = "head",
         limit: int = 100,
         offset: int = 0,
     ) -> List[AgentEvent]:
         """Get events for a session with optional filtering."""
         stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
+        stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
 
         if context_mode == "active_context":
-            boundary = self.get_active_context_boundary(session_id)
+            boundary = self.get_active_context_boundary(session_id, branch_mode=branch_mode)
             if boundary is not None:
                 stmt = self._apply_active_context_filter(stmt, boundary)
 
@@ -877,12 +1238,14 @@ class AgentsStore:
         tool_name: Optional[str] = None,
         query: Optional[str] = None,
         context_mode: str = "forensic",
+        branch_mode: str = "head",
     ) -> int:
         """Count events for a session with the same filters as get_session_events."""
         stmt = select(func.count()).select_from(AgentEvent).where(AgentEvent.session_id == session_id)
+        stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
 
         if context_mode == "active_context":
-            boundary = self.get_active_context_boundary(session_id)
+            boundary = self.get_active_context_boundary(session_id, branch_mode=branch_mode)
             if boundary is not None:
                 stmt = self._apply_active_context_filter(stmt, boundary)
 
@@ -939,7 +1302,12 @@ class AgentsStore:
 
         return {"projects": projects, "providers": providers, "machines": machines}
 
-    def export_session_jsonl(self, session_id: UUID) -> Optional[tuple[bytes, AgentSession]]:
+    def export_session_jsonl(
+        self,
+        session_id: UUID,
+        *,
+        branch_mode: str = "head",
+    ) -> Optional[tuple[bytes, AgentSession]]:
         """Export a session as JSONL bytes for Claude Code --resume.
 
         If events have raw_json stored (original JSONL lines), those are returned
@@ -957,39 +1325,58 @@ class AgentsStore:
         if not session:
             return None
 
-        # Query events ordered by source_offset for correct file order
-        source_lines = (
-            self.db.query(AgentSourceLine)
-            .filter(AgentSourceLine.session_id == session_id)
-            .order_by(AgentSourceLine.source_path.asc(), AgentSourceLine.source_offset.asc())
-            .all()
-        )
+        source_lines_query = self.db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id)
+        head_branch_id = self.get_head_branch_id(session_id)
+        if branch_mode == "head" and head_branch_id is not None:
+            source_lines_query = source_lines_query.filter(AgentSourceLine.branch_id == head_branch_id)
+        source_lines = source_lines_query.order_by(
+            AgentSourceLine.branch_id.asc(),
+            AgentSourceLine.source_path.asc(),
+            AgentSourceLine.source_offset.asc(),
+            AgentSourceLine.revision.asc(),
+            AgentSourceLine.id.asc(),
+        ).all()
         if source_lines:
-            # Most sessions map to one source_path. In mixed-path edge cases,
-            # export the dominant path (most rows) for stable replay.
-            path_counts: dict[str, int] = {}
-            for row in source_lines:
-                path_counts[row.source_path] = path_counts.get(row.source_path, 0) + 1
-            primary_path = max(path_counts.items(), key=lambda item: item[1])[0]
-            if len(path_counts) > 1:
-                logger.warning(
-                    "Session %s has %d source paths in archive; exporting primary path %s",
-                    session_id,
-                    len(path_counts),
-                    primary_path,
+            if branch_mode == "all":
+                lines = [row.raw_json for row in source_lines]
+            else:
+                latest_by_offset: dict[tuple[str, int], AgentSourceLine] = {}
+                for row in source_lines:
+                    key = (row.source_path, int(row.source_offset))
+                    prev = latest_by_offset.get(key)
+                    if prev is None or int(row.revision) > int(prev.revision):
+                        latest_by_offset[key] = row
+                normalized_source_lines = sorted(
+                    latest_by_offset.values(),
+                    key=lambda row: (row.source_path, int(row.source_offset), int(row.id)),
                 )
-            lines = [row.raw_json for row in source_lines if row.source_path == primary_path]
+
+                # Most sessions map to one source_path. In mixed-path edge cases,
+                # export the dominant path for stable --resume behavior.
+                path_counts: dict[str, int] = {}
+                for row in normalized_source_lines:
+                    path_counts[row.source_path] = path_counts.get(row.source_path, 0) + 1
+                primary_path = max(path_counts.items(), key=lambda item: item[1])[0]
+                if len(path_counts) > 1:
+                    logger.warning(
+                        "Session %s has %d source paths in archive; exporting primary path %s",
+                        session_id,
+                        len(path_counts),
+                        primary_path,
+                    )
+                lines = [row.raw_json for row in normalized_source_lines if row.source_path == primary_path]
             content = "\n".join(lines) + "\n" if lines else ""
             return content.encode("utf-8"), session
 
         # Legacy fallback path: rebuild from events only.
-        events = (
-            self.db.query(AgentEvent)
-            .filter(AgentEvent.session_id == session_id)
-            .order_by(AgentEvent.source_offset.asc(), AgentEvent.timestamp.asc())
+        events_stmt = (
+            select(AgentEvent)
+            .where(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.source_offset.asc(), AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .limit(10000)
-            .all()
         )
+        events_stmt = self._apply_branch_mode_filter(events_stmt, session_id, branch_mode)
+        events = list(self.db.execute(events_stmt).scalars().all())
 
         # Check if we have raw_json available (lossless path)
         has_raw_json = any(event.raw_json for event in events)
