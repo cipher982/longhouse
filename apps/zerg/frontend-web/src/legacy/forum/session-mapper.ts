@@ -2,7 +2,7 @@
  * Maps Longhouse sessions to Forum canvas entities.
  */
 
-import type { ActiveSession } from "../hooks/useActiveSessions";
+import type { ActiveSession } from "../../hooks/useActiveSessions";
 import type {
   ForumEntity,
   ForumGridPoint,
@@ -10,7 +10,7 @@ import type {
   ForumRoom,
 } from "./types";
 import { createForumState, type ForumMapState } from "./state";
-import { parseUTC } from "../lib/dateUtils";
+import { parseUTC } from "../../lib/dateUtils";
 import { isSessionActive, normalizePresenceState } from "./session-status";
 
 const ROOM_SIZE = 8; // Grid units per room

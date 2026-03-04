@@ -999,7 +999,7 @@ api_app.include_router(jobs_router)  # Scheduled jobs management
 api_app.include_router(traces_router)  # Trace Explorer (admin only)
 api_app.include_router(reliability_router)  # Reliability Dashboard (admin only)
 api_app.include_router(skills_router)  # Skills Platform for workspace-scoped tools
-api_app.include_router(session_chat_router)  # Forum session chat (drop-in)
+api_app.include_router(session_chat_router)  # Timeline session drop-in chat
 api_app.include_router(agents_router)  # Agents schema for cross-provider session tracking
 api_app.include_router(heartbeat_router)  # Engine daemon heartbeat ingest
 api_app.include_router(presence_router)  # Claude Code hook presence signals

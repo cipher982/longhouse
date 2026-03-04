@@ -229,7 +229,7 @@ export async function fetchAgentSessionPreview(
 }
 
 /**
- * List sessions for Forum live mode.
+ * List sessions for the live sessions view.
  */
 export async function fetchAgentActiveSessions(
   filters: AgentActiveSessionFilters = {}

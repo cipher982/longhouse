@@ -2026,7 +2026,7 @@ async def list_active_sessions(
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
 ) -> ActiveSessionsResponse:
-    """Return session summaries for Forum live mode."""
+    """Return active/recent session summaries for the live sessions surface."""
     try:
         store = AgentsStore(db)
         since = datetime.now(timezone.utc) - timedelta(days=days_back)

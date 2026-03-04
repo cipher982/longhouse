@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Tech Debt] Longhouse simplification wave (Commis/Oikos/Forum) (size: 8)
+
+Status (2026-03-03): In progress.
+
+**Goal:** Reduce conceptual and code complexity now that product direction is clear (timeline-first, Oikos coordinator, commis as CLI jobs).
+
+- [x] Remove dual commis semantics (`standard`/legacy compatibility paths); keep workspace/scratch-only execution
+- [ ] Split monolith modules by responsibility (`oikos_tools.py`, `commis_resume.py`, `oikos_service.py`)
+- [x] Quarantine Forum code as legacy while route stays disabled
+- [x] Remove naming drift (`Forum live mode` → `Live sessions`) in comments/docs/API descriptions
+- [ ] Add guardrail tests to prevent regressions into deprecated flow
+
+Notes:
+- Keep the current soft-disable behavior for `/forum` while this cleanup is underway.
+- 2026-03-03: `spawn_commis` runtime now only executes workspace path; legacy `standard` branch removed from job processor.
+- 2026-03-03: Forum implementation moved to `frontend-web/src/legacy/forum`; timeline live panel is list-only (2D map removed from active timeline UX).
+
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
 Status (2026-03-03): Done.

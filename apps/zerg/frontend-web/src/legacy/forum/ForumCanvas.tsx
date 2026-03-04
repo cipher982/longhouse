@@ -11,7 +11,7 @@ import clsx from "clsx";
 import { gridToIso } from "./layout";
 import type { ForumAlert, ForumEntity, ForumMapLayout, ForumMarker, ForumRoom, ForumTask } from "./types";
 import type { ForumMapState } from "./state";
-import "../styles/forum-map.css";
+import "../../styles/forum-map.css";
 
 export type ForumCanvasProps = {
   state: ForumMapState;

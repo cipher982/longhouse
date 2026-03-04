@@ -24,7 +24,7 @@ export interface UseActiveSessionsOptions {
 
 /**
  * Hook to fetch active sessions from the materialized view.
- * Used by Forum UI to display real-time session state.
+ * Used by live session UIs to display real-time session state.
  */
 export function useActiveSessions(options: UseActiveSessionsOptions = {}) {
   const {

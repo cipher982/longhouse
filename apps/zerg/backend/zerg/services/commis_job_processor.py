@@ -449,9 +449,8 @@ class CommisJobProcessor:
             If True, the job was already atomically claimed (status set to 'running'),
             so skip the status check and update. This prevents race conditions.
         """
-        # First, fetch job data and determine execution mode
+        # First, fetch job data (all jobs execute via workspace mode).
         # This session is short-lived - we extract data and close before execution
-        execution_mode = "workspace"
         oikos_run_id = None
         job_task_preview = ""
 
@@ -467,40 +466,17 @@ class CommisJobProcessor:
                     logger.debug(f"Job {job_id} already being processed (status: {job.status})")
                     return
 
-            # Determine execution mode (workspace is default since 2026-02)
+            # Legacy execution_mode values in job config are ignored. Runtime is
+            # workspace-only (repo workspace when git_repo is set, scratch workspace
+            # when omitted).
             job_config = job.config or {}
-            execution_mode = job_config.get("execution_mode", "workspace")
-
-            # Standard mode is deprecated — only allow with LEGACY_STANDARD_MODE=1
-            if execution_mode == "standard":
-                import os
-
-                legacy_flag = os.environ.get("LEGACY_STANDARD_MODE", "")
-                if legacy_flag not in ("1", "true", "yes"):
-                    # Only force workspace if we have a git_repo; otherwise standard mode
-                    # is the only viable path (no workspace without a repo to clone)
-                    git_repo_for_check = job_config.get("git_repo")
-                    if git_repo_for_check:
-                        logger.warning(
-                            f"Commis job {job_id} requested standard mode but LEGACY_STANDARD_MODE is not set. "
-                            "Standard mode is deprecated — forcing workspace mode."
-                        )
-                        execution_mode = "workspace"
-                    else:
-                        logger.warning(
-                            f"Commis job {job_id} using deprecated standard mode (no git_repo, "
-                            "cannot force workspace). Set LEGACY_STANDARD_MODE=1 to suppress."
-                        )
-                else:
-                    logger.warning(f"Commis job {job_id} using deprecated standard mode (LEGACY_STANDARD_MODE=1).")
-
-            if execution_mode not in {"standard", "workspace"}:
-                job.status = "failed"
-                job.error = f"Invalid execution_mode: {execution_mode}"
-                job.finished_at = datetime.now(timezone.utc)
-                db.commit()
-                logger.error(f"Commis job {job_id} failed: invalid execution_mode '{execution_mode}'")
-                return
+            legacy_mode = job_config.get("execution_mode")
+            if legacy_mode and legacy_mode != "workspace":
+                logger.warning(
+                    "Commis job %s has legacy execution_mode=%s; forcing workspace mode",
+                    job_id,
+                    legacy_mode,
+                )
 
             # Capture oikos run ID for SSE correlation
             oikos_run_id = job.oikos_run_id
@@ -513,24 +489,10 @@ class CommisJobProcessor:
                 db.commit()
 
         # Session is now closed - execute outside of any db session context
-        logger.info(f"Starting commis job {job_id} (mode={execution_mode}) for task: {job_task_preview}...")
-
-        if execution_mode == "workspace":
-            # Workspace execution: manages its own short-lived sessions
-            # No db session passed - _process_workspace_job opens/closes sessions as needed
-            await self._process_workspace_job(job_id, oikos_run_id)
-        else:
-            # Standard mode is removed — fail the job with a clear error
-            with db_session() as err_db:
-                err_job = err_db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
-                if err_job:
-                    err_job.status = "failed"
-                    err_job.error = (
-                        "Standard mode (in-process CommisRunner) has been removed. " "All commis must use workspace mode with a git_repo."
-                    )
-                    err_job.finished_at = datetime.now(timezone.utc)
-                    err_db.commit()
-            logger.error(f"Commis job {job_id} failed: standard mode is removed")
+        logger.info(f"Starting commis job {job_id} (mode=workspace) for task: {job_task_preview}...")
+        # Workspace execution: manages its own short-lived sessions.
+        # No db session passed - _process_workspace_job opens/closes sessions as needed.
+        await self._process_workspace_job(job_id, oikos_run_id)
 
     async def _process_workspace_job(self, job_id: int, oikos_run_id: Optional[int]) -> None:
         """Process a job using workspace execution (hatch subprocess with git workspace).

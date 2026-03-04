@@ -35,9 +35,6 @@ import { PresenceBadge } from "../components/PresenceBadge";
 import { parseUTC } from "../lib/dateUtils";
 import { reportApiError, clearApiError } from "../lib/apiHealth";
 import { RecallPanel } from "../components/RecallPanel";
-import { ForumCanvas } from "../forum/ForumCanvas";
-import { buildForumStateFromSessions, getSessionDisplayTitle, getSessionRoomLabel } from "../forum/session-mapper";
-import "../styles/forum.css";
 import "../styles/sessions.css";
 
 // ---------------------------------------------------------------------------
@@ -62,8 +59,8 @@ function formatRelativeTime(dateStr: string): string {
   if (diffMins < 1) return "Just now";
   if (diffMins < 60) return `${diffMins}m ago`;
   if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
+  if (diffDays < 30) return `${diffDays}d ago`;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function getDateKey(dateStr: string): string {
@@ -217,19 +214,6 @@ function renderHighlightedText(text: string, query: string) {
   );
 }
 
-function formatDuration(startedAt: string, endedAt: string | null): string {
-  if (!endedAt) return "In progress";
-  const start = parseUTC(startedAt);
-  const end = parseUTC(endedAt);
-  const diffMs = end.getTime() - start.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-
-  if (diffMins < 1) return "<1m";
-  if (diffMins < 60) return `${diffMins}m`;
-  const hours = Math.floor(diffMins / 60);
-  const mins = diffMins % 60;
-  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-}
 
 function sessionSortKey(status: string): number {
   if (status === "working") return 0;
@@ -243,6 +227,43 @@ function isSessionLive(session: ActiveSession): boolean {
     session.presence_state === "thinking" ||
     session.presence_state === "running"
   );
+}
+
+function repoNameFromUrl(url: string | null): string | null {
+  if (!url) return null;
+  const cleaned = url.replace(/\.git$/, "");
+  const parts = cleaned.split("/");
+  return parts[parts.length - 1] || null;
+}
+
+function cwdBasename(cwd: string | null): string | null {
+  if (!cwd) return null;
+  const parts = cwd.split("/").filter(Boolean);
+  return parts[parts.length - 1] || null;
+}
+
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 3).trim()}...`;
+}
+
+function getLiveSessionScope(session: ActiveSession): string {
+  return (
+    session.project?.trim() ||
+    repoNameFromUrl(session.git_repo) ||
+    cwdBasename(session.cwd) ||
+    "workspace"
+  );
+}
+
+function getLiveSessionTitle(session: ActiveSession): string {
+  const candidate = (session.last_user_message || session.last_assistant_message || "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (candidate) {
+    return truncateText(candidate, 56);
+  }
+  return getLiveSessionScope(session);
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +509,6 @@ export default function SessionsPage() {
   const [filtersOpen, setFiltersOpen] = useState(hasUrlFilters);
   const [recallOpen, setRecallOpen] = useState(false);
   const [liveViewOpen, setLiveViewOpen] = useState(false);
-  const [liveSelectedId, setLiveSelectedId] = useState<string | null>(null);
 
   // Pagination state
   const [limit, setLimit] = useState(PAGE_SIZE);
@@ -591,7 +611,6 @@ export default function SessionsPage() {
   );
 
   const liveAuthError = (activeSessionsError as { status?: number } | null)?.status === 401;
-  const canvasState = useMemo(() => buildForumStateFromSessions(activeSessions), [activeSessions]);
   const liveList = useMemo(() => activeSessions.slice(0, 8), [activeSessions]);
 
   // Fast-poll while any visible session is still generating its summary
@@ -611,12 +630,6 @@ export default function SessionsPage() {
     }
     return () => clearApiError(); // ensure footer clears if user navigates away
   }, [error]);
-
-  useEffect(() => {
-    if (!liveViewOpen) {
-      setLiveSelectedId(null);
-    }
-  }, [liveViewOpen]);
 
   // Group sessions by day
   const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
@@ -838,44 +851,30 @@ export default function SessionsPage() {
               </div>
             </div>
             <div className="sessions-live-body">
-              <div className="sessions-live-map">
-                {liveAuthError ? (
-                  <div className="sessions-live-empty">
-                    <span>Session expired.</span>
-                    <Button variant="primary" size="sm" onClick={() => window.location.reload()}>
-                      Refresh to log in
-                    </Button>
-                  </div>
-                ) : activeSessionsLoading && liveTotal === 0 ? (
-                  <div className="sessions-live-empty">
-                    <Spinner size="lg" />
-                    <span>Loading live view...</span>
-                  </div>
-                ) : liveTotal === 0 ? (
-                  <div className="sessions-live-empty">
-                    <span>No sessions yet.</span>
-                    <span className="sessions-live-empty-subtitle">Start a CLI session to light up the map.</span>
-                  </div>
-                ) : (
-                  <ForumCanvas
-                    state={canvasState}
-                    selectedEntityId={liveSelectedId}
-                    onSelectEntity={setLiveSelectedId}
-                  />
-                )}
-              </div>
-              <div className="sessions-live-list">
-                {activeSessionsLoading && liveTotal === 0 ? (
-                  <div className="sessions-live-list-empty">Loading sessions...</div>
-                ) : liveList.length === 0 ? (
-                  <div className="sessions-live-list-empty">No recent sessions.</div>
-                ) : (
-                  liveList.map((session) => {
+              {liveAuthError ? (
+                <div className="sessions-live-empty">
+                  <span>Session expired.</span>
+                  <Button variant="primary" size="sm" onClick={() => window.location.reload()}>
+                    Refresh to log in
+                  </Button>
+                </div>
+              ) : activeSessionsLoading && liveTotal === 0 ? (
+                <div className="sessions-live-empty">
+                  <Spinner size="lg" />
+                  <span>Loading live view...</span>
+                </div>
+              ) : liveList.length === 0 ? (
+                <div className="sessions-live-empty">
+                  <span>No recent sessions.</span>
+                  <span className="sessions-live-empty-subtitle">Start a CLI session to populate this list.</span>
+                </div>
+              ) : (
+                <div className="sessions-live-list">
+                  {liveList.map((session) => {
                     const isActive = isSessionLive(session);
                     const rowClass = [
                       "sessions-live-row",
                       isActive ? "sessions-live-row--active" : "",
-                      session.id === liveSelectedId ? "sessions-live-row--selected" : "",
                     ].filter(Boolean).join(" ");
 
                     return (
@@ -884,15 +883,14 @@ export default function SessionsPage() {
                         type="button"
                         className={rowClass}
                         onClick={() => {
-                          setLiveSelectedId(session.id);
                           navigate(`/timeline/${session.id}`);
                         }}
                       >
                         <div className="sessions-live-row-title">
-                          {getSessionDisplayTitle(session)}
+                          {getLiveSessionTitle(session)}
                         </div>
                         <div className="sessions-live-row-meta">
-                          {getSessionRoomLabel(session)} · {session.provider} ·{" "}
+                          {getLiveSessionScope(session)} · {session.provider} ·{" "}
                           {formatRelativeTime(session.last_activity_at)}
                         </div>
                         <div className="sessions-live-row-presence">
@@ -909,9 +907,9 @@ export default function SessionsPage() {
                         </div>
                       </button>
                     );
-                  })
-                )}
-              </div>
+                  })}
+                </div>
+              )}
             </div>
             </Card>
           </div>
