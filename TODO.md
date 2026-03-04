@@ -30,11 +30,11 @@ Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events con
 - [x] Persist compaction metadata as first-class events (do not drop `type=summary` / compaction-adjacent records at parse time)
   - [x] Parse and ingest `summary`, `file-history-snapshot`, and `system` `{subtype: compact_boundary|microcompact_boundary}` as `role=system` events (Rust engine + Python parser)
   - [ ] Parse high-volume `progress` records as first-class events (deferred until default timeline/query mode can hide noise)
-- [ ] Add `compaction_boundary` derivation during ingest/projection (boundary anchored to source offset + timestamp)
+- [x] Add `compaction_boundary` derivation during ingest/projection (boundary anchored to source offset + timestamp)
 - [ ] Add context modes in read/query APIs:
   - [x] `/api/agents/sessions/{id}/events` supports `context_mode=forensic|active_context`
-  - [ ] Extend `context_mode` semantics to search/recall/session-tool surfaces (MCP + API list/search endpoints)
-  - [ ] `active_context` projection should anchor by explicit boundary source offset/timestamp (current slice anchors by latest boundary event id)
+  - [x] Extend `context_mode` semantics to search/recall/session-tool surfaces (MCP + API list/search endpoints)
+  - [x] `active_context` projection should anchor by explicit boundary source offset/timestamp
 - [ ] Keep pre-compaction turns visible in timeline/search by default (no destructive pruning)
 - [ ] In UI, mark pre-compaction facts as "outside active model context" instead of hiding/deleting
 - [ ] Add retention/sync guardrails so source transcripts are archived before local cleanup windows can delete them (for example Claude `cleanupPeriodDays` default)
@@ -47,6 +47,8 @@ Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events con
 Notes:
 - 2026-03-04: Rust + Python parsers now emit compaction-adjacent records as `system` events; `progress` remains intentionally skipped for now to avoid timeline noise until query modes land.
 - 2026-03-04: Added `context_mode` projection for session events API/store (`forensic` default, `active_context` from latest compact/summary boundary); this is projection-only and does not mutate stored history.
+- 2026-03-04: Active-context boundary now derives from explicit compaction marker metadata (`source_path`, `source_offset`, `timestamp`) instead of latest boundary event id; stale same-path events before the boundary offset are excluded.
+- 2026-03-04: Added `context_mode` support to search + recall + MCP session tools (`search_sessions`, `get_session_detail`, `get_session_events`, `recall`) and `/api/agents/sessions` + `/api/agents/sessions/semantic` + `/api/agents/recall`.
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 

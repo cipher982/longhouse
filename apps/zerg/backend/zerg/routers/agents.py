@@ -1426,6 +1426,7 @@ async def semantic_search_sessions(
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
+    context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
@@ -1438,6 +1439,12 @@ async def semantic_search_sessions(
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
 
+    if context_mode not in {"forensic", "active_context"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="context_mode must be one of: forensic, active_context",
+        )
+
     config = get_embedding_config_with_db_fallback(db=db)
     if not config:
         return SemanticSearchResponse(sessions=[], total=0)
@@ -1445,10 +1452,7 @@ async def semantic_search_sessions(
     # Generate query embedding
     query_vec = await generate_embedding(query, config)
 
-    # Load cache if needed
     cache = EmbeddingCache()
-    if not cache._session_loaded:
-        cache.load_session_embeddings(db, config.model, config.dims)
 
     # Build session filter from date/project/provider constraints
     since = datetime.now(timezone.utc) - timedelta(days=days_back)
@@ -1462,16 +1466,18 @@ async def semantic_search_sessions(
     filter_query = filter_query.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
     valid_ids = {str(row[0]) for row in filter_query.all()}
 
-    # Search
-    results = cache.search_sessions(query_vec, limit=limit, session_filter=valid_ids)
+    sessions: list[SessionResponse] = []
+    store = AgentsStore(db)
 
-    # Fetch full session objects
-    session_ids = [sid for sid, _ in results]
+    if context_mode == "forensic":
+        if not cache._session_loaded:
+            cache.load_session_embeddings(db, config.model, config.dims)
 
-    sessions = []
-    for sid in session_ids:
-        session = db.query(AgentSession).filter(AgentSession.id == sid).first()
-        if session:
+        results = cache.search_sessions(query_vec, limit=limit, session_filter=valid_ids)
+        for sid, score in results:
+            session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+            if not session:
+                continue
             sessions.append(
                 SessionResponse(
                     id=str(session.id),
@@ -1492,8 +1498,73 @@ async def semantic_search_sessions(
                     # Use summary as the snippet — more useful than the raw similarity score.
                     # Fall back to summary_title, then None (UI will hide the snippet field).
                     match_snippet=session.summary or session.summary_title or None,
+                    match_score=score,
                 )
             )
+    else:
+        if not cache._turn_loaded:
+            cache.load_turn_embeddings(db, config.model, config.dims)
+
+        turn_hits = cache.search_turns(
+            query_vec,
+            limit=min(limit * 8, 200),
+            session_filter=valid_ids,
+        )
+        seen_sessions: set[str] = set()
+        for sid, _chunk_index, score, event_start, _event_end in turn_hits:
+            sid_str = str(sid)
+            if sid_str in seen_sessions:
+                continue
+            session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+            if not session:
+                continue
+
+            matched_event = None
+            if event_start is not None and event_start >= 0:
+                matched_event = (
+                    db.query(AgentEvent)
+                    .filter(AgentEvent.session_id == session.id)
+                    .order_by(AgentEvent.timestamp, AgentEvent.id)
+                    .offset(event_start)
+                    .limit(1)
+                    .first()
+                )
+            boundary = store.get_active_context_boundary(session.id)
+            if boundary is not None and (matched_event is None or not store.is_event_in_active_context(matched_event, boundary)):
+                continue
+
+            snippet_source = ""
+            if matched_event is not None:
+                snippet_source = (matched_event.content_text or matched_event.tool_output_text or "").strip()
+            snippet = (
+                (snippet_source[:200] + "...")
+                if snippet_source and len(snippet_source) > 200
+                else (snippet_source or session.summary or session.summary_title or None)
+            )
+            sessions.append(
+                SessionResponse(
+                    id=str(session.id),
+                    provider=session.provider,
+                    project=session.project,
+                    device_id=session.device_id,
+                    environment=session.environment,
+                    cwd=session.cwd,
+                    git_repo=session.git_repo,
+                    git_branch=session.git_branch,
+                    started_at=session.started_at,
+                    ended_at=session.ended_at,
+                    user_messages=session.user_messages or 0,
+                    assistant_messages=session.assistant_messages or 0,
+                    tool_calls=session.tool_calls or 0,
+                    summary=session.summary,
+                    summary_title=session.summary_title,
+                    match_snippet=snippet,
+                    match_score=score,
+                )
+            )
+            seen_sessions.add(sid_str)
+            if len(sessions) >= limit:
+                break
 
     return SemanticSearchResponse(sessions=sessions, total=len(sessions))
 
@@ -1505,6 +1576,7 @@ async def recall_sessions(
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
     max_results: int = Query(5, ge=1, le=20, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
+    context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
@@ -1516,6 +1588,12 @@ async def recall_sessions(
     from zerg.models_config import get_embedding_config_with_db_fallback
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
+
+    if context_mode not in {"forensic", "active_context"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="context_mode must be one of: forensic, active_context",
+        )
 
     config = get_embedding_config_with_db_fallback(db=db)
     if not config:
@@ -1540,16 +1618,33 @@ async def recall_sessions(
 
     results = cache.search_turns(query_vec, limit=max_results, session_filter=valid_ids)
 
+    store = AgentsStore(db)
     matches = []
     for session_id, chunk_index, score, event_start, event_end in results:
         # Fetch context window
-        events_query = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp)
+        events_query = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
         all_events = events_query.all()
         total_events = len(all_events)
+        if total_events == 0:
+            continue
+
+        active_start_index = 0
+        if context_mode == "active_context":
+            boundary = store.get_active_context_boundary(session_id)
+            if boundary is not None:
+                active_start_index = total_events
+                for idx, event in enumerate(all_events):
+                    if store.is_event_in_active_context(event, boundary):
+                        active_start_index = idx
+                        break
+                if active_start_index >= total_events:
+                    continue
+                if event_end is not None and event_end < active_start_index:
+                    continue
 
         context = []
         if event_start is not None and event_end is not None:
-            window_start = max(0, event_start - context_turns)
+            window_start = max(active_start_index, event_start - context_turns)
             window_end = min(total_events, event_end + context_turns + 1)
             for i in range(window_start, window_end):
                 if i < len(all_events):
@@ -1566,6 +1661,9 @@ async def recall_sessions(
                             "is_match": event_start <= i <= event_end,
                         }
                     )
+
+        if context_mode == "active_context" and event_start is not None and event_start < active_start_index:
+            event_start = active_start_index
 
         match_event_id = all_events[event_start].id if event_start is not None and event_start < total_events else None
 
@@ -1673,6 +1771,7 @@ async def list_sessions(
         None, description="Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present."
     ),
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
+    context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
@@ -1683,6 +1782,12 @@ async def list_sessions(
     By default, test and e2e sessions are excluded.
     """
     try:
+        if context_mode not in {"forensic", "active_context"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="context_mode must be one of: forensic, active_context",
+            )
+
         # Determine effective sort
         effective_sort = sort
         if effective_sort is None:
@@ -1716,6 +1821,7 @@ async def list_sessions(
                 days_back=days_back,
                 exclude_user_states=["archived"],
                 hide_autonomous=hide_autonomous,
+                context_mode=context_mode,
             )
 
             lex_hits = lexical_search(query or "", db, _filters, limit, over_fetch=True)
@@ -1723,7 +1829,10 @@ async def list_sessions(
             config = get_embedding_config_with_db_fallback(db=db)
             sem_hits: list[tuple[AgentSession, float]] = []
             x_search_mode_header = None
-            if config and query:
+            query_vec = None
+            if context_mode == "active_context":
+                x_search_mode_header = "active-context-lexical"
+            elif config and query:
                 from zerg.services.embedding_cache import EmbeddingCache
                 from zerg.services.session_processing.embeddings import generate_embedding
 
@@ -1760,7 +1869,7 @@ async def list_sessions(
             match_map = {}
             if query and lex_hits:
                 try:
-                    match_map = store.get_session_matches([s.id for s in lex_hits], query)
+                    match_map = store.get_session_matches([s.id for s in lex_hits], query, context_mode=context_mode)
                 except Exception:
                     pass
 
@@ -1869,6 +1978,7 @@ async def list_sessions(
             limit=limit,
             offset=offset,
             hide_autonomous=hide_autonomous,
+            context_mode=context_mode,
         )
 
         # Apply sort to lexical results
@@ -1879,7 +1989,7 @@ async def list_sessions(
             sessions = apply_sort(sessions, effective_sort, bm25_order=bm25_order)
 
         session_ids = [s.id for s in sessions]
-        match_map = store.get_session_matches(session_ids, query) if query else {}
+        match_map = store.get_session_matches(session_ids, query, context_mode=context_mode) if query else {}
         activity_map = store.get_last_activity_map(session_ids)
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
 

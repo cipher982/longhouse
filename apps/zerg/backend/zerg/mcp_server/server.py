@@ -105,6 +105,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         days_back: int = 14,
         limit: int = 10,
         semantic: bool = False,
+        context_mode: str = "forensic",
     ) -> str:
         """Search past agent sessions by content.
 
@@ -119,11 +120,16 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             days_back: Number of days to look back (default 14).
             limit: Maximum results to return (default 10).
             semantic: Use semantic (embedding) search instead of text search (default False).
+            context_mode: Context projection mode: forensic|active_context (default forensic).
         """
+        if context_mode not in {"forensic", "active_context"}:
+            return json.dumps({"error": "context_mode must be one of: forensic, active_context"})
+
         params: dict = {
             "query": query,
             "days_back": days_back,
             "limit": limit,
+            "context_mode": context_mode,
         }
         if project:
             params["project"] = project
@@ -156,6 +162,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         roles: str | None = None,
         include_tool_output: bool = True,
         max_content_chars: int = 400,
+        context_mode: str = "forensic",
     ) -> str:
         """Full ordered replay of a session. Loads complete event stream in sequence.
 
@@ -172,10 +179,13 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             include_tool_output: Set False to omit tool_output_text entirely (saves tokens).
             max_content_chars: Truncate content_text and tool_output_text at this length.
                 Truncated fields get _<field>_truncated=True and _<field>_full_chars=N added.
+            context_mode: Context projection mode: forensic|active_context (default forensic).
         """
         # Validate session_id to prevent path injection
         if not _UUID_RE.match(session_id):
             return json.dumps({"error": "Invalid session_id format. Expected a UUID."})
+        if context_mode not in {"forensic", "active_context"}:
+            return json.dumps({"error": "context_mode must be one of: forensic, active_context"})
 
         try:
             # Fetch session metadata
@@ -184,7 +194,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 return json.dumps({"error": f"Session not found: {meta_resp.status_code}"})
 
             # Fetch session events
-            params: dict = {"limit": max_events}
+            params: dict = {"limit": max_events, "context_mode": context_mode}
             if roles:
                 params["roles"] = roles
             events_resp = await client.get(
@@ -220,6 +230,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         limit: int = 20,
         offset: int = 0,
         max_content_chars: int = 400,
+        context_mode: str = "forensic",
     ) -> str:
         """Surgical event search within a known session.
 
@@ -240,12 +251,15 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             limit: Max events to return (default 20).
             offset: Pagination offset (default 0).
             max_content_chars: Truncate content fields at this length (default 400).
+            context_mode: Context projection mode: forensic|active_context (default forensic).
         """
         if not _UUID_RE.match(session_id):
             return json.dumps({"error": "Invalid session_id format. Expected a UUID."})
+        if context_mode not in {"forensic", "active_context"}:
+            return json.dumps({"error": "context_mode must be one of: forensic, active_context"})
 
         try:
-            params: dict = {"limit": limit, "offset": offset}
+            params: dict = {"limit": limit, "offset": offset, "context_mode": context_mode}
             if query:
                 params["query"] = query
             if tool_name:
@@ -559,6 +573,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         since_days: int = 90,
         max_results: int = 5,
         context_turns: int = 2,
+        context_mode: str = "forensic",
     ) -> str:
         """Retrieve knowledge from past AI sessions by searching conversation content.
 
@@ -573,12 +588,17 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             since_days: Days to look back (default 90).
             max_results: Max sessions to return content from (default 5).
             context_turns: Turns before/after match to include (default 2).
+            context_mode: Context projection mode: forensic|active_context (default forensic).
         """
+        if context_mode not in {"forensic", "active_context"}:
+            return json.dumps({"error": "context_mode must be one of: forensic, active_context"})
+
         params: dict = {
             "query": query,
             "since_days": since_days,
             "max_results": max_results,
             "context_turns": context_turns,
+            "context_mode": context_mode,
         }
         if project:
             params["project"] = project
