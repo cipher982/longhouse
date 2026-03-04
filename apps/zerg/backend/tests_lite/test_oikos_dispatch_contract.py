@@ -1,5 +1,7 @@
 """Deterministic dispatch-contract checks for scripted Oikos behavior."""
 
+from zerg.services.oikos_react_engine import _classify_dispatch_lane
+from zerg.services.oikos_react_engine import _infer_requested_backend
 from zerg.testing.scripted_llm import ScriptedChatLLM
 from zerg.types.messages import HumanMessage
 from zerg.types.messages import SystemMessage
@@ -18,6 +20,7 @@ def test_dispatch_direct_response_no_tool_call():
     response = llm._generate_native(_oikos_messages("what is 2 + 2?"))
 
     assert response.tool_calls == []
+    assert _classify_dispatch_lane(response.tool_calls) == "direct"
     assert response.content == "4"
 
 
@@ -29,6 +32,7 @@ def test_dispatch_quick_tool_memory_search():
     assert response.tool_calls is not None
     assert len(response.tool_calls) == 1
     assert response.tool_calls[0]["name"] == "search_memory"
+    assert _classify_dispatch_lane(response.tool_calls) == "quick_tool"
 
 
 def test_dispatch_commis_delegation_for_infra_task():
@@ -39,3 +43,9 @@ def test_dispatch_commis_delegation_for_infra_task():
     assert response.tool_calls is not None
     assert len(response.tool_calls) == 1
     assert response.tool_calls[0]["name"] == "spawn_workspace_commis"
+    assert _classify_dispatch_lane(response.tool_calls) == "cli_delegation"
+
+
+def test_dispatch_backend_preference_detection_from_user_text():
+    messages = _oikos_messages("Use codex for this investigation")
+    assert _infer_requested_backend(messages) == "codex"
