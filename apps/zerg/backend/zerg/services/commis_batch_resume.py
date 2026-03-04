@@ -8,10 +8,6 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Any
-from typing import Callable
-from typing import Protocol
-from typing import Sequence
-from typing import runtime_checkable
 
 from sqlalchemy.orm import Session
 
@@ -20,6 +16,8 @@ from zerg.models.commis_barrier import CommisBarrierJob
 from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
+from zerg.services.commis_runner import RunnerFactory
+from zerg.services.commis_runner import default_runner_factory as _default_runner_factory
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
@@ -29,58 +27,6 @@ from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_co
 from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Runner Protocol — decouples commis_resume from concrete FicheRunner
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class ContinuationRunner(Protocol):
-    """Protocol for a runner that can execute continuations.
-
-    FicheRunner (a.k.a. Runner) satisfies this protocol.  Any object
-    implementing these methods and attributes can be used as the runner
-    for commis resume.
-    """
-
-    usage_prompt_tokens: int | None
-    usage_completion_tokens: int | None
-    usage_total_tokens: int | None
-    usage_reasoning_tokens: int | None
-
-    async def run_continuation(
-        self,
-        db: Session,
-        thread: Any,
-        tool_call_id: str,
-        tool_result: str,
-        *,
-        run_id: int | None = None,
-        trace_id: str | None = None,
-    ) -> Sequence[Any]: ...
-
-    async def run_batch_continuation(
-        self,
-        db: Session,
-        thread: Any,
-        commis_results: list[dict],
-        *,
-        run_id: int | None = None,
-        trace_id: str | None = None,
-    ) -> Sequence[Any]: ...
-
-
-# Factory callable: (fiche, model_override, reasoning_effort) -> ContinuationRunner
-RunnerFactory = Callable[..., ContinuationRunner]
-
-
-def _default_runner_factory(fiche: Any, *, model_override: str | None = None, reasoning_effort: str | None = None) -> ContinuationRunner:
-    """Create a FicheRunner — the default runner factory."""
-    from zerg.managers.fiche_runner import FicheRunner
-
-    return FicheRunner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)
 
 
 async def resume_oikos_batch(

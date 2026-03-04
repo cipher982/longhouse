@@ -7,13 +7,13 @@ import uuid
 from datetime import datetime
 from datetime import timezone
 from typing import Any
-from typing import Callable
 
 from sqlalchemy.orm import Session
 
 from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
+from zerg.services.commis_runner import RunnerFactory
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
@@ -23,8 +23,6 @@ from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_co
 from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 
 logger = logging.getLogger(__name__)
-
-RunnerFactory = Callable[..., Any]
 
 
 def _compute_duration_ms(started_at, *, end_time: datetime | None = None) -> int:
