@@ -37,7 +37,7 @@ Notes:
 
 ## [Tech Debt] Longhouse simplification wave (Commis/Oikos/Forum) (size: 8)
 
-Status (2026-03-03): In progress.
+Status (2026-03-04): Done.
 
 **Goal:** Reduce conceptual and code complexity now that product direction is clear (timeline-first, Oikos coordinator, commis as CLI jobs).
 
@@ -439,10 +439,16 @@ Make `model` an explicit override only, not a forced default. New execution logi
 
 ## [Product] Harness — Oikos Dispatch Contract (Deferred)
 
-- [ ] Oikos dispatch contract: direct vs quick-tool vs CLI delegation
+- [x] Oikos dispatch contract: direct vs quick-tool vs CLI delegation
 - [ ] Claude Compaction API for infinite thread context management
 
 Research doc: `apps/zerg/backend/docs/specs/3a-deferred-research.md`
+
+Notes (2026-03-04):
+- Added explicit dispatch-lane contract to `BASE_OIKOS_PROMPT` (direct, quick-tool, CLI delegation) with escalation rules.
+- Added backend-intent mapping guidance in prompt (`zai|codex|gemini|bedrock|anthropic`) for `spawn_workspace_commis`.
+- Added runtime dispatch normalization in `oikos_react_engine.py` to infer requested backend from latest user prompt and inject it into `spawn_workspace_commis` when missing.
+- Added dispatch guardrail tests for lane classification and backend normalization.
 
 ---
 
