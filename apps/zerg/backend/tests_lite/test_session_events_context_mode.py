@@ -139,3 +139,67 @@ def test_active_context_mode_falls_back_to_summary_marker(tmp_path):
         assert active_events[1].role == "user"
     finally:
         db.close()
+
+
+def test_active_context_mode_prefers_source_offset_on_same_path(tmp_path):
+    """Late-arriving stale lines before boundary offset stay out of active context."""
+    db, store = _make_store(tmp_path)
+    try:
+        source_path = "/tmp/rewind-like.jsonl"
+        result = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="zerg",
+                device_id="dev-machine",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=_ts(0),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="yellow in old context",
+                        timestamp=_ts(1),
+                        source_path=source_path,
+                        source_offset=100,
+                        raw_json='{"type":"user","timestamp":"2026-01-01T00:00:01Z"}',
+                    ),
+                    EventIngest(
+                        role="system",
+                        content_text="Conversation compacted [trigger=auto]",
+                        timestamp=_ts(2),
+                        source_path=source_path,
+                        source_offset=200,
+                        raw_json='{"type":"system","subtype":"compact_boundary","timestamp":"2026-01-01T00:00:02Z"}',
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="post-compact response",
+                        timestamp=_ts(3),
+                        source_path=source_path,
+                        source_offset=300,
+                        raw_json='{"type":"assistant","timestamp":"2026-01-01T00:00:03Z"}',
+                    ),
+                    # Rewind-like stale row: newer ingest id/timestamp, older source offset.
+                    EventIngest(
+                        role="user",
+                        content_text="yellow stale rewind branch",
+                        timestamp=_ts(4),
+                        source_path=source_path,
+                        source_offset=150,
+                        raw_json='{"type":"user","timestamp":"2026-01-01T00:00:04Z"}',
+                    ),
+                ],
+                source_lines=[],
+            )
+        )
+
+        active_events = store.get_session_events(result.session_id, context_mode="active_context", limit=100)
+        assert [event.content_text for event in active_events if event.content_text] == [
+            "Conversation compacted [trigger=auto]",
+            "post-compact response",
+        ]
+        assert store.count_session_events(result.session_id, context_mode="active_context", query="yellow") == 0
+    finally:
+        db.close()

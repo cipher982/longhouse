@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from typing import Dict
@@ -18,6 +19,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 from pydantic import Field
+from sqlalchemy import and_
 from sqlalchemy import bindparam
 from sqlalchemy import func
 from sqlalchemy import or_
@@ -31,6 +33,16 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CompactionBoundary:
+    """Active-context boundary marker derived from system metadata events."""
+
+    event_id: int
+    timestamp: datetime
+    source_path: str | None
+    source_offset: int | None
 
 
 # ---------------------------------------------------------------------------
@@ -224,15 +236,47 @@ class AgentsStore:
             }
         return matches
 
-    def get_session_matches(self, session_ids: list[UUID], query: str) -> dict[UUID, dict[str, Any]]:
+    def get_session_matches(
+        self,
+        session_ids: list[UUID],
+        query: str,
+        *,
+        context_mode: str = "forensic",
+    ) -> dict[UUID, dict[str, Any]]:
         """Return a match map keyed by session id for a query."""
         if not query or not session_ids:
             return {}
+        if context_mode == "active_context":
+            matches: dict[UUID, dict[str, Any]] = {}
+            for session_id in session_ids:
+                events = self.get_session_events(
+                    session_id,
+                    query=query,
+                    context_mode="active_context",
+                    limit=1,
+                    offset=0,
+                )
+                if not events:
+                    continue
+                event = events[0]
+                snippet = (
+                    self._build_snippet(event.content_text, query)
+                    or self._build_snippet(event.tool_output_text, query)
+                    or self._build_snippet(event.tool_name, query)
+                    or ""
+                )
+                matches[session_id] = {
+                    "event_id": event.id,
+                    "snippet": snippet,
+                    "role": event.role,
+                }
+            return matches
+
         if not self._fts_available():
             raise RuntimeError("FTS5 is required for session search but is not available.")
         return self._fts_match_map(session_ids, query)
 
-    def _fts_session_ids(self, query: str) -> Optional[list[UUID]]:
+    def _fts_session_ids(self, query: str, *, context_mode: str = "forensic") -> Optional[list[UUID]]:
         """Return session ids matching the FTS query."""
         if not query:
             return None
@@ -252,7 +296,16 @@ class AgentsStore:
                     except ValueError:
                         continue
                 session_ids.append(session_id)
-            return session_ids
+            if context_mode != "active_context":
+                return session_ids
+
+            # Active-context projection: keep only sessions with a matching event
+            # that is still inside the latest compaction boundary window.
+            filtered: list[UUID] = []
+            for session_id in session_ids:
+                if self.count_session_events(session_id, query=query, context_mode="active_context") > 0:
+                    filtered.append(session_id)
+            return filtered
         except Exception as exc:
             raise RuntimeError(f"FTS5 search failed: {exc}") from exc
 
@@ -471,6 +524,7 @@ class AgentsStore:
         offset: int = 0,
         exclude_user_states: Optional[list[str]] = None,
         hide_autonomous: bool = True,
+        context_mode: str = "forensic",
     ) -> tuple[List[AgentSession], int]:
         """List sessions with optional filters.
 
@@ -512,7 +566,7 @@ class AgentsStore:
 
         # Content search requires joining events
         if query:
-            session_ids = self._fts_session_ids(query)
+            session_ids = self._fts_session_ids(query, context_mode=context_mode)
             if session_ids is not None:
                 if not session_ids:
                     return [], 0
@@ -695,26 +749,91 @@ class AgentsStore:
             False,
         )
 
-    def _latest_compaction_boundary_event_id(self, session_id: UUID) -> int | None:
-        """Return latest compaction boundary event id for active-context projection.
+    def _is_compaction_boundary_raw_json(self, raw_json: str | None) -> bool:
+        """Return True when a raw line is a compaction boundary marker."""
+        if not raw_json:
+            return False
+        try:
+            obj = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(obj, dict):
+            return False
+        row_type = obj.get("type")
+        if row_type == "summary":
+            return True
+        if row_type != "system":
+            return False
+        subtype = obj.get("subtype")
+        return subtype in {"compact_boundary", "microcompact_boundary"}
 
-        Detects both explicit system compact boundaries and legacy summary rows
-        via raw_json shape. Returns None when no boundary markers exist.
-        """
-        stmt = (
-            select(func.max(AgentEvent.id))
-            .where(AgentEvent.session_id == session_id)
-            .where(AgentEvent.role == "system")
-            .where(
-                or_(
-                    AgentEvent.raw_json.ilike('%"subtype"%compact_boundary%'),
-                    AgentEvent.raw_json.ilike('%"subtype"%microcompact_boundary%'),
-                    AgentEvent.raw_json.ilike('%"type"%summary%'),
-                )
-            )
+    def get_active_context_boundary(self, session_id: UUID) -> CompactionBoundary | None:
+        """Return the latest compaction boundary marker for a session."""
+        rows = (
+            self.db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.role == "system")
+            .filter(AgentEvent.raw_json.isnot(None))
+            .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+            .all()
         )
-        result = self.db.execute(stmt).scalar()
-        return int(result) if result is not None else None
+        for event in rows:
+            if not self._is_compaction_boundary_raw_json(event.raw_json):
+                continue
+            source_offset = int(event.source_offset) if event.source_offset is not None else None
+            return CompactionBoundary(
+                event_id=int(event.id),
+                timestamp=event.timestamp,
+                source_path=event.source_path,
+                source_offset=source_offset,
+            )
+        return None
+
+    def is_event_in_active_context(self, event: AgentEvent, boundary: CompactionBoundary | None) -> bool:
+        """Return True when an event is inside the active context projection."""
+        if boundary is None:
+            return True
+
+        event_source_offset = int(event.source_offset) if event.source_offset is not None else None
+        if (
+            boundary.source_offset is not None
+            and event_source_offset is not None
+            and boundary.source_path
+            and event.source_path == boundary.source_path
+        ):
+            return event_source_offset >= boundary.source_offset
+
+        if event.timestamp > boundary.timestamp:
+            return True
+        if event.timestamp < boundary.timestamp:
+            return False
+        return int(event.id) >= boundary.event_id
+
+    def _apply_active_context_filter(self, stmt, boundary: CompactionBoundary):
+        """Apply active-context boundary filtering to an event statement."""
+        fallback_predicate = or_(
+            AgentEvent.timestamp > boundary.timestamp,
+            and_(
+                AgentEvent.timestamp == boundary.timestamp,
+                AgentEvent.id >= boundary.event_id,
+            ),
+        )
+        if boundary.source_path and boundary.source_offset is not None:
+            same_source_offset_predicate = and_(
+                AgentEvent.source_path == boundary.source_path,
+                AgentEvent.source_offset.isnot(None),
+                AgentEvent.source_offset >= boundary.source_offset,
+            )
+            not_same_source_predicate = and_(
+                or_(
+                    AgentEvent.source_path.is_(None),
+                    AgentEvent.source_path != boundary.source_path,
+                    AgentEvent.source_offset.is_(None),
+                ),
+                fallback_predicate,
+            )
+            return stmt.where(or_(same_source_offset_predicate, not_same_source_predicate))
+        return stmt.where(fallback_predicate)
 
     def get_session_events(
         self,
@@ -731,9 +850,9 @@ class AgentsStore:
         stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
 
         if context_mode == "active_context":
-            boundary_id = self._latest_compaction_boundary_event_id(session_id)
-            if boundary_id is not None:
-                stmt = stmt.where(AgentEvent.id >= boundary_id)
+            boundary = self.get_active_context_boundary(session_id)
+            if boundary is not None:
+                stmt = self._apply_active_context_filter(stmt, boundary)
 
         if roles:
             stmt = stmt.where(AgentEvent.role.in_(roles))
@@ -763,9 +882,9 @@ class AgentsStore:
         stmt = select(func.count()).select_from(AgentEvent).where(AgentEvent.session_id == session_id)
 
         if context_mode == "active_context":
-            boundary_id = self._latest_compaction_boundary_event_id(session_id)
-            if boundary_id is not None:
-                stmt = stmt.where(AgentEvent.id >= boundary_id)
+            boundary = self.get_active_context_boundary(session_id)
+            if boundary is not None:
+                stmt = self._apply_active_context_filter(stmt, boundary)
 
         if roles:
             stmt = stmt.where(AgentEvent.role.in_(roles))

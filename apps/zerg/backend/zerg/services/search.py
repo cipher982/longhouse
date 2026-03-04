@@ -33,6 +33,7 @@ class SessionFilters:
     days_back: int = 14
     exclude_user_states: list[str] = field(default_factory=list)
     hide_autonomous: bool = True  # Exclude autonomous sessions (Task sub-agents and sessions with no user messages)
+    context_mode: str = "forensic"
 
 
 def lexical_search(
@@ -64,6 +65,7 @@ def lexical_search(
         offset=0,
         exclude_user_states=filters.exclude_user_states,
         hide_autonomous=filters.hide_autonomous,
+        context_mode=filters.context_mode,
     )
     return sessions
 
