@@ -16,6 +16,13 @@ from control_plane.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _generate_fernet_key() -> str:
+    """Generate a throwaway URL-safe base64-encoded 32-byte key (Fernet-compatible)."""
+    import base64
+
+    return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+
+
 def _generate_password() -> tuple[str, str]:
     """Generate a random password and its PBKDF2 hash.
 
@@ -203,6 +210,9 @@ class Provisioner:
                 environment={
                     "DATABASE_URL": "sqlite:////data/longhouse.db",
                     "AUTH_DISABLED": "1",
+                    # Migration doesn't use Fernet but the settings validator requires it.
+                    # Generate a throwaway key — schema migrations never read encrypted data.
+                    "FERNET_SECRET": _generate_fernet_key(),
                 },
                 extra_hosts={"host.docker.internal": "host-gateway"},
             )
