@@ -32,7 +32,8 @@ Notes:
 - 2026-03-03: Added shared demo seeding helper (`seed_missing_demo_sessions`) to top-up missing demo sessions and emit per-session failure logs; wired into startup auto-seed and `POST /api/agents/demo`.
 - 2026-03-03: `DELETE /api/agents/demo` now keys off `provider_session_id LIKE 'demo-%'`, decoupled from `device_id`.
 - 2026-03-03: Restored `environment` in all session API response mappers (`/agents/sessions`, hybrid/semantic, and `/agents/sessions/{id}`).
-- Validation: `make test` ✅ (513 lite backend + 96 control-plane + 9 engine tests).
+- 2026-03-03: Added `POST /api/agents/demo?replace=true` (dev-only) for stale hot-reload recovery; response now includes `sessions_failed` + `sessions_deleted`.
+- Validation: `make test` ✅ (519 lite backend + 96 control-plane + 9 engine tests).
 
 ## [Tech Debt] Longhouse simplification wave (Commis/Oikos/Forum) (size: 8)
 
