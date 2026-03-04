@@ -827,7 +827,7 @@ class CommisJobProcessor:
             if final_status != "cancelled":
                 with db_session() as resume_db:
                     try:
-                        from zerg.services.commis_resume import resume_oikos_with_commis_result
+                        from zerg.services.commis_single_resume import resume_oikos_with_commis_result
 
                         resume_summary = summary
                         if diff:

@@ -97,7 +97,7 @@ async def resume_run(
         # 1. Locates the tool_call_id for the commis job
         # 2. Injects the tool result via FicheRunner.run_continuation()
         # 3. Emits completion events
-        from zerg.services.commis_resume import resume_oikos_with_commis_result
+        from zerg.services.commis_single_resume import resume_oikos_with_commis_result
 
         result = await resume_oikos_with_commis_result(
             db=db,

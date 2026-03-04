@@ -1,7 +1,7 @@
 """Shared Oikos run lifecycle helpers.
 
 These helpers centralize small pieces of run lifecycle behavior used by both
-oikos_service and commis_resume to reduce drift between primary and
+oikos_service and commis continuation modules to reduce drift between primary and
 continuation paths.
 """
 
