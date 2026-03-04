@@ -80,11 +80,11 @@ class MockChatLLM(BaseChatModel):
         content = str(last_msg.content) if last_msg else ""
 
         if "TRIGGER_COMMIS" in content:
-            # Emit spawn_commis tool call
+            # Emit spawn_workspace_commis tool call
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "spawn_commis",
-                "args": {"task": "Test commis task", "model": "gpt-mock", "wait": False},
+                "name": "spawn_workspace_commis",
+                "args": {"task": "Test commis task", "model": "gpt-mock"},
             }
             return AIMessage(content="Spawning commis...", tool_calls=[tool_call])
 

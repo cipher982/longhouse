@@ -69,6 +69,7 @@ Notes:
 - 2026-03-03: Moved `ForumPage` tests from `pages/__tests__` into `legacy/forum/__tests__` to keep active page test surface aligned with forum quarantine.
 - 2026-03-03: Removed `services/commis_resume.py` compatibility facade entirely; callers now import concrete modules directly (`commis_single_resume.py`, `commis_batch_resume.py`, `commis_inbox_trigger.py`).
 - 2026-03-03: Removed compatibility wrappers from `tools/builtin/oikos_tools.py` for commis lifecycle/artifact tools; the tools registry now references concrete implementations imported directly from `tools/builtin/oikos_commis_artifact_tools.py`.
+- 2026-03-03: Removed `spawn_commis` alias from active contracts: Oikos tool registry/runtime now uses `spawn_workspace_commis` only, tool schema/types were regenerated, and frontend Oikos timeline/tool-store logic now keys off `spawn_workspace_commis`.
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 

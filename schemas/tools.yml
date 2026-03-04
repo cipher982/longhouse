@@ -86,7 +86,6 @@ components:
         - send_sms
         - cancel_commis
         - check_commis_status
-        - spawn_commis
         - spawn_workspace_commis
         - wait_for_commis
         - task_create
@@ -303,8 +302,6 @@ components:
               const: oikos
             check_commis_status:
               const: oikos
-            spawn_commis:
-              const: oikos
             spawn_workspace_commis:
               const: oikos
             wait_for_commis:
@@ -380,7 +377,6 @@ components:
             - send_imessage
             - send_slack_webhook
             - send_sms
-            - spawn_commis
             - spawn_workspace_commis
             - task_create
             - task_delete

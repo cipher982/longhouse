@@ -21,7 +21,7 @@ from zerg.models_config import TIER_3  # Use cheapest model for demo
 from zerg.tools.builtin.oikos_tools import get_commis_metadata
 from zerg.tools.builtin.oikos_tools import list_commiss
 from zerg.tools.builtin.oikos_tools import read_commis_result
-from zerg.tools.builtin.oikos_tools import spawn_commis
+from zerg.tools.builtin.oikos_tools import spawn_workspace_commis
 
 
 async def main():
@@ -41,7 +41,7 @@ async def main():
                 print("No users found. Please create a user first.")
                 return
 
-            # Set up credential resolver context (required for spawn_commis)
+            # Set up credential resolver context (required for spawn_workspace_commis)
             resolver = CredentialResolver(fiche_id=1, db=db, owner_id=user.id)
             set_credential_resolver(resolver)
 
@@ -51,7 +51,7 @@ async def main():
 
             # 1. Spawn a commis
             print("\n1. Spawning a commis to calculate 10 + 15...")
-            result = spawn_commis(task="Calculate 10 + 15 and explain the result", model=TIER_3)
+            result = spawn_workspace_commis(task="Calculate 10 + 15 and explain the result", model=TIER_3)
             print(result)
 
             # Extract commis_id from the result
@@ -61,7 +61,7 @@ async def main():
 
             # 2. Spawn another commis
             print("\n2. Spawning another commis to write a haiku about AI...")
-            result2 = spawn_commis(task="Write a haiku about artificial intelligence", model=TIER_3)
+            result2 = spawn_workspace_commis(task="Write a haiku about artificial intelligence", model=TIER_3)
             print(result2)
 
             # 3. List all commis

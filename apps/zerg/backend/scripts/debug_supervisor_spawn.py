@@ -49,11 +49,11 @@ def main():
     print(f"Fiche name: {fiche.name}")
     print(f"Allowed tools: {fiche.allowed_tools}")
 
-    # Check if spawn_commis is in tools
-    if "spawn_commis" in (fiche.allowed_tools or []):
-        print("✅ spawn_commis is in allowed_tools")
+    # Check if spawn_workspace_commis is in tools
+    if "spawn_workspace_commis" in (fiche.allowed_tools or []):
+        print("✅ spawn_workspace_commis is in allowed_tools")
     else:
-        print("❌ spawn_commis NOT in allowed_tools!")
+        print("❌ spawn_workspace_commis NOT in allowed_tools!")
 
     # Check ACTUAL thread messages (runtime state, not just config)
     print("\n" + "=" * 60)
@@ -143,8 +143,8 @@ def main():
     issues = []
     if not user.context:
         issues.append("User context is empty - run auto-seed")
-    if "spawn_commis" not in (fiche.allowed_tools or []):
-        issues.append("spawn_commis not in allowed_tools")
+    if "spawn_workspace_commis" not in (fiche.allowed_tools or []):
+        issues.append("spawn_workspace_commis not in allowed_tools")
     if "cube" not in prompt.lower():
         issues.append("'cube' not in prompt - user context not injected")
     if "Spawn a commis immediately" not in prompt:

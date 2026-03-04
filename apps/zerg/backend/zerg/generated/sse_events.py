@@ -127,7 +127,7 @@ class CommisSpawnedPayload(BaseModel):
     """Payload for CommisSpawnedPayload"""
 
     job_id: int = Field(ge=1, description='Commis job ID')
-    tool_call_id: Optional[str] = Field(default=None, description='Tool call ID for the spawn_commis invocation')
+    tool_call_id: Optional[str] = Field(default=None, description='Tool call ID for the spawn_workspace_commis invocation')
     task: str = Field(min_length=1, description='Commis task (may be truncated to 100 chars)')
     model: Optional[str] = Field(default=None, description='LLM model for commis')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
@@ -200,7 +200,7 @@ class CommisToolFailedPayload(BaseModel):
 class CommisOutputChunkPayload(BaseModel):
     """Payload for CommisOutputChunkPayload"""
 
-    job_id: Optional[int] = Field(default=None, ge=1, description='Commis job ID (spawn_commis job)')
+    job_id: Optional[int] = Field(default=None, ge=1, description='Commis job ID (spawn_workspace_commis job)')
     commis_id: str = Field(min_length=1, description='')
     runner_job_id: Optional[str] = Field(default=None, min_length=1, description='Runner exec job UUID')
     stream: Literal['stdout', 'stderr'] = Field(description='Output stream for this chunk')

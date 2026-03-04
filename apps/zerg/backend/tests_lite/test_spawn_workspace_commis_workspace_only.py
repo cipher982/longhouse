@@ -13,7 +13,7 @@ from zerg.tools.builtin import oikos_tools
 
 
 def _make_db(tmp_path):
-    db_path = tmp_path / "spawn_commis_workspace.db"
+    db_path = tmp_path / "spawn_workspace_commis_workspace.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
@@ -28,8 +28,8 @@ def _create_user(db, email: str = "commis-test@example.com") -> User:
 
 
 @pytest.mark.asyncio
-async def test_spawn_commis_alias_always_creates_workspace_job(tmp_path, monkeypatch):
-    """Legacy alias still creates workspace-mode jobs (scratch workspace path)."""
+async def test_spawn_workspace_commis_creates_workspace_job_in_scratch_mode(tmp_path, monkeypatch):
+    """Primary spawn tool creates workspace-mode jobs in scratch mode without git_repo."""
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
         user = _create_user(db)
@@ -37,7 +37,7 @@ async def test_spawn_commis_alias_always_creates_workspace_job(tmp_path, monkeyp
         monkeypatch.setattr(oikos_tools, "get_credential_resolver", lambda: resolver)
         monkeypatch.setattr(oikos_tools, "get_oikos_context", lambda: None)
 
-        result = await oikos_tools.spawn_commis_async(
+        result = await oikos_tools.spawn_workspace_commis_async(
             task="Investigate flaky tests",
             backend="gemini",
             _return_structured=True,

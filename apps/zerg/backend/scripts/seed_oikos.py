@@ -88,7 +88,7 @@ def seed_oikos(user_email: str = None, name: str = "Oikos"):
     # Oikos tools - carefully selected for delegation and direct tasks
     oikos_tools = [
         # Oikos/delegation tools
-        "spawn_commis",
+        "spawn_workspace_commis",
         "list_commiss",
         "read_commis_result",
         "read_commis_file",
@@ -165,7 +165,7 @@ Be helpful, concise, and transparent about what you're doing."""
     print(f"   Owner: {user.email}")
     print(f"   Model: {fiche.model}")
     print(f"   Tools: {len(fiche.allowed_tools)} tools")
-    print("     - Oikos: spawn_commis, list_commiss, read_commis_result, etc.")
+    print("     - Oikos: spawn_workspace_commis, list_commiss, read_commis_result, etc.")
     print("     - Direct: get_current_time, http_request, send_email")
 
     print("\n🚀 Oikos is ready!")

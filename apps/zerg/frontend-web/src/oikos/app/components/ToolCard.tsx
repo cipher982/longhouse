@@ -28,7 +28,7 @@ const TOOL_ICONS: Record<string, string> = {
   web_search: '🌐',
   web_fetch: '🔗',
   http_request: '📡',
-  spawn_commis: '🤖',
+  spawn_workspace_commis: '🤖',
   list_commiss: '📋',
   read_commis_result: '📖',
   get_current_time: '⏰',

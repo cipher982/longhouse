@@ -7,7 +7,7 @@ The oikos/commis pattern enables complex delegation scenarios where a oikos
 can spawn multiple commiss for parallel execution or break down complex tasks.
 
 Commis execution flow (async inbox model):
-- spawn_commis() creates CommisJob and returns immediately (non-blocking)
+- spawn_workspace_commis() creates CommisJob and returns immediately (non-blocking)
 - Commis runs in background via CommisJobProcessor
 - Results surface in the oikos inbox on the next turn
 - wait_for_commis() is the explicit opt-in blocking path (raises FicheInterrupted)
@@ -46,7 +46,7 @@ from zerg.types.tools import Tool as StructuredTool
 logger = logging.getLogger(__name__)
 
 
-async def spawn_commis_async(
+async def _spawn_workspace_commis_core_async(
     task: str,
     model: str | None = None,
     backend: str | None = None,
@@ -75,9 +75,9 @@ async def spawn_commis_async(
         The commis's result after completion
 
     Example:
-        spawn_commis("Fix typo in README", git_repo="git@github.com:user/repo.git")
-        spawn_commis("Analyze dependencies", git_repo="https://github.com/org/repo.git")
-        spawn_commis("Continue work", git_repo="...", resume_session_id="abc-123")
+        spawn_workspace_commis("Fix typo in README", git_repo="git@github.com:user/repo.git")
+        spawn_workspace_commis("Analyze dependencies", git_repo="https://github.com/org/repo.git")
+        spawn_workspace_commis("Continue work", git_repo="...", resume_session_id="abc-123")
     """
     from zerg.models.models import CommisJob
 
@@ -242,31 +242,20 @@ async def spawn_commis_async(
         # Return job info for caller to handle interruption.
         # oikos_react_engine raises FicheInterrupted
         # to pause execution until commis completes.
-        logger.debug(f"spawn_commis returning queued response for job {commis_job.id}")
+        logger.debug(f"spawn_workspace_commis returning queued response for job {commis_job.id}")
         if _return_structured:
             return {"job_id": commis_job.id, "status": "queued", "task": task[:100]}
         return f"Commis job {commis_job.id} queued successfully. Working on: {task[:100]}"
 
     except Exception as e:
-        logger.exception(f"Failed to spawn commis for task: {task}")
+        logger.exception(f"Failed to spawn workspace commis for task: {task}")
         db.rollback()
-        return tool_error(ErrorType.EXECUTION_ERROR, f"Error spawning commis: {e}")
-
-
-def spawn_commis(
-    task: str,
-    model: str | None = None,
-    backend: str | None = None,
-) -> str:
-    """Spawn a commis in scratch workspace mode (legacy alias)."""
-    from zerg.utils.async_utils import run_async_safely
-
-    return run_async_safely(spawn_commis_async(task=task, model=model, backend=backend))
+        return tool_error(ErrorType.EXECUTION_ERROR, f"Error spawning workspace commis: {e}")
 
 
 async def spawn_workspace_commis_async(
     task: str,
-    git_repo: str,
+    git_repo: str | None = None,
     model: str | None = None,
     backend: str | None = None,
     resume_session_id: str | None = None,
@@ -275,14 +264,15 @@ async def spawn_workspace_commis_async(
     _tool_call_id: str | None = None,
     _return_structured: bool = False,
 ) -> str | dict:
-    """Spawn a commis to execute a task in a git repository workspace.
+    """Spawn a commis to execute a task in a workspace.
 
-    The repository is cloned to an isolated workspace, the agent runs
-    headlessly, and any changes are captured as a diff.
+    If `git_repo` is provided, the repository is cloned to an isolated workspace.
+    Otherwise, the commis runs in an ephemeral scratch workspace.
 
     Args:
-        task: What to do in the repository (analyze code, fix bug, etc)
-        git_repo: Repository URL (https://github.com/org/repo.git or git@github.com:org/repo.git)
+        task: What to do in the workspace (analyze code, fix bug, etc)
+        git_repo: Optional repository URL
+            (https://github.com/org/repo.git or git@github.com:org/repo.git)
         model: Optional model override for the commis
         backend: Optional backend override (zai/codex/gemini/bedrock/anthropic)
         resume_session_id: Life Hub session UUID to resume (for session continuity)
@@ -296,16 +286,17 @@ async def spawn_workspace_commis_async(
     Example:
         spawn_workspace_commis("List dependencies from pyproject.toml", "https://github.com/langchain-ai/langchain.git")
         spawn_workspace_commis("Fix the typo in README.md", "git@github.com:user/repo.git")
-        spawn_workspace_commis("Continue the work", "git@...", resume_session_id="abc-123")
+        spawn_workspace_commis("Investigate a shell command issue")
     """
     # Early validation: reject dangerous URLs before job creation (defense in depth)
     # Delegate to shared validator to stay consistent with workspace_manager rules.
     from zerg.services.workspace_manager import validate_git_repo_url
 
-    try:
-        validate_git_repo_url(git_repo)
-    except ValueError as exc:
-        return tool_error(ErrorType.VALIDATION_ERROR, str(exc))
+    if git_repo:
+        try:
+            validate_git_repo_url(git_repo)
+        except ValueError as exc:
+            return tool_error(ErrorType.VALIDATION_ERROR, str(exc))
 
     # Resolve skill content from user's loaded skills (if any requested)
     resolved_skills: list[str] | None = None
@@ -333,7 +324,7 @@ async def spawn_workspace_commis_async(
             logger.warning("Failed to resolve skills for commis", exc_info=True)
 
     # Delegate to the core implementation with workspace mode forced
-    return await spawn_commis_async(
+    return await _spawn_workspace_commis_core_async(
         task=task,
         model=model,
         backend=backend,
@@ -347,7 +338,7 @@ async def spawn_workspace_commis_async(
 
 def spawn_workspace_commis(
     task: str,
-    git_repo: str,
+    git_repo: str | None = None,
     model: str | None = None,
     backend: str | None = None,
     resume_session_id: str | None = None,
@@ -712,19 +703,12 @@ def request_session_selection(
 # can use whichever invocation method is appropriate for the runtime.
 TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
-        func=spawn_commis,
-        coroutine=spawn_commis_async,
-        name="spawn_commis",
-        description="DEPRECATED: Use spawn_workspace_commis instead. "
-        "Compatibility alias that runs commis in scratch workspace mode "
-        "(no git repo clone).",
-    ),
-    StructuredTool.from_function(
         func=spawn_workspace_commis,
         coroutine=spawn_workspace_commis_async,
         name="spawn_workspace_commis",
-        description="Spawn a commis to work in a git repository (PRIMARY tool for all commis work). "
-        "Clones the repo, runs a CLI agent (Claude Code) in an isolated workspace, and captures changes. "
+        description="Spawn a commis to work in a workspace (PRIMARY tool for all commis work). "
+        "Optionally clone a git repo by passing git_repo; otherwise uses an ephemeral scratch workspace. "
+        "Runs a CLI agent (Claude Code) in an isolated workspace and captures changes. "
         "Use this for: reading code, analyzing dependencies, making changes, running tests, research. "
         "Pass skills=['skill-name'] to activate user skills in the commis prompt.",
     ),
@@ -894,7 +878,7 @@ def get_oikos_allowed_tools() -> list[str]:
 # ---------------------------------------------------------------------------
 
 # Commis agents get a focused tool set for doing work in a workspace.
-# They do NOT get coordinator tools (spawn_commis, manage commis jobs, etc.)
+# They do NOT get coordinator tools (spawn_workspace_commis, manage commis jobs, etc.)
 # because commis should not spawn other commis or inspect oikos state.
 #
 # Categories:
@@ -979,7 +963,7 @@ def get_commis_allowed_tools() -> list[str]:
 
     Commis agents are execution-focused workers that operate in git workspaces.
     They get tools for doing work (web, project management, communication, etc.)
-    but NOT coordinator tools (spawn_commis, manage commis jobs, etc.).
+    but NOT coordinator tools (spawn_workspace_commis, manage commis jobs, etc.).
 
     This is the SINGLE SOURCE OF TRUTH for commis tool allowlists.
 

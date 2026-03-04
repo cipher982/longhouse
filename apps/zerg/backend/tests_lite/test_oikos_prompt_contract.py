@@ -14,7 +14,7 @@ def _tool_description(tool_name: str) -> str:
 def test_prompt_teaches_workspace_first_spawn_contract():
     assert "spawn_workspace_commis" in BASE_OIKOS_PROMPT
     assert "(PRIMARY)" in BASE_OIKOS_PROMPT
-    assert "spawn_commis** (DEPRECATED)" in BASE_OIKOS_PROMPT
+    assert "(DEPRECATED)" not in BASE_OIKOS_PROMPT
 
 
 def test_prompt_uses_wait_for_commis_not_removed_wait_parameter():
@@ -25,8 +25,5 @@ def test_prompt_uses_wait_for_commis_not_removed_wait_parameter():
 
 
 def test_tool_descriptions_match_prompt_semantics():
-    spawn_commis_description = _tool_description("spawn_commis")
     workspace_description = _tool_description("spawn_workspace_commis")
-
-    assert "DEPRECATED" in spawn_commis_description
     assert "PRIMARY" in workspace_description

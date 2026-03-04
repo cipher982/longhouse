@@ -234,7 +234,7 @@ class CommisToolInfo(BaseModel):
 
 
 class CommisInfo(BaseModel):
-    """Commis spawned by spawn_commis tool."""
+    """Commis spawned by spawn_workspace_commis tool."""
 
     job_id: int
     task: str
@@ -250,7 +250,7 @@ class ToolCallInfo(BaseModel):
     tool_name: str
     args: Optional[dict] = None
     result: Optional[str] = None
-    # For spawn_commis tools, includes commis activity
+    # For spawn_workspace_commis tools, includes commis activity
     commis: Optional[CommisInfo] = None
 
 
@@ -272,7 +272,7 @@ class OikosHistoryResponse(BaseModel):
 
 
 def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str]) -> dict[str, dict]:
-    """Fetch commis activity for spawn_commis tool calls.
+    """Fetch commis activity for spawn_workspace_commis tool calls.
 
     Queries RunEvent to build a complete picture of commis execution:
     - commis_spawned: task, job_id
@@ -284,7 +284,7 @@ def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str])
     Args:
         db: Database session
         fiche_id: Oikos fiche ID (to filter runs)
-        tool_call_ids: List of spawn_commis tool_call_ids to look up
+        tool_call_ids: List of spawn_workspace_commis tool_call_ids to look up
 
     Returns:
         Dict mapping tool_call_id -> commis activity dict with:
@@ -325,7 +325,7 @@ def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str])
 
     # Build job_id -> commis activity from commis events
     job_activity: dict[int, dict] = {}
-    # Map tool_call_id -> commis activity (for spawn_commis history)
+    # Map tool_call_id -> commis activity (for spawn_workspace_commis history)
     result: dict[str, dict] = {}
     for e in events:
         payload = e.payload or {}
@@ -387,7 +387,7 @@ def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str])
         pending_tool_call_ids: deque[str] = deque()
         for e in run_events:
             payload = e.payload or {}
-            if e.event_type == "oikos_tool_started" and payload.get("tool_name") == "spawn_commis":
+            if e.event_type == "oikos_tool_started" and payload.get("tool_name") == "spawn_workspace_commis":
                 tc_id = payload.get("tool_call_id")
                 if tc_id in tool_call_ids and tc_id not in result:
                     pending_tool_call_ids.append(tc_id)
@@ -451,18 +451,18 @@ def oikos_history(
     # Get paginated messages
     messages = query.offset(offset).limit(limit).all()
 
-    # Collect all tool_call_ids that are spawn_commis to batch-fetch commis activity
-    spawn_commis_tool_call_ids = []
+    # Collect all tool_call_ids that are spawn_workspace_commis to batch-fetch commis activity
+    spawn_workspace_tool_call_ids = []
     for msg in messages:
         if msg.role == "assistant" and msg.tool_calls:
             for tc in msg.tool_calls:
-                if tc.get("name") == "spawn_commis" and tc.get("id"):
-                    spawn_commis_tool_call_ids.append(tc["id"])
+                if tc.get("name") == "spawn_workspace_commis" and tc.get("id"):
+                    spawn_workspace_tool_call_ids.append(tc["id"])
 
-    # Batch fetch commis activity for all spawn_commis tool calls
+    # Batch fetch commis activity for all spawn_workspace_commis tool calls
     commis_activity_map: dict[str, dict] = {}
-    if spawn_commis_tool_call_ids:
-        commis_activity_map = _fetch_commis_activity(db, fiche.id, spawn_commis_tool_call_ids)
+    if spawn_workspace_tool_call_ids:
+        commis_activity_map = _fetch_commis_activity(db, fiche.id, spawn_workspace_tool_call_ids)
 
     # Also need to find tool results from ToolMessages
     # Get all ToolMessages for this thread to map tool_call_id -> result
@@ -492,9 +492,9 @@ def oikos_history(
                 tc_args = tc.get("args")
                 tc_result = tool_results_map.get(tc_id)
 
-                # For spawn_commis, include commis activity
+                # For spawn_workspace_commis, include commis activity
                 commis_info = None
-                if tc_name == "spawn_commis" and tc_id in commis_activity_map:
+                if tc_name == "spawn_workspace_commis" and tc_id in commis_activity_map:
                     wa = commis_activity_map[tc_id]
                     commis_info = CommisInfo(
                         job_id=wa["job_id"],
@@ -589,7 +589,7 @@ def oikos_clear_history(
     db.commit()
 
     logger.info(
-        f"Oikos history cleared: deleted {deleted_count} messages from thread {old_thread.id} " f"for user {current_user.id}",
+        (f"Oikos history cleared: deleted {deleted_count} messages from thread {old_thread.id} " f"for user {current_user.id}"),
         extra={"tag": "OIKOS"},
     )
 

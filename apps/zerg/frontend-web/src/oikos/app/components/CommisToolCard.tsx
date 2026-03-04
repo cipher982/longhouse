@@ -1,5 +1,5 @@
 /**
- * CommisToolCard - Displays spawn_commis tool calls with nested commis progress
+ * CommisToolCard - Displays spawn_workspace_commis tool calls with nested commis progress
  *
  * Unified component that replaces the separate CommisProgress panel.
  * Shows:
