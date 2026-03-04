@@ -15,6 +15,66 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Product] Compaction Fidelity + Active Context Semantics (size: 4)
+
+Status (2026-03-04): Spec drafted, not implemented.
+
+**Goal:** Preserve full transcript fidelity while accurately modeling what Claude can still "remember" after `/compact`.
+
+**First-principles invariants:**
+- [ ] Never lose bytes: source transcript archive must remain append-only and lossless
+- [ ] Facts are immutable; UI/search contexts are derived views
+- [ ] "Forensic history" and "active model context" are different and must both be queryable
+
+**Implementation spec:**
+- [ ] Persist compaction metadata as first-class events (do not drop `type=summary` / compaction-adjacent records at parse time)
+- [ ] Add `compaction_boundary` derivation during ingest/projection (boundary anchored to source offset + timestamp)
+- [ ] Add context modes in read/query APIs:
+  - [ ] `forensic` = all facts (full timeline)
+  - [ ] `active_context` = latest compaction summary + post-boundary turns
+- [ ] Keep pre-compaction turns visible in timeline/search by default (no destructive pruning)
+- [ ] In UI, mark pre-compaction facts as "outside active model context" instead of hiding/deleting
+
+**Acceptance tests:**
+- [ ] Real Claude transcript with repeated summary lines still roundtrips byte-for-byte in source archive
+- [ ] Compaction-only append does not create fake conversational events
+- [ ] `forensic` query returns pre-compact fact; `active_context` query excludes it unless reintroduced later
+
+Notes:
+- Current parser explicitly skips `summary`/`file-history-snapshot`/`progress`; this task removes that fidelity gap while keeping default UI clean.
+
+## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
+
+Status (2026-03-04): Spec drafted, not implemented.
+
+**Goal:** Handle `/rewind` as intentional branch history, not duplicate/corrupt event accumulation.
+
+**First-principles invariants:**
+- [ ] Rewind must never destroy previously shipped facts
+- [ ] Post-rewind "head" must be reconstructable deterministically
+- [ ] Abandoned branches remain auditable but do not pollute default active timeline
+
+**Implementation spec:**
+- [ ] Make source-line storage append-only by revision (stop overwriting `(session_id, source_path, source_offset)` on conflict)
+- [ ] Detect rewrite-at-same-offset and file truncation as `rewind_candidate` signals
+- [ ] Introduce branch metadata for sessions (`branch_id`, `parent_branch_id`, `branched_at_offset`, `is_head`)
+- [ ] On rewind detection:
+  - [ ] Freeze prior head as abandoned branch
+  - [ ] Start new head branch from rewind point
+- [ ] Update event projection APIs:
+  - [ ] default timeline = head branch only
+  - [ ] optional "show abandoned" mode for forensic/debug
+- [ ] Add explicit UX language for "dangling state": events still exist, but are not on active branch
+
+**Acceptance tests:**
+- [ ] Rewind replay with rewritten line at same offset creates new head branch (not duplicate rows in active projection)
+- [ ] Forensic mode returns both pre- and post-rewind branches
+- [ ] Default timeline excludes abandoned-branch continuation after rewind point
+- [ ] Export "head only" and "full forensic" both pass deterministic reconstruction tests
+
+Notes:
+- Real DB evidence already shows same `(session, path, offset)` with distinct content hashes; this task formalizes that into branch semantics.
+
 ## [Tech Debt] Demo seed/reset reliability + session environment fidelity (size: 2)
 
 Status (2026-03-03): Done.
