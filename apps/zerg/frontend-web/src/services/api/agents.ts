@@ -120,6 +120,7 @@ export interface AgentEvent {
   tool_output_text: string | null;
   tool_call_id: string | null;
   timestamp: string;
+  in_active_context?: boolean;
 }
 
 export interface AgentEventsListResponse {
