@@ -45,6 +45,7 @@ Notes:
 - 2026-03-03: Removed dead `frontend-web/src/styles/forum-map.css` placeholder (unused import surface).
 - 2026-03-03: Continued `commis_resume.py` split by extracting inbox follow-up polling/scheduling into `services/commis_inbox_followup.py` and wiring callbacks from resume path with dedicated unit tests.
 - 2026-03-03: Extracted inbox synthetic-task prompt builder to `services/commis_inbox_prompt.py` and replaced inline branch logic in `trigger_commis_inbox_run` with a shared helper + tests.
+- 2026-03-03: Continued `commis_resume.py` split by extracting barrier coordination logic to `services/commis_barrier.py`; `commis_resume.py` now orchestrates while barrier semantics are covered by dedicated unit tests.
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
