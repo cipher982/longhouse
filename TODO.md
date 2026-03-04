@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [QA/Test] Verify landing-page provider claims (Claude/Codex/Gemini) (size: 2)
+
+Status (2026-03-04): Done.
+
+**Goal:** Validate that "Syncing now" claims map to tested, working ingestion paths (and identify any gaps or overclaims).
+
+- [x] Audit landing copy vs actual supported providers in ingest pipeline
+- [x] Run current test gates (`make test`, `make test-e2e`) and provider-focused ingestion checks
+- [x] Confirm whether provider coverage is real end-to-end, fixture-based, or mocked at each layer
+- [x] Propose minimal follow-up tests/wording changes if claims exceed verification evidence
+
+Notes:
+- Investigation requested due to uncertainty about current Gemini support quality and E2E realism.
+- 2026-03-04: Verification run complete. `make test`, `make test-e2e`, and `make test-shipper-e2e` passed.
+- 2026-03-04: Added/updated landing E2E coverage to match current UX and claims (`landing-links.spec.ts`, `landing-integrations.spec.ts`), validated with `22 passed`.
+- 2026-03-04: Confirmed E2E harness intentionally uses deterministic test doubles for agent execution (`gpt-scripted`, mock hatch, tool stubs), while shipper/provider ingest pipeline tests run real API + SQLite + engine binary on fixture transcripts.
+
 ## [Infra] Migration Hardening (startup-safe + preflight + ledger) (size: 3)
 
 Status (2026-03-04): Done.
