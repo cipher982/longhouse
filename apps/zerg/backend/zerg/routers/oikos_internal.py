@@ -97,6 +97,7 @@ async def resume_run(
         # 1. Locates the tool_call_id for the commis job
         # 2. Injects the tool result via FicheRunner.run_continuation()
         # 3. Emits completion events
+        from zerg.services.commis_runner import default_runner_factory
         from zerg.services.commis_single_resume import resume_oikos_with_commis_result
 
         result = await resume_oikos_with_commis_result(
@@ -104,6 +105,7 @@ async def resume_run(
             run_id=run_id,
             commis_result=result_text,
             job_id=payload.job_id,
+            runner_factory=default_runner_factory,
         )
 
         result_status = result.get("status") if result else "unknown"

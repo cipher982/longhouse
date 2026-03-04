@@ -1017,11 +1017,14 @@ class OikosService:
             session_factory = get_session_factory()
             fresh_db = session_factory()
             try:
+                from zerg.services.commis_runner import default_runner_factory
+
                 await resume_oikos_with_commis_result(
                     db=fresh_db,
                     run_id=run_id,
                     commis_result=result_text,
                     job_id=commis_job.id,
+                    runner_factory=default_runner_factory,
                 )
                 logger.info(f"Immediate resume completed for run {run_id}")
             finally:
