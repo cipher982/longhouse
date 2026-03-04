@@ -4,7 +4,7 @@ This module provides a thread-safe way to pass the oikos run_id
 to commis spawning during fiche execution using Python's contextvars.
 
 The pattern mirrors the credential context (connectors/context.py) where
-the OikosService sets the context before invocation and spawn_commis reads from it.
+the OikosService sets the context before invocation and spawn_workspace_commis reads from it.
 
 Usage in OikosService.run_oikos:
     from zerg.services.oikos_context import set_oikos_context
@@ -12,7 +12,7 @@ Usage in OikosService.run_oikos:
     # ... invoke fiche ...
     reset_oikos_context(token)  # cleanup
 
-Usage in spawn_commis / tool event emission:
+Usage in spawn_workspace_commis / tool event emission:
     from zerg.services.oikos_context import get_oikos_context
     ctx = get_oikos_context()  # Returns OikosContext or None
     if ctx:

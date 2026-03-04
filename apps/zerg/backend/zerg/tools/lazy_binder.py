@@ -3,7 +3,7 @@
 This module provides the LazyToolBinder class which manages tool loading
 for the oikos ReAct loop. It:
 
-1. Pre-loads core tools (spawn_commis, contact_user, etc.)
+1. Pre-loads core tools (spawn_workspace_commis, contact_user, etc.)
 2. Lazy-loads other tools on first use
 3. Tracks which tools have been loaded for rebinding
 
@@ -56,7 +56,7 @@ CORE_TOOLS: frozenset[str] = OIKOS_TOOL_NAMES | frozenset(
 )
 
 # Core tools for Commis - execution-focused tools, pre-loaded.
-# Commis agents don't get coordinator tools (spawn_commis, etc.)
+# Commis agents don't get coordinator tools (spawn_workspace_commis, etc.)
 COMMIS_CORE_TOOLS: frozenset[str] = COMMIS_TOOL_NAMES
 
 

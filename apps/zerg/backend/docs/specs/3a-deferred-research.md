@@ -13,11 +13,11 @@ Oikos dispatch today is implicit. The ReAct loop in `oikos_react_engine.py` call
 
 - **Direct response** — LLM returns text, no tool calls
 - **Quick tool** — LLM calls a builtin tool (search, memory, email, etc.)
-- **CLI delegation** — LLM calls `spawn_commis` or `spawn_workspace_commis`
+- **CLI delegation** — LLM calls `spawn_workspace_commis`
 
-Backend selection for commis is partially exposed via the `model` arg on `spawn_commis`, but the user cannot say "use Codex" in natural language and have Oikos map that to a backend. The prompt guidance still references legacy patterns.
+Backend selection for commis is partially exposed via `model`/`backend` args on `spawn_workspace_commis`, but the user cannot always say "use Codex" in natural language and have Oikos map that intent consistently.
 
-Repo vs scratch delegation is partially implemented: `spawn_commis` accepts `git_repo` and creates a workspace clone when present. Without `git_repo`, it falls back but there is no clean "scratch mode" contract in the tool schema.
+Repo vs scratch delegation is implemented through one contract: `spawn_workspace_commis` clones when `git_repo` is provided and runs scratch mode when `git_repo` is omitted.
 
 ## 2. Dispatch Contract Evaluation
 
@@ -25,10 +25,10 @@ Repo vs scratch delegation is partially implemented: `spawn_commis` accepts `git
 
 **Is this needed now?** Partially. The LLM is already smart enough to route between direct/tool/delegation without a keyword parser. What is missing:
 
-1. **Backend intent mapping** — Oikos prompt should instruct the model to pass `backend` (or `model`) args to `spawn_commis` when the user specifies a preference. This is a prompt change, not code.
-2. **Scratch mode** — Adding `scratch=True` to `spawn_commis` schema (skip git clone) would be clean but is low-urgency since most real work targets a repo.
+1. **Backend intent mapping** — Oikos prompt should instruct the model to pass `backend` (or `model`) args to `spawn_workspace_commis` when the user specifies a preference. This is mostly a prompt change.
+2. **Scratch mode clarity** — Keep documenting that omitting `git_repo` means scratch mode for `spawn_workspace_commis`.
 
-**Recommendation: Defer further.** The dispatch "contract" is mostly a prompt engineering task. The model already routes correctly 90% of the time. When backend intent mapping becomes a real user need (multiple CLI backends in production), update the Oikos system prompt to include backend selection guidance and add a `backend` param to `spawn_commis`. No new code architecture needed.
+**Recommendation: Defer further.** The dispatch "contract" is mostly a prompt engineering task. The model already routes correctly most of the time. When backend intent mapping becomes a real user need (multiple CLI backends in production), update the Oikos system prompt guidance and tighten eval coverage. No new routing architecture needed.
 
 ## 3. Compaction API Evaluation
 
