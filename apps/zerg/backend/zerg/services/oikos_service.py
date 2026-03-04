@@ -1184,7 +1184,7 @@ class OikosService:
             The completed CommisJob record
         """
         from zerg.database import get_session_factory
-        from zerg.services.commis_resume import resume_oikos_with_commis_result
+        from zerg.services.commis_single_resume import resume_oikos_with_commis_result
 
         try:
 
@@ -1268,7 +1268,7 @@ class OikosService:
         """
         from zerg.database import get_session_factory
         from zerg.services.commis_barrier import check_and_resume_if_all_complete
-        from zerg.services.commis_resume import resume_oikos_batch
+        from zerg.services.commis_batch_resume import resume_oikos_batch
 
         try:
             # Extract result summary
@@ -1336,7 +1336,7 @@ class OikosService:
             logger.exception(f"Failed to trigger immediate barrier check for run {run_id}: {e}")
 
     # NOTE: run_continuation() removed - replaced by LangGraph-free continuation
-    # See commis_resume.py for the new implementation using Runner.run_continuation()
+    # See commis_single_resume.py for the implementation using Runner.run_continuation()
 
 
 __all__ = [

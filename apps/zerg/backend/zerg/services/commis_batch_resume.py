@@ -1,4 +1,4 @@
-"""Batch commis resume flow extracted from commis_resume."""
+"""Batch commis resume flow."""
 
 from __future__ import annotations
 

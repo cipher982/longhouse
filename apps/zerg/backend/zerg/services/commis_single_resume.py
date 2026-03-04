@@ -1,4 +1,4 @@
-"""Single-commis continuation flow extracted from commis_resume."""
+"""Single-commis continuation flow."""
 
 from __future__ import annotations
 

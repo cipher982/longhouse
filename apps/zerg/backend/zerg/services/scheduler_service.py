@@ -70,7 +70,7 @@ class SchedulerService:
     async def _run_barrier_reaper(self):
         """Execute the barrier reaper task."""
         from zerg.services.commis_barrier_reaper import reap_expired_barriers
-        from zerg.services.commis_resume import resume_oikos_batch
+        from zerg.services.commis_batch_resume import resume_oikos_batch
 
         try:
             with db_session(self.session_factory) as db:
