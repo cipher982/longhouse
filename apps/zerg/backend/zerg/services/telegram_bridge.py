@@ -99,8 +99,10 @@ class TelegramBridge:
             )
             return
 
-        # Persist chat_id so Oikos can proactively reach the user later
-        await self._persist_chat_id(owner_id, chat_id)
+        # Persist chat_id from DMs only — prevents group messages from
+        # overwriting the user's real chat_id (and hijacking notifications)
+        if event.get("chat_type") == "dm":
+            await self._persist_chat_id(owner_id, chat_id)
 
         # Send typing indicator and keep refreshing it while Oikos runs
         typing_task = asyncio.create_task(self._keep_typing(chat_id))

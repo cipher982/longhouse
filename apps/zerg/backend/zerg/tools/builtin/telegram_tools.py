@@ -17,6 +17,50 @@ from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
 
+_DESCRIPTION = (
+    "Send a Telegram message to the user on their phone. "
+    "Use when a task finishes, you need to flag something urgent, or the user asked you to follow up. "
+    "Only works after the user has messaged the bot at least once."
+)
+
+
+def _resolve_chat_id() -> tuple[str | None, Dict[str, Any] | None]:
+    """Return (chat_id, None) or (None, error_dict)."""
+    ctx = get_commis_context()
+    owner_id = ctx.owner_id if ctx else None
+    if owner_id is None:
+        return None, tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="send_telegram requires a commis context with owner information.",
+        )
+
+    with db_session() as db:
+        user = crud.get_user(db, owner_id)
+        if not user:
+            return None, tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message=f"User {owner_id} not found.",
+            )
+        chat_id = str((user.context or {}).get("telegram_chat_id", ""))
+
+    if not chat_id:
+        return None, tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=("No Telegram chat linked. The user needs to message the Longhouse bot first " "to establish the connection."),
+        )
+    return chat_id, None
+
+
+def _build_message(chat_id: str, text: str) -> Any:
+    from zerg.channels.types import ChannelMessage
+
+    return ChannelMessage(
+        channel_id="telegram",
+        to=chat_id,
+        text=_format_for_telegram(text),
+        parse_mode="html",
+    )
+
 
 def send_telegram(message: str) -> Dict[str, Any]:
     """Send a Telegram message to the user.
@@ -39,42 +83,15 @@ def send_telegram(message: str) -> Dict[str, Any]:
         {"success": True}
     """
     if not message or not message.strip():
-        return tool_error(
-            error_type=ErrorType.VALIDATION_ERROR,
-            user_message="message is required",
-        )
+        return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="message is required")
 
-    # Get owner from commis context
-    ctx = get_commis_context()
-    owner_id = ctx.owner_id if ctx else None
+    chat_id, err = _resolve_chat_id()
+    if err:
+        return err
 
-    if owner_id is None:
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message="send_telegram requires a commis context with owner information.",
-        )
-
-    # Look up the user's telegram_chat_id
-    with db_session() as db:
-        user = crud.get_user(db, owner_id)
-        if not user:
-            return tool_error(
-                error_type=ErrorType.EXECUTION_ERROR,
-                user_message=f"User {owner_id} not found.",
-            )
-        chat_id = str((user.context or {}).get("telegram_chat_id", ""))
-
-    if not chat_id:
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message=("No Telegram chat linked. The user needs to message @Longhouse_drose_bot first " "to establish the connection."),
-        )
-
-    # Send via the registered TelegramChannel
     from zerg.channels.registry import get_registry
 
-    registry = get_registry()
-    channel = registry.get("telegram")
+    channel = get_registry().get("telegram")
     if not channel:
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
@@ -83,29 +100,15 @@ def send_telegram(message: str) -> Dict[str, Any]:
 
     import asyncio
 
-    from zerg.channels.types import ChannelMessage
-
-    msg: ChannelMessage = {
-        "channel_id": "telegram",
-        "to": chat_id,
-        "text": _format_for_telegram(message),
-        "parse_mode": "html",
-    }
-
+    msg = _build_message(chat_id, message)  # type: ignore[arg-type]
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're inside an async context — schedule and wait
-            future = asyncio.run_coroutine_threadsafe(channel.send_message(msg), loop)
-            result = future.result(timeout=10)
-        else:
-            result = loop.run_until_complete(channel.send_message(msg))
+        result = asyncio.run_coroutine_threadsafe(channel.send_message(msg), asyncio.get_running_loop()).result(timeout=10)
+    except RuntimeError:
+        # No running loop — called from a truly sync context (e.g. tests)
+        result = asyncio.run(channel.send_message(msg))
     except Exception as e:
-        logger.exception("send_telegram: delivery failed for chat %s: %s", chat_id, e)
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message=f"Failed to send Telegram message: {e}",
-        )
+        logger.exception("send_telegram: delivery failed for chat %s", chat_id)
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Failed to send: {e}")
 
     if not result.get("success"):
         return tool_error(
@@ -117,12 +120,44 @@ def send_telegram(message: str) -> Dict[str, Any]:
     return tool_success({"delivered_to": chat_id})
 
 
-send_telegram_tool = StructuredTool(
+async def send_telegram_async(message: str) -> Dict[str, Any]:
+    """Async version — used by Oikos ainvoke path (avoids thread/loop bridging entirely)."""
+    if not message or not message.strip():
+        return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="message is required")
+
+    chat_id, err = _resolve_chat_id()
+    if err:
+        return err
+
+    from zerg.channels.registry import get_registry
+
+    channel = get_registry().get("telegram")
+    if not channel:
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="Telegram channel is not active on this instance.",
+        )
+
+    msg = _build_message(chat_id, message)  # type: ignore[arg-type]
+    try:
+        result = await channel.send_message(msg)
+    except Exception as e:
+        logger.exception("send_telegram: delivery failed for chat %s", chat_id)
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Failed to send: {e}")
+
+    if not result.get("success"):
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Telegram delivery failed: {result.get('error')} (code={result.get('error_code')})",
+        )
+
+    logger.info("send_telegram: delivered to chat %s", chat_id)
+    return tool_success({"delivered_to": chat_id})
+
+
+send_telegram_tool = StructuredTool.from_function(
     func=send_telegram,
+    coroutine=send_telegram_async,
     name="send_telegram",
-    description=(
-        "Send a Telegram message to the user on their phone. "
-        "Use when a task finishes, you need to flag something urgent, or the user asked you to follow up. "
-        "Only works after the user has messaged the bot at least once."
-    ),
+    description=_DESCRIPTION,
 )
