@@ -33,6 +33,7 @@ from zerg.models.models import Thread as ThreadModel
 from zerg.prompts import build_oikos_prompt
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_context import reset_seq
+from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
@@ -1130,24 +1131,16 @@ class OikosService:
 
             self.db.commit()
 
-            # Emit error event with consistent schema
-            await emit_run_event(
+            await emit_error_event_and_close_stream(
                 db=self.db,
-                run_id=run.id,
-                event_type="error",
-                payload={
-                    "fiche_id": fiche.id,
-                    "thread_id": thread.id,
-                    "message": str(e),
-                    "status": "error",
-                    "debug_url": f"/oikos/{run.id}",
-                    "owner_id": owner_id,
-                    "trace_id": str(run.trace_id) if run.trace_id else None,
-                },
+                run=run,
+                thread_id=thread.id,
+                owner_id=owner_id,
+                message=str(e),
+                trace_id=str(run.trace_id) if run.trace_id else None,
+                fiche_id=fiche.id,
+                debug_url=f"/oikos/{run.id}",
             )
-
-            # Emit stream_control:close for errors
-            await emit_stream_control(self.db, run, "close", "error", owner_id)
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
             await emit_failed_run_updated(

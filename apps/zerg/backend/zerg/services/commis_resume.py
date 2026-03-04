@@ -35,6 +35,7 @@ from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.services.oikos_context import reset_seq
+from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
@@ -699,23 +700,14 @@ async def resume_oikos_batch(
 
         db.commit()
 
-        await emit_run_event(
+        await emit_error_event_and_close_stream(
             db=db,
-            run_id=run.id,
-            event_type="error",
-            payload={
-                "thread_id": thread.id,
-                "message": str(e),
-                "status": "error",
-                "owner_id": owner_id,
-                "trace_id": trace_id,
-            },
+            run=run,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            message=str(e),
+            trace_id=trace_id,
         )
-
-        # Emit stream_control:close for errors
-        from zerg.services.oikos_service import emit_stream_control
-
-        await emit_stream_control(db, run, "close", "error", owner_id)
 
         await emit_failed_run_updated(
             db=db,
@@ -856,23 +848,14 @@ async def _continue_oikos_langgraph_free(
         db.commit()
 
         # Emit error events for UI consistency
-        await emit_run_event(
+        await emit_error_event_and_close_stream(
             db=db,
-            run_id=run.id,
-            event_type="error",
-            payload={
-                "thread_id": thread.id,
-                "message": error_msg,
-                "status": "error",
-                "owner_id": owner_id,
-                "trace_id": trace_id,
-            },
+            run=run,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            message=error_msg,
+            trace_id=trace_id,
         )
-
-        # Emit stream_control:close for errors
-        from zerg.services.oikos_service import emit_stream_control
-
-        await emit_stream_control(db, run, "close", "error", owner_id)
 
         await emit_failed_run_updated(
             db=db,
@@ -1080,23 +1063,14 @@ async def _continue_oikos_langgraph_free(
         run.duration_ms = duration_ms
         db.commit()
 
-        await emit_run_event(
+        await emit_error_event_and_close_stream(
             db=db,
-            run_id=run.id,
-            event_type="error",
-            payload={
-                "thread_id": thread.id,
-                "message": str(e),
-                "status": "error",
-                "owner_id": owner_id,
-                "trace_id": trace_id,
-            },
+            run=run,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            message=str(e),
+            trace_id=trace_id,
         )
-
-        # Emit stream_control:close for errors
-        from zerg.services.oikos_service import emit_stream_control
-
-        await emit_stream_control(db, run, "close", "error", owner_id)
 
         await emit_failed_run_updated(
             db=db,
