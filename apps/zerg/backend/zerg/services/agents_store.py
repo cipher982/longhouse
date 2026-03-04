@@ -378,6 +378,21 @@ class AgentsStore:
             parent_uuid = None
         return event_uuid, parent_uuid
 
+    def _extract_leaf_uuid(self, raw_json: str | None) -> str | None:
+        """Extract Claude summary leafUuid hint from a raw JSONL line."""
+        if not raw_json:
+            return None
+        try:
+            obj = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        leaf_uuid = obj.get("leafUuid")
+        if not isinstance(leaf_uuid, str):
+            return None
+        return leaf_uuid
+
     def _normalize_source_lines_for_ingest(self, data: SessionIngest) -> list[SourceLineIngest]:
         """Return source lines for ingest, falling back to event raw_json rows."""
         source_lines = list(data.source_lines)
@@ -744,6 +759,44 @@ class AgentsStore:
         session_obj.assistant_messages = int(assistant_count)
         session_obj.tool_calls = int(tool_count)
 
+    def _align_head_branch_from_leaf_uuid(
+        self,
+        session_id: UUID,
+        fallback_head_branch_id: int,
+        leaf_uuid: str | None,
+    ) -> int:
+        """Align active head branch from Claude leafUuid hint when available."""
+        if not leaf_uuid:
+            return fallback_head_branch_id
+
+        target_branch_id = (
+            self.db.query(AgentEvent.branch_id)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.event_uuid == leaf_uuid)
+            .order_by(AgentEvent.id.desc())
+            .limit(1)
+            .scalar()
+        )
+        if target_branch_id is None:
+            return fallback_head_branch_id
+
+        target_branch_id_int = int(target_branch_id)
+        if target_branch_id_int == fallback_head_branch_id:
+            return fallback_head_branch_id
+
+        self.db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == session_id).filter(
+            AgentSessionBranch.id != target_branch_id_int
+        ).update({"is_head": 0}, synchronize_session=False)
+        updated = (
+            self.db.query(AgentSessionBranch)
+            .filter(AgentSessionBranch.session_id == session_id)
+            .filter(AgentSessionBranch.id == target_branch_id_int)
+            .update({"is_head": 1}, synchronize_session=False)
+        )
+        if updated == 0:
+            return fallback_head_branch_id
+        return target_branch_id_int
+
     def ingest_session(self, data: SessionIngest) -> IngestResult:
         """Ingest a session with events, handling deduplication.
 
@@ -788,10 +841,14 @@ class AgentsStore:
 
         events_inserted = 0
         events_skipped = 0
+        leaf_uuid_hint: str | None = None
 
         for event_data in data.events:
             event_hash = self._compute_event_hash(event_data)
             event_uuid, parent_event_uuid = self._extract_event_lineage(event_data.raw_json)
+            event_leaf_uuid = self._extract_leaf_uuid(event_data.raw_json)
+            if event_leaf_uuid:
+                leaf_uuid_hint = event_leaf_uuid
 
             stmt = sqlite_insert(AgentEvent).values(
                 session_id=session_id,
@@ -855,7 +912,8 @@ class AgentsStore:
                 latest_state[key] = (revision, line_hash)
                 source_lines_inserted += 1
 
-        self._sync_session_counts_to_head(session_id, ingest_branch.id)
+        head_branch_for_counts = self._align_head_branch_from_leaf_uuid(session_id, ingest_branch.id, leaf_uuid_hint)
+        self._sync_session_counts_to_head(session_id, head_branch_for_counts)
 
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if session_obj and events_inserted > 0:
@@ -871,7 +929,7 @@ class AgentsStore:
         logger.info(
             "Ingested session %s branch=%s rewind=%s events inserted=%s skipped=%s source_lines_inserted=%s",
             session_id,
-            ingest_branch.id,
+            head_branch_for_counts,
             rewind_signal.reason if rewind_signal else "none",
             events_inserted,
             events_skipped,

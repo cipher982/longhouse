@@ -22,16 +22,16 @@ Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events con
 **Goal:** Preserve full transcript fidelity while accurately modeling what Claude can still "remember" after `/compact`.
 
 **First-principles invariants:**
-- [ ] Never lose bytes: source transcript archive must remain append-only and lossless
-- [ ] Facts are immutable; UI/search contexts are derived views
-- [ ] "Forensic history" and "active model context" are different and must both be queryable
+- [x] Never lose bytes: source transcript archive must remain append-only and lossless
+- [x] Facts are immutable; UI/search contexts are derived views
+- [x] "Forensic history" and "active model context" are different and must both be queryable
 
 **Implementation spec:**
 - [x] Persist compaction metadata as first-class events (do not drop `type=summary` / compaction-adjacent records at parse time)
   - [x] Parse and ingest `summary`, `file-history-snapshot`, and `system` `{subtype: compact_boundary|microcompact_boundary}` as `role=system` events (Rust engine + Python parser)
   - [ ] Parse high-volume `progress` records as first-class events (deferred until default timeline/query mode can hide noise)
 - [x] Add `compaction_boundary` derivation during ingest/projection (boundary anchored to source offset + timestamp)
-- [ ] Add context modes in read/query APIs:
+- [x] Add context modes in read/query APIs:
   - [x] `/api/agents/sessions/{id}/events` supports `context_mode=forensic|active_context`
   - [x] Extend `context_mode` semantics to search/recall/session-tool surfaces (MCP + API list/search endpoints)
   - [x] `active_context` projection should anchor by explicit boundary source offset/timestamp
@@ -57,7 +57,7 @@ Notes:
 
 ## [Product] Claude Rewind DAG Fidelity (size: 3)
 
-Status (2026-03-04): In progress (lineage storage landed; DAG-driven branching still pending).
+Status (2026-03-04): Done.
 
 **Goal:** Match real Claude `/rewind` behavior when branching is represented by `uuid`/`parentUuid` graph relationships (not only source-offset rewrites/truncation).
 
@@ -65,7 +65,7 @@ Status (2026-03-04): In progress (lineage storage landed; DAG-driven branching s
 - [x] Persist raw event lineage IDs (`uuid`, `parentUuid`) on `events` for every ingested line when present
 - [x] Add branch-scoped dedupe for lineage IDs so replay retries do not duplicate events while branch prefix copy remains valid
 - [x] Detect branch forks from lineage graph divergence even when no same-offset rewrite/truncation is observed
-- [ ] Align head-branch selection with Claude `leafUuid`/DAG head semantics when available
+- [x] Align head-branch selection with Claude `leafUuid`/DAG head semantics when available
 - [x] Add real-transcript verification harness for high-rewind sessions (multiple parent fan-outs)
 
 Notes:
@@ -73,6 +73,7 @@ Notes:
 - 2026-03-04: Added `event_uuid` + `parent_event_uuid` columns/index/migration path and ingest extraction in `AgentsStore`; coverage in `tests_lite/test_event_lineage_ingest.py`.
 - 2026-03-04: Rewind detection now forks on lineage divergence (`parentUuid` already has different child on head) even when incoming lines are append-only; regression in `tests_lite/test_rewind_branch_projection.py::test_lineage_divergence_forks_branch_without_offset_rewrite`.
 - 2026-03-04: Added `is_branch_copy` provenance on `source_lines` so forensic export excludes branch-prefix copies; real transcript verification (`scripts/verify_real_claude_transcript_fidelity.py --strict-fanout`) now passes with 19 stored branches and exact byte roundtrip.
+- 2026-03-04: Ingest now honors summary `leafUuid` hints to realign active head branch; regression in `tests_lite/test_rewind_branch_projection.py::test_leaf_uuid_realigns_head_branch`.
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 
