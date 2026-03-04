@@ -94,6 +94,44 @@ async def emit_failed_run_updated(
     )
 
 
+async def emit_error_event_and_close_stream(
+    db: Session,
+    run: Any,
+    *,
+    thread_id: int,
+    owner_id: int,
+    message: str,
+    trace_id: str | None = None,
+    fiche_id: int | None = None,
+    debug_url: str | None = None,
+) -> None:
+    """Emit an error event and close stream for terminal failures."""
+    from zerg.services.event_store import emit_run_event
+    from zerg.services.oikos_service import emit_stream_control
+
+    payload: dict[str, Any] = {
+        "thread_id": thread_id,
+        "message": message,
+        "status": "error",
+        "owner_id": owner_id,
+    }
+    if trace_id:
+        payload["trace_id"] = trace_id
+    if fiche_id is not None:
+        payload["fiche_id"] = fiche_id
+    if debug_url:
+        payload["debug_url"] = debug_url
+
+    await emit_run_event(
+        db=db,
+        run_id=run.id,
+        event_type="error",
+        payload=payload,
+    )
+
+    await emit_stream_control(db, run, "close", "error", owner_id)
+
+
 async def emit_stream_control_for_pending_commiss(
     db: Session,
     run: Any,

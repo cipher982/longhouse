@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
@@ -163,6 +164,78 @@ async def test_emit_failed_run_updated(monkeypatch):
                 "thread_id": 15,
                 "owner_id": 23,
             },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emit_error_event_and_close_stream(monkeypatch):
+    event_calls = []
+    stream_calls = []
+
+    async def _fake_emit_run_event(*, db, run_id, event_type, payload):
+        event_calls.append(
+            {
+                "db": db,
+                "run_id": run_id,
+                "event_type": event_type,
+                "payload": payload,
+            }
+        )
+
+    async def _fake_emit_stream_control(db, run, action, reason, owner_id, ttl_ms=None):
+        stream_calls.append(
+            {
+                "db": db,
+                "run_id": run.id,
+                "action": action,
+                "reason": reason,
+                "owner_id": owner_id,
+                "ttl_ms": ttl_ms,
+            }
+        )
+
+    monkeypatch.setattr("zerg.services.event_store.emit_run_event", _fake_emit_run_event)
+    monkeypatch.setattr("zerg.services.oikos_service.emit_stream_control", _fake_emit_stream_control)
+
+    db = object()
+    run = SimpleNamespace(id=88)
+
+    await emit_error_event_and_close_stream(
+        db=db,
+        run=run,
+        thread_id=17,
+        owner_id=24,
+        message="bad thing",
+        trace_id="trace-err",
+        fiche_id=31,
+        debug_url="/oikos/88",
+    )
+
+    assert event_calls == [
+        {
+            "db": db,
+            "run_id": 88,
+            "event_type": "error",
+            "payload": {
+                "thread_id": 17,
+                "message": "bad thing",
+                "status": "error",
+                "owner_id": 24,
+                "trace_id": "trace-err",
+                "fiche_id": 31,
+                "debug_url": "/oikos/88",
+            },
+        }
+    ]
+    assert stream_calls == [
+        {
+            "db": db,
+            "run_id": 88,
+            "action": "close",
+            "reason": "error",
+            "owner_id": 24,
+            "ttl_ms": None,
         }
     ]
 
