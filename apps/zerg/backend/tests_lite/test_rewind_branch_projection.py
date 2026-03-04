@@ -140,3 +140,94 @@ def test_rewind_branch_head_vs_forensic_projection(tmp_path):
         ]
     finally:
         db.close()
+
+
+def test_lineage_divergence_forks_branch_without_offset_rewrite(tmp_path):
+    """Rewind branch can be inferred from parentUuid divergence even on append-only source offsets."""
+    db, store = _make_store(tmp_path)
+    try:
+        source_path = "/tmp/rewind-lineage.jsonl"
+        line0 = '{"uuid":"u-root","type":"user","text":"start"}'
+        line10_old = '{"uuid":"u-old-1","parentUuid":"u-root","type":"assistant","text":"old middle"}'
+        line20_old = '{"uuid":"u-old-2","parentUuid":"u-old-1","type":"assistant","text":"old tail"}'
+        line30_new = '{"uuid":"u-new-1","parentUuid":"u-root","type":"assistant","text":"new tail"}'
+
+        first = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="zerg",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=_ts(0),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="start",
+                        timestamp=_ts(1),
+                        source_path=source_path,
+                        source_offset=0,
+                        raw_json=line0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="old middle",
+                        timestamp=_ts(2),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=line10_old,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="old tail",
+                        timestamp=_ts(3),
+                        source_path=source_path,
+                        source_offset=20,
+                        raw_json=line20_old,
+                    ),
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=0, raw_json=line0),
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=line10_old),
+                    SourceLineIngest(source_path=source_path, source_offset=20, raw_json=line20_old),
+                ],
+            )
+        )
+        session_id = first.session_id
+
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=_ts(0),
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="new tail",
+                        timestamp=_ts(4),
+                        source_path=source_path,
+                        source_offset=30,
+                        raw_json=line30_new,
+                    )
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=30, raw_json=line30_new),
+                ],
+            )
+        )
+
+        head_events = store.get_session_events(session_id, branch_mode="head", limit=100)
+        assert [event.content_text for event in head_events if event.content_text] == [
+            "start",
+            "new tail",
+        ]
+
+        forensic_events = store.get_session_events(session_id, branch_mode="all", limit=100)
+        assert any(event.content_text == "old middle" for event in forensic_events)
+        assert any(event.content_text == "old tail" for event in forensic_events)
+    finally:
+        db.close()

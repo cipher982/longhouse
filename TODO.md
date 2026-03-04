@@ -63,13 +63,14 @@ Status (2026-03-04): In progress (lineage storage landed; DAG-driven branching s
 **Implementation spec:**
 - [x] Persist raw event lineage IDs (`uuid`, `parentUuid`) on `events` for every ingested line when present
 - [x] Add branch-scoped dedupe for lineage IDs so replay retries do not duplicate events while branch prefix copy remains valid
-- [ ] Detect branch forks from lineage graph divergence even when no same-offset rewrite/truncation is observed
+- [x] Detect branch forks from lineage graph divergence even when no same-offset rewrite/truncation is observed
 - [ ] Align head-branch selection with Claude `leafUuid`/DAG head semantics when available
 - [ ] Add real-transcript regression fixture coverage for high-rewind sessions (multiple parent fan-outs)
 
 Notes:
 - 2026-03-04: Real transcript analysis on local Claude session `bf3c1a89-...` showed `summary=26`, `compact_boundary=1`, and ~25 parent fan-out branch points in raw JSONL while offset-only rewind detection produced a single stored branch, confirming the remaining fidelity gap.
 - 2026-03-04: Added `event_uuid` + `parent_event_uuid` columns/index/migration path and ingest extraction in `AgentsStore`; coverage in `tests_lite/test_event_lineage_ingest.py`.
+- 2026-03-04: Rewind detection now forks on lineage divergence (`parentUuid` already has different child on head) even when incoming lines are append-only; regression in `tests_lite/test_rewind_branch_projection.py::test_lineage_divergence_forks_branch_without_offset_rewrite`.
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 
