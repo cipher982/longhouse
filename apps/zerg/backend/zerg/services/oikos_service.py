@@ -32,6 +32,12 @@ from zerg.models.models import Run
 from zerg.models.models import Thread as ThreadModel
 from zerg.prompts import build_oikos_prompt
 from zerg.services.commis_artifact_store import CommisArtifactStore
+from zerg.services.oikos_commis_context import RECENT_COMMIS_CONTEXT_MARKER
+from zerg.services.oikos_commis_context import RECENT_COMMIS_HISTORY_LIMIT
+from zerg.services.oikos_commis_context import RECENT_COMMIS_HISTORY_MINUTES
+from zerg.services.oikos_commis_context import acknowledge_commis_jobs
+from zerg.services.oikos_commis_context import build_recent_commis_context
+from zerg.services.oikos_commis_context import cleanup_stale_commis_context
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_cancelled_run_updated
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
@@ -47,12 +53,6 @@ logger = logging.getLogger(__name__)
 
 # Thread type for oikos threads - distinguishes from regular fiche threads
 OIKOS_THREAD_TYPE = ThreadType.SUPER
-
-# Configuration for recent commis history injection
-RECENT_COMMIS_HISTORY_LIMIT = 5  # Max commiss to show
-RECENT_COMMIS_HISTORY_MINUTES = 10  # Only show commiss from last N minutes
-# Marker to identify ephemeral context messages (for cleanup)
-RECENT_COMMIS_CONTEXT_MARKER = "<!-- RECENT_COMMIS_CONTEXT -->"
 
 
 @dataclass
@@ -263,234 +263,16 @@ class OikosService:
         return thread
 
     def _build_recent_commis_context(self, owner_id: int) -> tuple[str | None, list[int]]:
-        """Build inbox context with active commiss and unacknowledged results.
-
-        v3.0 (Async Inbox Model): The inbox shows:
-        1. Active commiss (queued, running) with elapsed time
-        2. Unacknowledged completed commiss with summaries
-
-        This allows the oikos to be aware of background work without blocking.
-        The message includes a marker for cleanup - see _cleanup_stale_commis_context().
-
-        IMPORTANT: This method does NOT commit acknowledgements. It returns the job IDs
-        that should be acknowledged. The caller must:
-        1. Persist the system message to the thread
-        2. THEN call _acknowledge_commis_jobs(job_ids) to mark them as seen
-
-        This ensures atomic "see message + acknowledge" semantics.
-
-        Returns:
-            Tuple of (context_string, job_ids_to_acknowledge).
-            context_string is None if there are no commiss to show.
-        """
-        from datetime import timedelta
-
-        # Query active commiss (queued, running)
-        active_jobs = (
-            self.db.query(CommisJob)
-            .filter(
-                CommisJob.owner_id == owner_id,
-                CommisJob.status.in_(["queued", "running"]),
-            )
-            .order_by(CommisJob.created_at.desc())
-            .limit(RECENT_COMMIS_HISTORY_LIMIT)
-            .all()
-        )
-
-        # Query unacknowledged completed commiss (for inbox model)
-        # These are results the oikos hasn't seen yet
-        unacknowledged_jobs = (
-            self.db.query(CommisJob)
-            .filter(
-                CommisJob.owner_id == owner_id,
-                CommisJob.status.in_(["success", "failed", "cancelled"]),
-                CommisJob.acknowledged == False,  # noqa: E712
-            )
-            .order_by(CommisJob.created_at.desc())
-            .limit(RECENT_COMMIS_HISTORY_LIMIT)
-            .all()
-        )
-
-        # Also include recent acknowledged jobs for context (last N minutes)
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=RECENT_COMMIS_HISTORY_MINUTES)
-        recent_acknowledged_jobs = (
-            self.db.query(CommisJob)
-            .filter(
-                CommisJob.owner_id == owner_id,
-                CommisJob.status.in_(["success", "failed", "cancelled"]),
-                CommisJob.acknowledged == True,  # noqa: E712
-                CommisJob.created_at >= cutoff,
-            )
-            .order_by(CommisJob.created_at.desc())
-            .limit(3)  # Just show a few recent acknowledged for context
-            .all()
-        )
-
-        if not active_jobs and not unacknowledged_jobs and not recent_acknowledged_jobs:
-            return None, []
-
-        # Try to get artifact store for richer summaries, but don't fail if unavailable
-        artifact_store = None
-        try:
-            artifact_store = CommisArtifactStore()
-        except (OSError, PermissionError) as e:
-            logger.warning(f"CommisArtifactStore unavailable, using task summaries only: {e}")
-
-        def get_elapsed_str(job_time: datetime) -> str:
-            """Calculate elapsed time string."""
-            if job_time.tzinfo is None:
-                job_time = job_time.replace(tzinfo=timezone.utc)
-            elapsed = datetime.now(timezone.utc) - job_time
-            if elapsed.total_seconds() >= 3600:
-                return f"{int(elapsed.total_seconds() / 3600)}h ago"
-            elif elapsed.total_seconds() >= 60:
-                return f"{int(elapsed.total_seconds() / 60)}m ago"
-            else:
-                return f"{int(elapsed.total_seconds())}s ago"
-
-        def get_summary(job: CommisJob, max_chars: int = 150) -> str:
-            """Get summary from artifact store or truncate task."""
-            summary = None
-            if artifact_store and job.commis_id and job.status in ["success", "failed"]:
-                try:
-                    metadata = artifact_store.get_commis_metadata(job.commis_id)
-                    summary = metadata.get("summary")
-                except Exception:
-                    pass
-            if not summary:
-                summary = job.task[:max_chars] + "..." if len(job.task) > max_chars else job.task
-            return summary
-
-        # Build context with marker for cleanup
-        lines = [
-            RECENT_COMMIS_CONTEXT_MARKER,  # Marker for identifying ephemeral context
-            "## Commis Inbox",
-        ]
-
-        # Section 1: Active commiss
-        if active_jobs:
-            lines.append("\n**Active Commiss:**")
-            for job in active_jobs:
-                elapsed_str = get_elapsed_str(job.started_at or job.created_at)
-                status_icon = "⏳" if job.status == "queued" else "⋯"
-                task_preview = job.task[:80] + "..." if len(job.task) > 80 else job.task
-                lines.append(f"- Job {job.id} [{status_icon} {job.status.upper()}] ({elapsed_str})")
-                lines.append(f"  Task: {task_preview}")
-
-        # Section 2: New results (unacknowledged)
-        # Collect job IDs to acknowledge (caller will commit after message is persisted)
-        jobs_to_acknowledge: list[int] = []
-        if unacknowledged_jobs:
-            lines.append("\n**New Results (unread):**")
-            for job in unacknowledged_jobs:
-                elapsed_str = get_elapsed_str(job.finished_at or job.created_at)
-                status_icon = "✓" if job.status == "success" else "✗"
-                summary = get_summary(job)
-                lines.append(f"- Job {job.id} [{status_icon} {job.status.upper()}] ({elapsed_str})")
-                lines.append(f"  {summary}")
-                jobs_to_acknowledge.append(job.id)
-
-        # Section 3: Recent acknowledged (brief reference only)
-        if recent_acknowledged_jobs and not unacknowledged_jobs:
-            lines.append("\n**Recent Work:**")
-            for job in recent_acknowledged_jobs:
-                elapsed_str = get_elapsed_str(job.finished_at or job.created_at)
-                status_icon = "✓" if job.status == "success" else "✗"
-                task_preview = job.task[:60] + "..." if len(job.task) > 60 else job.task
-                lines.append(f"- Job {job.id} [{status_icon}] {task_preview} ({elapsed_str})")
-
-        # Footer with usage hints
-        lines.append("")
-        if unacknowledged_jobs:
-            lines.append("Use `read_commis_result(job_id)` for full details.")
-        if active_jobs:
-            lines.append("Use `check_commis_status()` to see commis progress.")
-            lines.append("Use `wait_for_commis(job_id)` if you need to block for a result.")
-
-        return "\n".join(lines), jobs_to_acknowledge
+        """Build inbox context with active commis and unread recent results."""
+        return build_recent_commis_context(self.db, owner_id)
 
     def _acknowledge_commis_jobs(self, job_ids: list[int]) -> None:
-        """Mark commis jobs as acknowledged after system message is persisted.
-
-        This should be called AFTER the inbox context message is successfully
-        persisted to the thread. This ensures atomic "see message + acknowledge" semantics.
-
-        Args:
-            job_ids: List of CommisJob IDs to mark as acknowledged
-        """
-        if not job_ids:
-            return
-
-        self.db.query(CommisJob).filter(CommisJob.id.in_(job_ids)).update(
-            {"acknowledged": True},
-            synchronize_session=False,
-        )
-        self.db.commit()
-        logger.debug(f"Marked {len(job_ids)} commis jobs as acknowledged")
+        """Mark commis jobs as acknowledged after context message persistence."""
+        acknowledge_commis_jobs(self.db, job_ids)
 
     def _cleanup_stale_commis_context(self, thread_id: int, min_age_seconds: float = 5.0) -> int:
-        """Delete previous recent commis context messages from the thread.
-
-        This prevents stale context from accumulating across runs.
-        Messages are identified by the RECENT_COMMIS_CONTEXT_MARKER.
-
-        Strategy to handle both race conditions and back-to-back requests:
-        1. Find all marked messages, sorted newest-first
-        2. Keep the newest one ONLY if it's < min_age_seconds old (concurrent request protection)
-        3. Delete all others (prevents accumulation from back-to-back requests)
-
-        Args:
-            thread_id: The thread to clean up
-            min_age_seconds: Protect messages newer than this from deletion (default: 5s)
-
-        Returns:
-            Number of messages deleted.
-        """
-        from datetime import timedelta
-
-        from zerg.models.models import ThreadMessage
-
-        age_cutoff = datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)
-
-        # Find ALL marked messages, sorted by sent_at descending (newest first)
-        all_marked = (
-            self.db.query(ThreadMessage)
-            .filter(
-                ThreadMessage.thread_id == thread_id,
-                ThreadMessage.role == "system",
-                ThreadMessage.content.contains(RECENT_COMMIS_CONTEXT_MARKER),
-            )
-            .order_by(ThreadMessage.sent_at.desc())
-            .all()
-        )
-
-        if not all_marked:
-            return 0
-
-        # Determine which messages to delete:
-        # - Keep newest ONLY if it's fresh (< min_age_seconds) - protects concurrent requests
-        # - Delete ALL others (prevents accumulation)
-        messages_to_delete = []
-        newest = all_marked[0]
-        newest_sent_at = newest.sent_at
-        if newest_sent_at.tzinfo is None:
-            newest_sent_at = newest_sent_at.replace(tzinfo=timezone.utc)
-
-        if newest_sent_at >= age_cutoff:
-            # Newest is fresh - keep it, delete all others
-            messages_to_delete = all_marked[1:]
-        else:
-            # Newest is stale - delete all (we're about to inject a new one)
-            messages_to_delete = all_marked
-
-        count = len(messages_to_delete)
-        for msg in messages_to_delete:
-            self.db.delete(msg)
-
-        if count > 0:
-            logger.debug(f"Cleaned up {count} stale commis context message(s) from thread {thread_id}")
-
-        return count
+        """Delete stale injected commis-context messages from the thread."""
+        return cleanup_stale_commis_context(self.db, thread_id, min_age_seconds=min_age_seconds)
 
     async def run_oikos(
         self,

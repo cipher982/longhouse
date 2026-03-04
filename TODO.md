@@ -42,7 +42,7 @@ Status (2026-03-03): In progress.
 **Goal:** Reduce conceptual and code complexity now that product direction is clear (timeline-first, Oikos coordinator, commis as CLI jobs).
 
 - [x] Remove dual commis semantics (`standard`/legacy compatibility paths); keep workspace/scratch-only execution
-- [ ] Split monolith modules by responsibility (`oikos_tools.py`, `commis_resume.py`, `oikos_service.py`)
+- [x] Split monolith modules by responsibility (`oikos_tools.py`, `commis_resume.py`, `oikos_service.py`)
 - [x] Quarantine Forum code as legacy while route stays disabled
 - [x] Remove naming drift (`Forum live mode` → `Live sessions`) in comments/docs/API descriptions
 - [x] Add guardrail tests to prevent regressions into deprecated flow
@@ -71,6 +71,9 @@ Notes:
 - 2026-03-03: Removed compatibility wrappers from `tools/builtin/oikos_tools.py` for commis lifecycle/artifact tools; the tools registry now references concrete implementations imported directly from `tools/builtin/oikos_commis_artifact_tools.py`.
 - 2026-03-03: Removed `spawn_commis` alias from active contracts: Oikos tool registry/runtime now uses `spawn_workspace_commis` only, tool schema/types were regenerated, and frontend Oikos timeline/tool-store logic now keys off `spawn_workspace_commis`.
 - 2026-03-03: Cleaned spec drift in `docs/specs/unified-memory-bridge.md` + `docs/specs/3a-deferred-research.md` to remove legacy `spawn_commis` contract language and added a guardrail test asserting `"spawn_commis" not in OIKOS_TOOL_NAMES`.
+- 2026-03-03: Extracted commis job-management implementations from `tools/builtin/oikos_tools.py` into `tools/builtin/oikos_commis_job_tools.py`; `oikos_tools.py` now owns tool registration + allowlist contracts.
+- 2026-03-03: Extracted Oikos commis inbox-context lifecycle into `services/oikos_commis_context.py` and reduced `oikos_service.py` helpers to delegating wrappers.
+- 2026-03-03: Added focused unit coverage for the extracted inbox-context helpers in `tests_lite/test_oikos_commis_context.py`.
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
