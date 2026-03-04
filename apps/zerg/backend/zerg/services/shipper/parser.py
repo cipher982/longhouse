@@ -5,12 +5,13 @@ Claude Code stores sessions at ~/.claude/projects/{encoded_cwd}/{sessionId}.json
 Each line is a JSON object with a "type" field:
 - "user": User message
 - "assistant": Assistant message (may contain text and/or tool_use)
-- "summary": Session summary (metadata only)
-- "file-history-snapshot": File tracking (metadata only)
-- "progress": Subagent progress updates (metadata only)
+- "summary": Session summary (compaction metadata)
+- "file-history-snapshot": File tracking snapshot
+- "system" (subtype compact_boundary/microcompact_boundary): compaction boundary markers
+- "progress": High-volume hook/tool progress updates (kept in source archive; skipped as events)
 
-This parser extracts the meaningful events (user messages, assistant text,
-tool calls) and converts them to a normalized format for the agents schema.
+This parser extracts user/assistant/tool events plus compaction-adjacent system
+events and converts them to a normalized format for the agents schema.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ class ParsedEvent:
     uuid: str
     session_id: str
     timestamp: datetime
-    role: str  # 'user' | 'assistant' | 'tool'
+    role: str  # 'user' | 'assistant' | 'tool' | 'system'
     content_text: str | None = None
     tool_name: str | None = None
     tool_input_json: dict | None = None
@@ -255,6 +256,86 @@ def _extract_tool_results(
                 first = False
 
 
+def _compact_metadata_hint(metadata: object) -> str | None:
+    """Build a compact metadata hint string from compactMetadata payload."""
+    if not isinstance(metadata, dict):
+        return None
+
+    parts: list[str] = []
+    trigger = metadata.get("trigger")
+    if isinstance(trigger, str) and trigger.strip():
+        parts.append(f"trigger={trigger}")
+
+    pre_tokens = metadata.get("preTokens")
+    if isinstance(pre_tokens, int):
+        parts.append(f"pre_tokens={pre_tokens}")
+
+    return " ".join(parts) if parts else None
+
+
+def _extract_compaction_metadata_event(
+    obj: dict,
+    session_id: str,
+    offset: int,
+    raw_line: str = "",
+) -> ParsedEvent | None:
+    """Extract compaction-adjacent metadata as role=system events."""
+    event_type = obj.get("type", "")
+    timestamp = _parse_timestamp(obj.get("timestamp"))
+    raw_type = event_type
+    content: str | None = None
+
+    if event_type == "summary":
+        summary = obj.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            content = summary
+        else:
+            content = "Conversation compacted"
+    elif event_type == "file-history-snapshot":
+        snapshot = obj.get("snapshot")
+        snapshot_ts = None
+        if isinstance(snapshot, dict):
+            snapshot_ts = _parse_timestamp(snapshot.get("timestamp"))
+        if not timestamp:
+            timestamp = snapshot_ts
+        content = "File history snapshot"
+        if snapshot_ts is not None:
+            content = f"{content} ({snapshot_ts.isoformat()})"
+    elif event_type == "system":
+        subtype = obj.get("subtype")
+        if subtype not in ("compact_boundary", "microcompact_boundary"):
+            return None
+        raw_type = str(subtype)
+        raw_content = obj.get("content")
+        if isinstance(raw_content, str) and raw_content.strip():
+            content = raw_content
+        elif subtype == "microcompact_boundary":
+            content = "Context microcompacted"
+        else:
+            content = "Conversation compacted"
+
+        metadata_key = "microcompactMetadata" if subtype == "microcompact_boundary" else "compactMetadata"
+        hint = _compact_metadata_hint(obj.get(metadata_key))
+        if hint:
+            content = f"{content} [{hint}]"
+    else:
+        return None
+
+    if not timestamp:
+        timestamp = datetime.now(timezone.utc)
+
+    return ParsedEvent(
+        uuid=str(obj.get("uuid") or f"meta-{raw_type}-{offset}"),
+        session_id=session_id,
+        timestamp=timestamp,
+        role="system",
+        content_text=content,
+        source_offset=offset,
+        raw_type=raw_type,
+        raw_line=raw_line,
+    )
+
+
 def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
     """Parse Claude Code JSONL file starting from byte offset.
 
@@ -292,7 +373,12 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
 
                 event_type = obj.get("type", "")
 
-                if event_type in ("summary", "file-history-snapshot", "progress"):
+                metadata_event = _extract_compaction_metadata_event(obj, session_id, line_offset, raw_line=line_text)
+                if metadata_event is not None:
+                    yield metadata_event
+                    continue
+
+                if event_type == "progress":
                     continue
 
                 if event_type == "user":
@@ -424,7 +510,12 @@ def _parse_with_offset_tracking(
 
                 event_type = obj.get("type", "")
 
-                if event_type in ("summary", "file-history-snapshot", "progress"):
+                metadata_event = _extract_compaction_metadata_event(obj, session_id, line_offset, raw_line=line_text)
+                if metadata_event is not None:
+                    events.append(metadata_event)
+                    continue
+
+                if event_type == "progress":
                     continue
 
                 if event_type == "user":

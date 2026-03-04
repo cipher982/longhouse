@@ -142,16 +142,13 @@ pub fn build_payload_with_source_lines<'a>(
         })
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
-    let ended_at = metadata
-        .ended_at
-        .map(|t| t.to_rfc3339())
-        .or_else(|| {
-            events
-                .iter()
-                .map(|e| e.timestamp)
-                .max()
-                .map(|t| t.to_rfc3339())
-        });
+    let ended_at = metadata.ended_at.map(|t| t.to_rfc3339()).or_else(|| {
+        events
+            .iter()
+            .map(|e| e.timestamp)
+            .max()
+            .map(|t| t.to_rfc3339())
+    });
 
     let event_ingests: Vec<EventIngest<'a>> = events
         .iter()
@@ -160,6 +157,7 @@ pub fn build_payload_with_source_lines<'a>(
                 super::parser::Role::User => "user",
                 super::parser::Role::Assistant => "assistant",
                 super::parser::Role::Tool => "tool",
+                super::parser::Role::System => "system",
             };
             EventIngest {
                 role,
@@ -282,8 +280,14 @@ pub fn build_and_compress_with_source_lines(
     source_lines: Option<&[ParsedSourceLine]>,
     algo: CompressionAlgo,
 ) -> anyhow::Result<Vec<u8>> {
-    let payload =
-        build_payload_with_source_lines(session_id, events, metadata, source_path, provider, source_lines);
+    let payload = build_payload_with_source_lines(
+        session_id,
+        events,
+        metadata,
+        source_path,
+        provider,
+        source_lines,
+    );
     compress_payload_with(&payload, algo)
 }
 
@@ -293,7 +297,10 @@ pub fn compress_payload(payload: &IngestPayload<'_>) -> anyhow::Result<Vec<u8>> 
 }
 
 /// Compress payload with specified algorithm.
-pub fn compress_payload_with(payload: &IngestPayload<'_>, algo: CompressionAlgo) -> anyhow::Result<Vec<u8>> {
+pub fn compress_payload_with(
+    payload: &IngestPayload<'_>,
+    algo: CompressionAlgo,
+) -> anyhow::Result<Vec<u8>> {
     let buf = Vec::with_capacity(64 * 1024);
     match algo {
         CompressionAlgo::Gzip => {
@@ -346,7 +353,9 @@ mod tests {
                 tool_call_id: None,
                 source_offset: 0,
                 raw_type: "user".to_string(),
-                raw_line: Some(r#"{"type":"user","message":{"content":"Hello world"}}"#.to_string()),
+                raw_line: Some(
+                    r#"{"type":"user","message":{"content":"Hello world"}}"#.to_string(),
+                ),
             },
             ParsedEvent {
                 uuid: "e2".to_string(),
@@ -451,14 +460,21 @@ mod tests {
                 session_id: "s1".to_string(),
                 timestamp: Utc::now(),
                 role: Role::Assistant,
-                content_text: Some(format!("This is response number {} with some repeated text to help compression.", i)),
+                content_text: Some(format!(
+                    "This is response number {} with some repeated text to help compression.",
+                    i
+                )),
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: None,
                 tool_call_id: None,
                 source_offset: i * 100,
                 raw_type: "assistant".to_string(),
-                raw_line: if i == 0 { Some("raw".to_string()) } else { None },
+                raw_line: if i == 0 {
+                    Some("raw".to_string())
+                } else {
+                    None
+                },
             });
         }
 
@@ -467,9 +483,10 @@ mod tests {
             ..Default::default()
         };
 
-        let compressed =
-            build_and_compress("test-id", &events, &meta, "/path", "claude").unwrap();
-        let uncompressed = serde_json::to_vec(&build_payload("test-id", &events, &meta, "/path", "claude")).unwrap();
+        let compressed = build_and_compress("test-id", &events, &meta, "/path", "claude").unwrap();
+        let uncompressed =
+            serde_json::to_vec(&build_payload("test-id", &events, &meta, "/path", "claude"))
+                .unwrap();
 
         // Compressed should be significantly smaller
         let ratio = uncompressed.len() as f64 / compressed.len() as f64;
@@ -507,7 +524,9 @@ mod tests {
         };
 
         let payload = build_payload("test-id", &events, &meta, "/path", "claude");
-        let raw_json = payload.events[0].raw_json.expect("raw_json should be present");
+        let raw_json = payload.events[0]
+            .raw_json
+            .expect("raw_json should be present");
         assert_eq!(raw_json, events[0].raw_line.as_deref().unwrap());
     }
 
@@ -601,7 +620,11 @@ mod tests {
 
         // "Unship back to log": reconstruct the full file body from source_lines.
         let actual_log = actual.values().cloned().collect::<Vec<_>>().join("\n");
-        let expected_log = expected_map.values().cloned().collect::<Vec<_>>().join("\n");
+        let expected_log = expected_map
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(actual_log, expected_log);
     }
 
