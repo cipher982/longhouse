@@ -38,4 +38,4 @@ def test_dispatch_commis_delegation_for_infra_task():
 
     assert response.tool_calls is not None
     assert len(response.tool_calls) == 1
-    assert response.tool_calls[0]["name"] == "spawn_commis"
+    assert response.tool_calls[0]["name"] == "spawn_workspace_commis"

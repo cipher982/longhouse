@@ -145,7 +145,7 @@ describe('OikosToolStore', () => {
 
       eventBus.emit('oikos:tool_started', {
         runId: 1,
-        toolName: 'spawn_commis',
+        toolName: 'spawn_workspace_commis',
         toolCallId: 'call-live',
         argsPreview: 'task: "check logs"',
         args: { task: 'check logs' },

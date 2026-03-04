@@ -26,7 +26,7 @@ describe('ChatContainer timeline ordering', () => {
     oikosToolStore.clearTools();
   });
 
-  it('keeps spawn_commis card between user and assistant during streaming', () => {
+  it('keeps spawn_workspace_commis card between user and assistant during streaming', () => {
     // Setup: user message + streaming assistant + tool card, all same runId
     const now = new Date();
     const messages: ChatMessage[] = [
@@ -52,7 +52,7 @@ describe('ChatContainer timeline ordering', () => {
     const toolState = oikosToolStore.getState();
     toolState.tools.set('call-1', {
       toolCallId: 'call-1',
-      toolName: 'spawn_commis',
+      toolName: 'spawn_workspace_commis',
       status: 'running',
       runId: 123,
       startedAt: now.getTime() + 50,  // Between user and assistant timestamps
@@ -118,7 +118,7 @@ describe('ChatContainer timeline ordering', () => {
     const toolState = oikosToolStore.getState();
     toolState.tools.set('call-1', {
       toolCallId: 'call-1',
-      toolName: 'spawn_commis',
+      toolName: 'spawn_workspace_commis',
       status: 'completed',
       runId: 123,
       startedAt: now.getTime() + 50,

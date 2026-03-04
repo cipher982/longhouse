@@ -23,7 +23,6 @@ Oikos is the coordinator layer. Its tools are for:
 Primary delegation and lifecycle tools:
 
 - `spawn_workspace_commis` (primary)
-- `spawn_commis` (legacy compatibility alias)
 - `list_commiss`
 - `check_commis_status`
 - `wait_for_commis`
@@ -61,7 +60,6 @@ Current utility categories include:
 - Commis run through workspace-mode CLI execution (`hatch` subprocess).
 - Standard/in-process commis mode is deprecated and being removed.
 - `spawn_workspace_commis` is the intended path for new behavior.
-- `spawn_commis` exists for compatibility and should not be treated as a long-term API contract.
 
 ## Alignment Work In Progress
 

@@ -38,7 +38,7 @@ export interface NestedToolCall {
   error?: string;
 }
 
-// Result structure for spawn_commis tools
+// Result structure for spawn_workspace_commis tools
 export interface SpawnCommisResult {
   commisStatus: 'spawned' | 'running' | 'complete' | 'failed';
   commisSummary?: string;
@@ -100,9 +100,9 @@ class OikosToolStore {
   private tickerInterval: number | null = null;
   private clearTimeout: number | null = null;
 
-  // Map jobId -> toolCallId for spawn_commis tools
+  // Map jobId -> toolCallId for spawn_workspace_commis tools
   private commisJobToToolCallId = new Map<number, string>();
-  // Map commisId -> toolCallId for spawn_commis tools
+  // Map commisId -> toolCallId for spawn_workspace_commis tools
   private commisIdToToolCallId = new Map<string, string>();
 
   constructor() {
@@ -110,7 +110,7 @@ class OikosToolStore {
   }
 
   /**
-   * Safely get spawn_commis result with proper typing
+   * Safely get spawn_workspace_commis result with proper typing
    */
   private getSpawnCommisResult(tool: OikosToolCall): SpawnCommisResult {
     const result = tool.result as SpawnCommisResult | undefined;
@@ -236,8 +236,8 @@ class OikosToolStore {
         logs: [],
       };
 
-      // Initialize commis metadata for spawn_commis tools
-      if (data.toolName === 'spawn_commis') {
+      // Initialize commis metadata for spawn_workspace_commis tools
+      if (data.toolName === 'spawn_workspace_commis') {
         tool.result = {
           commisStatus: 'spawned',
           nestedTools: [],
@@ -286,10 +286,10 @@ class OikosToolStore {
       const tool = newTools.get(data.toolCallId);
 
       if (tool) {
-        // For spawn_commis, merge result with existing commis metadata (commisStatus, nestedTools)
+        // For spawn_workspace_commis, merge result with existing commis metadata (commisStatus, nestedTools)
         // For other tools, just set result directly
         let mergedResult: Record<string, unknown> | undefined;
-        if (tool.toolName === 'spawn_commis') {
+        if (tool.toolName === 'spawn_workspace_commis') {
           const existingResult = this.getSpawnCommisResult(tool);
           if (typeof data.result === 'object' && data.result !== null) {
             mergedResult = { ...existingResult, ...(data.result as Record<string, unknown>) };
@@ -312,8 +312,8 @@ class OikosToolStore {
         newTools.set(data.toolCallId, updatedTool);
         this.setState({ tools: newTools });
 
-        // Extract job_id from spawn_commis result and update mapping
-        if (tool.toolName === 'spawn_commis' && data.result != null) {
+        // Extract job_id from spawn_workspace_commis result and update mapping
+        if (tool.toolName === 'spawn_workspace_commis' && data.result != null) {
           const jobId = this.extractJobIdFromResult(data.result);
           if (jobId != null) {
             this.commisJobToToolCallId.set(jobId, data.toolCallId);
@@ -385,7 +385,7 @@ class OikosToolStore {
       logger.debug('[OikosToolStore] Oikos cleared');
     });
 
-    // Commis lifecycle events - update spawn_commis tool metadata
+    // Commis lifecycle events - update spawn_workspace_commis tool metadata
     eventBus.on('oikos:commis_spawned', (data) => {
       // Use tool_call_id from event payload if available (parallel path includes it)
       // Fall back to finding most recent running tool (legacy single-commis path)
@@ -401,7 +401,7 @@ class OikosToolStore {
         this.updateCommisMetadata(toolCallId, { commisStatus: 'spawned' });
         logger.debug(`[OikosToolStore] Commis spawned for tool ${toolCallId} (job ${data.jobId})`);
       } else {
-        logger.warn(`[OikosToolStore] Could not find spawn_commis tool for job ${data.jobId}`);
+        logger.warn(`[OikosToolStore] Could not find spawn_workspace_commis tool for job ${data.jobId}`);
       }
     });
 
@@ -503,8 +503,8 @@ class OikosToolStore {
       // Regular tool still running
       if (tool.status === 'running') return true;
 
-      // spawn_commis with active commis or nested tools
-      if (tool.toolName === 'spawn_commis') {
+      // spawn_workspace_commis with active commis or nested tools
+      if (tool.toolName === 'spawn_workspace_commis') {
         const spawnResult = this.getSpawnCommisResult(tool);
         const { commisStatus, nestedTools } = spawnResult;
 
@@ -529,14 +529,14 @@ class OikosToolStore {
   }
 
   /**
-   * Find the most recent spawn_commis tool that's still running
+   * Find the most recent spawn_workspace_commis tool that's still running
    * Used when commis_spawned fires (before we have job_id in result)
    */
   private findMostRecentSpawnCommisTool(): string | null {
     let mostRecent: { toolCallId: string; startedAt: number } | null = null;
 
     for (const [toolCallId, tool] of this.state.tools.entries()) {
-      if (tool.toolName === 'spawn_commis' && tool.status === 'running') {
+      if (tool.toolName === 'spawn_workspace_commis' && tool.status === 'running') {
         if (!mostRecent || tool.startedAt > mostRecent.startedAt) {
           mostRecent = { toolCallId, startedAt: tool.startedAt };
         }
@@ -547,7 +547,7 @@ class OikosToolStore {
   }
 
   /**
-   * Find the spawn_commis tool for a given job ID (by checking existing mapping)
+   * Find the spawn_workspace_commis tool for a given job ID (by checking existing mapping)
    */
   private findSpawnCommisToolForJob(jobId: number): string | null {
     // First check if we already have a mapping
@@ -558,7 +558,7 @@ class OikosToolStore {
 
     // Fallback: search tools for job_id in result (set after tool_completed)
     for (const [toolCallId, tool] of this.state.tools.entries()) {
-      if (tool.toolName === 'spawn_commis' && tool.result) {
+      if (tool.toolName === 'spawn_workspace_commis' && tool.result) {
         const resultJobId = this.extractJobIdFromResult(tool.result);
         if (resultJobId === jobId) {
           return toolCallId;
@@ -569,7 +569,7 @@ class OikosToolStore {
   }
 
   /**
-   * Extract job_id from spawn_commis tool result
+   * Extract job_id from spawn_workspace_commis tool result
    * Result format: "Commis job {jobId} queued successfully..."
    */
   private extractJobIdFromResult(result: unknown): number | null {
@@ -587,13 +587,13 @@ class OikosToolStore {
   }
 
   /**
-   * Update commis metadata for a spawn_commis tool
+   * Update commis metadata for a spawn_workspace_commis tool
    */
   private updateCommisMetadata(toolCallId: string, metadata: Partial<SpawnCommisResult>): void {
     const newTools = new Map(this.state.tools);
     const tool = newTools.get(toolCallId);
 
-    if (tool && tool.toolName === 'spawn_commis') {
+    if (tool && tool.toolName === 'spawn_workspace_commis') {
       const existingResult = this.getSpawnCommisResult(tool);
       const updatedTool: OikosToolCall = {
         ...tool,
@@ -613,7 +613,7 @@ class OikosToolStore {
     const newTools = new Map(this.state.tools);
     const tool = newTools.get(toolCallId);
 
-    if (tool && tool.toolName === 'spawn_commis') {
+    if (tool && tool.toolName === 'spawn_workspace_commis') {
       const existingResult = this.getSpawnCommisResult(tool);
       const prefix = stream === 'stderr' ? '[stderr] ' : '';
       let liveOutput = `${existingResult.liveOutput ?? ''}${prefix}${data}`;
@@ -636,13 +636,13 @@ class OikosToolStore {
   }
 
   /**
-   * Add a nested tool to a spawn_commis tool
+   * Add a nested tool to a spawn_workspace_commis tool
    */
   private addNestedTool(toolCallId: string, nestedTool: NestedToolCall): void {
     const newTools = new Map(this.state.tools);
     const tool = newTools.get(toolCallId);
 
-    if (tool && tool.toolName === 'spawn_commis') {
+    if (tool && tool.toolName === 'spawn_workspace_commis') {
       const existingResult = this.getSpawnCommisResult(tool);
       const updatedTool: OikosToolCall = {
         ...tool,
@@ -657,13 +657,13 @@ class OikosToolStore {
   }
 
   /**
-   * Update a nested tool within a spawn_commis tool
+   * Update a nested tool within a spawn_workspace_commis tool
    */
   private updateNestedTool(toolCallId: string, nestedToolCallId: string, updates: Partial<NestedToolCall>): void {
     const newTools = new Map(this.state.tools);
     const tool = newTools.get(toolCallId);
 
-    if (tool && tool.toolName === 'spawn_commis') {
+    if (tool && tool.toolName === 'spawn_workspace_commis') {
       const existingResult = this.getSpawnCommisResult(tool);
       const updatedNested = existingResult.nestedTools.map(nt =>
         nt.toolCallId === nestedToolCallId ? { ...nt, ...updates } : nt

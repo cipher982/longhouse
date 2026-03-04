@@ -592,7 +592,7 @@ components:
           description: Commis job ID
         tool_call_id:
           type: string
-          description: Tool call ID for the spawn_commis invocation
+          description: Tool call ID for the spawn_workspace_commis invocation
         task:
           type: string
           minLength: 1
@@ -777,7 +777,7 @@ components:
         job_id:
           type: integer
           minimum: 1
-          description: Commis job ID (spawn_commis job)
+          description: Commis job ID (spawn_workspace_commis job)
         commis_id:
           type: string
           minLength: 1

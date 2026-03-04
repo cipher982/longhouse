@@ -143,7 +143,7 @@ export interface ErrorPayload {
 export interface CommisSpawnedPayload {
   /** Commis job ID */
   job_id: number;
-  /** Tool call ID for the spawn_commis invocation */
+  /** Tool call ID for the spawn_workspace_commis invocation */
   tool_call_id?: string;
   /** Commis task (may be truncated to 100 chars) */
   task: string;
@@ -232,7 +232,7 @@ export interface CommisToolFailedPayload {
 }
 
 export interface CommisOutputChunkPayload {
-  /** Commis job ID (spawn_commis job) */
+  /** Commis job ID (spawn_workspace_commis job) */
   job_id?: number;
   commis_id: string;
   /** Runner exec job UUID */

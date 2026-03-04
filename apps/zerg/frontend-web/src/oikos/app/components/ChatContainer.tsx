@@ -202,7 +202,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
   // Check if any commis are actively running (for hiding typing dots)
   const hasActiveCommis = useMemo(() => {
     return Array.from(toolState.tools.values()).some(tool => {
-      if (tool.toolName === 'spawn_commis') {
+      if (tool.toolName === 'spawn_workspace_commis') {
         const commisStatus = (tool.result as Record<string, unknown>)?.commisStatus
         return commisStatus === 'running' || commisStatus === 'spawned'
       }
@@ -214,7 +214,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
 
   // Render a tool event
   const renderTool = (tool: OikosToolCall) => {
-    if (tool.toolName === 'spawn_commis') {
+    if (tool.toolName === 'spawn_workspace_commis') {
       const isDeferred = oikosToolStore.isDeferred(tool.runId)
       const commisStatus = (tool.result as Record<string, unknown>)?.commisStatus
       const isDetached = isDeferred && (commisStatus === 'running' || commisStatus === 'spawned')

@@ -99,7 +99,7 @@ When a user asks for something, you can:
 2. Use tools to help accomplish tasks
 3. Spawn commis for complex tasks that need tool access
 
-When you call spawn_commis, it will create a background commis to handle the task.
+When you call spawn_workspace_commis, it will create a background commis to handle the task.
 Once the commis completes, you'll receive the result and should synthesize it for the user.
 
 IMPORTANT: When you see a tool result that says "Commis job N completed:", that means
@@ -107,13 +107,13 @@ the task is DONE. You should summarize the result for the user, NOT spawn anothe
 
     user_message = "check disk space on cube real quick"
 
-    # The AI's first response - called spawn_commis
+    # The AI's first response - called spawn_workspace_commis
     first_ai_response = AIMessage(
         content="",
-        tool_calls=[{"id": "call_abc123", "name": "spawn_commis", "args": {"task": "Check disk space on cube"}}],
+        tool_calls=[{"id": "call_abc123", "name": "spawn_workspace_commis", "args": {"task": "Check disk space on cube"}}],
     )
 
-    # The tool result from spawn_commis AFTER commis completed
+    # The tool result from spawn_workspace_commis AFTER commis completed
     # This is what interrupt() returns after Command(resume=commis_result)
     tool_result = ToolMessage(
         content="""Commis job 41 completed:
@@ -127,7 +127,7 @@ Details:
   - /home: 42GB
   - /var/log: 8GB""",
         tool_call_id="call_abc123",
-        name="spawn_commis",
+        name="spawn_workspace_commis",
     )
 
     # This is what the LLM should see on resume
@@ -158,10 +158,10 @@ Possible causes for the double-spawn bug:
    requires for function calling.
 
 4. REPLAY BEHAVIOR: LangGraph might be replaying the tool calls from checkpoint
-   before continuing, causing spawn_commis to be called twice.
+   before continuing, causing spawn_workspace_commis to be called twice.
 
 5. PROMPT CONFUSION: The LLM might see "check disk space on cube" in the user
-   message but "Check disk space on cube" (capitalized) in the spawn_commis args,
+   message but "Check disk space on cube" (capitalized) in the spawn_workspace_commis args,
    and decide the original request wasn't fully addressed.
 
 TO DIAGNOSE:

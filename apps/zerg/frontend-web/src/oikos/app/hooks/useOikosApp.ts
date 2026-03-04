@@ -277,8 +277,8 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
                 logs: [],
               }
 
-              // For spawn_commis, include commis metadata
-              if (tc.tool_name === 'spawn_commis' && tc.commis) {
+              // For spawn_workspace_commis, include commis metadata
+              if (tc.tool_name === 'spawn_workspace_commis' && tc.commis) {
                 const nestedTools = tc.commis.tools.map(wt => ({
                   toolCallId: `${tc.tool_call_id}-${wt.tool_name}`,
                   toolName: wt.tool_name,

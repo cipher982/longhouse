@@ -50,7 +50,6 @@ from zerg.models.enums import ThreadType
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
-from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_service import OikosService
 from zerg.tools import get_registry
 
@@ -66,7 +65,7 @@ logger = logging.getLogger(__name__)
 class ReplayStats:
     """Track replay statistics for comparison."""
 
-    spawn_commis_calls: int = 0
+    spawn_workspace_commis_calls: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
     blocked_tool_calls: int = 0
@@ -96,14 +95,13 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
 
 
 class MockedSpawnCommis:
-    """Mock spawn_commis that returns cached results from original run."""
+    """Mock spawn_workspace_commis that returns cached results from original run."""
 
     def __init__(self, db: Session, original_run_id: int, stats: ReplayStats, *, match_threshold: float = 0.7):
         self.db = db
         self.original_run_id = original_run_id
         self.stats = stats
         self.match_threshold = match_threshold
-        self.artifact_store = CommisArtifactStore()
         self.cached_jobs = self._load_original_commis()
         self.used_job_ids: set[int] = set()
 
@@ -158,14 +156,16 @@ class MockedSpawnCommis:
     async def __call__(
         self,
         task: str,
+        git_repo: str | None = None,
         model: str | None = None,
-        wait: bool = False,
-        timeout_seconds: float = 300.0,
-        decision_mode: str = "heuristic",
+        backend: str | None = None,
+        resume_session_id: str | None = None,
+        skills: list[str] | None = None,
+        **_: object,
     ) -> str:
-        """Mock spawn_commis - returns cached results instead of spawning real commis."""
-        self.stats.spawn_commis_calls += 1
-        self.stats.tool_call_names.append("spawn_commis")
+        """Mock spawn_workspace_commis - returns cached results instead of spawning real commis."""
+        self.stats.spawn_workspace_commis_calls += 1
+        self.stats.tool_call_names.append("spawn_workspace_commis")
 
         matching_job = self._find_matching_job(task)
 
@@ -178,49 +178,38 @@ class MockedSpawnCommis:
             )
 
         # Mark the matched cached job as used to avoid reusing a single cached job
-        # for multiple spawn_commis calls in the replay.
+        # for multiple spawn_workspace_commis calls in the replay.
         self.used_job_ids.add(int(matching_job["job_id"]))
         self.stats.cache_hits += 1
         job_id = matching_job["job_id"]
-        commis_id = matching_job["commis_id"]
         status = matching_job["status"]
+        workspace_kind = "repo workspace" if git_repo else "scratch workspace"
+        backend_note = f", backend={backend}" if backend else ""
+        resume_note = f", resume_session_id={resume_session_id}" if resume_session_id else ""
 
-        if not wait:
-            # Fire-and-forget mode: return queued message
-            return (
-                f"[REPLAY MOCK] Commis job {job_id} (cached) queued.\n"
-                f"Task: {task[:100]}\n"
-                f"Original status: {status}\n\n"
-                f"Use read_commis_result('{job_id}') to get results."
-            )
-
-        # Wait mode: return actual cached result
-        if status == "success" and commis_id:
-            try:
-                result = self.artifact_store.get_commis_result(commis_id)
-                return f"[REPLAY MOCK - cached from job {job_id}]\n\n{result}"
-            except Exception as e:
-                logger.error(f"Failed to read cached result for {commis_id}: {e}")
-                return f"[REPLAY MOCK] Error reading cached result: {e}"
-        elif status == "failed":
-            error = matching_job.get("error", "Unknown error")
-            return f"[REPLAY MOCK] Commis job {job_id} failed: {error}"
-        else:
-            return f"[REPLAY MOCK] Commis job {job_id} status: {status}"
+        return (
+            f"[REPLAY MOCK] Commis job {job_id} (cached) queued.\n"
+            f"Task: {task[:100]}\n"
+            f"Workspace: {workspace_kind}{backend_note}{resume_note}\n"
+            f"Original status: {status}\n\n"
+            "Use read_commis_result(job_id) to inspect the cached output."
+        )
 
     def sync_wrapper(
         self,
         task: str,
+        git_repo: str | None = None,
         model: str | None = None,
-        wait: bool = False,
-        timeout_seconds: float = 300.0,
-        decision_mode: str = "heuristic",
+        backend: str | None = None,
+        resume_session_id: str | None = None,
+        skills: list[str] | None = None,
+        **kwargs: object,
     ) -> str:
-        """Sync wrapper for the mock (matches spawn_commis signature)."""
+        """Sync wrapper for the mock (matches spawn_workspace_commis signature)."""
         try:
             asyncio.get_running_loop()
             raise RuntimeError(
-                "spawn_commis sync wrapper was called while an event loop is already running. "
+                "spawn_workspace_commis sync wrapper was called while an event loop is already running. "
                 "This usually indicates the tool was executed synchronously in an async context."
             )
         except RuntimeError as e:
@@ -230,7 +219,17 @@ class MockedSpawnCommis:
         # Run the async version in a new event loop
         loop = asyncio.new_event_loop()
         try:
-            return loop.run_until_complete(self(task, model, wait, timeout_seconds, decision_mode))
+            return loop.run_until_complete(
+                self(
+                    task=task,
+                    git_repo=git_repo,
+                    model=model,
+                    backend=backend,
+                    resume_session_id=resume_session_id,
+                    skills=skills,
+                    **kwargs,
+                )
+            )
         finally:
             loop.close()
 
@@ -251,7 +250,7 @@ class ToolMocker:
         """Initialize the tool mocker.
 
         Args:
-            tool_name: Name of the tool to mock (e.g., "spawn_commis")
+            tool_name: Name of the tool to mock (e.g., "spawn_workspace_commis")
             mock_async: Async function to replace the tool's coroutine
             mock_sync: Sync function to replace the tool's func
         """
@@ -452,12 +451,12 @@ def print_comparison(original: dict, replay: dict, stats: ReplayStats):
 
     # Tool calls
     print(f"{'Tool Calls (all)':<25} {original['tool_calls']:<20} {replay['tool_calls']:<20}")
-    print(f"{'  spawn_commis (mocked)':<25} {original['commis']:<20} {stats.spawn_commis_calls:<20}")
+    print(f"{'  spawn_workspace_commis (mocked)':<25} {original['commis']:<20} {stats.spawn_workspace_commis_calls:<20}")
     if stats.blocked_tool_calls:
         print(f"{'  blocked tools':<25} {'-':<20} {stats.blocked_tool_calls:<20}")
 
     # Commis
-    print(f"{'Commis Spawned':<25} {original['commis']:<20} {stats.spawn_commis_calls:<20}")
+    print(f"{'Commis Spawned':<25} {original['commis']:<20} {stats.spawn_workspace_commis_calls:<20}")
     print(f"{'  Cache Hits':<25} {'-':<20} {stats.cache_hits:<20}")
     print(f"{'  Cache Misses':<25} {'-':<20} {stats.cache_misses:<20}")
 
@@ -605,7 +604,7 @@ async def replay_run(
     blocked_tools: list[str] = []
     if not allow_all_tools:
         for tool_name in allowed_tool_names:
-            if tool_name == "spawn_commis":
+            if tool_name == "spawn_workspace_commis":
                 continue
             if tool_name in SAFE_DEFAULT_TOOLS:
                 continue
@@ -633,7 +632,7 @@ async def replay_run(
         else:
             context_note = f" ({context_count})"
 
-        print("\n[DRY RUN] Would replay with mocked spawn_commis in an isolated replay thread")
+        print("\n[DRY RUN] Would replay with mocked spawn_workspace_commis in an isolated replay thread")
         print(f"Context messages to copy (non-system):{context_note}")
         print(f"Tool policy: {'ALLOW ALL' if allow_all_tools else 'SAFE DEFAULT'}")
         if blocked_tools:
@@ -678,7 +677,7 @@ async def replay_run(
         processed=False,
     )
 
-    print("\n--- STARTING REPLAY (isolated thread + mocked spawn_commis) ---\n")
+    print("\n--- STARTING REPLAY (isolated thread + mocked spawn_workspace_commis) ---\n")
     print(f"Replay run:   #{replay_run_row.id} (thread {replay_thread.id})")
     print(f"Context size: {copied_count} message(s) copied from original thread history")
     if blocked_tools:
@@ -692,8 +691,8 @@ async def replay_run(
     start_time = datetime.now(timezone.utc)
 
     with ExitStack() as stack:
-        # Patch spawn_commis tool directly on the StructuredTool instance
-        stack.enter_context(ToolMocker("spawn_commis", mock_spawn, mock_spawn.sync_wrapper))
+        # Patch spawn_workspace_commis tool directly on the StructuredTool instance
+        stack.enter_context(ToolMocker("spawn_workspace_commis", mock_spawn, mock_spawn.sync_wrapper))
 
         # Optionally block side-effect tools for safety
         for tool_name in blocked_tools:

@@ -38,7 +38,7 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
 
   const hasActiveWork = tools.some(t => {
     if (t.status === 'running') return true;
-    if (t.toolName !== 'spawn_commis') return false;
+    if (t.toolName !== 'spawn_workspace_commis') return false;
 
     const commisStatus = (t.result as any)?.commisStatus;
     const nestedTools = (t.result as any)?.nestedTools || [];
@@ -58,8 +58,8 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
   return (
     <div className={`activity-stream ${className || ''} ${hasActiveWork ? 'activity-stream--active' : ''}`}>
       {tools.map(tool => {
-        // Use CommisToolCard for spawn_commis, regular ToolCard for everything else
-        if (tool.toolName === 'spawn_commis') {
+        // Use CommisToolCard for spawn_workspace_commis, regular ToolCard for everything else
+        if (tool.toolName === 'spawn_workspace_commis') {
           // Mark commis as detached if it's still running while oikos is deferred
           const commisStatus = (tool.result as any)?.commisStatus;
           const isDetached = isDeferred && (commisStatus === 'running' || commisStatus === 'spawned');
