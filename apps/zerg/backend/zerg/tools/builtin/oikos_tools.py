@@ -23,6 +23,22 @@ from typing import List
 from zerg.connectors.context import get_credential_resolver
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_context import get_oikos_context
+from zerg.tools.builtin.oikos_commis_artifact_tools import cancel_commis
+from zerg.tools.builtin.oikos_commis_artifact_tools import cancel_commis_async
+from zerg.tools.builtin.oikos_commis_artifact_tools import check_commis_status
+from zerg.tools.builtin.oikos_commis_artifact_tools import check_commis_status_async
+from zerg.tools.builtin.oikos_commis_artifact_tools import get_commis_evidence
+from zerg.tools.builtin.oikos_commis_artifact_tools import get_commis_evidence_async
+from zerg.tools.builtin.oikos_commis_artifact_tools import get_tool_output
+from zerg.tools.builtin.oikos_commis_artifact_tools import get_tool_output_async
+from zerg.tools.builtin.oikos_commis_artifact_tools import peek_commis_output
+from zerg.tools.builtin.oikos_commis_artifact_tools import peek_commis_output_async
+from zerg.tools.builtin.oikos_commis_artifact_tools import read_commis_file
+from zerg.tools.builtin.oikos_commis_artifact_tools import read_commis_file_async
+from zerg.tools.builtin.oikos_commis_artifact_tools import read_commis_result
+from zerg.tools.builtin.oikos_commis_artifact_tools import read_commis_result_async
+from zerg.tools.builtin.oikos_commis_artifact_tools import wait_for_commis
+from zerg.tools.builtin.oikos_commis_artifact_tools import wait_for_commis_async
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.types.tools import Tool as StructuredTool
@@ -443,136 +459,6 @@ def list_commiss(
     from zerg.utils.async_utils import run_async_safely
 
     return run_async_safely(list_commiss_async(limit, status, since_hours))
-
-
-def format_duration(duration_ms: int) -> str:
-    """Compatibility wrapper around extracted commis duration formatter."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import format_duration as _impl
-
-    return _impl(duration_ms)
-
-
-async def check_commis_status_async(job_id: str | None = None) -> str:
-    """Compatibility wrapper around extracted commis status helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import check_commis_status_async as _impl
-
-    return await _impl(job_id)
-
-
-def check_commis_status(job_id: str | None = None) -> str:
-    """Compatibility wrapper around extracted commis status helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import check_commis_status as _impl
-
-    return _impl(job_id)
-
-
-async def cancel_commis_async(job_id: str) -> str:
-    """Compatibility wrapper around extracted commis cancel helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import cancel_commis_async as _impl
-
-    return await _impl(job_id)
-
-
-def cancel_commis(job_id: str) -> str:
-    """Compatibility wrapper around extracted commis cancel helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import cancel_commis as _impl
-
-    return _impl(job_id)
-
-
-async def wait_for_commis_async(
-    job_id: str,
-    *,
-    _tool_call_id: str | None = None,
-) -> str:
-    """Compatibility wrapper around extracted wait-for-commis helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import wait_for_commis_async as _impl
-
-    return await _impl(job_id, _tool_call_id=_tool_call_id)
-
-
-def wait_for_commis(job_id: str) -> str:
-    """Compatibility wrapper around extracted wait-for-commis helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import wait_for_commis as _impl
-
-    return _impl(job_id)
-
-
-async def read_commis_result_async(job_id: str) -> str:
-    """Compatibility wrapper around extracted commis result helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import read_commis_result_async as _impl
-
-    return await _impl(job_id)
-
-
-def read_commis_result(job_id: str) -> str:
-    """Compatibility wrapper around extracted commis result helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import read_commis_result as _impl
-
-    return _impl(job_id)
-
-
-async def get_commis_evidence_async(job_id: str, budget_bytes: int = 32000) -> str:
-    """Compatibility wrapper around extracted commis evidence helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import get_commis_evidence_async as _impl
-
-    return await _impl(job_id, budget_bytes)
-
-
-def get_commis_evidence(job_id: str, budget_bytes: int = 32000) -> str:
-    """Compatibility wrapper around extracted commis evidence helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import get_commis_evidence as _impl
-
-    return _impl(job_id, budget_bytes)
-
-
-def _truncate_head_tail(content: str, max_bytes: int, head_size: int = 1024) -> str:
-    """Compatibility wrapper around extracted commis artifact truncation helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import _truncate_head_tail as _impl
-
-    return _impl(content, max_bytes, head_size)
-
-
-async def get_tool_output_async(artifact_id: str, max_bytes: int = 32000) -> str:
-    """Compatibility wrapper around extracted commis artifact tool output helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import get_tool_output_async as _impl
-
-    return await _impl(artifact_id, max_bytes)
-
-
-def get_tool_output(artifact_id: str, max_bytes: int = 32000) -> str:
-    """Compatibility wrapper around extracted commis artifact tool output helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import get_tool_output as _impl
-
-    return _impl(artifact_id, max_bytes)
-
-
-async def read_commis_file_async(job_id: str, file_path: str) -> str:
-    """Compatibility wrapper around extracted commis artifact file-read helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import read_commis_file_async as _impl
-
-    return await _impl(job_id, file_path)
-
-
-async def peek_commis_output_async(job_id: str, max_bytes: int = 4000) -> str:
-    """Compatibility wrapper around extracted commis artifact output-peek helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import peek_commis_output_async as _impl
-
-    return await _impl(job_id, max_bytes)
-
-
-def read_commis_file(job_id: str, file_path: str) -> str:
-    """Compatibility wrapper around extracted commis artifact file-read helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import read_commis_file as _impl
-
-    return _impl(job_id, file_path)
-
-
-def peek_commis_output(job_id: str, max_bytes: int = 4000) -> str:
-    """Compatibility wrapper around extracted commis artifact output-peek helper."""
-    from zerg.tools.builtin.oikos_commis_artifact_tools import peek_commis_output as _impl
-
-    return _impl(job_id, max_bytes)
 
 
 async def grep_commiss_async(pattern: str, since_hours: int = 24) -> str:
