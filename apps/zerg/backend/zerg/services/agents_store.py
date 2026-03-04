@@ -49,7 +49,7 @@ class CompactionBoundary:
 
 @dataclass(frozen=True)
 class RewindSignal:
-    """Detected rewind trigger in incoming source-line payload."""
+    """Detected rewind trigger in incoming payload."""
 
     source_path: str
     source_offset: int
@@ -460,7 +460,7 @@ class AgentsStore:
             )
         return latest, max_offset_by_path
 
-    def _detect_rewind_signal(
+    def _detect_source_rewind_signal(
         self,
         session_id: UUID,
         head_branch_id: int,
@@ -506,6 +506,86 @@ class AgentsStore:
             if rewind_candidate is None or candidate.source_offset < rewind_candidate.source_offset:
                 rewind_candidate = candidate
         return rewind_candidate
+
+    def _detect_lineage_rewind_signal(
+        self,
+        session_id: UUID,
+        head_branch_id: int,
+        events: list[EventIngest],
+    ) -> RewindSignal | None:
+        """Detect rewind when incoming lineage forks from an existing parent UUID."""
+        lineage_rows: list[tuple[EventIngest, str, str]] = []
+        parent_ids: set[str] = set()
+        for event in events:
+            event_uuid, parent_uuid = self._extract_event_lineage(event.raw_json)
+            if not event_uuid or not parent_uuid:
+                continue
+            lineage_rows.append((event, event_uuid, parent_uuid))
+            parent_ids.add(parent_uuid)
+
+        if not lineage_rows:
+            return None
+
+        parent_rows = (
+            self.db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(AgentEvent.event_uuid.in_(sorted(parent_ids)))
+            .all()
+        )
+        if not parent_rows:
+            return None
+
+        parent_by_uuid: dict[str, AgentEvent] = {}
+        for row in parent_rows:
+            if row.event_uuid and row.event_uuid not in parent_by_uuid:
+                parent_by_uuid[row.event_uuid] = row
+
+        child_rows = (
+            self.db.query(AgentEvent.parent_event_uuid, AgentEvent.event_uuid)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(AgentEvent.parent_event_uuid.in_(sorted(parent_ids)))
+            .filter(AgentEvent.event_uuid.isnot(None))
+            .all()
+        )
+        children_by_parent: dict[str, set[str]] = defaultdict(set)
+        for parent_uuid, child_uuid in child_rows:
+            if not isinstance(parent_uuid, str) or not isinstance(child_uuid, str):
+                continue
+            children_by_parent[parent_uuid].add(child_uuid)
+
+        candidate: RewindSignal | None = None
+        for _event, incoming_uuid, parent_uuid in lineage_rows:
+            existing_children = children_by_parent.get(parent_uuid)
+            if not existing_children or incoming_uuid in existing_children:
+                continue
+            parent_event = parent_by_uuid.get(parent_uuid)
+            if parent_event is None:
+                continue
+            if parent_event.source_path is None or parent_event.source_offset is None:
+                continue
+            signal = RewindSignal(
+                source_path=parent_event.source_path,
+                source_offset=int(parent_event.source_offset) + 1,
+                reason="lineage_divergence",
+            )
+            if candidate is None or signal.source_offset < candidate.source_offset:
+                candidate = signal
+        return candidate
+
+    def _detect_rewind_signal(
+        self,
+        session_id: UUID,
+        head_branch_id: int,
+        source_lines: list[SourceLineIngest],
+        events: list[EventIngest],
+    ) -> RewindSignal | None:
+        """Detect rewind from source rewrites/truncation or lineage divergence."""
+        source_signal = self._detect_source_rewind_signal(session_id, head_branch_id, source_lines)
+        if source_signal is not None:
+            return source_signal
+        return self._detect_lineage_rewind_signal(session_id, head_branch_id, events)
 
     def _fork_head_branch(
         self,
@@ -608,10 +688,11 @@ class AgentsStore:
         self,
         session_id: UUID,
         source_lines: list[SourceLineIngest],
+        events: list[EventIngest],
     ) -> tuple[AgentSessionBranch, RewindSignal | None]:
         """Return branch to ingest into, forking when rewind is detected."""
         head = self._ensure_head_branch(session_id)
-        signal = self._detect_rewind_signal(session_id, head.id, source_lines)
+        signal = self._detect_rewind_signal(session_id, head.id, source_lines, events)
         if signal is None:
             return head, None
         return self._fork_head_branch(session_id, head, signal), signal
@@ -702,7 +783,7 @@ class AgentsStore:
             session_created = True
 
         source_lines = self._normalize_source_lines_for_ingest(data)
-        ingest_branch, rewind_signal = self._resolve_ingest_branch(session_id, source_lines)
+        ingest_branch, rewind_signal = self._resolve_ingest_branch(session_id, source_lines, data.events)
 
         events_inserted = 0
         events_skipped = 0
