@@ -225,7 +225,9 @@ function isSessionLive(session: ActiveSession): boolean {
   return (
     session.status === "working" ||
     session.presence_state === "thinking" ||
-    session.presence_state === "running"
+    session.presence_state === "running" ||
+    session.presence_state === "needs_user" ||
+    session.presence_state === "blocked"
   );
 }
 

@@ -7,7 +7,7 @@
 
 import { useEffect } from "react";
 
-export type PresenceState = "thinking" | "running" | "idle";
+export type PresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
 export type PresenceStateInput = PresenceState | (string & {});
 
 export interface PresenceBadgeProps {
@@ -85,7 +85,13 @@ function getToolLabel(tool: string): { prefix: string; label: string } {
 }
 
 function isKnownPresenceState(state: PresenceStateInput | null | undefined): state is PresenceState {
-  return state === "thinking" || state === "running" || state === "idle";
+  return (
+    state === "thinking" ||
+    state === "running" ||
+    state === "idle" ||
+    state === "needs_user" ||
+    state === "blocked"
+  );
 }
 
 function normalizePresenceState(state: PresenceStateInput | null | undefined): PresenceState | null {
@@ -132,6 +138,32 @@ function Dot({ state, size }: DotProps) {
           background: "radial-gradient(circle, #38bdf8 30%, #0ea5e9 100%)",
           animation: "presence-run-blink 0.9s ease-in-out infinite",
           boxShadow: "0 0 6px 2px rgba(56, 189, 248, 0.5)",
+        }}
+      />
+    );
+  }
+
+  if (state === "needs_user") {
+    return (
+      <span
+        style={{
+          ...base,
+          background: "radial-gradient(circle, #fbbf24 30%, #f59e0b 100%)",
+          animation: "presence-pulse 2s ease-in-out infinite",
+          ["--presence-glow" as string]: "rgba(251, 191, 36, 0.5)",
+        }}
+      />
+    );
+  }
+
+  if (state === "blocked") {
+    return (
+      <span
+        style={{
+          ...base,
+          background: "radial-gradient(circle, #f87171 30%, #ef4444 100%)",
+          animation: "presence-pulse 2.5s ease-in-out infinite",
+          ["--presence-glow" as string]: "rgba(248, 113, 113, 0.5)",
         }}
       />
     );
@@ -276,10 +308,18 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
   const dotSize = compact ? 8 : 10;
 
   if (compact) {
+    const compactTitle =
+      normalizedState === "running" && tool
+        ? `Running: ${tool}`
+        : normalizedState === "blocked" && tool
+          ? `Blocked: ${tool}`
+          : normalizedState === "needs_user"
+            ? "Waiting for input"
+            : normalizedState;
     return (
       <span
         className={className}
-        title={normalizedState === "running" && tool ? `Running: ${tool}` : normalizedState}
+        title={compactTitle}
         style={{ display: "inline-flex", alignItems: "center" }}
       >
         <Dot state={normalizedState} size={dotSize} />
@@ -331,6 +371,45 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
     );
   }
 
+  if (normalizedState === "needs_user") {
+    return (
+      <span className={className} style={containerStyle}>
+        <Dot state="needs_user" size={dotSize} />
+        <span style={{ color: "#fbbf24", fontWeight: 500, letterSpacing: "0.02em" }}>
+          Waiting for input
+        </span>
+      </span>
+    );
+  }
+
+  if (normalizedState === "blocked") {
+    const toolLabel = tool ? getToolLabel(tool) : null;
+    return (
+      <span className={className} style={containerStyle}>
+        <Dot state="blocked" size={dotSize} />
+        <span
+          style={{
+            color: "#f87171",
+            fontWeight: 500,
+            letterSpacing: "0.02em",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          {toolLabel ? (
+            <>
+              <span style={{ opacity: 0.75, fontSize: 11 }}>{toolLabel.prefix}</span>
+              <span>blocked ({toolLabel.label})</span>
+            </>
+          ) : (
+            "Needs permission"
+          )}
+        </span>
+      </span>
+    );
+  }
+
   // idle
   return (
     <span className={className} style={containerStyle}>
@@ -361,18 +440,28 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
 
   const isThinking = normalizedState === "thinking";
   const isRunning = normalizedState === "running";
+  const isNeedsUser = normalizedState === "needs_user";
+  const isBlocked = normalizedState === "blocked";
 
   const borderColor = isThinking
     ? "rgba(251, 146, 60, 0.4)"
     : isRunning
       ? "rgba(56, 189, 248, 0.4)"
-      : "rgba(107, 114, 128, 0.2)";
+      : isNeedsUser
+        ? "rgba(251, 191, 36, 0.4)"
+        : isBlocked
+          ? "rgba(248, 113, 113, 0.4)"
+          : "rgba(107, 114, 128, 0.2)";
 
   const bgColor = isThinking
     ? "rgba(251, 146, 60, 0.08)"
     : isRunning
       ? "rgba(56, 189, 248, 0.08)"
-      : "rgba(107, 114, 128, 0.04)";
+      : isNeedsUser
+        ? "rgba(251, 191, 36, 0.06)"
+        : isBlocked
+          ? "rgba(248, 113, 113, 0.06)"
+          : "rgba(107, 114, 128, 0.04)";
 
   return (
     <div
