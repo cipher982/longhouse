@@ -97,25 +97,6 @@ def _default_runner_factory(fiche: Any, *, model_override: str | None = None, re
     return FicheRunner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)
 
 
-async def check_and_resume_if_all_complete(
-    db: Session,
-    run_id: int,
-    job_id: int,
-    result: str,
-    error: str | None = None,
-) -> dict[str, Any]:
-    """Compatibility shim for callers still importing from commis_resume."""
-    from zerg.services.commis_barrier import check_and_resume_if_all_complete as _check_and_resume_if_all_complete
-
-    return await _check_and_resume_if_all_complete(
-        db=db,
-        run_id=run_id,
-        job_id=job_id,
-        result=result,
-        error=error,
-    )
-
-
 async def resume_oikos_batch(
     db: Session,
     run_id: int,
@@ -1129,13 +1110,3 @@ async def trigger_commis_inbox_run(
     except Exception as e:
         logger.exception(f"Error triggering inbox run for original run {original_run_id}: {e}")
         return {"status": "error", "error": str(e)}
-
-
-async def reap_expired_barriers(db: Session) -> dict[str, Any]:
-    """Compatibility shim for callers still importing from commis_resume."""
-    from zerg.services.commis_barrier_reaper import reap_expired_barriers as _reap_expired_barriers
-
-    return await _reap_expired_barriers(
-        db=db,
-        resume_batch=resume_oikos_batch,
-    )
