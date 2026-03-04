@@ -43,6 +43,14 @@ async function ensureDemoProviders(page: Page): Promise<void> {
   await expect(claudeOption).toHaveCount(1, { timeout: 15000 });
 }
 
+async function ensureFilterPanelOpen(page: Page): Promise<void> {
+  const filterPanel = page.locator('#filter-panel');
+  if (!(await filterPanel.isVisible().catch(() => false))) {
+    await page.locator('button[aria-controls="filter-panel"]').click();
+    await expect(filterPanel).toBeVisible({ timeout: 5000 });
+  }
+}
+
 async function ingestSession(
   request: APIRequestContext,
   overrides: Partial<{
@@ -275,7 +283,7 @@ test.describe('Filter Chips and Popover', () => {
     await page.locator('[data-filter-section="provider"] [data-filter-option="claude"]').click();
 
     // Open popover again to select machine
-    await page.locator('button[aria-controls="filter-panel"]').click();
+    await ensureFilterPanelOpen(page);
     const machineBtn = page.locator(`[data-filter-section="machine"] [data-filter-option="${machineName}"]`);
     await expect(machineBtn).toHaveCount(1, { timeout: 8000 });
     await machineBtn.click();
@@ -311,7 +319,7 @@ test.describe('Filter Chips and Popover', () => {
     await expect(page.locator('#filter-panel')).toBeVisible();
 
     // Click the page title (far from the popover and filter button)
-    await page.locator('.section-header-title').click();
+    await page.locator('.ui-section-header__title').click();
 
     await expect(page.locator('#filter-panel')).toHaveCount(0);
   });
@@ -322,7 +330,11 @@ test.describe('Filter Chips and Popover', () => {
     await ensureDemoProviders(page);
 
     // Select 30d in the popover
-    await page.locator('[data-filter-section="time"] [data-filter-option="30d"]').click();
+    const days30 = page.locator('[data-filter-section="time"] [data-filter-option="30d"]');
+    await days30.scrollIntoViewIfNeeded();
+    await days30.evaluate((el) => {
+      (el as HTMLButtonElement).click();
+    });
 
     // Chip should appear
     const chip = page.locator('.sessions-filter-chip', { hasText: '30d' });

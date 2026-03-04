@@ -827,6 +827,7 @@ class CommisJobProcessor:
             if final_status != "cancelled":
                 with db_session() as resume_db:
                     try:
+                        from zerg.services.commis_runner import default_runner_factory
                         from zerg.services.commis_single_resume import resume_oikos_with_commis_result
 
                         resume_summary = summary
@@ -838,6 +839,7 @@ class CommisJobProcessor:
                             run_id=oikos_run_id,
                             commis_result=resume_summary,
                             job_id=job_id,
+                            runner_factory=default_runner_factory,
                         )
                     except Exception as resume_error:
                         logger.warning(f"Failed to resume oikos for job {job_id}: {resume_error}")

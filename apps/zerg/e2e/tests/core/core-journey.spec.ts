@@ -12,7 +12,7 @@
  * - Oikos returns direct scripted response
  * - No commis spawning (avoids continuation complexity)
  *
- * For commis flow testing with spawn_commis, see TODO: commis_flow.spec.ts
+ * For commis flow testing with spawn_workspace_commis, see TODO: commis_flow.spec.ts
  */
 
 import { randomUUID } from 'node:crypto';
@@ -178,9 +178,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('oikos:started', { runId, task: 'Test task', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_commis',
+          toolName: 'spawn_workspace_commis',
           toolCallId,
-          argsPreview: 'spawn_commis args',
+          argsPreview: 'spawn_workspace_commis args',
           args: { task },
           timestamp: now + 1,
         });
@@ -247,9 +247,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('oikos:started', { runId, task: 'Details test', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_commis',
+          toolName: 'spawn_workspace_commis',
           toolCallId,
-          argsPreview: 'spawn_commis args',
+          argsPreview: 'spawn_workspace_commis args',
           args: { task: 'Test details drawer' },
           timestamp: now + 1,
         });
@@ -325,9 +325,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('oikos:started', { runId, task: 'Source badge test', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_commis',
+          toolName: 'spawn_workspace_commis',
           toolCallId,
-          argsPreview: 'spawn_commis args',
+          argsPreview: 'spawn_workspace_commis args',
           args: { task: 'Test source badge' },
           timestamp: now + 1,
         });
@@ -382,9 +382,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('oikos:started', { runId, task: 'Offline badge test', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_commis',
+          toolName: 'spawn_workspace_commis',
           toolCallId,
-          argsPreview: 'spawn_commis args',
+          argsPreview: 'spawn_workspace_commis args',
           args: { task: 'Test offline badge' },
           timestamp: now + 1,
         });
@@ -447,9 +447,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('oikos:started', { runId, task: 'Compact mode test', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_commis',
+          toolName: 'spawn_workspace_commis',
           toolCallId,
-          argsPreview: 'spawn_commis args',
+          argsPreview: 'spawn_workspace_commis args',
           args: { task: 'Test compact mode' },
           timestamp: now + 1,
         });
@@ -522,9 +522,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
         bus.emit('oikos:started', { runId, task: 'Copy button test', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_commis',
+          toolName: 'spawn_workspace_commis',
           toolCallId,
-          argsPreview: 'spawn_commis args',
+          argsPreview: 'spawn_workspace_commis args',
           args: { task: 'Test copy button' },
           timestamp: now + 1,
         });
