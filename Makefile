@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-legacy test-control-plane test-e2e-cp test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-visual-compare qa-visual-compare-fast test-perf test-zerg-unit test-zerg-e2e test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-screenshots marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-legacy test-control-plane test-e2e-cp test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-visual-compare qa-visual-compare-fast test-perf test-zerg-unit test-zerg-e2e test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local
 
 
 # ---------------------------------------------------------------------------
@@ -505,35 +505,9 @@ seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)
 	@docker exec $$BACKEND uv run python scripts/seed_personal_credentials.py $(ARGS)
 	@echo "✅ Credentials seeded"
 
-seed-marketing: ## Seed marketing data (workflows, agents, chat thread)
-	@echo "🌱 Seeding marketing data..."
-	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
-	if [ -z "$$BACKEND" ]; then \
-		echo "❌ Backend not running. Start with 'make dev'"; \
-		exit 1; \
-	fi; \
-	docker exec $$BACKEND uv run python scripts/seed_marketing_workflow.py
-
 marketing-screenshots: ## Capture marketing screenshots (self-contained: starts+stops dev stack automatically)
-	@echo "📸 Capturing marketing screenshots (self-contained)..."
-	@bash scripts/marketing-screenshots.sh $(NAME)
-
-marketing-capture: ## Capture all marketing screenshots (requires dev stack on :30080)
 	@echo "📸 Capturing marketing screenshots..."
-	@if ! curl -sf http://localhost:30080/api/health >/dev/null 2>&1; then \
-		echo "❌ Dev stack not running. Start with 'make dev'"; \
-		exit 1; \
-	fi
-	$(MAKE) seed-marketing
-	@uv run --with playwright --with pyyaml scripts/capture_marketing.py
-
-marketing-single: ## Capture specific screenshot (usage: make marketing-single NAME=chat-preview)
-	@test -n "$(NAME)" || (echo "❌ Usage: make marketing-single NAME=<screenshot-name>" && exit 1)
-	@if ! curl -sf http://localhost:30080/api/health >/dev/null 2>&1; then \
-		echo "❌ Dev stack not running. Start with 'make dev'"; \
-		exit 1; \
-	fi
-	@uv run --with playwright --with pyyaml scripts/capture_marketing.py --name $(NAME)
+	@bash scripts/marketing-screenshots.sh $(NAME)
 
 marketing-validate: ## Validate all marketing screenshots exist and have reasonable size
 	@uv run --with pyyaml scripts/capture_marketing.py --validate
