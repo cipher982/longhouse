@@ -121,7 +121,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 ## Gotchas
 
 1. **`make dev` is interactive** — Use `run_in_background=true` in Bash tool.
-2. **.env can override** — DATABASE_URL in .env breaks SQLite dev; comment it out.
+2. **Dev DB location + overrides** — SQLite dev DB is `~/.longhouse/dev.db` (check `/api/health` → `checks.database.url`). `DATABASE_URL` in `.env` overrides this and can silently point you elsewhere.
 3. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
 4. **Auth disabled in dev** — `AUTH_DISABLED=1` set by dev.sh.
 5. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.

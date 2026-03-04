@@ -56,7 +56,8 @@ from zerg.models.agents import SessionPresence
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
-from zerg.services.demo_sessions import build_demo_agent_sessions
+from zerg.services.demo_seed import DEMO_PROVIDER_SESSION_PREFIX
+from zerg.services.demo_seed import seed_missing_demo_sessions
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -1475,6 +1476,7 @@ async def semantic_search_sessions(
                     provider=session.provider,
                     project=session.project,
                     device_id=session.device_id,
+                    environment=session.environment,
                     cwd=session.cwd,
                     git_repo=session.git_repo,
                     git_branch=session.git_branch,
@@ -1809,6 +1811,7 @@ async def list_sessions(
                     provider=s.provider,
                     project=s.project,
                     device_id=s.device_id,
+                    environment=s.environment,
                     cwd=s.cwd,
                     git_repo=s.git_repo,
                     git_branch=s.git_branch,
@@ -1884,6 +1887,7 @@ async def list_sessions(
                 provider=s.provider,
                 project=s.project,
                 device_id=s.device_id,
+                environment=s.environment,
                 cwd=s.cwd,
                 git_repo=s.git_repo,
                 git_branch=s.git_branch,
@@ -2209,21 +2213,15 @@ async def seed_demo_sessions(
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
 ) -> DemoSeedResponse:
-    """Seed demo sessions for the timeline (idempotent)."""
-    existing = db.query(AgentSession).filter(AgentSession.provider_session_id.like("demo-%")).first()
-    if existing:
-        return DemoSeedResponse(seeded=False, sessions_created=0)
-
-    store = AgentsStore(db)
-    sessions = build_demo_agent_sessions(datetime.now(timezone.utc))
-    for session in sessions:
-        store.ingest_session(session)
-
-    # Rebuild FTS5 index so timeline search works on demo data
-    store.rebuild_fts()
-    db.commit()
-
-    return DemoSeedResponse(seeded=True, sessions_created=len(sessions))
+    """Seed missing demo sessions for the timeline (idempotent top-up)."""
+    seeded_count, failed_count = seed_missing_demo_sessions(db, now=datetime.now(timezone.utc))
+    if failed_count:
+        logger.warning(
+            "Demo seed completed with %d failures and %d created sessions",
+            failed_count,
+            seeded_count,
+        )
+    return DemoSeedResponse(seeded=seeded_count > 0, sessions_created=seeded_count)
 
 
 @router.delete("/demo", response_model=DemoSeedResponse)
@@ -2232,7 +2230,7 @@ async def reset_demo_sessions(
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
 ) -> DemoSeedResponse:
-    """Delete all demo-seeded sessions (device_id='demo-mac').
+    """Delete all demo-seeded sessions (provider_session_id LIKE 'demo-%').
 
     Only available when AUTH_DISABLED=1. Used by the zerg-ui skill to set up
     a clean empty state before screenshot capture (SCENE=empty).
@@ -2244,7 +2242,11 @@ async def reset_demo_sessions(
             detail="Demo reset only available in dev mode (AUTH_DISABLED=1)",
         )
 
-    deleted = db.query(AgentSession).filter(AgentSession.device_id == "demo-mac").delete(synchronize_session=False)
+    deleted = (
+        db.query(AgentSession)
+        .filter(AgentSession.provider_session_id.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"))
+        .delete(synchronize_session=False)
+    )
     db.commit()
 
     return DemoSeedResponse(seeded=False, sessions_created=deleted)
@@ -2322,6 +2324,7 @@ async def get_session(
         provider=session.provider,
         project=session.project,
         device_id=session.device_id,
+        environment=session.environment,
         cwd=session.cwd,
         git_repo=session.git_repo,
         git_branch=session.git_branch,
