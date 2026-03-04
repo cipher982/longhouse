@@ -33,6 +33,7 @@ from zerg.models.models import Thread as ThreadModel
 from zerg.prompts import build_oikos_prompt
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_context import reset_seq
+from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 from zerg.services.thread_service import ThreadService
 from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
 
@@ -1029,18 +1030,7 @@ class OikosService:
             )
 
             # Emit stream_control based on pending commiss
-            pending_commiss_count = (
-                self.db.query(CommisJob)
-                .filter(
-                    CommisJob.oikos_run_id == run.id,
-                    CommisJob.status.in_(["queued", "running"]),
-                )
-                .count()
-            )
-            if pending_commiss_count > 0:
-                await emit_stream_control(self.db, run, "keep_open", "commiss_pending", owner_id, ttl_ms=120_000)
-            else:
-                await emit_stream_control(self.db, run, "close", "all_complete", owner_id)
+            await emit_stream_control_for_pending_commiss(self.db, run, owner_id, ttl_ms=120_000)
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
             await emit_run_event(

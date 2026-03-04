@@ -34,6 +34,7 @@ Notes:
 - 2026-03-03: Added guardrails for deprecated flow drift:
   - frontend route helper test locks `/forum` -> `/timeline` redirect semantics
   - backend tests assert `spawn_commis`/`spawn_workspace_commis` always persist `execution_mode=workspace`
+- 2026-03-03: Began monolith split (Phase 1) by extracting shared pending-commis stream lifecycle helper to `services/oikos_run_lifecycle.py` and wiring `oikos_service.py` + `commis_resume.py` to use it.
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
