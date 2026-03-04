@@ -11,10 +11,7 @@ Key requirements:
 
 from __future__ import annotations
 
-import asyncio
-import contextvars
 import logging
-import time
 import uuid
 from datetime import datetime
 from datetime import timedelta
@@ -34,6 +31,8 @@ from zerg.models.commis_barrier import CommisBarrierJob
 from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
+from zerg.services.commis_inbox_followup import INBOX_QUEUED_RESULT
+from zerg.services.commis_inbox_followup import schedule_inbox_followup_after_run
 from zerg.services.commis_updates import queue_commis_update
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
@@ -96,78 +95,6 @@ def _default_runner_factory(fiche: Any, *, model_override: str | None = None, re
     from zerg.managers.fiche_runner import FicheRunner
 
     return FicheRunner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)
-
-
-# Sentinel used when follow-up continuations should read queued commis updates from thread.
-INBOX_QUEUED_RESULT = "(Queued commis updates available in thread)"
-
-# Follow-up wait tuning (best-effort, avoids infinite background tasks)
-INBOX_FOLLOWUP_TIMEOUT_S = 300
-INBOX_FOLLOWUP_SLEEP_S = 0.5
-INBOX_FOLLOWUP_MAX_SLEEP_S = 2.0
-
-
-async def run_inbox_followup_after_run(
-    *,
-    run_id: int,
-    commis_job_id: int,
-    commis_status: str,
-    commis_error: str | None,
-    timeout_s: int = INBOX_FOLLOWUP_TIMEOUT_S,
-) -> dict[str, Any] | None:
-    """Wait for a run to finish, then trigger a continuation for queued commis updates."""
-    from zerg.database import get_session_factory
-
-    start = time.monotonic()
-    sleep_s = INBOX_FOLLOWUP_SLEEP_S
-    session_factory = get_session_factory()
-    db = session_factory()
-    try:
-        while True:
-            run = db.query(Run).filter(Run.id == run_id).first()
-            if not run:
-                return None
-            if run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
-                break
-            if (time.monotonic() - start) >= timeout_s:
-                logger.info("Inbox follow-up timed out waiting for run %s to finish", run_id)
-                return None
-            await asyncio.sleep(sleep_s)
-            sleep_s = min(sleep_s * 1.5, INBOX_FOLLOWUP_MAX_SLEEP_S)
-            db.expire_all()
-
-        # Trigger continuation using queued updates already in the thread.
-        return await trigger_commis_inbox_run(
-            db=db,
-            original_run_id=run_id,
-            commis_job_id=commis_job_id,
-            commis_result=INBOX_QUEUED_RESULT,
-            commis_status=commis_status,
-            commis_error=commis_error,
-        )
-    finally:
-        db.close()
-
-
-def _schedule_inbox_followup_after_run(
-    *,
-    run_id: int,
-    commis_job_id: int,
-    commis_status: str,
-    commis_error: str | None,
-) -> None:
-    """Fire-and-forget scheduling for follow-up continuations."""
-    coro = run_inbox_followup_after_run(
-        run_id=run_id,
-        commis_job_id=commis_job_id,
-        commis_status=commis_status,
-        commis_error=commis_error,
-    )
-    try:
-        asyncio.create_task(coro, context=contextvars.Context())
-    except Exception:
-        coro.close()
-        raise
 
 
 # ---------------------------------------------------------------------------
@@ -1154,11 +1081,12 @@ async def trigger_commis_inbox_run(
                     commis_result=commis_result,
                     commis_error=commis_error,
                 )
-                _schedule_inbox_followup_after_run(
+                schedule_inbox_followup_after_run(
                     run_id=existing_continuation.id,
                     commis_job_id=commis_job_id,
                     commis_status=commis_status,
                     commis_error=commis_error,
+                    trigger_followup=trigger_commis_inbox_run,
                 )
                 return {
                     "status": "queued",
@@ -1228,11 +1156,12 @@ async def trigger_commis_inbox_run(
                         commis_result=commis_result,
                         commis_error=commis_error,
                     )
-                    _schedule_inbox_followup_after_run(
+                    schedule_inbox_followup_after_run(
                         run_id=existing.id,
                         commis_job_id=commis_job_id,
                         commis_status=commis_status,
                         commis_error=commis_error,
+                        trigger_followup=trigger_commis_inbox_run,
                     )
                     return {
                         "status": "queued",
