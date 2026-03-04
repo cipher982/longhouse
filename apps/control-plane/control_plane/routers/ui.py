@@ -18,6 +18,7 @@ from control_plane.models import Instance
 from control_plane.models import User
 from control_plane.routers.auth import SESSION_COOKIE_NAME
 from control_plane.routers.auth import _decode_jwt
+from control_plane.routers.instances import _build_migration_status
 from control_plane.services.provisioner import Provisioner
 
 router = APIRouter(tags=["ui"])
@@ -621,13 +622,23 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
 @router.get("/admin", response_class=HTMLResponse)
 def admin(db: Session = Depends(get_db)):
     rows = db.query(Instance, User).join(User, Instance.user_id == User.id).all()
-    table_rows = "".join(
-        f"<tr><td>{inst.id}</td><td>{html.escape(user.email)}</td>"
-        f"<td>{html.escape(inst.subdomain)}</td><td>{inst.status}</td></tr>"
-        for inst, user in rows
-    )
+    table_rows_rendered: list[str] = []
+    for inst, user in rows:
+        migration = _build_migration_status(inst)
+        if migration.state == "pending":
+            migration_text = f"pending ({migration.pending_count})"
+        elif migration.state == "ok":
+            migration_text = "ok"
+        else:
+            migration_text = migration.state
+        table_rows_rendered.append(
+            f"<tr><td>{inst.id}</td><td>{html.escape(user.email)}</td>"
+            f"<td>{html.escape(inst.subdomain)}</td><td>{inst.status}</td>"
+            f"<td>{html.escape(migration_text)}</td></tr>"
+        )
+    table_rows = "".join(table_rows_rendered)
     if not table_rows:
-        table_rows = '<tr><td colspan=4><em>No instances yet</em></td></tr>'
+        table_rows = '<tr><td colspan=5><em>No instances yet</em></td></tr>'
 
     body = f"""
     <h1>Provision Instance</h1>
@@ -643,7 +654,7 @@ def admin(db: Session = Depends(get_db)):
     <div class="card">
       <h2>Instances</h2>
       <table>
-        <thead><tr><th>ID</th><th>Email</th><th>Subdomain</th><th>Status</th></tr></thead>
+        <thead><tr><th>ID</th><th>Email</th><th>Subdomain</th><th>Status</th><th>Migrations</th></tr></thead>
         <tbody>{table_rows}</tbody>
       </table>
     </div>

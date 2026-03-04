@@ -4,9 +4,11 @@ import base64
 import hashlib
 import hmac
 import json
+import sqlite3
 import time
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -24,12 +26,17 @@ from control_plane.models import Instance
 from control_plane.models import User
 from control_plane.schemas import InstanceCreate
 from control_plane.schemas import InstanceList
+from control_plane.schemas import MigrationStatusOut
 from control_plane.schemas import InstanceOut
 from control_plane.schemas import TokenOut
 from control_plane.services.provisioner import Provisioner
 from control_plane.services.provisioner import _generate_password
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
+
+_HEAVY_MIGRATION_EVENTS = "20260304_events_branch_backfill"
+_HEAVY_MIGRATION_SOURCE_LINES = "20260304_source_lines_branch_revision_rebuild"
+_HEAVY_MIGRATION_ORDER = (_HEAVY_MIGRATION_EVENTS, _HEAVY_MIGRATION_SOURCE_LINES)
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +100,91 @@ def _refresh_instance_health_if_ready(
     return False
 
 
+def _instance_db_path(inst: Instance) -> Path:
+    if inst.data_path:
+        return Path(inst.data_path) / "longhouse.db"
+    return Path(settings.instance_data_root) / inst.subdomain / "longhouse.db"
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _normalized_table_sql(conn: sqlite3.Connection, table_name: str) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    if not row or not row[0]:
+        return ""
+    sql = str(row[0]).lower()
+    return "".join(ch for ch in sql if not ch.isspace() and ch not in {'"', "`", "[", "]"})
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    if not _table_exists(conn, table_name):
+        return set()
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row[1]) for row in rows}
+
+
+def _build_migration_status(inst: Instance) -> MigrationStatusOut:
+    db_path = _instance_db_path(inst)
+    if not db_path.exists():
+        return MigrationStatusOut(state="unknown", detail=f"db missing at {db_path}")
+
+    pending: set[str] = set()
+    failed: set[str] = set()
+
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            if _table_exists(conn, "migration_runs"):
+                rows = conn.execute("SELECT migration_name, status FROM migration_runs").fetchall()
+                for migration_name, migration_status in rows:
+                    if str(migration_status) == "failed":
+                        failed.add(str(migration_name))
+
+            event_columns = _table_columns(conn, "events")
+            if event_columns:
+                if "branch_id" not in event_columns:
+                    pending.add(_HEAVY_MIGRATION_EVENTS)
+                else:
+                    null_count_row = conn.execute("SELECT COUNT(*) FROM events WHERE branch_id IS NULL").fetchone()
+                    null_count = int(null_count_row[0]) if null_count_row else 0
+                    if null_count > 0:
+                        pending.add(_HEAVY_MIGRATION_EVENTS)
+
+            source_columns = _table_columns(conn, "source_lines")
+            if source_columns:
+                if "branch_id" not in source_columns or "revision" not in source_columns:
+                    pending.add(_HEAVY_MIGRATION_SOURCE_LINES)
+                normalized_sql = _normalized_table_sql(conn, "source_lines")
+                if "unique(session_id,source_path,source_offset)" in normalized_sql:
+                    pending.add(_HEAVY_MIGRATION_SOURCE_LINES)
+    except Exception as exc:  # noqa: BLE001
+        return MigrationStatusOut(state="error", detail=str(exc))
+
+    ordered_pending = [name for name in _HEAVY_MIGRATION_ORDER if name in pending]
+    ordered_failed = sorted(failed)
+
+    state = "ok"
+    if ordered_pending:
+        state = "pending"
+    elif ordered_failed:
+        state = "failed"
+
+    return MigrationStatusOut(
+        state=state,
+        pending_count=len(ordered_pending),
+        pending_names=ordered_pending,
+        failed_names=ordered_failed,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -145,6 +237,7 @@ def my_instance(request: Request, db: Session = Depends(get_db)):
         status=inst.status,
         created_at=inst.created_at,
         last_health_at=inst.last_health_at,
+        migration=_build_migration_status(inst),
     )
 
 
@@ -201,6 +294,7 @@ def list_instances(db: Session = Depends(get_db)):
                 status=inst.status,
                 created_at=inst.created_at,
                 last_health_at=inst.last_health_at,
+                migration=_build_migration_status(inst),
             )
         )
     return InstanceList(instances=items)
@@ -280,6 +374,7 @@ def get_instance(instance_id: int, db: Session = Depends(get_db)):
         status=inst.status,
         created_at=inst.created_at,
         last_health_at=inst.last_health_at,
+        migration=_build_migration_status(inst),
     )
 
 

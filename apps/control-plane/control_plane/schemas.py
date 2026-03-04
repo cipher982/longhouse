@@ -3,6 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import BaseModel
+from pydantic import Field
+
+
+class MigrationStatusOut(BaseModel):
+    state: str
+    pending_count: int = 0
+    pending_names: list[str] = Field(default_factory=list)
+    failed_names: list[str] = Field(default_factory=list)
+    detail: str | None = None
 
 
 class InstanceCreate(BaseModel):
@@ -19,6 +28,7 @@ class InstanceOut(BaseModel):
     password: str | None = None  # Only set on create/regenerate (shown once)
     created_at: datetime | None = None
     last_health_at: datetime | None = None
+    migration: MigrationStatusOut | None = None
 
 
 class InstanceList(BaseModel):

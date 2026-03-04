@@ -41,6 +41,7 @@ sys.modules.setdefault("stripe", _mock_stripe_module)
 from control_plane.db import Base, get_db  # noqa: E402
 from control_plane.main import app  # noqa: E402
 from control_plane.models import Instance, User  # noqa: E402
+from control_plane.routers.instances import _build_migration_status  # noqa: E402
 from control_plane.services.provisioner import (  # noqa: E402
     Provisioner,
     ProvisionResult,
@@ -336,6 +337,7 @@ class TestInstancesAPI:
         data = resp.json()
         assert len(data["instances"]) == 1
         assert data["instances"][0]["email"] == "owner@test.com"
+        assert data["instances"][0]["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
 
     @patch("control_plane.routers.instances.httpx")
     def test_list_instances_promotes_ready_provisioning_instance(self, mock_httpx, client, db_session):
@@ -380,6 +382,7 @@ class TestInstancesAPI:
         resp = client.get(f"/api/instances/{inst.id}", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         assert resp.json()["subdomain"] == "inst1"
+        assert "migration" in resp.json()
 
     def test_get_instance_not_found(self, client, db_session):
         resp = client.get("/api/instances/999", headers=ADMIN_HEADERS)
@@ -982,6 +985,108 @@ class TestProvisionerClass:
         provisioner = Provisioner()
         with pytest.raises(RuntimeError, match="Migration preflight failed"):
             provisioner.run_migration_preflight("testuser", data_path=str(tmp_path / "testuser"))
+
+
+class TestMigrationStatusProbe:
+    def test_build_migration_status_pending_for_legacy_schema(self, tmp_path):
+        data_dir = tmp_path / "legacy-instance"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        db_path = data_dir / "longhouse.db"
+
+        import sqlite3
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE source_lines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    source_offset INTEGER NOT NULL,
+                    raw_json TEXT NOT NULL,
+                    line_hash TEXT NOT NULL,
+                    UNIQUE(session_id, source_path, source_offset)
+                )
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        inst = Instance(id=999, user_id=1, subdomain="legacy", container_name="longhouse-legacy", status="active", data_path=str(data_dir))
+        status = _build_migration_status(inst)
+
+        assert status.state == "pending"
+        assert status.pending_count >= 1
+        assert "20260304_source_lines_branch_revision_rebuild" in status.pending_names
+
+    def test_build_migration_status_ok_for_modern_schema(self, tmp_path):
+        data_dir = tmp_path / "modern-instance"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        db_path = data_dir / "longhouse.db"
+
+        import sqlite3
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    branch_id INTEGER
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE source_lines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    source_offset INTEGER NOT NULL,
+                    branch_id INTEGER NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    is_branch_copy INTEGER NOT NULL DEFAULT 0,
+                    raw_json TEXT NOT NULL,
+                    line_hash TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE migration_runs (
+                    migration_name TEXT PRIMARY KEY,
+                    status TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO migration_runs (migration_name, status) VALUES (?, ?)",
+                ("20260304_events_branch_backfill", "succeeded"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        inst = Instance(id=1000, user_id=1, subdomain="modern", container_name="longhouse-modern", status="active", data_path=str(data_dir))
+        status = _build_migration_status(inst)
+
+        assert status.state == "ok"
+        assert status.pending_count == 0
 
 
 # ===========================================================================

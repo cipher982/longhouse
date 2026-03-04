@@ -1065,7 +1065,6 @@ class AgentsStore:
             .where(
                 or_(
                     heads_subq.c.head_branch_id.is_(None),
-                    AgentEvent.branch_id.is_(None),
                     AgentEvent.branch_id == heads_subq.c.head_branch_id,
                 )
             )
@@ -1133,7 +1132,6 @@ class AgentsStore:
             .where(
                 or_(
                     heads_subq.c.head_branch_id.is_(None),
-                    AgentEvent.branch_id.is_(None),
                     AgentEvent.branch_id == heads_subq.c.head_branch_id,
                 )
             )
@@ -1176,7 +1174,6 @@ class AgentsStore:
             .where(
                 or_(
                     heads_subq.c.head_branch_id.is_(None),
-                    AgentEvent.branch_id.is_(None),
                     AgentEvent.branch_id == heads_subq.c.head_branch_id,
                 )
             )
@@ -1351,12 +1348,7 @@ class AgentsStore:
         head_branch_id = self.get_head_branch_id(session_id)
         if head_branch_id is None:
             return stmt
-        return stmt.where(
-            or_(
-                AgentEvent.branch_id == head_branch_id,
-                AgentEvent.branch_id.is_(None),  # legacy rows prior to branch migration
-            )
-        )
+        return stmt.where(AgentEvent.branch_id == head_branch_id)
 
     def get_session_events(
         self,
