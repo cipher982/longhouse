@@ -3,6 +3,7 @@
 import os
 from datetime import datetime
 from datetime import timezone
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -83,6 +84,8 @@ def test_demo_seed_tops_up_missing_sessions(tmp_path):
         body = resp.json()
         assert body["seeded"] is True
         assert body["sessions_created"] == len(all_demo_sessions) - 1
+        assert body["sessions_failed"] == 0
+        assert body["sessions_deleted"] == 0
         assert _count_demo_sessions(factory) == len(all_demo_sessions)
     finally:
         from zerg.main import api_app
@@ -102,6 +105,43 @@ def test_demo_seed_is_idempotent_when_complete(tmp_path):
         assert second.status_code == 200
         assert second.json()["seeded"] is False
         assert second.json()["sessions_created"] == 0
+        assert second.json()["sessions_failed"] == 0
+        assert second.json()["sessions_deleted"] == 0
+    finally:
+        from zerg.main import api_app
+
+        api_app.dependency_overrides.clear()
+
+
+def test_demo_seed_replace_deletes_existing_demo_rows(tmp_path):
+    factory = _make_db(tmp_path, "demo_replace.db")
+    _seed_session(factory, provider_session_id="demo-stale-row")
+
+    client = _client(factory)
+    try:
+        resp = client.post("/agents/demo?replace=true", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["seeded"] is True
+        assert body["sessions_deleted"] == 1
+        assert body["sessions_failed"] == 0
+        assert body["sessions_created"] == len(build_demo_agent_sessions())
+        assert _count_demo_sessions(factory) == len(build_demo_agent_sessions())
+    finally:
+        from zerg.main import api_app
+
+        api_app.dependency_overrides.clear()
+
+
+def test_demo_seed_replace_blocked_when_auth_enabled(tmp_path):
+    factory = _make_db(tmp_path, "demo_replace_auth.db")
+    client = _client(factory)
+    try:
+        with patch("zerg.routers.agents.get_settings") as mock_settings:
+            mock_settings.return_value.auth_disabled = False
+            mock_settings.return_value.testing = True
+            resp = client.post("/agents/demo?replace=true", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 403
     finally:
         from zerg.main import api_app
 

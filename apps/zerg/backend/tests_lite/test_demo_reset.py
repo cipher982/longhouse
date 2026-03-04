@@ -90,6 +90,8 @@ def test_demo_reset_deletes_demo_sessions(tmp_path):
         assert resp.status_code == 200
         body = resp.json()
         assert body["sessions_created"] == 2
+        assert body["sessions_deleted"] == 2
+        assert body["sessions_failed"] == 0
         assert _count(factory) == 0
     finally:
         from zerg.main import api_app
@@ -109,6 +111,8 @@ def test_demo_reset_preserves_real_sessions(tmp_path):
         resp = client.delete("/agents/demo", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200
         assert resp.json()["sessions_created"] == 1
+        assert resp.json()["sessions_deleted"] == 1
+        assert resp.json()["sessions_failed"] == 0
         assert _count(factory) == 2
     finally:
         from zerg.main import api_app
@@ -140,6 +144,8 @@ def test_demo_reset_no_sessions_returns_zero(tmp_path):
         resp = client.delete("/agents/demo", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200
         assert resp.json()["sessions_created"] == 0
+        assert resp.json()["sessions_deleted"] == 0
+        assert resp.json()["sessions_failed"] == 0
     finally:
         from zerg.main import api_app
         api_app.dependency_overrides.clear()
