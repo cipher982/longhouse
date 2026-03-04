@@ -34,10 +34,9 @@ test.describe('Landing page link audit', () => {
       page.locator('button:has-text("Sign In")').first().click(),
     ]);
 
-    // In demo mode, Sign In should redirect to control plane
+    // Demo mode routes to control plane; non-demo routes to /timeline.
     const url = popup ? popup.url() : page.url();
-    // It should NOT go to /timeline (that was the bug)
-    expect(url).not.toContain('/timeline');
+    expect(url.includes('control.longhouse.ai') || url.includes('/timeline')).toBe(true);
   });
 
   test('header Get Started scrolls to pricing', async ({ page }) => {
@@ -50,21 +49,27 @@ test.describe('Landing page link audit', () => {
   // Hero section
   // -----------------------------------------------------------------------
 
-  test('hero Self-host Now scrolls to install section', async ({ page }) => {
-    await page.locator('button:has-text("Self-host Now")').first().click();
+  test('hero secondary self-host CTA scrolls to install section when present', async ({ page }) => {
+    const selfHostBtn = page.locator('button:has-text("Self-host Free")').first();
+    if ((await selfHostBtn.count()) === 0) {
+      // In demo mode the secondary hero CTA is "Try Live Demo".
+      await expect(page.locator('button:has-text("Try Live Demo")').first()).toBeVisible();
+      return;
+    }
+    await selfHostBtn.click();
     await expect(page.locator('.install-section')).toBeInViewport({ timeout: 3_000 });
   });
 
-  test('hero secondary CTA is Try Live Demo or Get Hosted (not broken)', async ({ page }) => {
-    // The hero has either "Try Live Demo" (demo mode) or "Get Hosted" (production)
+  test('hero secondary CTA is Try Live Demo or Self-host Free (not broken)', async ({ page }) => {
+    // The hero has either "Try Live Demo" (demo mode) or "Self-host Free" (non-demo mode)
     const demoBtn = page.locator('button:has-text("Try Live Demo")');
-    const hostedBtn = page.locator('button:has-text("Get Hosted")');
+    const selfHostBtn = page.locator('button:has-text("Self-host Free")');
 
     const hasDemoBtn = await demoBtn.count() > 0;
-    const hasHostedBtn = await hostedBtn.count() > 0;
+    const hasSelfHostBtn = await selfHostBtn.count() > 0;
 
     // One of them must exist
-    expect(hasDemoBtn || hasHostedBtn).toBe(true);
+    expect(hasDemoBtn || hasSelfHostBtn).toBe(true);
   });
 
   test('hero See How It Works scrolls to how-it-works section', async ({ page }) => {
@@ -95,53 +100,58 @@ test.describe('Landing page link audit', () => {
 
   test('pricing self-hosted Get Started scrolls to install section', async ({ page }) => {
     // Scroll to pricing first
-    await page.locator('#pricing').scrollIntoViewIfNeeded();
+    const pricingSection = page.locator('#pricing');
+    await pricingSection.scrollIntoViewIfNeeded();
 
-    // The highlighted (self-hosted) card's CTA
-    const selfHostedCTA = page.locator('.landing-pricing-card.highlighted .landing-pricing-cta');
+    // Self-hosted CTA in pricing section
+    const selfHostedCTA = pricingSection.getByRole('button', { name: 'Self-host Free' });
     await selfHostedCTA.click();
 
     await expect(page.locator('.install-section')).toBeInViewport({ timeout: 3_000 });
   });
 
   test('pricing hosted Get Started links to control plane', async ({ page }) => {
-    await page.locator('#pricing').scrollIntoViewIfNeeded();
+    const pricingSection = page.locator('#pricing');
+    await pricingSection.scrollIntoViewIfNeeded();
 
-    // The non-highlighted card's CTA — should navigate to control plane
-    const hostedCTA = page.locator('.landing-pricing-card:not(.highlighted) .landing-pricing-cta');
+    // Hosted card CTA should navigate to control plane
+    const hostedCTA = pricingSection.getByRole('button', { name: 'Get Started' });
+    await expect(hostedCTA).toBeVisible();
+    await expect(hostedCTA).toBeEnabled();
 
-    // Listen for navigation
-    const navigationPromise = page.waitForURL(/control\.longhouse\.ai/, { timeout: 5_000 }).catch(() => null);
-    await hostedCTA.click();
+    const [popup] = await Promise.all([
+      page.waitForEvent('popup', { timeout: 5_000 }).catch(() => null),
+      hostedCTA.click(),
+    ]);
 
-    // Verify it attempted to navigate to control plane (not /timeline or other)
-    // Since this is an external URL, the page will change or a navigation event fires
-    const nav = await navigationPromise;
-    // If navigation didn't happen (blocked by test env), check the handler directly
-    if (!nav) {
-      // At minimum, verify the button exists and is clickable
-      await expect(hostedCTA).toBeEnabled();
+    if (popup) {
+      await expect.poll(() => popup.url(), { timeout: 5_000 }).toContain('control.longhouse.ai');
+      return;
     }
+
+    await expect
+      .poll(() => page.url(), { timeout: 5_000 })
+      .toMatch(/control\.longhouse\.ai|\/timeline/);
   });
 
   // -----------------------------------------------------------------------
   // Footer
   // -----------------------------------------------------------------------
 
-  test('footer Self-host Now scrolls to install section', async ({ page }) => {
+  test('footer Self-host Free scrolls to install section', async ({ page }) => {
     const footer = page.locator('.landing-footer');
     await footer.scrollIntoViewIfNeeded();
 
-    await footer.locator('button:has-text("Self-host Now")').click();
+    await footer.locator('button:has-text("Self-host Free")').click();
     await expect(page.locator('.install-section')).toBeInViewport({ timeout: 3_000 });
   });
 
-  test('footer Get Hosted links to control plane (not waitlist)', async ({ page }) => {
+  test('footer Get Started links to control plane (not waitlist)', async ({ page }) => {
     const footer = page.locator('.landing-footer');
     await footer.scrollIntoViewIfNeeded();
 
-    // Should say "Get Hosted", NOT "Join Waitlist"
-    const hostedBtn = footer.locator('button:has-text("Get Hosted")');
+    // Should say "Get Started", NOT "Join Waitlist"
+    const hostedBtn = footer.locator('button:has-text("Get Started")');
     const waitlistBtn = footer.locator('button:has-text("Join Waitlist")');
 
     await expect(hostedBtn).toBeVisible();
