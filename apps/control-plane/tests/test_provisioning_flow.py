@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -334,6 +336,42 @@ class TestInstancesAPI:
         assert len(data["instances"]) == 1
         assert data["instances"][0]["email"] == "owner@test.com"
 
+    @patch("control_plane.routers.instances.httpx")
+    def test_list_instances_promotes_ready_provisioning_instance(self, mock_httpx, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(db_session, user, status="provisioning", last_health_at=None)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_httpx.get.return_value = mock_resp
+
+        resp = client.get("/api/instances", headers=ADMIN_HEADERS)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["instances"][0]["status"] == "active"
+
+        db_session.refresh(inst)
+        assert inst.status == "active"
+        assert inst.last_health_at is not None
+
+    @patch("control_plane.routers.instances.httpx")
+    def test_list_instances_keeps_provisioning_when_not_ready(self, mock_httpx, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(db_session, user, status="provisioning", last_health_at=None)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 503
+        mock_httpx.get.return_value = mock_resp
+
+        resp = client.get("/api/instances", headers=ADMIN_HEADERS)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["instances"][0]["status"] == "provisioning"
+
+        db_session.refresh(inst)
+        assert inst.status == "provisioning"
+        assert inst.last_health_at is None
+
     def test_get_instance(self, client, db_session):
         user = _make_user(db_session)
         inst = _make_instance(db_session, user)
@@ -367,7 +405,12 @@ class TestInstancesAPI:
         MockProv.return_value = prov
 
         user = _make_user(db_session)
-        inst = _make_instance(db_session, user, status="deprovisioned")
+        inst = _make_instance(
+            db_session,
+            user,
+            status="deprovisioned",
+            last_health_at=datetime.now(timezone.utc),
+        )
 
         resp = client.post(f"/api/instances/{inst.id}/reprovision", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
@@ -375,6 +418,8 @@ class TestInstancesAPI:
         assert data["status"] == "provisioning"
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
+        db_session.refresh(inst)
+        assert inst.last_health_at is None
 
     @patch("control_plane.routers.instances.Provisioner")
     def test_reprovision_blocked_during_deploy(self, MockProv, client, db_session):

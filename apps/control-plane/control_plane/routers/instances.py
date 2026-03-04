@@ -61,6 +61,38 @@ def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
     return (signing_input + b"." + sig_b64).decode()
 
 
+def _instance_health_url(inst: Instance) -> str:
+    return f"https://{inst.subdomain}.{settings.root_domain}/api/health"
+
+
+def _probe_instance_health(inst: Instance, timeout_seconds: float = 5.0) -> tuple[bool, str | None]:
+    """Probe tenant instance health endpoint."""
+    try:
+        resp = httpx.get(_instance_health_url(inst), timeout=timeout_seconds, follow_redirects=True)
+        if resp.status_code == 200:
+            return True, None
+        return False, f"status={resp.status_code}"
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
+def _refresh_instance_health_if_ready(
+    db: Session,
+    inst: Instance,
+    timeout_seconds: float = 5.0,
+) -> bool:
+    """Promote provisioning instances to active when their health endpoint is ready."""
+    if inst.status != "provisioning":
+        return inst.status == "active"
+
+    healthy, _ = _probe_instance_health(inst, timeout_seconds=timeout_seconds)
+    if healthy:
+        inst.status = "active"
+        inst.last_health_at = datetime.now(timezone.utc)
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -134,23 +166,30 @@ def my_instance_health(request: Request, db: Session = Depends(get_db)):
     if inst.status == "active":
         return {"status": "active", "ready": True}
 
-    # Server-side health probe — verifies SSL + 200
-    health_url = f"https://{inst.subdomain}.{settings.root_domain}/api/health"
-    try:
-        resp = httpx.get(health_url, timeout=5.0, follow_redirects=True)
-        if resp.status_code == 200:
-            inst.status = "active"
-            inst.last_health_at = datetime.now(timezone.utc)
-            db.commit()
-            return {"status": "active", "ready": True}
-        return {"status": "provisioning", "ready": False, "detail": f"status={resp.status_code}"}
-    except Exception:  # noqa: BLE001
-        return {"status": "provisioning", "ready": False}
+    healthy, detail = _probe_instance_health(inst, timeout_seconds=5.0)
+    if healthy:
+        inst.status = "active"
+        inst.last_health_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"status": "active", "ready": True}
+
+    payload: dict[str, Any] = {"status": "provisioning", "ready": False}
+    if detail:
+        payload["detail"] = detail
+    return payload
 
 
 @router.get("", response_model=InstanceList, dependencies=[Depends(require_admin)])
 def list_instances(db: Session = Depends(get_db)):
     rows = db.query(Instance, User).join(User, Instance.user_id == User.id).all()
+
+    changed = False
+    for inst, _ in rows:
+        if _refresh_instance_health_if_ready(db, inst, timeout_seconds=2.0):
+            changed = True
+    if changed:
+        db.commit()
+
     items: list[InstanceOut] = []
     for inst, user in rows:
         items.append(
@@ -229,6 +268,10 @@ def get_instance(instance_id: int, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="instance not found")
     inst, user = row
+
+    if _refresh_instance_health_if_ready(db, inst, timeout_seconds=2.0):
+        db.commit()
+
     return InstanceOut(
         id=inst.id,
         email=user.email,
@@ -279,6 +322,7 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
     result = provisioner.provision_instance(inst.subdomain, owner_email=user.email, password=password)
     inst.container_name = result.container_name
     inst.status = "provisioning"
+    inst.last_health_at = None
     db.commit()
     db.refresh(inst)
 
@@ -314,6 +358,7 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     result = provisioner.provision_instance(inst.subdomain, owner_email=user.email)
 
     inst.status = "provisioning"
+    inst.last_health_at = None
     inst.container_name = result.container_name
     if result.password_hash:
         inst.password_hash = result.password_hash

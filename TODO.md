@@ -75,6 +75,21 @@ Notes:
 - 2026-03-03: Extracted Oikos commis inbox-context lifecycle into `services/oikos_commis_context.py` and reduced `oikos_service.py` helpers to delegating wrappers.
 - 2026-03-03: Added focused unit coverage for the extracted inbox-context helpers in `tests_lite/test_oikos_commis_context.py`.
 
+## [Infra] Control-plane provisioning status reconciliation (size: 1)
+
+Status (2026-03-04): Done.
+
+**Goal:** Stop admin/API status drift where reprovisioned instances remain `provisioning` even after containers are healthy.
+
+- [x] Add shared health-probe helper in `routers/instances.py`
+- [x] Reconcile `provisioning` instances to `active` during admin list/get reads
+- [x] Clear stale `last_health_at` timestamps on reprovision/password-regeneration paths
+- [x] Add control-plane tests covering reconciliation and timestamp reset behavior
+
+Notes (2026-03-04):
+- `list_instances` and `get_instance` now opportunistically probe `/api/health` for `provisioning` rows and persist `active + last_health_at` on success.
+- `reprovision` and `regenerate-password` now reset `last_health_at=None` when re-entering `provisioning`, preventing stale health metadata.
+
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 
 Status (2026-03-03): Done.
