@@ -7,10 +7,13 @@ Usage:
     longhouse ship          # One-shot sync
     longhouse connect       # Foreground engine sync (watch + fallback scan)
     longhouse recall        # Search past sessions
+    longhouse migrate       # Plan/apply heavy legacy DB migrations
     longhouse onboard       # Run onboarding wizard
     longhouse doctor        # Self-diagnosis
     longhouse --help        # Show help
 """
+
+import json
 
 import typer
 
@@ -80,6 +83,74 @@ app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])
 app.command(name="recall")(_cmd_lookup["recall"])
+
+
+@app.command(name="migrate")
+def migrate(
+    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override (defaults to env)."),
+    apply: bool = typer.Option(False, "--apply", help="Apply pending heavy migrations."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Plan or apply explicit heavy SQLite migrations."""
+    from zerg.database import initialize_database
+    from zerg.database import make_engine
+    from zerg.db_migrations import apply_heavy_migrations
+    from zerg.db_migrations import plan_heavy_migrations
+
+    engine = make_engine(database_url) if database_url else None
+    initialize_database(engine)
+    target_engine = engine
+
+    if target_engine is None:
+        from zerg.database import default_engine
+
+        target_engine = default_engine
+    if target_engine is None:
+        raise typer.Exit(code=2)
+
+    plan_before = plan_heavy_migrations(target_engine)
+    pending_before = [item.name for item in plan_before if item.pending]
+
+    run_items = []
+    if apply:
+        run_items = apply_heavy_migrations(target_engine)
+
+    plan_after = plan_heavy_migrations(target_engine)
+    pending_after = [item.name for item in plan_after if item.pending]
+
+    payload = {
+        "pending_before": pending_before,
+        "pending_after": pending_after,
+        "plan": [
+            {
+                "name": item.name,
+                "description": item.description,
+                "pending": item.pending,
+                "reason": item.reason,
+                "last_status": item.last_status,
+            }
+            for item in plan_after
+        ],
+        "applied": [{"name": item.name, "status": item.status, "details": item.details} for item in run_items],
+    }
+
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        if pending_before:
+            typer.echo(f"Pending heavy migrations: {', '.join(pending_before)}")
+        else:
+            typer.echo("No heavy migrations pending.")
+        if run_items:
+            for item in run_items:
+                details = f" ({item.details})" if item.details else ""
+                typer.echo(f"- {item.name}: {item.status}{details}")
+        if apply and pending_after:
+            typer.echo(f"Still pending: {', '.join(pending_after)}")
+
+    if apply and pending_after:
+        raise typer.Exit(code=1)
+
 
 # Onboarding wizard
 app.command(name="onboard")(onboard)

@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Infra] Migration Hardening (startup-safe + preflight + ledger) (size: 3)
+
+Status (2026-03-04): In progress.
+
+**Goal:** Prevent long startup stalls/timeouts from heavy SQLite rewrites while keeping legacy instance upgrades deterministic.
+
+- [ ] Move heavy legacy rewrites out of `initialize_database()` startup path
+- [ ] Add explicit migration ledger + idempotent runner (`longhouse migrate`)
+- [ ] Run migration preflight before control-plane reprovision
+- [ ] Add tests for pending/ran migration planning and reprovision preflight behavior
+- [ ] Validate with `make test` and `make test-e2e`
+
+Notes:
+- Heavy operations include global `events.branch_id` backfill and `source_lines` table rebuild.
+- Startup should run lightweight schema/index guards only and report pending heavy migrations instead of executing them inline.
+- Reprovision preflight should apply heavy migrations against instance data before container boot.
+
 ## [Product] Compaction Fidelity + Active Context Semantics (size: 4)
 
 Status (2026-03-04): In progress (slice 1+2 landed: metadata ingest + events context mode).
