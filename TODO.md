@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Product] Compaction Fidelity + Active Context Semantics (size: 4)
 
-Status (2026-03-04): Spec drafted, not implemented.
+Status (2026-03-04): In progress (slice 1 landed: compaction metadata ingest).
 
 **Goal:** Preserve full transcript fidelity while accurately modeling what Claude can still "remember" after `/compact`.
 
@@ -27,13 +27,16 @@ Status (2026-03-04): Spec drafted, not implemented.
 - [ ] "Forensic history" and "active model context" are different and must both be queryable
 
 **Implementation spec:**
-- [ ] Persist compaction metadata as first-class events (do not drop `type=summary` / compaction-adjacent records at parse time)
+- [x] Persist compaction metadata as first-class events (do not drop `type=summary` / compaction-adjacent records at parse time)
+  - [x] Parse and ingest `summary`, `file-history-snapshot`, and `system` `{subtype: compact_boundary|microcompact_boundary}` as `role=system` events (Rust engine + Python parser)
+  - [ ] Parse high-volume `progress` records as first-class events (deferred until default timeline/query mode can hide noise)
 - [ ] Add `compaction_boundary` derivation during ingest/projection (boundary anchored to source offset + timestamp)
 - [ ] Add context modes in read/query APIs:
   - [ ] `forensic` = all facts (full timeline)
   - [ ] `active_context` = latest compaction summary + post-boundary turns
 - [ ] Keep pre-compaction turns visible in timeline/search by default (no destructive pruning)
 - [ ] In UI, mark pre-compaction facts as "outside active model context" instead of hiding/deleting
+- [ ] Add retention/sync guardrails so source transcripts are archived before local cleanup windows can delete them (for example Claude `cleanupPeriodDays` default)
 
 **Acceptance tests:**
 - [ ] Real Claude transcript with repeated summary lines still roundtrips byte-for-byte in source archive
@@ -41,7 +44,7 @@ Status (2026-03-04): Spec drafted, not implemented.
 - [ ] `forensic` query returns pre-compact fact; `active_context` query excludes it unless reintroduced later
 
 Notes:
-- Current parser explicitly skips `summary`/`file-history-snapshot`/`progress`; this task removes that fidelity gap while keeping default UI clean.
+- 2026-03-04: Rust + Python parsers now emit compaction-adjacent records as `system` events; `progress` remains intentionally skipped for now to avoid timeline noise until query modes land.
 
 ## [Product] Rewind Branch Semantics + Dangling State UX (size: 5)
 

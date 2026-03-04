@@ -2,7 +2,8 @@
 //!
 //! Mirrors the Python parser at `zerg/services/shipper/parser.py`.
 //! Extracts meaningful events (user messages, assistant text, tool calls,
-//! tool results) from session files and converts them to a normalized format.
+//! tool results) plus compaction-adjacent metadata boundaries from session
+//! files and converts them to a normalized format.
 //!
 //! Supported formats (dispatched by file extension):
 //! - **Claude** (`.jsonl`): `{type: "user"|"assistant", message: {content: ...}}`
@@ -35,6 +36,7 @@ pub enum Role {
     User,
     Assistant,
     Tool,
+    System,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,6 +115,19 @@ struct RawLine {
     version: Option<String>,
     #[serde(rename = "isSidechain")]
     is_sidechain: Option<bool>,
+    /// Claude summary title/body line written during/after compaction.
+    summary: Option<String>,
+    /// Claude system-message subtype (e.g. compact_boundary).
+    subtype: Option<String>,
+    /// System-message content field.
+    content: Option<String>,
+    /// File-history snapshot payload.
+    snapshot: Option<FileHistorySnapshot>,
+    /// Optional compaction metadata payloads on system boundary lines.
+    #[serde(rename = "compactMetadata")]
+    compact_metadata: Option<Box<RawValue>>,
+    #[serde(rename = "microcompactMetadata")]
+    microcompact_metadata: Option<Box<RawValue>>,
     /// Claude format: `{message: {content: ...}}`
     message: Option<RawMessage>,
     /// Codex format: `{payload: {type: ..., role: ..., content: [...]}}`
@@ -124,6 +139,11 @@ struct RawMessage {
     /// Kept as raw JSON — avoids building a full serde_json::Value DOM tree.
     /// Parsed on-demand in extraction functions via ContentItem.
     content: Box<RawValue>,
+}
+
+#[derive(Deserialize)]
+struct FileHistorySnapshot {
+    timestamp: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +220,11 @@ fn extract_gemini_text(v: &serde_json::Value) -> Option<String> {
     match v {
         serde_json::Value::String(s) => {
             let t = s.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         }
         serde_json::Value::Array(arr) => {
             // Try to concatenate "text" fields from a parts array
@@ -209,7 +233,11 @@ fn extract_gemini_text(v: &serde_json::Value) -> Option<String> {
                 .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
                 .collect::<Vec<_>>()
                 .join("");
-            if text.trim().is_empty() { None } else { Some(text.trim().to_string()) }
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text.trim().to_string())
+            }
         }
         serde_json::Value::Object(obj) => {
             // Try common text field names
@@ -501,11 +529,16 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                         .map(|id| id.to_string())
                         .unwrap_or_else(|| format!("{}", idx));
 
-                    let tool_input = tc.args.map(|v| {
-                        RawValue::from_string(v.to_string()).ok()
-                    }).flatten();
+                    let tool_input = tc
+                        .args
+                        .map(|v| RawValue::from_string(v.to_string()).ok())
+                        .flatten();
 
-                    let gemini_tc_id = tc.id.as_deref().filter(|s| !s.is_empty()).map(|s| s.to_string());
+                    let gemini_tc_id = tc
+                        .id
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
                     events.push(ParsedEvent {
                         uuid: format!("{}-tool-{}", msg_id, tc_id),
                         session_id: canonical_session_id.clone(),
@@ -610,8 +643,8 @@ fn resolve_git_info(cwd: &Path) -> (Option<String>, Option<String>) {
 // ---------------------------------------------------------------------------
 
 fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open {}", path.display()))?;
+    let file =
+        std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
 
     let mmap = unsafe { Mmap::map(&file) }
         .with_context(|| format!("Failed to mmap {}", path.display()))?;
@@ -694,13 +727,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
 
         // Extract events — pass raw bytes, convert to string only when needed
         let line_str = std::str::from_utf8(line_bytes).unwrap_or("");
-        extract_events(
-            &obj,
-            session_id,
-            line_offset,
-            line_str,
-            &mut events,
-        );
+        extract_events(&obj, session_id, line_offset, line_str, &mut events);
     }
 
     // Finalize metadata
@@ -730,8 +757,8 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
 // ---------------------------------------------------------------------------
 
 fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult> {
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open {}", path.display()))?;
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
 
     if offset > 0 {
         use std::io::Seek;
@@ -786,13 +813,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
 
         collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
 
-        extract_events(
-            &obj,
-            session_id,
-            line_offset,
-            &line,
-            &mut events,
-        );
+        extract_events(&obj, session_id, line_offset, &line, &mut events);
     }
 
     metadata.started_at = min_ts;
@@ -907,10 +928,17 @@ fn extract_events(
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
 
-    // Skip metadata-only types (Claude + Codex)
+    // Keep compaction-adjacent records as first-class system events.
+    if let Some(meta_event) =
+        extract_compaction_metadata_event(obj, session_id, line_offset, raw_line)
+    {
+        events.push(meta_event);
+        return;
+    }
+
+    // Skip non-compaction metadata-only types (Claude + Codex).
     match event_type {
-        "summary" | "file-history-snapshot" | "progress"
-        | "session_meta" | "turn_context" | "event_msg" => return,
+        "progress" | "session_meta" | "turn_context" | "event_msg" => return,
         _ => {}
     }
 
@@ -920,11 +948,7 @@ fn extract_events(
         .and_then(parse_timestamp)
         .unwrap_or_else(Utc::now);
 
-    let msg_uuid = obj
-        .uuid
-        .as_deref()
-        .unwrap_or("")
-        .to_string();
+    let msg_uuid = obj.uuid.as_deref().unwrap_or("").to_string();
     let msg_uuid = if msg_uuid.is_empty() {
         Uuid::new_v4().to_string()
     } else {
@@ -934,7 +958,15 @@ fn extract_events(
     // Codex format: {type: "response_item", payload: {...}}
     if event_type == "response_item" {
         if let Some(ref payload) = obj.payload {
-            extract_codex_events(payload, session_id, &msg_uuid, timestamp, line_offset, raw_line, events);
+            extract_codex_events(
+                payload,
+                session_id,
+                &msg_uuid,
+                timestamp,
+                line_offset,
+                raw_line,
+                events,
+            );
         }
         return;
     }
@@ -976,6 +1008,146 @@ fn extract_events(
     }
 }
 
+fn extract_compaction_metadata_event(
+    obj: &RawLine,
+    session_id: &str,
+    line_offset: u64,
+    raw_line: &str,
+) -> Option<ParsedEvent> {
+    let event_type = obj.r#type.as_deref().unwrap_or("");
+
+    match event_type {
+        "summary" => {
+            let mut content = obj
+                .summary
+                .clone()
+                .or_else(|| obj.content.clone())
+                .unwrap_or_else(|| "Conversation compacted".to_string());
+            if content.trim().is_empty() {
+                content = "Conversation compacted".to_string();
+            }
+            Some(ParsedEvent {
+                uuid: obj
+                    .uuid
+                    .clone()
+                    .unwrap_or_else(|| format!("meta-summary-{}", line_offset)),
+                session_id: session_id.to_string(),
+                timestamp: metadata_timestamp(obj),
+                role: Role::System,
+                content_text: Some(content),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset: line_offset,
+                raw_type: "summary".to_string(),
+                raw_line: Some(raw_line.to_string()),
+            })
+        }
+        "file-history-snapshot" => {
+            let mut content = "File history snapshot".to_string();
+            if let Some(ts) = obj.snapshot.as_ref().and_then(|s| s.timestamp.as_ref()) {
+                if !ts.trim().is_empty() {
+                    content = format!("File history snapshot ({})", ts);
+                }
+            }
+            Some(ParsedEvent {
+                uuid: obj
+                    .uuid
+                    .clone()
+                    .unwrap_or_else(|| format!("meta-file-history-snapshot-{}", line_offset)),
+                session_id: session_id.to_string(),
+                timestamp: metadata_timestamp(obj),
+                role: Role::System,
+                content_text: Some(content),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset: line_offset,
+                raw_type: "file-history-snapshot".to_string(),
+                raw_line: Some(raw_line.to_string()),
+            })
+        }
+        "system" => {
+            let subtype = obj.subtype.as_deref().unwrap_or("");
+            if subtype != "compact_boundary" && subtype != "microcompact_boundary" {
+                return None;
+            }
+
+            let mut content = obj.content.clone().unwrap_or_else(|| {
+                if subtype == "microcompact_boundary" {
+                    "Context microcompacted".to_string()
+                } else {
+                    "Conversation compacted".to_string()
+                }
+            });
+
+            if let Some(hint) = compact_metadata_hint(if subtype == "microcompact_boundary" {
+                obj.microcompact_metadata.as_deref()
+            } else {
+                obj.compact_metadata.as_deref()
+            }) {
+                content = format!("{} [{}]", content, hint);
+            }
+
+            Some(ParsedEvent {
+                uuid: obj
+                    .uuid
+                    .clone()
+                    .unwrap_or_else(|| format!("meta-{}-{}", subtype, line_offset)),
+                session_id: session_id.to_string(),
+                timestamp: metadata_timestamp(obj),
+                role: Role::System,
+                content_text: Some(content),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset: line_offset,
+                raw_type: subtype.to_string(),
+                raw_line: Some(raw_line.to_string()),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn metadata_timestamp(obj: &RawLine) -> DateTime<Utc> {
+    obj.timestamp
+        .as_deref()
+        .and_then(parse_timestamp)
+        .or_else(|| {
+            obj.snapshot
+                .as_ref()
+                .and_then(|s| s.timestamp.as_deref())
+                .and_then(parse_timestamp)
+        })
+        .unwrap_or_else(Utc::now)
+}
+
+fn compact_metadata_hint(raw: Option<&RawValue>) -> Option<String> {
+    let raw = raw?;
+    let value: serde_json::Value = serde_json::from_str(raw.get()).ok()?;
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(trigger) = value.get("trigger").and_then(|v| v.as_str()) {
+        if !trigger.trim().is_empty() {
+            parts.push(format!("trigger={}", trigger));
+        }
+    }
+
+    if let Some(pre_tokens) = value.get("preTokens").and_then(|v| v.as_i64()) {
+        parts.push(format!("pre_tokens={}", pre_tokens));
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Codex extraction
 // ---------------------------------------------------------------------------
@@ -1005,8 +1177,11 @@ fn extract_codex_events(
                 _ => return,
             };
 
-            let content_items: &[CodexContentItem] =
-                payload.content.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+            let content_items: &[CodexContentItem] = payload
+                .content
+                .as_ref()
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
 
             // Filter Codex context-injection user messages.
             // Codex prepends AGENTS.md, environment context, and permission instructions
@@ -1113,7 +1288,11 @@ fn extract_codex_events(
                 tool_name: Some(tool_name),
                 tool_input_json: tool_input,
                 tool_output_text: None,
-                tool_call_id: if call_id.is_empty() { None } else { Some(call_id.to_string()) },
+                tool_call_id: if call_id.is_empty() {
+                    None
+                } else {
+                    Some(call_id.to_string())
+                },
                 source_offset: line_offset,
                 raw_type: "codex_function_call".to_string(),
                 raw_line: Some(raw_line.to_string()),
@@ -1137,7 +1316,11 @@ fn extract_codex_events(
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: Some(output.to_string()),
-                tool_call_id: if call_id.is_empty() { None } else { Some(call_id.to_string()) },
+                tool_call_id: if call_id.is_empty() {
+                    None
+                } else {
+                    Some(call_id.to_string())
+                },
                 source_offset: line_offset,
                 raw_type: "codex_function_call_output".to_string(),
                 raw_line: Some(raw_line.to_string()),
@@ -1168,9 +1351,9 @@ fn extract_user_events(
     // Try parsing as array of ContentItems
     if let Ok(items) = serde_json::from_str::<Vec<ContentItem>>(content_str) {
         // Check if any items are tool_results
-        let has_tool_result = items.iter().any(|item| {
-            item.r#type.as_deref() == Some("tool_result")
-        });
+        let has_tool_result = items
+            .iter()
+            .any(|item| item.r#type.as_deref() == Some("tool_result"));
 
         if has_tool_result {
             extract_tool_results_from_items(
@@ -1298,7 +1481,11 @@ fn extract_assistant_events(
                     tool_name: Some(tool_name),
                     tool_input_json: tool_input,
                     tool_output_text: None,
-                    tool_call_id: if tool_id.is_empty() { None } else { Some(tool_id.to_string()) },
+                    tool_call_id: if tool_id.is_empty() {
+                        None
+                    } else {
+                        Some(tool_id.to_string())
+                    },
                     source_offset: line_offset,
                     raw_type: "assistant".to_string(),
                     raw_line: if first {
@@ -1338,9 +1525,10 @@ fn extract_tool_results_from_items(
             tool_use_id.to_string()
         };
 
-        let result_text = item.result_content.as_ref().and_then(|raw| {
-            extract_text_from_raw_content(raw.get())
-        });
+        let result_text = item
+            .result_content
+            .as_ref()
+            .and_then(|raw| extract_text_from_raw_content(raw.get()));
 
         // Use extracted text, or fall back to "[tool error]" for empty-content error results
         // so the result event is still emitted and the call/result pair stays linked.
@@ -1360,7 +1548,11 @@ fn extract_tool_results_from_items(
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: Some(text),
-                tool_call_id: if tool_use_id.is_empty() { None } else { Some(tool_use_id.to_string()) },
+                tool_call_id: if tool_use_id.is_empty() {
+                    None
+                } else {
+                    Some(tool_use_id.to_string())
+                },
                 source_offset: line_offset,
                 raw_type: "tool_result".to_string(),
                 raw_line: if first {
@@ -1475,8 +1667,14 @@ fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
 // ---------------------------------------------------------------------------
 
 fn trim_bytes(bytes: &[u8]) -> &[u8] {
-    let start = bytes.iter().position(|&b| !b.is_ascii_whitespace()).unwrap_or(bytes.len());
-    let end = bytes.iter().rposition(|&b| !b.is_ascii_whitespace()).map_or(start, |p| p + 1);
+    let start = bytes
+        .iter()
+        .position(|&b| !b.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|&b| !b.is_ascii_whitespace())
+        .map_or(start, |p| p + 1);
     &bytes[start..end]
 }
 
@@ -1505,13 +1703,18 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "test-session.jsonl",
-            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"Hello world"},"cwd":"/home/user/project","gitBranch":"main"}"#],
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"Hello world"},"cwd":"/home/user/project","gitBranch":"main"}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("Hello world"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("Hello world")
+        );
         assert_eq!(result.metadata.cwd.as_deref(), Some("/home/user/project"));
         assert_eq!(result.metadata.git_branch.as_deref(), Some("main"));
         assert_eq!(result.metadata.project.as_deref(), Some("project"));
@@ -1523,7 +1726,9 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "test-session.jsonl",
-            &[r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"Let me check"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/foo"}}]}}"#],
+            &[
+                r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"Let me check"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/foo"}}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
@@ -1531,13 +1736,22 @@ mod tests {
 
         // First event: text
         assert_eq!(result.events[0].role, Role::Assistant);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("Let me check"));
-        assert!(result.events[0].raw_line.is_some(), "First event should have raw_line");
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("Let me check")
+        );
+        assert!(
+            result.events[0].raw_line.is_some(),
+            "First event should have raw_line"
+        );
 
         // Second event: tool_use
         assert_eq!(result.events[1].role, Role::Assistant);
         assert_eq!(result.events[1].tool_name.as_deref(), Some("Read"));
-        assert!(result.events[1].raw_line.is_none(), "Second event should NOT have raw_line");
+        assert!(
+            result.events[1].raw_line.is_none(),
+            "Second event should NOT have raw_line"
+        );
     }
 
     #[test]
@@ -1547,7 +1761,9 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "test-session.jsonl",
-            &[r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"one"},{"type":"text","text":"two"},{"type":"text","text":"three"}]}}"#],
+            &[
+                r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"one"},{"type":"text","text":"two"},{"type":"text","text":"three"}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
@@ -1563,32 +1779,65 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "test-session.jsonl",
-            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"file contents here"}]}}"#],
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"file contents here"}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].role, Role::Tool);
-        assert_eq!(result.events[0].tool_output_text.as_deref(), Some("file contents here"));
+        assert_eq!(
+            result.events[0].tool_output_text.as_deref(),
+            Some("file contents here")
+        );
     }
 
     #[test]
-    fn test_skip_metadata_types() {
+    fn test_emit_compaction_metadata_types() {
         let dir = tempfile::tempdir().unwrap();
         let path = make_jsonl_file(
             dir.path(),
             "test-session.jsonl",
             &[
-                r#"{"type":"summary","timestamp":"2026-01-01T00:00:00Z"}"#,
-                r#"{"type":"file-history-snapshot","timestamp":"2026-01-01T00:00:01Z"}"#,
+                r#"{"type":"summary","summary":"Conversation compacted at checkpoint"}"#,
+                r#"{"type":"file-history-snapshot","snapshot":{"timestamp":"2026-01-01T00:00:01Z"}}"#,
+                r#"{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-01-01T00:00:01Z","compactMetadata":{"trigger":"auto","preTokens":155708}}"#,
                 r#"{"type":"progress","timestamp":"2026-01-01T00:00:02Z"}"#,
                 r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:03Z","message":{"content":"real message"}}"#,
             ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("real message"));
+        assert_eq!(result.events.len(), 4);
+
+        assert_eq!(result.events[0].role, Role::System);
+        assert_eq!(result.events[0].raw_type, "summary");
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("Conversation compacted at checkpoint")
+        );
+
+        assert_eq!(result.events[1].role, Role::System);
+        assert_eq!(result.events[1].raw_type, "file-history-snapshot");
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
+            Some("File history snapshot (2026-01-01T00:00:01Z)")
+        );
+
+        assert_eq!(result.events[2].role, Role::System);
+        assert_eq!(result.events[2].raw_type, "compact_boundary");
+        assert_eq!(
+            result.events[2].content_text.as_deref(),
+            Some("Conversation compacted [trigger=auto pre_tokens=155708]")
+        );
+
+        // progress stays skipped (high-volume hook noise)
+        assert_eq!(result.events[3].role, Role::User);
+        assert_eq!(
+            result.events[3].content_text.as_deref(),
+            Some("real message")
+        );
     }
 
     #[test]
@@ -1599,11 +1848,22 @@ mod tests {
         let path = make_jsonl_file(dir.path(), "test-session.jsonl", &[raw_meta, raw_user]);
 
         let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.events.len(), 1, "metadata lines should not become events");
-        assert_eq!(result.source_lines.len(), 2, "all source lines should be archived");
+        assert_eq!(
+            result.events.len(),
+            1,
+            "metadata lines should not become events"
+        );
+        assert_eq!(
+            result.source_lines.len(),
+            2,
+            "all source lines should be archived"
+        );
         assert_eq!(result.source_lines[0].source_offset, 0);
         assert_eq!(result.source_lines[0].raw_line, raw_meta);
-        assert_eq!(result.source_lines[1].source_offset, (raw_meta.len() + 1) as u64);
+        assert_eq!(
+            result.source_lines[1].source_offset,
+            (raw_meta.len() + 1) as u64
+        );
         assert_eq!(result.source_lines[1].raw_line, raw_user);
     }
 
@@ -1663,12 +1923,18 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("Hello from Codex"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("Hello from Codex")
+        );
         assert_eq!(result.events[0].raw_type, "codex_user");
         // Metadata from session_meta
         assert_eq!(result.metadata.cwd.as_deref(), Some("/Users/test/project"));
         assert_eq!(result.metadata.version.as_deref(), Some("0.1.2"));
-        assert_eq!(result.metadata.session_id, "019c638d-ea04-7983-a845-d0b68a77fa62");
+        assert_eq!(
+            result.metadata.session_id,
+            "019c638d-ea04-7983-a845-d0b68a77fa62"
+        );
     }
 
     #[test]
@@ -1677,13 +1943,18 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "019c638d-0000-0000-0000-000000000001.jsonl",
-            &[r#"{"type":"response_item","timestamp":"2026-02-15T17:06:12Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Here is the answer"}]}}"#],
+            &[
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:12Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Here is the answer"}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].role, Role::Assistant);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("Here is the answer"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("Here is the answer")
+        );
         assert_eq!(result.events[0].raw_type, "codex_assistant");
     }
 
@@ -1710,7 +1981,10 @@ mod tests {
 
         // Tool output
         assert_eq!(result.events[1].role, Role::Tool);
-        assert_eq!(result.events[1].tool_output_text.as_deref(), Some("file1.txt\nfile2.txt"));
+        assert_eq!(
+            result.events[1].tool_output_text.as_deref(),
+            Some("file1.txt\nfile2.txt")
+        );
         assert_eq!(result.events[1].raw_type, "codex_function_call_output");
     }
 
@@ -1733,7 +2007,10 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         // Only the user message should produce an event
         assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("real user message"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("real user message")
+        );
     }
 
     #[test]
@@ -1750,11 +2027,20 @@ mod tests {
 
         let result = parse_session_file(&path, 0).unwrap();
         // session_id from payload, not filename v5 UUID
-        assert_eq!(result.metadata.session_id, "019c638d-ea04-7983-a845-d0b68a77fa62");
+        assert_eq!(
+            result.metadata.session_id,
+            "019c638d-ea04-7983-a845-d0b68a77fa62"
+        );
         assert_eq!(result.metadata.cwd.as_deref(), Some("/Users/test/zorb"));
-        assert_eq!(result.metadata.git_branch.as_deref(), Some("feature/my-branch"));
+        assert_eq!(
+            result.metadata.git_branch.as_deref(),
+            Some("feature/my-branch")
+        );
         // git_repo from session_meta payload, not disk
-        assert_eq!(result.metadata.git_repo.as_deref(), Some("git@github.com:org/zorb.git"));
+        assert_eq!(
+            result.metadata.git_repo.as_deref(),
+            Some("git@github.com:org/zorb.git")
+        );
         // project derived from cwd basename
         assert_eq!(result.metadata.project.as_deref(), Some("zorb"));
     }
@@ -1769,13 +2055,18 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "agent-a51c878.jsonl",
-            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hello"}}"#],
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hello"}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         // Should be a valid UUID (v5 derived from path)
-        assert!(Uuid::parse_str(&result.metadata.session_id).is_ok(),
-            "Non-UUID filename should get a deterministic UUID, got: {}", result.metadata.session_id);
+        assert!(
+            Uuid::parse_str(&result.metadata.session_id).is_ok(),
+            "Non-UUID filename should get a deterministic UUID, got: {}",
+            result.metadata.session_id
+        );
 
         // Parse again — should get the same UUID (deterministic)
         let result2 = parse_session_file(&path, 0).unwrap();
@@ -1788,11 +2079,16 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "3334cc69-974a-46a5-84e3-64459521135c.jsonl",
-            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hello"}}"#],
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hello"}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.metadata.session_id, "3334cc69-974a-46a5-84e3-64459521135c");
+        assert_eq!(
+            result.metadata.session_id,
+            "3334cc69-974a-46a5-84e3-64459521135c"
+        );
     }
 
     #[test]
@@ -1810,7 +2106,10 @@ mod tests {
 
         let result = parse_session_file(&path, 0).unwrap();
         // session_meta id should take precedence
-        assert_eq!(result.metadata.session_id, "019c638d-ea04-7983-a845-d0b68a77fa62");
+        assert_eq!(
+            result.metadata.session_id,
+            "019c638d-ea04-7983-a845-d0b68a77fa62"
+        );
     }
 
     #[test]
@@ -1933,11 +2232,20 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 2);
         assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("What is 2+2?"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("What is 2+2?")
+        );
         assert_eq!(result.events[1].role, Role::Assistant);
-        assert_eq!(result.events[1].content_text.as_deref(), Some("2+2 equals 4."));
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
+            Some("2+2 equals 4.")
+        );
         // Session ID from document takes precedence over stem-derived
-        assert_eq!(result.metadata.session_id, "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        assert_eq!(
+            result.metadata.session_id,
+            "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        );
         assert!(result.metadata.started_at.is_some());
     }
 
@@ -1969,14 +2277,21 @@ mod tests {
                 }
             ]
         }"#;
-        let path = make_json_file(dir.path(), "session-2026-01-10T11-00-00-bbbb.json", session_json);
+        let path = make_json_file(
+            dir.path(),
+            "session-2026-01-10T11-00-00-bbbb.json",
+            session_json,
+        );
 
         let result = parse_session_file(&path, 0).unwrap();
         // user message + assistant text + tool call = 3 events
         assert_eq!(result.events.len(), 3);
         assert_eq!(result.events[0].role, Role::User);
         assert_eq!(result.events[1].role, Role::Assistant);
-        assert_eq!(result.events[1].content_text.as_deref(), Some("I will read it now."));
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
+            Some("I will read it now.")
+        );
         assert_eq!(result.events[2].role, Role::Assistant);
         assert_eq!(result.events[2].tool_name.as_deref(), Some("read_file"));
         assert!(result.events[2].tool_input_json.is_some());
@@ -2004,7 +2319,10 @@ mod tests {
         // Even with offset = file_size, we still get events (offset is ignored for .json)
         let result = parse_session_file(&path, file_size).unwrap();
         assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("Hello Gemini"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("Hello Gemini")
+        );
     }
 
     #[test]
@@ -2026,13 +2344,18 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "session.jsonl",
-            &[r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"toolu_bdrk_01ABC","name":"Bash","input":{"command":"ls"}}]}}"#],
+            &[
+                r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"toolu_bdrk_01ABC","name":"Bash","input":{"command":"ls"}}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].tool_name.as_deref(), Some("Bash"));
-        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("toolu_bdrk_01ABC"));
+        assert_eq!(
+            result.events[0].tool_call_id.as_deref(),
+            Some("toolu_bdrk_01ABC")
+        );
     }
 
     #[test]
@@ -2041,13 +2364,18 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "session.jsonl",
-            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_bdrk_01ABC","content":"file contents here"}]}}"#],
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_bdrk_01ABC","content":"file contents here"}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].role, Role::Tool);
-        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("toolu_bdrk_01ABC"));
+        assert_eq!(
+            result.events[0].tool_call_id.as_deref(),
+            Some("toolu_bdrk_01ABC")
+        );
     }
 
     #[test]
@@ -2108,14 +2436,22 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "session.jsonl",
-            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01ERR","content":"","is_error":true}]}}"#],
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01ERR","content":"","is_error":true}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].role, Role::Tool);
-        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("toolu_01ERR"));
-        assert_eq!(result.events[0].tool_output_text.as_deref(), Some("[tool error]"));
+        assert_eq!(
+            result.events[0].tool_call_id.as_deref(),
+            Some("toolu_01ERR")
+        );
+        assert_eq!(
+            result.events[0].tool_output_text.as_deref(),
+            Some("[tool error]")
+        );
     }
 
     #[test]
@@ -2125,12 +2461,17 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "session.jsonl",
-            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01ERR","content":"The user rejected this action.","is_error":true}]}}"#],
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01ERR","content":"The user rejected this action.","is_error":true}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].tool_output_text.as_deref(), Some("The user rejected this action."));
+        assert_eq!(
+            result.events[0].tool_output_text.as_deref(),
+            Some("The user rejected this action.")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2144,13 +2485,22 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "019c638d-0000-0000-0000-000000000010.jsonl",
-            &[r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,abc123"}]}}"#],
+            &[
+                r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,abc123"}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.events.len(), 1, "image-only message should emit placeholder event");
+        assert_eq!(
+            result.events.len(),
+            1,
+            "image-only message should emit placeholder event"
+        );
         assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("[image attached]"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("[image attached]")
+        );
     }
 
     #[test]
@@ -2160,7 +2510,9 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "019c638d-0000-0000-0000-000000000011.jsonl",
-            &[r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image name=[Image #1]>"},{"type":"input_image","image_url":"data:image/png;base64,abc"},{"type":"input_text","text":"</image>"},{"type":"input_text","text":"[Image #1]\n\nwhat is in this screenshot?"}]}}"#],
+            &[
+                r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image name=[Image #1]>"},{"type":"input_image","image_url":"data:image/png;base64,abc"},{"type":"input_text","text":"</image>"},{"type":"input_text","text":"[Image #1]\n\nwhat is in this screenshot?"}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
@@ -2169,7 +2521,10 @@ mod tests {
         // Wrapper tags stripped, real prompt preserved
         assert!(!text.contains("<image "), "wrapper tag should be stripped");
         assert!(!text.contains("</image>"), "closing tag should be stripped");
-        assert!(text.contains("what is in this screenshot?"), "real prompt should be kept");
+        assert!(
+            text.contains("what is in this screenshot?"),
+            "real prompt should be kept"
+        );
     }
 
     #[test]
@@ -2201,10 +2556,13 @@ mod tests {
                 "type": "message", "role": "user",
                 "content": [{"type": "input_text", "text": "please help me debug this"}]
             }
-        }).to_string();
+        })
+        .to_string();
 
         let path = {
-            let path = dir.path().join("019c638d-0000-0000-0000-000000000012.jsonl");
+            let path = dir
+                .path()
+                .join("019c638d-0000-0000-0000-000000000012.jsonl");
             let mut f = std::fs::File::create(&path).unwrap();
             use std::io::Write;
             writeln!(f, "{}", agents_line).unwrap();
@@ -2214,9 +2572,16 @@ mod tests {
         };
 
         let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.events.len(), 1, "only real user message should survive");
+        assert_eq!(
+            result.events.len(),
+            1,
+            "only real user message should survive"
+        );
         assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("please help me debug this"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("please help me debug this")
+        );
     }
 
     #[test]
@@ -2225,12 +2590,17 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "019c638d-0000-0000-0000-000000000013.jsonl",
-            &[r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,a"},{"type":"input_image","image_url":"data:image/png;base64,b"},{"type":"input_image","image_url":"data:image/png;base64,c"}]}}"#],
+            &[
+                r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,a"},{"type":"input_image","image_url":"data:image/png;base64,b"},{"type":"input_image","image_url":"data:image/png;base64,c"}]}}"#,
+            ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("[3 images attached]"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("[3 images attached]")
+        );
     }
 
     #[test]
