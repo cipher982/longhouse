@@ -260,6 +260,8 @@ test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg
 
 test-shipper-e2e: ## Full pipeline E2E: fixture → longhouse-engine ship → API → DB (uses repo-local binary)
 	@echo "🚀 Running shipper E2E tests (Claude/Gemini/Codex + schema-drift)..."
+	@echo "🦀 Building release engine binary (avoids stale-binary false confidence)..."
+	cd apps/engine && cargo build --release
 	cd apps/zerg/backend && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
 test-shipper-premerge: ## Full shipper QA: engine fast tests + pipeline E2E (run before merging engine changes)
