@@ -7,6 +7,7 @@ import pytest
 from zerg.services.oikos_run_lifecycle import emit_cancelled_run_updated
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
+from zerg.services.oikos_run_lifecycle import emit_oikos_complete_success
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
@@ -256,6 +257,91 @@ async def test_emit_cancelled_run_updated(monkeypatch):
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_emit_oikos_complete_success_with_optional_fields(monkeypatch):
+    calls = []
+
+    async def _fake_emit_run_event(*, db, run_id, event_type, payload):
+        calls.append(
+            {
+                "db": db,
+                "run_id": run_id,
+                "event_type": event_type,
+                "payload": payload,
+            }
+        )
+
+    monkeypatch.setattr("zerg.services.event_store.emit_run_event", _fake_emit_run_event)
+
+    db = object()
+    usage = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3, "reasoning_tokens": 0}
+    await emit_oikos_complete_success(
+        db=db,
+        run_id=15,
+        fiche_id=23,
+        thread_id=36,
+        owner_id=57,
+        message_id="msg-15",
+        result="done",
+        duration_ms=444,
+        debug_url="/oikos/15",
+        usage=usage,
+        trace_id="trace-15",
+        batch_size=2,
+    )
+
+    assert calls == [
+        {
+            "db": db,
+            "run_id": 15,
+            "event_type": "oikos_complete",
+            "payload": {
+                "fiche_id": 23,
+                "thread_id": 36,
+                "result": "done",
+                "status": "success",
+                "duration_ms": 444,
+                "debug_url": "/oikos/15",
+                "owner_id": 57,
+                "message_id": "msg-15",
+                "usage": usage,
+                "trace_id": "trace-15",
+                "batch_size": 2,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emit_oikos_complete_success_without_optional_fields(monkeypatch):
+    calls = []
+
+    async def _fake_emit_run_event(*, db, run_id, event_type, payload):
+        calls.append(payload)
+
+    monkeypatch.setattr("zerg.services.event_store.emit_run_event", _fake_emit_run_event)
+
+    db = object()
+    usage = {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None, "reasoning_tokens": None}
+    await emit_oikos_complete_success(
+        db=db,
+        run_id=16,
+        fiche_id=24,
+        thread_id=37,
+        owner_id=58,
+        message_id="msg-16",
+        result="ok",
+        duration_ms=555,
+        debug_url="/oikos/16",
+        usage=usage,
+    )
+
+    assert calls[0]["status"] == "success"
+    assert calls[0]["usage"] == usage
+    assert "trace_id" not in calls[0]
+    assert "batch_size" not in calls[0]
 
 
 @pytest.mark.asyncio

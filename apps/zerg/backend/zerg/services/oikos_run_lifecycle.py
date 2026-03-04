@@ -150,6 +150,48 @@ async def emit_cancelled_run_updated(
     )
 
 
+async def emit_oikos_complete_success(
+    db: Session,
+    *,
+    run_id: int,
+    fiche_id: int,
+    thread_id: int,
+    owner_id: int,
+    message_id: str,
+    result: str,
+    duration_ms: int,
+    debug_url: str,
+    usage: dict[str, Any],
+    trace_id: str | None = None,
+    batch_size: int | None = None,
+) -> None:
+    """Emit standardized oikos_complete payload for successful runs."""
+    from zerg.services.event_store import emit_run_event
+
+    payload: dict[str, Any] = {
+        "fiche_id": fiche_id,
+        "thread_id": thread_id,
+        "result": result,
+        "status": "success",
+        "duration_ms": duration_ms,
+        "debug_url": debug_url,
+        "owner_id": owner_id,
+        "message_id": message_id,
+        "usage": usage,
+    }
+    if trace_id:
+        payload["trace_id"] = trace_id
+    if batch_size is not None:
+        payload["batch_size"] = batch_size
+
+    await emit_run_event(
+        db=db,
+        run_id=run_id,
+        event_type="oikos_complete",
+        payload=payload,
+    )
+
+
 async def emit_error_event_and_close_stream(
     db: Session,
     run: Any,
