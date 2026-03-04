@@ -87,7 +87,34 @@ function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
   return event?.in_active_context === false;
 }
 
-function getToolDisplayInfo(toolName: string): { icon: string; color: string } {
+/** Parse `mcp__namespace__method` into parts. */
+function parseMcpTool(name: string): { namespace: string; method: string } | null {
+  const parts = name.split("__");
+  if (parts.length === 3 && parts[0] === "mcp") {
+    return { namespace: parts[1], method: parts[2] };
+  }
+  return null;
+}
+
+function getToolDisplayInfo(toolName: string): { icon: string; color: string; displayName: string; mcpNamespace?: string } {
+  const mcp = parseMcpTool(toolName);
+  if (mcp) {
+    const ns = mcp.namespace.toLowerCase();
+    if (ns.includes("longhouse") || ns.includes("life-hub")) {
+      return { icon: "⬡", color: "var(--color-brand-primary)", displayName: mcp.method, mcpNamespace: mcp.namespace };
+    }
+    if (ns.includes("browser")) {
+      return { icon: "◉", color: "var(--color-neon-cyan)", displayName: mcp.method, mcpNamespace: mcp.namespace };
+    }
+    if (ns.includes("search") || ns.includes("web")) {
+      return { icon: "⌕", color: "var(--color-neon-secondary)", displayName: mcp.method, mcpNamespace: mcp.namespace };
+    }
+    if (ns.includes("gdrive") || ns.includes("gmail")) {
+      return { icon: "G", color: "var(--color-intent-success)", displayName: mcp.method, mcpNamespace: mcp.namespace };
+    }
+    return { icon: "⊡", color: "var(--color-text-secondary)", displayName: mcp.method, mcpNamespace: mcp.namespace };
+  }
+
   switch (toolName.toLowerCase()) {
     case "bash":
     case "exec_command":
@@ -95,28 +122,57 @@ function getToolDisplayInfo(toolName: string): { icon: string; color: string } {
     case "shell_command":
     case "run_shell_command":
     case "write_stdin":
-      return { icon: "$", color: "var(--color-intent-warning)" };
+      return { icon: "$", color: "var(--color-intent-warning)", displayName: toolName };
     case "read":
     case "read_file":
-      return { icon: "R", color: "var(--color-neon-cyan)" };
+      return { icon: "R", color: "var(--color-neon-cyan)", displayName: toolName };
     case "write":
     case "create_file":
-      return { icon: "W", color: "var(--color-intent-success)" };
+      return { icon: "W", color: "var(--color-intent-success)", displayName: toolName };
     case "edit":
     case "str_replace_editor":
-      return { icon: "E", color: "var(--color-brand-primary)" };
+      return { icon: "E", color: "var(--color-brand-primary)", displayName: toolName };
     case "grep":
-      return { icon: "~", color: "var(--color-text-secondary)" };
+      return { icon: "~", color: "var(--color-text-secondary)", displayName: toolName };
     case "glob":
-      return { icon: "*", color: "var(--color-text-secondary)" };
+      return { icon: "*", color: "var(--color-text-secondary)", displayName: toolName };
     case "task":
-      return { icon: "T", color: "var(--color-neon-secondary)" };
+      return { icon: "T", color: "var(--color-neon-secondary)", displayName: toolName };
     case "todowrite":
     case "update_plan":
-      return { icon: "✓", color: "var(--color-brand-accent)" };
+      return { icon: "✓", color: "var(--color-brand-accent)", displayName: toolName };
     default:
-      return { icon: (toolName[0] || "·").toUpperCase(), color: "var(--color-text-secondary)" };
+      return { icon: (toolName[0] || "·").toUpperCase(), color: "var(--color-text-secondary)", displayName: toolName };
   }
+}
+
+/** Parse the Longhouse execution wrapper out of tool output text. */
+function parseLonghouseOutput(text: string): {
+  wallTime: string | null;
+  exitCode: number | null;
+  output: string;
+} | null {
+  // Pattern: optional "Chunk ID: ...\n", optional "Wall time: N.N seconds\n",
+  // optional "Process exited with code N\n", optional "Original token count: N\n",
+  // then "Output:\n<actual>"
+  const match = text.match(
+    /^(?:Chunk ID: \w+\n)?(?:Wall time: ([\d.]+) seconds\n)?(?:Process exited with code (\d+)\n)?(?:Original token count: \d+\n)?Output:\n([\s\S]*)$/
+  );
+  if (!match) return null;
+  return {
+    wallTime: match[1] ? `${match[1]}s` : null,
+    exitCode: match[2] != null ? parseInt(match[2], 10) : null,
+    output: match[3] ?? text,
+  };
+}
+
+/** Compute duration string between a tool call and its result. */
+function getToolDuration(callEvent: AgentEvent | null, resultEvent: AgentEvent | null): string | null {
+  if (!callEvent || !resultEvent) return null;
+  const diffMs = parseUTC(resultEvent.timestamp).getTime() - parseUTC(callEvent.timestamp).getTime();
+  if (diffMs <= 0) return null;
+  if (diffMs < 1000) return `${diffMs}ms`;
+  return `${(diffMs / 1000).toFixed(1)}s`;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,9 +193,16 @@ type ToolInteraction = {
   timestamp: string;
 };
 
+/** A batch of parallel tool calls (same-second timestamp cluster). */
+type ToolBatch = {
+  interactions: ToolInteraction[];
+  timestamp: string;
+};
+
 type TimelineItem =
   | { kind: "message"; event: AgentEvent }
-  | { kind: "tool"; interaction: ToolInteraction };
+  | { kind: "tool"; interaction: ToolInteraction }
+  | { kind: "tool_batch"; batch: ToolBatch };
 
 /**
  * Build the merged timeline view-model from raw events.
@@ -242,7 +305,38 @@ function buildTimelineItems(events: AgentEvent[]): {
     }
   }
 
-  return { items, toolItems, eventIdToAnchor };
+  // Pass 3 ── group consecutive tool items with same-second timestamps into batches
+  const BATCH_WINDOW_MS = 1000;
+  const groupedItems: TimelineItem[] = [];
+  let i = 0;
+  while (i < items.length) {
+    const item = items[i];
+    if (item.kind !== "tool") {
+      groupedItems.push(item);
+      i++;
+      continue;
+    }
+    const batchTs = parseUTC(item.interaction.timestamp).getTime();
+    const batch: ToolInteraction[] = [item.interaction];
+    let j = i + 1;
+    while (j < items.length && items[j].kind === "tool") {
+      const nextTs = parseUTC((items[j] as { kind: "tool"; interaction: ToolInteraction }).interaction.timestamp).getTime();
+      if (nextTs - batchTs <= BATCH_WINDOW_MS) {
+        batch.push((items[j] as { kind: "tool"; interaction: ToolInteraction }).interaction);
+        j++;
+      } else {
+        break;
+      }
+    }
+    if (batch.length >= 2) {
+      groupedItems.push({ kind: "tool_batch", batch: { interactions: batch, timestamp: item.interaction.timestamp } });
+    } else {
+      groupedItems.push(item);
+    }
+    i = j;
+  }
+
+  return { items: groupedItems, toolItems, eventIdToAnchor };
 }
 
 // ---------------------------------------------------------------------------
@@ -336,19 +430,27 @@ function ToolInteractionCard({
     if (callEvent?.tool_input_json) {
       const input = callEvent.tool_input_json;
       if ("file_path" in input) return truncatePath(String(input.file_path));
-      if ("command" in input) return String(input.command).slice(0, 60);
+      if ("command" in input) return String(input.command).slice(0, 80);
+      if ("cmd" in input) return String(input.cmd).slice(0, 80);
       if ("pattern" in input) return String(input.pattern);
+      if ("query" in input) return String(input.query).slice(0, 80);
       if ("path" in input) return truncatePath(String(input.path));
-      if ("url" in input) return String(input.url).slice(0, 50);
+      if ("url" in input) return String(input.url).slice(0, 60);
+      if ("prompt" in input) return String(input.prompt).slice(0, 80);
+      if ("key" in input) return String(input.key).slice(0, 60);
     }
     if (resultEvent?.tool_output_text) {
-      return resultEvent.tool_output_text.slice(0, 80).replace(/\n/g, " ");
+      const parsed = parseLonghouseOutput(resultEvent.tool_output_text);
+      const raw = parsed ? parsed.output : resultEvent.tool_output_text;
+      return raw.slice(0, 80).replace(/\n/g, " ");
     }
     return "";
   };
 
   const summary = getSummary();
   const timestamp = callEvent?.timestamp ?? resultEvent?.timestamp ?? "";
+  const duration = getToolDuration(callEvent, resultEvent);
+  const parsedOutput = hasOutput ? parseLonghouseOutput(resultEvent!.tool_output_text!) : null;
 
   return (
     <div
@@ -367,7 +469,10 @@ function ToolInteractionCard({
           >
             {toolInfo.icon}
           </span>
-          <span className="tool-name">{toolName}</span>
+          <span className="tool-name">{toolInfo.displayName}</span>
+          {toolInfo.mcpNamespace && (
+            <span className="tool-mcp-ns">{toolInfo.mcpNamespace}</span>
+          )}
           {outsideActiveContext && (
             <span className="event-context-badge">Outside active model context</span>
           )}
@@ -377,6 +482,14 @@ function ToolInteractionCard({
           )}
         </div>
         <div className="event-tool-meta">
+          <div className="tool-meta-row">
+            {parsedOutput?.exitCode != null && (
+              <span className={`tool-exit-code ${parsedOutput.exitCode === 0 ? "tool-exit-code--ok" : "tool-exit-code--err"}`}>
+                {parsedOutput.exitCode === 0 ? "✓" : `✗${parsedOutput.exitCode}`}
+              </span>
+            )}
+            {duration && <span className="tool-duration">{duration}</span>}
+          </div>
           {timestamp && <span className="event-time">{formatTime(timestamp)}</span>}
           <span className="expand-icon">{isExpanded ? "▼" : "▶"}</span>
         </div>
@@ -395,8 +508,20 @@ function ToolInteractionCard({
           {hasOutput && (
             <div className="tool-section">
               <div className="tool-section-label">Output</div>
+              {parsedOutput && (parsedOutput.wallTime || parsedOutput.exitCode != null) && (
+                <div className="tool-output-meta">
+                  {parsedOutput.exitCode != null && (
+                    <span className={`tool-exit-code ${parsedOutput.exitCode === 0 ? "tool-exit-code--ok" : "tool-exit-code--err"}`}>
+                      exit {parsedOutput.exitCode}
+                    </span>
+                  )}
+                  {parsedOutput.wallTime && (
+                    <span className="tool-output-meta-item">{parsedOutput.wallTime}</span>
+                  )}
+                </div>
+              )}
               <pre className="tool-section-content tool-output">
-                {resultEvent!.tool_output_text}
+                {parsedOutput ? parsedOutput.output : resultEvent!.tool_output_text}
               </pre>
             </div>
           )}
@@ -411,6 +536,76 @@ function ToolInteractionCard({
           {!hasInput && !hasOutput && !isPending && !isOrphan && (
             <div className="tool-section-empty">No input/output recorded</div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Parallel Batch Card
+// ---------------------------------------------------------------------------
+
+interface ToolBatchCardProps {
+  batch: ToolBatch;
+  expandedTools: Set<string>;
+  onToggleTool: (key: string) => void;
+}
+
+function ToolBatchCard({ batch, expandedTools, onToggleTool }: ToolBatchCardProps) {
+  const [batchExpanded, setBatchExpanded] = useState(false);
+  const { interactions, timestamp } = batch;
+
+  return (
+    <div className="event-item event-tool-batch">
+      <button
+        className="tool-batch-header"
+        onClick={() => setBatchExpanded((v) => !v)}
+        aria-expanded={batchExpanded}
+      >
+        <div className="tool-batch-label">
+          <span className="tool-batch-badge">⚡ {interactions.length} parallel</span>
+          {!batchExpanded && (
+            <div className="tool-batch-chips">
+              {interactions.map((ia) => {
+                const info = getToolDisplayInfo(ia.toolName);
+                const summary = (() => {
+                  if (ia.callEvent?.tool_input_json) {
+                    const inp = ia.callEvent.tool_input_json;
+                    if ("cmd" in inp) return String(inp.cmd).slice(0, 40);
+                    if ("command" in inp) return String(inp.command).slice(0, 40);
+                    if ("file_path" in inp) return truncatePath(String(inp.file_path), 30);
+                    if ("query" in inp) return String(inp.query).slice(0, 40);
+                    if ("key" in inp) return String(inp.key).slice(0, 40);
+                  }
+                  return info.displayName;
+                })();
+                return (
+                  <span key={ia.key} className="tool-batch-chip">
+                    <span className="tool-batch-chip-icon" style={{ color: info.color }}>{info.icon}</span>
+                    {summary}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div className="event-tool-meta">
+          <span className="event-time">{formatTime(timestamp)}</span>
+          <span className="expand-icon">{batchExpanded ? "▼" : "▶"}</span>
+        </div>
+      </button>
+
+      {batchExpanded && (
+        <div className="tool-batch-body">
+          {interactions.map((ia) => (
+            <ToolInteractionCard
+              key={ia.key}
+              interaction={ia}
+              isExpanded={expandedTools.has(ia.key)}
+              onToggle={() => onToggleTool(ia.key)}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -540,7 +735,7 @@ export default function SessionDetailPage() {
     if (eventFilter === "messages") {
       result = result.filter((item) => item.kind === "message");
     } else if (eventFilter === "tools") {
-      result = result.filter((item) => item.kind === "tool");
+      result = result.filter((item) => item.kind === "tool" || item.kind === "tool_batch");
     }
 
     if (debouncedSearch.trim()) {
@@ -549,15 +744,16 @@ export default function SessionDetailPage() {
         if (item.kind === "message") {
           return item.event.content_text?.toLowerCase().includes(q);
         }
-        // tool: search name, input, output
-        const { interaction } = item;
-        if (interaction.toolName.toLowerCase().includes(q)) return true;
-        if (interaction.callEvent?.tool_input_json &&
-          JSON.stringify(interaction.callEvent.tool_input_json).toLowerCase().includes(q))
-          return true;
-        if (interaction.resultEvent?.tool_output_text?.toLowerCase().includes(q))
-          return true;
-        return false;
+        const interactions = item.kind === "tool_batch" ? item.batch.interactions : [item.interaction];
+        return interactions.some((ia) => {
+          if (ia.toolName.toLowerCase().includes(q)) return true;
+          if (ia.callEvent?.tool_input_json &&
+            JSON.stringify(ia.callEvent.tool_input_json).toLowerCase().includes(q))
+            return true;
+          if (ia.resultEvent?.tool_output_text?.toLowerCase().includes(q))
+            return true;
+          return false;
+        });
       });
     }
 
@@ -919,6 +1115,17 @@ export default function SessionDetailPage() {
           ) : (
             <div className="timeline-events">
               {filteredItems.map((item) => {
+                if (item.kind === "tool_batch") {
+                  return (
+                    <ToolBatchCard
+                      key={item.batch.timestamp + item.batch.interactions[0].key}
+                      batch={item.batch}
+                      expandedTools={expandedTools}
+                      onToggleTool={toggleTool}
+                    />
+                  );
+                }
+
                 if (item.kind === "tool") {
                   const { interaction } = item;
                   const isHighlighted =
