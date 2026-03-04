@@ -1267,7 +1267,7 @@ class OikosService:
             The completed CommisJob record
         """
         from zerg.database import get_session_factory
-        from zerg.services.commis_resume import check_and_resume_if_all_complete
+        from zerg.services.commis_barrier import check_and_resume_if_all_complete
         from zerg.services.commis_resume import resume_oikos_batch
 
         try:
