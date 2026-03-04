@@ -16,6 +16,7 @@ Fixtures are sanitised real-world session files (no PII):
 - ``gemini_session.json``  — Gemini CLI JSON format
 - ``019a4bea-....jsonl``   — Codex CLI JSONL format
 - ``gemini_drift.json``    — Gemini with object-typed content (schema drift)
+- ``gemini_tool_results.json`` — Gemini tool call + tool result payloads
 
 Marks / skip conditions
 -----------------------
@@ -49,12 +50,14 @@ ENGINE_BIN = REPO_ROOT / "apps" / "engine" / "target" / "release" / "longhouse-e
 CLAUDE_FIXTURE = "1dd6c481-7d7b-498a-b492-c33c917889b9.jsonl"
 GEMINI_FIXTURE = "gemini_session.json"
 GEMINI_DRIFT_FIXTURE = "gemini_drift.json"
+GEMINI_TOOL_RESULTS_FIXTURE = "gemini_tool_results.json"
 CODEX_FIXTURE = "019a4bea-3f39-7fe1-b132-6c14579e806c.jsonl"
 
 # Expected session IDs — must match the fixture files exactly.
 CLAUDE_SESSION_ID = "1dd6c481-7d7b-498a-b492-c33c917889b9"
 GEMINI_SESSION_ID = "5053c934-f66d-4fea-96af-f95181de5986"
 GEMINI_DRIFT_SESSION_ID = "d1f7b8a2-3e4c-4f56-a789-012345678901"
+GEMINI_TOOL_RESULTS_SESSION_ID = "f2b84f4d-9149-4ed8-8d65-9dc0b6b0fbe2"
 CODEX_SESSION_ID = "019a4bea-3f39-7fe1-b132-6c14579e806c"
 
 pytestmark = pytest.mark.integration
@@ -319,6 +322,59 @@ class TestGeminiSchemaDrift:
         _ship(GEMINI_DRIFT_FIXTURE, server, "gemini", tmp_path / "engine2.db")
         events_after = _get_events(server, GEMINI_DRIFT_SESSION_ID)
         assert len(events_after) == len(events_before)
+
+
+# ---------------------------------------------------------------------------
+# Gemini tool-results tests (tool_call_id pairing + tool outputs)
+# ---------------------------------------------------------------------------
+
+
+class TestGeminiToolResults:
+    def test_session_appears_in_db(self, server, tmp_path):
+        _ship(GEMINI_TOOL_RESULTS_FIXTURE, server, "gemini", tmp_path / "engine.db")
+        session = _get_session(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        assert session is not None, "Gemini tool-results session not found after shipping"
+        assert session["provider"] == "gemini"
+
+    def test_tool_calls_and_results_are_ingested(self, server, tmp_path):
+        events = _get_events(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        # user + assistant text + 2 assistant tool calls + 2 tool result events
+        assert len(events) == 6, f"Expected exactly 6 events, got {len(events)}"
+
+        tool_results = [e for e in events if e["role"] == "tool"]
+        assert len(tool_results) == 2, (
+            f"Expected 2 Gemini tool result events, got {len(tool_results)}"
+        )
+        outputs = [e.get("tool_output_text", "") for e in tool_results]
+        assert any("README content" in output for output in outputs), (
+            f"Expected README output in tool results. Got: {outputs}"
+        )
+        assert any("cancelled" in output.lower() for output in outputs), (
+            f"Expected cancelled/error output in tool results. Got: {outputs}"
+        )
+
+    def test_tool_call_id_pairing(self, server, tmp_path):
+        events = _get_events(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        assistants = [
+            e for e in events
+            if e["role"] == "assistant" and e.get("tool_name")
+        ]
+        tools = [e for e in events if e["role"] == "tool"]
+
+        assistant_ids = {e.get("tool_call_id") for e in assistants if e.get("tool_call_id")}
+        tool_ids = {e.get("tool_call_id") for e in tools if e.get("tool_call_id")}
+
+        assert assistant_ids == {"tc-read", "tc-write"}
+        assert tool_ids == {"tc-read", "tc-write"}
+        assert assistant_ids == tool_ids, "Gemini tool call/result IDs must align"
+
+    def test_reship_is_idempotent(self, server, tmp_path):
+        events_before = _get_events(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        _ship(GEMINI_TOOL_RESULTS_FIXTURE, server, "gemini", tmp_path / "engine2.db")
+        events_after = _get_events(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        assert len(events_after) == len(events_before), (
+            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
+        )
 
 
 # ---------------------------------------------------------------------------

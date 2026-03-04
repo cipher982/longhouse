@@ -1,0 +1,72 @@
+{
+  "sessionId": "f2b84f4d-9149-4ed8-8d65-9dc0b6b0fbe2",
+  "projectHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "startTime": "2026-02-21T10:00:00.000Z",
+  "lastUpdated": "2026-02-21T10:00:08.000Z",
+  "messages": [
+    {
+      "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "timestamp": "2026-02-21T10:00:00.000Z",
+      "type": "user",
+      "content": "Read README and then create NOTES.md"
+    },
+    {
+      "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "timestamp": "2026-02-21T10:00:05.000Z",
+      "type": "gemini",
+      "content": "Running tools now.",
+      "toolCalls": [
+        {
+          "id": "tc-read",
+          "name": "read_file",
+          "args": {
+            "file_path": "README.md"
+          },
+          "result": [
+            {
+              "functionResponse": {
+                "id": "tc-read",
+                "name": "read_file",
+                "response": {
+                  "output": "README content"
+                }
+              }
+            }
+          ],
+          "status": "success",
+          "timestamp": "2026-02-21T10:00:06.000Z",
+          "resultDisplay": "",
+          "displayName": "ReadFile",
+          "description": "Reads file content.",
+          "renderOutputAsMarkdown": true
+        },
+        {
+          "id": "tc-write",
+          "name": "write_file",
+          "args": {
+            "file_path": "NOTES.md",
+            "content": "Done"
+          },
+          "result": [
+            {
+              "functionResponse": {
+                "id": "tc-write",
+                "name": "write_file",
+                "response": {
+                  "error": "[Operation Cancelled] Reason: User cancelled the operation."
+                }
+              }
+            }
+          ],
+          "status": "cancelled",
+          "timestamp": "2026-02-21T10:00:07.000Z",
+          "resultDisplay": "",
+          "displayName": "WriteFile",
+          "description": "Writes file content.",
+          "renderOutputAsMarkdown": true
+        }
+      ],
+      "model": "gemini-3-pro-preview"
+    }
+  ]
+}

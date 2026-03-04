@@ -255,6 +255,150 @@ struct GeminiToolCall {
     id: Option<String>,
     name: Option<String>,
     args: Option<serde_json::Value>,
+    status: Option<String>,
+    timestamp: Option<String>,
+    result: Option<serde_json::Value>,
+}
+
+fn extract_gemini_tool_result_text(v: &serde_json::Value) -> Option<String> {
+    fn value_to_text(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Some(v.to_string()),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                serde_json::to_string(v).ok().and_then(|s| {
+                    let t = s.trim();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t.to_string())
+                    }
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn collect_result_parts(v: &serde_json::Value, parts: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_result_parts(item, parts);
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                // Gemini CLI result shape:
+                // {"functionResponse":{"response":{"output":"..."} | {"error":"..."}}}
+                if let Some(fr) = obj.get("functionResponse") {
+                    if let Some(resp) = fr.get("response") {
+                        if let Some(output) = resp.get("output").and_then(value_to_text) {
+                            parts.push(output);
+                        }
+                        if let Some(error) = resp.get("error").and_then(value_to_text) {
+                            parts.push(error);
+                        }
+                    }
+                }
+
+                // Generic fallback for less common shapes.
+                if let Some(output) = obj.get("output").and_then(value_to_text) {
+                    parts.push(output);
+                }
+                if let Some(error) = obj.get("error").and_then(value_to_text) {
+                    parts.push(error);
+                }
+            }
+            _ => {
+                if let Some(text) = value_to_text(v) {
+                    parts.push(text);
+                }
+            }
+        }
+    }
+
+    let mut parts = Vec::new();
+    collect_result_parts(v, &mut parts);
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+fn hex_value(b: u8) -> Option<u16> {
+    match b {
+        b'0'..=b'9' => Some((b - b'0') as u16),
+        b'a'..=b'f' => Some((b - b'a' + 10) as u16),
+        b'A'..=b'F' => Some((b - b'A' + 10) as u16),
+        _ => None,
+    }
+}
+
+fn parse_u_escape(bytes: &[u8], i: usize) -> Option<u16> {
+    if i + 6 > bytes.len() || bytes[i] != b'\\' || bytes[i + 1] != b'u' {
+        return None;
+    }
+    let mut v = 0u16;
+    for j in 0..4 {
+        v = (v << 4) | hex_value(bytes[i + 2 + j])?;
+    }
+    Some(v)
+}
+
+fn sanitize_invalid_surrogate_escapes(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut i = 0usize;
+    let mut out: Vec<u8> = Vec::with_capacity(input.len());
+    let mut changed = false;
+
+    while i < bytes.len() {
+        if let Some(code_unit) = parse_u_escape(bytes, i) {
+            let is_high = (0xD800..=0xDBFF).contains(&code_unit);
+            let is_low = (0xDC00..=0xDFFF).contains(&code_unit);
+
+            if is_high {
+                if let Some(next_code_unit) = parse_u_escape(bytes, i + 6) {
+                    if (0xDC00..=0xDFFF).contains(&next_code_unit) {
+                        out.extend_from_slice(&bytes[i..i + 12]);
+                        i += 12;
+                        continue;
+                    }
+                }
+                out.extend_from_slice(br"\uFFFD");
+                changed = true;
+                i += 6;
+                continue;
+            }
+
+            if is_low {
+                out.extend_from_slice(br"\uFFFD");
+                changed = true;
+                i += 6;
+                continue;
+            }
+
+            out.extend_from_slice(&bytes[i..i + 6]);
+            i += 6;
+            continue;
+        }
+
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    if changed {
+        String::from_utf8(out).ok()
+    } else {
+        None
+    }
 }
 
 /// Targeted deserialization of a single content array item.
@@ -419,18 +563,49 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
 
     let session: GeminiSession = match serde_json::from_str(&content) {
         Ok(s) => s,
-        Err(e) => {
-            tracing::debug!(path = %path.display(), error = %e, "Failed to parse Gemini JSON");
-            return Ok(ParseResult {
-                events: Vec::new(),
-                source_lines: Vec::new(),
-                last_good_offset: file_size,
-                candidate_records: 0,
-                metadata: SessionMetadata {
-                    session_id: session_id.to_string(),
-                    ..Default::default()
-                },
-            });
+        Err(primary_error) => {
+            if let Some(sanitized) = sanitize_invalid_surrogate_escapes(&content) {
+                match serde_json::from_str(&sanitized) {
+                    Ok(s) => {
+                        tracing::debug!(
+                            path = %path.display(),
+                            error = %primary_error,
+                            "Recovered Gemini JSON after surrogate-escape repair"
+                        );
+                        s
+                    }
+                    Err(repaired_error) => {
+                        tracing::debug!(
+                            path = %path.display(),
+                            error = %primary_error,
+                            repaired_error = %repaired_error,
+                            "Failed to parse Gemini JSON (including repaired payload)"
+                        );
+                        return Ok(ParseResult {
+                            events: Vec::new(),
+                            source_lines: Vec::new(),
+                            last_good_offset: file_size,
+                            candidate_records: 0,
+                            metadata: SessionMetadata {
+                                session_id: session_id.to_string(),
+                                ..Default::default()
+                            },
+                        });
+                    }
+                }
+            } else {
+                tracing::debug!(path = %path.display(), error = %primary_error, "Failed to parse Gemini JSON");
+                return Ok(ParseResult {
+                    events: Vec::new(),
+                    source_lines: Vec::new(),
+                    last_good_offset: file_size,
+                    candidate_records: 0,
+                    metadata: SessionMetadata {
+                        session_id: session_id.to_string(),
+                        ..Default::default()
+                    },
+                });
+            }
         }
     };
 
@@ -534,6 +709,22 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                         .map(|v| RawValue::from_string(v.to_string()).ok())
                         .flatten();
 
+                    let tc_timestamp = tc
+                        .timestamp
+                        .as_deref()
+                        .and_then(parse_timestamp)
+                        .unwrap_or(timestamp);
+
+                    let tool_output_text = tc
+                        .result
+                        .as_ref()
+                        .and_then(extract_gemini_tool_result_text)
+                        .or_else(|| match tc.status.as_deref() {
+                            Some("error") => Some("[tool error]".to_string()),
+                            Some("cancelled") => Some("[tool cancelled]".to_string()),
+                            _ => None,
+                        });
+
                     let gemini_tc_id = tc
                         .id
                         .as_deref()
@@ -542,17 +733,34 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                     events.push(ParsedEvent {
                         uuid: format!("{}-tool-{}", msg_id, tc_id),
                         session_id: canonical_session_id.clone(),
-                        timestamp,
+                        timestamp: tc_timestamp,
                         role: Role::Assistant,
                         content_text: None,
                         tool_name: Some(tc_name),
                         tool_input_json: tool_input,
                         tool_output_text: None,
-                        tool_call_id: gemini_tc_id,
+                        tool_call_id: gemini_tc_id.clone(),
                         source_offset: 0,
                         raw_type: "gemini_tool_call".to_string(),
                         raw_line: None,
                     });
+
+                    if let Some(output_text) = tool_output_text {
+                        events.push(ParsedEvent {
+                            uuid: format!("{}-result-{}", msg_id, tc_id),
+                            session_id: canonical_session_id.clone(),
+                            timestamp: tc_timestamp,
+                            role: Role::Tool,
+                            content_text: None,
+                            tool_name: None,
+                            tool_input_json: None,
+                            tool_output_text: Some(output_text),
+                            tool_call_id: gemini_tc_id,
+                            source_offset: 0,
+                            raw_type: "gemini_tool_result".to_string(),
+                            raw_line: None,
+                        });
+                    }
                 }
             }
             _ => {
@@ -2298,6 +2506,97 @@ mod tests {
     }
 
     #[test]
+    fn test_gemini_parse_tool_call_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_json = r#"{
+            "sessionId": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+            "startTime": "2026-01-10T11:00:00Z",
+            "messages": [
+                {
+                    "id": "10101010-1010-1010-1010-101010101010",
+                    "timestamp": "2026-01-10T11:00:00Z",
+                    "type": "user",
+                    "content": "Read README and then write a note"
+                },
+                {
+                    "id": "20202020-2020-2020-2020-202020202020",
+                    "timestamp": "2026-01-10T11:00:05Z",
+                    "type": "gemini",
+                    "content": "Running tools now.",
+                    "toolCalls": [
+                        {
+                            "id": "tc-read",
+                            "name": "read_file",
+                            "args": {"file_path": "README.md"},
+                            "status": "success",
+                            "timestamp": "2026-01-10T11:00:06Z",
+                            "result": [
+                                {
+                                    "functionResponse": {
+                                        "id": "tc-read",
+                                        "name": "read_file",
+                                        "response": {
+                                            "output": "README content here"
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "id": "tc-write",
+                            "name": "write_file",
+                            "args": {"file_path": "note.txt", "content": "done"},
+                            "status": "cancelled",
+                            "timestamp": "2026-01-10T11:00:07Z",
+                            "result": [
+                                {
+                                    "functionResponse": {
+                                        "id": "tc-write",
+                                        "name": "write_file",
+                                        "response": {
+                                            "error": "[Operation Cancelled] Reason: User cancelled the operation."
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }"#;
+        let path = make_json_file(dir.path(), "session-gemini-tools.json", session_json);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 6);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[1].role, Role::Assistant);
+
+        // First tool call + result pair
+        assert_eq!(result.events[2].role, Role::Assistant);
+        assert_eq!(result.events[2].tool_name.as_deref(), Some("read_file"));
+        assert_eq!(result.events[2].tool_call_id.as_deref(), Some("tc-read"));
+        assert_eq!(result.events[3].role, Role::Tool);
+        assert_eq!(result.events[3].tool_call_id.as_deref(), Some("tc-read"));
+        assert_eq!(
+            result.events[3].tool_output_text.as_deref(),
+            Some("README content here")
+        );
+        assert_eq!(result.events[3].raw_type, "gemini_tool_result");
+
+        // Second tool call + error result pair
+        assert_eq!(result.events[4].role, Role::Assistant);
+        assert_eq!(result.events[4].tool_name.as_deref(), Some("write_file"));
+        assert_eq!(result.events[4].tool_call_id.as_deref(), Some("tc-write"));
+        assert_eq!(result.events[5].role, Role::Tool);
+        assert_eq!(result.events[5].tool_call_id.as_deref(), Some("tc-write"));
+        assert!(result.events[5]
+            .tool_output_text
+            .as_deref()
+            .unwrap_or("")
+            .contains("cancelled"));
+    }
+
+    #[test]
     fn test_gemini_offset_ignored() {
         // Gemini files always parse from 0 regardless of offset argument.
         let dir = tempfile::tempdir().unwrap();
@@ -2332,6 +2631,30 @@ mod tests {
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 0);
+    }
+
+    #[test]
+    fn test_gemini_invalid_surrogate_escape_is_repaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_json = r#"{
+            "sessionId": "f4a223b2-5db9-4908-b469-0fd0ca858f93",
+            "messages": [
+                {
+                    "id": "abababab-abab-abab-abab-abababababab",
+                    "timestamp": "2026-01-10T12:00:00Z",
+                    "type": "user",
+                    "content": "bad \ud83d text"
+                }
+            ]
+        }"#;
+        let path = make_json_file(dir.path(), "session-invalid-surrogate.json", session_json);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::User);
+        let text = result.events[0].content_text.as_deref().unwrap_or("");
+        assert!(text.contains("bad"));
+        assert!(text.contains("text"));
     }
 
     // -----------------------------------------------------------------------
