@@ -32,6 +32,26 @@ Notes:
 - 2026-03-04: Added/updated landing E2E coverage to match current UX and claims (`landing-links.spec.ts`, `landing-integrations.spec.ts`), validated with `22 passed`.
 - 2026-03-04: Confirmed E2E harness intentionally uses deterministic test doubles for agent execution (`gpt-scripted`, mock hatch, tool stubs), while shipper/provider ingest pipeline tests run real API + SQLite + engine binary on fixture transcripts.
 
+## [QA/Test] Deep Gemini end-to-end verification (size: 3)
+
+Status (2026-03-04): Done.
+
+**Goal:** Validate Gemini "Syncing now" with highest-confidence evidence from parser through ingest (including real local transcripts), and quantify remaining uncertainty.
+
+- [x] Re-audit Gemini parser against latest upstream Gemini CLI session schema
+- [x] Replay local real Gemini sessions and measure parse/ingest coverage (turn/tool fidelity)
+- [x] Add targeted parser/integration tests for uncovered Gemini edge-cases
+- [x] Run `make test-shipper-e2e`, Gemini-focused engine tests, and `make test-e2e`
+- [x] Publish confidence matrix (what is truly e2e vs fixture/mock vs unverified)
+
+Notes:
+- 2026-03-04: Prior provider-claims check passed, but this follow-up focuses specifically on Gemini depth and real-world transcript fidelity.
+- 2026-03-04: Added Gemini tool-result ingest support in Rust parser (`gemini_tool_result` / `role=tool`) with `tool_call_id` pairing.
+- 2026-03-04: Added fixture-backed integration coverage for Gemini tool call + result payloads (`gemini_tool_results.json`) and shipper e2e assertions.
+- 2026-03-04: Added parser fallback repair for invalid escaped surrogate pairs in Gemini JSON payloads; this recovers otherwise-dropped sessions.
+- 2026-03-04: Real local replay against `~/.gemini/tmp/**/chats/*.json` now shows full coverage for observed tool results: `7,721 raw results -> 7,721 parsed tool-result events` across 324 files.
+- 2026-03-04: Verification gates passed after changes: `make test-engine-fast`, `make test-shipper-e2e` (25 tests), and `make test-e2e` (`70 core + 4 a11y`).
+
 ## [Infra] Migration Hardening (startup-safe + preflight + ledger) (size: 3)
 
 Status (2026-03-04): Done.
