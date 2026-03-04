@@ -755,6 +755,34 @@ async def lifespan(app: FastAPI):
             except ValueError as exc:
                 logger.warning("Summarization unavailable (missing API key): %s", exc)
 
+        # Start Telegram channel + Oikos bridge (non-fatal if token missing/invalid)
+        if not _settings.testing and _settings.telegram_bot_token:
+            try:
+                from zerg.channels.plugins.telegram import TelegramChannel
+                from zerg.channels.registry import register_channel
+                from zerg.services.telegram_bridge import TelegramBridge
+
+                _tg_channel = TelegramChannel()
+                await _tg_channel.configure(
+                    {
+                        "credentials": {"bot_token": _settings.telegram_bot_token},
+                        "settings": {
+                            "webhook_url": _settings.telegram_webhook_url,
+                            "webhook_secret": _settings.telegram_webhook_secret,
+                            "parse_mode": "html",
+                        },
+                    }
+                )
+                await _tg_channel.start()
+                register_channel(_tg_channel, replace=True)
+                _tg_bridge = TelegramBridge(_tg_channel)
+                _tg_bridge.start()
+                app.state.telegram_channel = _tg_channel
+                app.state.telegram_bridge = _tg_bridge
+                logger.info("Telegram channel started (@%s)", _tg_channel._bot_info.get("username", "unknown"))
+            except Exception:
+                logger.exception("Telegram startup failed (non-fatal) — bot will be unavailable")
+
         logger.info("Application startup complete")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -776,6 +804,14 @@ async def lifespan(app: FastAPI):
                 ops_events_bridge.stop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop ops_events_bridge")
+
+            try:
+                if hasattr(app.state, "telegram_bridge"):
+                    app.state.telegram_bridge.stop()
+                if hasattr(app.state, "telegram_channel"):
+                    await app.state.telegram_channel.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop Telegram channel")
 
             try:
                 from zerg.services.watch_renewal_service import watch_renewal_service
