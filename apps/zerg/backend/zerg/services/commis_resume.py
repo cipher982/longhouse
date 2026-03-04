@@ -35,6 +35,8 @@ from zerg.models.enums import RunStatus
 from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.services.oikos_context import reset_seq
+from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
+from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 
 logger = logging.getLogger(__name__)
@@ -660,32 +662,16 @@ async def resume_oikos_batch(
             run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
         db.commit()  # Single commit: WAITING + barrier reset
 
-        await emit_run_event(
+        await emit_oikos_waiting_and_run_updated(
             db=db,
             run_id=run.id,
-            event_type="oikos_waiting",
-            payload={
-                "fiche_id": fiche.id,
-                "thread_id": thread.id,
-                "job_ids": job_ids,
-                "message": interrupt_message,
-                "owner_id": owner_id,
-                "message_id": message_id,
-                "close_stream": False,
-                "trace_id": trace_id,
-            },
-        )
-
-        await emit_run_event(
-            db=db,
-            run_id=run.id,
-            event_type="run_updated",
-            payload={
-                "fiche_id": fiche.id,
-                "status": "waiting",
-                "thread_id": thread.id,
-                "owner_id": owner_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            message_id=message_id,
+            message=interrupt_message,
+            trace_id=trace_id,
+            job_ids=job_ids,
         )
 
         logger.info(
@@ -731,19 +717,15 @@ async def resume_oikos_batch(
 
         await emit_stream_control(db, run, "close", "error", owner_id)
 
-        await emit_run_event(
+        await emit_failed_run_updated(
             db=db,
             run_id=run.id,
-            event_type="run_updated",
-            payload={
-                "fiche_id": fiche.id,
-                "status": "failed",
-                "finished_at": end_time.isoformat(),
-                "duration_ms": duration_ms,
-                "error": str(e),
-                "thread_id": thread.id,
-                "owner_id": owner_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            finished_at_iso=end_time.isoformat(),
+            duration_ms=duration_ms,
+            error=str(e),
         )
 
         reset_seq(run.id)
@@ -892,19 +874,15 @@ async def _continue_oikos_langgraph_free(
 
         await emit_stream_control(db, run, "close", "error", owner_id)
 
-        await emit_run_event(
+        await emit_failed_run_updated(
             db=db,
             run_id=run.id,
-            event_type="run_updated",
-            payload={
-                "fiche_id": fiche.id,
-                "status": "failed",
-                "finished_at": end_time.isoformat(),
-                "duration_ms": duration_ms,
-                "error": error_msg,
-                "thread_id": thread.id,
-                "owner_id": owner_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            finished_at_iso=end_time.isoformat(),
+            duration_ms=duration_ms,
+            error=error_msg,
         )
 
         return {"status": "error", "error": error_msg}
@@ -1071,32 +1049,16 @@ async def _continue_oikos_langgraph_free(
             run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
         db.commit()
 
-        await emit_run_event(
+        await emit_oikos_waiting_and_run_updated(
             db=db,
             run_id=run.id,
-            event_type="oikos_waiting",
-            payload={
-                "fiche_id": fiche.id,
-                "thread_id": thread.id,
-                "job_id": job_id,
-                "message": interrupt_message,
-                "owner_id": owner_id,
-                "message_id": message_id,
-                "close_stream": False,
-                "trace_id": trace_id,
-            },
-        )
-
-        await emit_run_event(
-            db=db,
-            run_id=run.id,
-            event_type="run_updated",
-            payload={
-                "fiche_id": fiche.id,
-                "status": "waiting",
-                "thread_id": thread.id,
-                "owner_id": owner_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            message_id=message_id,
+            message=interrupt_message,
+            trace_id=trace_id,
+            job_id=job_id,
         )
 
         logger.info(
@@ -1136,19 +1098,15 @@ async def _continue_oikos_langgraph_free(
 
         await emit_stream_control(db, run, "close", "error", owner_id)
 
-        await emit_run_event(
+        await emit_failed_run_updated(
             db=db,
             run_id=run.id,
-            event_type="run_updated",
-            payload={
-                "fiche_id": fiche.id,
-                "status": "failed",
-                "finished_at": end_time.isoformat(),
-                "duration_ms": duration_ms,
-                "error": str(e),
-                "thread_id": thread.id,
-                "owner_id": owner_id,
-            },
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            owner_id=owner_id,
+            finished_at_iso=end_time.isoformat(),
+            duration_ms=duration_ms,
+            error=str(e),
         )
 
         reset_seq(run.id)

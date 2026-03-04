@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
+from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 
 
@@ -24,6 +26,145 @@ class _DummyDb:
 
     def query(self, _model):
         return _DummyQuery(self._pending_count)
+
+
+@pytest.mark.asyncio
+async def test_emit_oikos_waiting_and_run_updated_with_single_job(monkeypatch):
+    calls = []
+
+    async def _fake_emit_run_event(*, db, run_id, event_type, payload):
+        calls.append(
+            {
+                "db": db,
+                "run_id": run_id,
+                "event_type": event_type,
+                "payload": payload,
+            }
+        )
+
+    monkeypatch.setattr("zerg.services.event_store.emit_run_event", _fake_emit_run_event)
+
+    db = object()
+    await emit_oikos_waiting_and_run_updated(
+        db=db,
+        run_id=5,
+        fiche_id=8,
+        thread_id=13,
+        owner_id=21,
+        message_id="msg-1",
+        message="Working in background",
+        trace_id="trace-1",
+        job_id=34,
+    )
+
+    assert calls == [
+        {
+            "db": db,
+            "run_id": 5,
+            "event_type": "oikos_waiting",
+            "payload": {
+                "fiche_id": 8,
+                "thread_id": 13,
+                "message": "Working in background",
+                "owner_id": 21,
+                "message_id": "msg-1",
+                "close_stream": False,
+                "trace_id": "trace-1",
+                "job_id": 34,
+            },
+        },
+        {
+            "db": db,
+            "run_id": 5,
+            "event_type": "run_updated",
+            "payload": {
+                "fiche_id": 8,
+                "status": "waiting",
+                "thread_id": 13,
+                "owner_id": 21,
+            },
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emit_oikos_waiting_and_run_updated_with_job_ids(monkeypatch):
+    calls = []
+
+    async def _fake_emit_run_event(*, db, run_id, event_type, payload):
+        calls.append(
+            {
+                "db": db,
+                "run_id": run_id,
+                "event_type": event_type,
+                "payload": payload,
+            }
+        )
+
+    monkeypatch.setattr("zerg.services.event_store.emit_run_event", _fake_emit_run_event)
+
+    db = object()
+    await emit_oikos_waiting_and_run_updated(
+        db=db,
+        run_id=6,
+        fiche_id=9,
+        thread_id=14,
+        owner_id=22,
+        message_id="msg-2",
+        message="Working on many tasks",
+        job_ids=[101, 102],
+    )
+
+    assert calls[0]["event_type"] == "oikos_waiting"
+    assert calls[0]["payload"]["job_ids"] == [101, 102]
+    assert "job_id" not in calls[0]["payload"]
+    assert "trace_id" not in calls[0]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_emit_failed_run_updated(monkeypatch):
+    calls = []
+
+    async def _fake_emit_run_event(*, db, run_id, event_type, payload):
+        calls.append(
+            {
+                "db": db,
+                "run_id": run_id,
+                "event_type": event_type,
+                "payload": payload,
+            }
+        )
+
+    monkeypatch.setattr("zerg.services.event_store.emit_run_event", _fake_emit_run_event)
+
+    db = object()
+    await emit_failed_run_updated(
+        db=db,
+        run_id=7,
+        fiche_id=11,
+        thread_id=15,
+        owner_id=23,
+        finished_at_iso="2026-03-03T12:00:00+00:00",
+        duration_ms=910,
+        error="boom",
+    )
+
+    assert calls == [
+        {
+            "db": db,
+            "run_id": 7,
+            "event_type": "run_updated",
+            "payload": {
+                "fiche_id": 11,
+                "status": "failed",
+                "finished_at": "2026-03-03T12:00:00+00:00",
+                "duration_ms": 910,
+                "error": "boom",
+                "thread_id": 15,
+                "owner_id": 23,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio
