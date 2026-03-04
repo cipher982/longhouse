@@ -395,7 +395,7 @@ Make `model` an explicit override only, not a forced default. New execution logi
 - [x] Real-time state — thinking/running/idle via Claude Code hooks → daemon → API
 - [x] Forum UI — active rows glow, canvas entities pulse, presence priority over ended_at
 - [x] Bucket actions — Park/Snooze/Archive/Resume
-- [ ] Extended hook states (`needs_user`, `blocked`) — deferred, hooks don't support it yet
+- [x] Extended hook states (`needs_user`, `blocked`) — shipped 2026-03-03 via Notification/PermissionRequest hooks
 
 ---
 
