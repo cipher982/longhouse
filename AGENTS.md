@@ -135,6 +135,8 @@ Import from `../components/ui`. **Check here before building custom UI.**
 12. **Do NOT add `extra_body={"metadata": ...}` to LLM calls** — Instance calls go directly to providers (Groq, OpenAI, z.ai), NOT through the LiteLLM proxy. Groq rejects `metadata` with 400. The proxy at `llm.drose.io` is personal-dev only, not used by user instances. New models must be added to `~/git/litellm-proxy/config.yaml` AND `hooks/model_hints.py` (for personal-dev proxy use).
 13. **DB provider config overrides env vars** — `get_llm_client_with_db_fallback()` checks `LlmProviderConfig` table first. Stale rows with wrong keys cause silent 401s. Check DB before debugging API auth failures.
 14. **Zerg host backups/cleanup are unified under `zerg-ops`** — source of truth is `scripts/zerg-ops.sh`, deployed to `/usr/local/bin/zerg-ops`. It is intentionally code-configured (no `/etc/zerg-ops.env` contract). For scoped checks use CLI `--instance`, and offsite uses SSH alias `longhouse-offsite` configured on the host.
+15. **Demo rows are keyed by `provider_session_id` prefix, not `device_id`** — demo cleanup/refresh logic uses `provider_session_id LIKE 'demo-%'`.
+16. **Hot-reload stale demo fix path** — In dev (`AUTH_DISABLED=1`), run `POST /api/agents/demo?replace=true` to wipe and reseed demo rows. Response includes `sessions_failed` and `sessions_deleted` for visibility.
 
 ## Pushing Changes
 
