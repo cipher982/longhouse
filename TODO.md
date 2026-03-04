@@ -25,12 +25,15 @@ Status (2026-03-03): In progress.
 - [ ] Split monolith modules by responsibility (`oikos_tools.py`, `commis_resume.py`, `oikos_service.py`)
 - [x] Quarantine Forum code as legacy while route stays disabled
 - [x] Remove naming drift (`Forum live mode` → `Live sessions`) in comments/docs/API descriptions
-- [ ] Add guardrail tests to prevent regressions into deprecated flow
+- [x] Add guardrail tests to prevent regressions into deprecated flow
 
 Notes:
 - Keep the current soft-disable behavior for `/forum` while this cleanup is underway.
 - 2026-03-03: `spawn_commis` runtime now only executes workspace path; legacy `standard` branch removed from job processor.
 - 2026-03-03: Forum implementation moved to `frontend-web/src/legacy/forum`; timeline live panel is list-only (2D map removed from active timeline UX).
+- 2026-03-03: Added guardrails for deprecated flow drift:
+  - frontend route helper test locks `/forum` -> `/timeline` redirect semantics
+  - backend tests assert `spawn_commis`/`spawn_workspace_commis` always persist `execution_mode=workspace`
 
 ## [Product] Admin Operations Dashboard semantics + UX overhaul (size: 3)
 

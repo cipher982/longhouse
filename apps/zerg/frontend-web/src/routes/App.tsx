@@ -78,25 +78,24 @@ function LandingAliasRedirect() {
   return <Navigate to={{ pathname: "/", search: location.search }} replace />;
 }
 
-function LegacyForumRedirect() {
-  const location = useLocation();
-  const params = new URLSearchParams(location.search);
+export function resolveLegacyForumRedirect(search: string): { pathname: string; search?: string } {
+  const params = new URLSearchParams(search);
   const sessionId = params.get("session");
   const shouldResume = params.get("chat") === "true";
 
   if (sessionId) {
-    return (
-      <Navigate
-        to={{
-          pathname: `/timeline/${sessionId}`,
-          search: shouldResume ? "?resume=1" : "",
-        }}
-        replace
-      />
-    );
+    return {
+      pathname: `/timeline/${sessionId}`,
+      search: shouldResume ? "?resume=1" : "",
+    };
   }
 
-  return <Navigate to="/timeline" replace />;
+  return { pathname: "/timeline" };
+}
+
+function LegacyForumRedirect() {
+  const location = useLocation();
+  return <Navigate to={resolveLegacyForumRedirect(location.search)} replace />;
 }
 
 export default function App() {
