@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-import threading
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -51,9 +50,6 @@ router = APIRouter(
     prefix="/runners",
     tags=["runners"],
 )
-
-_REGISTER_LOCK = threading.Lock()
-
 
 # ---------------------------------------------------------------------------
 # Enrollment Endpoints
@@ -647,62 +643,58 @@ def register_runner(
     Token consumption is committed BEFORE runner creation to prevent
     token reuse even if runner creation fails.
     """
-    # NOTE: Unit tests override the DB dependency to return a shared Session
-    # instance across concurrent requests. SQLAlchemy Sessions are not safe for
-    # concurrent use, so we serialize registration to avoid invalid session state.
-    with _REGISTER_LOCK:
-        # Validate and consume token (commit immediately)
-        token_record = runner_crud.validate_and_consume_enroll_token(
-            db=db,
-            token=request.enroll_token,
+    # Validate and consume token (commit immediately)
+    token_record = runner_crud.validate_and_consume_enroll_token(
+        db=db,
+        token=request.enroll_token,
+    )
+
+    if not token_record:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired enrollment token",
         )
 
-        if not token_record:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired enrollment token",
-            )
+    # Commit token consumption immediately (separate transaction)
+    db.commit()
 
-        # Commit token consumption immediately (separate transaction)
-        db.commit()
+    # Generate runner name if not provided
+    if not request.name:
+        # Use random suffix to avoid race conditions
+        request.name = f"runner-{secrets.token_hex(4)}"
 
-        # Generate runner name if not provided
-        if not request.name:
-            # Use random suffix to avoid race conditions
-            request.name = f"runner-{secrets.token_hex(4)}"
+    # Check for name conflicts
+    existing = runner_crud.get_runner_by_name(
+        db=db,
+        owner_id=token_record.owner_id,
+        name=request.name,
+    )
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Runner with name '{request.name}' already exists",
+        )
 
-        # Check for name conflicts
-        existing = runner_crud.get_runner_by_name(
+    # Generate auth secret
+    auth_secret = runner_crud.generate_token()
+
+    # Create runner (if this fails, token is already consumed - that's intentional)
+    try:
+        runner = runner_crud.create_runner(
             db=db,
             owner_id=token_record.owner_id,
             name=request.name,
+            auth_secret=auth_secret,
+            labels=request.labels,
+            metadata=request.metadata,
         )
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Runner with name '{request.name}' already exists",
-            )
-
-        # Generate auth secret
-        auth_secret = runner_crud.generate_token()
-
-        # Create runner (if this fails, token is already consumed - that's intentional)
-        try:
-            runner = runner_crud.create_runner(
-                db=db,
-                owner_id=token_record.owner_id,
-                name=request.name,
-                auth_secret=auth_secret,
-                labels=request.labels,
-                metadata=request.metadata,
-            )
-        except IntegrityError as e:
-            db.rollback()
-            logger.error(f"IntegrityError during runner creation: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Runner with name '{request.name}' already exists",
-            )
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"IntegrityError during runner creation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Runner with name '{request.name}' already exists",
+        )
 
     return RunnerRegisterResponse(
         runner_id=runner.id,
