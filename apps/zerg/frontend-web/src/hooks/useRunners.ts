@@ -13,10 +13,11 @@ import {
 } from "../services/api";
 
 // List runners
-export function useRunners() {
+export function useRunners(options?: { refetchInterval?: number }) {
   return useQuery<Runner[]>({
     queryKey: ["runners"],
     queryFn: fetchRunners,
+    refetchInterval: options?.refetchInterval,
   });
 }
 

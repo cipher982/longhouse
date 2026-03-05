@@ -8,9 +8,12 @@ interface AddRunnerModalProps {
   onClose: () => void;
 }
 
+type InstallTab = "native" | "docker";
+
 export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps) {
   const createTokenMutation = useCreateEnrollToken();
   const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState<InstallTab>("native");
   const codeRef = useRef<HTMLPreElement>(null);
 
   // Generate token when modal opens
@@ -21,10 +24,16 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only trigger on open, mutation identity changes each render
   }, [isOpen]);
 
+  const getCommand = () => {
+    if (!createTokenMutation.data) return "";
+    return activeTab === "native"
+      ? createTokenMutation.data.one_liner_install_command
+      : createTokenMutation.data.docker_command;
+  };
+
   const handleCopy = () => {
     if (!createTokenMutation.data) return;
-
-    navigator.clipboard.writeText(createTokenMutation.data.docker_command);
+    navigator.clipboard.writeText(getCommand());
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -35,16 +44,16 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
     const diffMs = expiry.getTime() - now.getTime();
     const diffMins = Math.floor(diffMs / 60000);
 
-    if (diffMins <= 0) return "Expired";
-    if (diffMins < 60) return `Expires in ${diffMins} minutes`;
-    return `Expires in ${Math.floor(diffMins / 60)} hours`;
+    if (diffMins <= 0) return "Token expired";
+    if (diffMins < 60) return `Token expires in ${diffMins} min`;
+    return `Token expires in ${Math.floor(diffMins / 60)} hr`;
   };
 
   if (!isOpen) return null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container add-runner-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Add Runner</h2>
           <button
@@ -76,18 +85,31 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
 
           {createTokenMutation.data && (
             <>
-              <div className="enrollment-info">
-                <p className="enrollment-description">
-                  Run these commands on your server to register and start a runner:
-                </p>
-                <p className="enrollment-expiry">
-                  {formatExpiry(createTokenMutation.data.expires_at)}
-                </p>
+              <p className="enrollment-description">
+                Run this on the machine you want to connect. It installs a native daemon that
+                persists across reboots.
+              </p>
+
+              <div className="install-tabs">
+                <button
+                  type="button"
+                  className={`install-tab${activeTab === "native" ? " install-tab--active" : ""}`}
+                  onClick={() => { setActiveTab("native"); setCopied(false); }}
+                >
+                  Native (macOS / Linux)
+                </button>
+                <button
+                  type="button"
+                  className={`install-tab${activeTab === "docker" ? " install-tab--active" : ""}`}
+                  onClick={() => { setActiveTab("docker"); setCopied(false); }}
+                >
+                  Docker
+                </button>
               </div>
 
               <div className="code-block-container">
                 <pre ref={codeRef} className="code-block">
-                  <code>{createTokenMutation.data.docker_command}</code>
+                  <code>{getCommand()}</code>
                 </pre>
                 <Button
                   variant="secondary"
@@ -100,14 +122,13 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
                 </Button>
               </div>
 
-              <div className="enrollment-instructions">
-                <h3>Instructions:</h3>
-                <ol>
-                  <li>Copy the commands above</li>
-                  <li>Run them on your server (requires Docker)</li>
-                  <li>The runner will appear in your runners list once connected</li>
-                </ol>
-              </div>
+              <p className="enrollment-expiry">
+                {formatExpiry(createTokenMutation.data.expires_at)}
+                {" · "}
+                {activeTab === "native"
+                  ? "Installs as launchd (macOS) or systemd user service (Linux)"
+                  : "Runs as a Docker container"}
+              </p>
 
               <div className="modal-actions">
                 <Button variant="primary" onClick={onClose}>

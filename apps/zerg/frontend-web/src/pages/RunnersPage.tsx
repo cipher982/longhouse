@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useRunners, useRevokeRunner } from "../hooks/useRunners";
+import { useRunners } from "../hooks/useRunners";
 import type { Runner } from "../services/api";
 import AddRunnerModal from "../components/AddRunnerModal";
 import {
@@ -13,66 +13,46 @@ import {
   Spinner
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
-import { useConfirm } from "../components/confirm";
 import { parseUTC } from "../lib/dateUtils";
 import "../styles/runners.css";
 
+function platformLabel(meta: Runner["runner_metadata"]): string {
+  if (!meta) return "Unknown";
+  const p = (meta as Record<string, string>).platform ?? "";
+  const a = (meta as Record<string, string>).arch ?? "";
+  const platName = p === "darwin" ? "macOS" : p === "linux" ? "Linux" : p || "Unknown";
+  return a ? `${platName} · ${a}` : platName;
+}
+
+function hostname(meta: Runner["runner_metadata"]): string | null {
+  if (!meta) return null;
+  return (meta as Record<string, string>).hostname ?? null;
+}
+
 export default function RunnersPage() {
   const navigate = useNavigate();
-  const { data: runners, isLoading, error } = useRunners();
-  const revokeRunnerMutation = useRevokeRunner();
-  const confirm = useConfirm();
+  const { data: runners, isLoading, error } = useRunners({ refetchInterval: 10_000 });
   const [showAddModal, setShowAddModal] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  const handleRevoke = async (runner: Runner) => {
-    const confirmed = await confirm({
-      title: `Revoke runner "${runner.name}"?`,
-      message: 'This runner will no longer be able to connect. You can create a new runner if needed.',
-      confirmLabel: 'Revoke',
-      cancelLabel: 'Keep',
-      variant: 'danger',
-    });
-    if (!confirmed) {
-      return;
-    }
-
-    setActionError(null);
-    try {
-      await revokeRunnerMutation.mutateAsync(runner.id);
-    } catch (err) {
-      console.error("Failed to revoke runner:", err);
-      setActionError("Failed to revoke runner. Please try again.");
-    }
-  };
 
   const getStatusVariant = (status: string): 'success' | 'error' | 'neutral' => {
     switch (status) {
-      case "online":
-        return "success";
-      case "revoked":
-        return "error";
-      default:
-        return "neutral";
+      case "online": return "success";
+      case "revoked": return "error";
+      default: return "neutral";
     }
   };
 
-  const formatTimestamp = (timestamp: string | null | undefined) => {
+  const formatLastSeen = (timestamp: string | null | undefined) => {
     if (!timestamp) return "Never";
-
     const date = parseUTC(timestamp);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);
-
     if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins} min ago`;
-
+    if (diffMins < 60) return `${diffMins}m ago`;
     const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? "s" : ""} ago`;
-
-    const diffDays = Math.floor(diffHours / 24);
-    return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${Math.floor(diffHours / 24)}d ago`;
   };
 
   // Ready signal - indicates page is interactive (even if empty)
@@ -121,15 +101,6 @@ export default function RunnersPage() {
           }
         />
 
-        {actionError && (
-          <div className="ui-action-error-banner" role="alert">
-            {actionError}
-            <button type="button" className="ui-action-error-dismiss" onClick={() => setActionError(null)}>
-              Dismiss
-            </button>
-          </div>
-        )}
-
         {runners && runners.length === 0 ? (
           <EmptyState
             title="No runners yet"
@@ -145,11 +116,21 @@ export default function RunnersPage() {
             {runners?.map((runner) => (
               <Card
                 key={runner.id}
-                className="runner-card"
+                className={`runner-card runner-card--${runner.status}`}
                 onClick={() => navigate(`/runners/${runner.id}`)}
               >
                 <Card.Header className="runner-card-header">
-                  <h3 className="runner-card-title">{runner.name}</h3>
+                  <div className="runner-card-title-group">
+                    <div className="runner-card-name-row">
+                      <span className={`runner-status-dot runner-status-dot--${runner.status}`} />
+                      <h3 className="runner-card-title">{runner.name}</h3>
+                    </div>
+                    {hostname(runner.runner_metadata) && (
+                      <span className="runner-card-hostname">
+                        {hostname(runner.runner_metadata)}
+                      </span>
+                    )}
+                  </div>
                   <Badge variant={getStatusVariant(runner.status)}>
                     {runner.status}
                   </Badge>
@@ -158,22 +139,22 @@ export default function RunnersPage() {
                 <Card.Body>
                   <div className="runner-card-details">
                     <div className="runner-detail-row">
-                      <span className="runner-detail-label">Platform:</span>
+                      <span className="runner-detail-label">Platform</span>
                       <span className="runner-detail-value">
-                        {runner.runner_metadata?.platform || "Unknown"} / {runner.runner_metadata?.arch || "Unknown"}
+                        {platformLabel(runner.runner_metadata)}
                       </span>
                     </div>
 
                     <div className="runner-detail-row">
-                      <span className="runner-detail-label">Last seen:</span>
+                      <span className="runner-detail-label">Last seen</span>
                       <span className="runner-detail-value">
-                        {formatTimestamp(runner.last_seen_at)}
+                        {formatLastSeen(runner.last_seen_at)}
                       </span>
                     </div>
 
                     {runner.capabilities && runner.capabilities.length > 0 && (
                       <div className="runner-detail-row">
-                        <span className="runner-detail-label">Capabilities:</span>
+                        <span className="runner-detail-label">Capabilities</span>
                         <div className="capabilities-list">
                           {runner.capabilities.map((cap) => (
                             <span key={cap} className="capability-chip">
@@ -184,21 +165,6 @@ export default function RunnersPage() {
                       </div>
                     )}
                   </div>
-
-                  {runner.status !== "revoked" && (
-                    <div className="runner-card-actions">
-                      <Button
-                        variant="danger"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRevoke(runner);
-                        }}
-                        className="runner-action-full"
-                      >
-                        Revoke
-                      </Button>
-                    </div>
-                  )}
                 </Card.Body>
               </Card>
             ))}
