@@ -54,6 +54,18 @@ logger = logging.getLogger(__name__)
 
 # Thread type for oikos threads - distinguishes from regular fiche threads
 OIKOS_THREAD_TYPE = ThreadType.SUPER
+_OWNER_RUN_LOCKS: dict[int, asyncio.Lock] = {}
+_OWNER_RUN_LOCKS_GUARD = asyncio.Lock()
+
+
+async def _get_owner_run_lock(owner_id: int) -> asyncio.Lock:
+    """Return (and lazily create) a process-local per-owner lock."""
+    async with _OWNER_RUN_LOCKS_GUARD:
+        lock = _OWNER_RUN_LOCKS.get(owner_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _OWNER_RUN_LOCKS[owner_id] = lock
+        return lock
 
 
 @dataclass
@@ -142,6 +154,7 @@ class OikosService:
         source_conversation_id: str,
         source_message_id: str | None = None,
         source_event_id: str | None = None,
+        source_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Build canonical message metadata for cross-surface rendering."""
         surface: dict[str, Any] = {
@@ -156,6 +169,8 @@ class OikosService:
             surface["source_message_id"] = source_message_id
         if source_event_id:
             surface["source_event_id"] = source_event_id
+        if source_idempotency_key:
+            surface["idempotency_key"] = source_idempotency_key
         return {"surface": surface}
 
     @staticmethod
@@ -362,6 +377,44 @@ class OikosService:
         source_conversation_id: str = "web:main",
         source_message_id: str | None = None,
         source_event_id: str | None = None,
+        source_idempotency_key: str | None = None,
+    ) -> OikosRunResult:
+        """Run oikos with per-owner serialization to prevent cross-surface races."""
+        owner_lock = await _get_owner_run_lock(owner_id)
+        async with owner_lock:
+            return await self._run_oikos_unlocked(
+                owner_id=owner_id,
+                task=task,
+                run_id=run_id,
+                message_id=message_id,
+                trace_id=trace_id,
+                timeout=timeout,
+                model_override=model_override,
+                reasoning_effort=reasoning_effort,
+                return_on_deferred=return_on_deferred,
+                source_surface_id=source_surface_id,
+                source_conversation_id=source_conversation_id,
+                source_message_id=source_message_id,
+                source_event_id=source_event_id,
+                source_idempotency_key=source_idempotency_key,
+            )
+
+    async def _run_oikos_unlocked(
+        self,
+        owner_id: int,
+        task: str,
+        run_id: int | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        timeout: int = 60,
+        model_override: str | None = None,
+        reasoning_effort: str | None = None,
+        return_on_deferred: bool = True,
+        source_surface_id: str = "web",
+        source_conversation_id: str = "web:main",
+        source_message_id: str | None = None,
+        source_event_id: str | None = None,
+        source_idempotency_key: str | None = None,
     ) -> OikosRunResult:
         """Run the oikos fiche with a task.
 
@@ -386,6 +439,7 @@ class OikosService:
             source_conversation_id: Surface-native conversation identifier
             source_message_id: Source platform message ID (if available)
             source_event_id: Source platform event/update ID (if available)
+            source_idempotency_key: Source idempotency key (if available)
 
         Returns:
             OikosRunResult with run details and result
@@ -397,6 +451,7 @@ class OikosService:
             source_conversation_id=source_conversation_id,
             source_message_id=source_message_id,
             source_event_id=source_event_id,
+            source_idempotency_key=source_idempotency_key,
         )
 
         # Get or create oikos components

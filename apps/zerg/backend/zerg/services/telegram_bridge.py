@@ -104,6 +104,11 @@ class TelegramBridge:
         if event.get("chat_type") == "dm":
             await self._persist_chat_id(owner_id, chat_id)
 
+        idempotency_key = self._build_idempotency_key(chat_id, event)
+        if idempotency_key and await self._is_duplicate_inbound(owner_id, idempotency_key):
+            logger.info("TelegramBridge: deduped retry for chat %s key %s", chat_id, idempotency_key)
+            return
+
         # Send typing indicator and keep refreshing it while Oikos runs
         typing_task = asyncio.create_task(self._keep_typing(chat_id))
         try:
@@ -116,6 +121,7 @@ class TelegramBridge:
                 chat_id=chat_id,
                 source_message_id=source_message_id or None,
                 source_event_id=source_event_id or None,
+                source_idempotency_key=idempotency_key,
             )
         except Exception as e:
             logger.exception(f"TelegramBridge: oikos failed for chat {chat_id}: {e}")
@@ -135,6 +141,7 @@ class TelegramBridge:
         chat_id: str,
         source_message_id: str | None = None,
         source_event_id: str | None = None,
+        source_idempotency_key: str | None = None,
     ) -> str | None:
         """Run OikosService and return the text result."""
         from zerg.services.oikos_service import OikosService
@@ -150,8 +157,57 @@ class TelegramBridge:
                 source_conversation_id=f"telegram:{chat_id}",
                 source_message_id=source_message_id,
                 source_event_id=source_event_id,
+                source_idempotency_key=source_idempotency_key,
             )
         return result.result
+
+    def _build_idempotency_key(self, chat_id: str, event: "ChannelMessageEvent") -> str | None:
+        """Build a stable key for Telegram webhook retry dedupe."""
+        raw = event.get("raw") or {}
+        update_id = str(raw.get("update_id", "") or "")
+        if update_id:
+            return f"telegram:{chat_id}:{update_id}"
+        message_id = str(event.get("message_id", "") or "")
+        if message_id:
+            return f"telegram:{chat_id}:message:{message_id}"
+        return None
+
+    async def _is_duplicate_inbound(self, owner_id: int, idempotency_key: str) -> bool:
+        """Return True if this inbound Telegram message was already persisted."""
+        if not idempotency_key:
+            return False
+
+        from zerg.models.thread import ThreadMessage
+        from zerg.services.oikos_service import OikosService
+
+        try:
+            with db_session() as db:
+                service = OikosService(db)
+                fiche = service.get_or_create_oikos_fiche(owner_id)
+                thread = service.get_or_create_oikos_thread(owner_id, fiche)
+                rows = (
+                    db.query(ThreadMessage.message_metadata)
+                    .filter(
+                        ThreadMessage.thread_id == thread.id,
+                        ThreadMessage.role == "user",
+                    )
+                    .order_by(ThreadMessage.id.desc())
+                    .limit(500)
+                    .all()
+                )
+                for row in rows:
+                    metadata = row[0] or {}
+                    surface = metadata.get("surface") if isinstance(metadata, dict) else {}
+                    if isinstance(surface, dict) and surface.get("idempotency_key") == idempotency_key:
+                        return True
+        except Exception:
+            logger.warning(
+                "TelegramBridge: dedupe lookup failed for owner=%s key=%s; continuing without dedupe",
+                owner_id,
+                idempotency_key,
+                exc_info=True,
+            )
+        return False
 
     # --- Identity resolution ---
 

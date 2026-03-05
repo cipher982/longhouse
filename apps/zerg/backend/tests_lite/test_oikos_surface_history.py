@@ -4,6 +4,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
@@ -188,6 +189,7 @@ async def test_run_oikos_persists_surface_metadata_on_user_and_assistant(monkeyp
             source_conversation_id="telegram:6311583060",
             source_message_id="msg-99",
             source_event_id="upd-444",
+            source_idempotency_key="telegram:6311583060:444",
         )
 
         assert result.status == "success"
@@ -220,6 +222,78 @@ async def test_run_oikos_persists_surface_metadata_on_user_and_assistant(monkeyp
             "visibility": "surface-local",
             "source_message_id": "msg-99",
             "source_event_id": "upd-444",
+            "idempotency_key": "telegram:6311583060:444",
         }
         assert user_surface == expected
         assert assistant_surface == expected
+
+
+@pytest.mark.asyncio
+async def test_run_oikos_serializes_concurrent_runs_per_owner(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user = User(email="lock@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        async def _noop_async(*_args, **_kwargs):
+            return None
+
+        class FakeRunner:
+            active_count = 0
+            max_active = 0
+
+            def __init__(self, *_args, **_kwargs):
+                self.usage_prompt_tokens = None
+                self.usage_completion_tokens = None
+                self.usage_total_tokens = None
+                self.usage_reasoning_tokens = None
+
+            async def run_thread(self, inner_db, thread):
+                type(self).active_count += 1
+                type(self).max_active = max(type(self).max_active, type(self).active_count)
+                try:
+                    await asyncio.sleep(0.01)
+                    assistant = crud.create_thread_message(
+                        db=inner_db,
+                        thread_id=thread.id,
+                        role="assistant",
+                        content="done",
+                        processed=True,
+                    )
+                    return [assistant]
+                finally:
+                    type(self).active_count -= 1
+
+        monkeypatch.setattr("zerg.services.oikos_service.Runner", FakeRunner)
+        monkeypatch.setattr("zerg.services.event_store.emit_run_event", _noop_async)
+        monkeypatch.setattr("zerg.services.oikos_service.emit_oikos_complete_success", _noop_async)
+        monkeypatch.setattr("zerg.services.oikos_service.emit_stream_control_for_pending_commiss", _noop_async)
+        monkeypatch.setattr("zerg.services.oikos_service.emit_success_run_updated", _noop_async)
+        monkeypatch.setattr("zerg.services.ops_discord.send_run_completion_notification", _noop_async)
+        monkeypatch.setattr("zerg.services.memory_summarizer.schedule_run_summary", lambda **_kwargs: None)
+
+        service = OikosService(db)
+
+        result_a, result_b = await asyncio.gather(
+            service.run_oikos(
+                owner_id=user.id,
+                task="task a",
+                message_id="msg-a",
+                source_surface_id="web",
+                source_conversation_id="web:main",
+            ),
+            service.run_oikos(
+                owner_id=user.id,
+                task="task b",
+                message_id="msg-b",
+                source_surface_id="telegram",
+                source_conversation_id="telegram:6311583060",
+            ),
+        )
+
+        assert result_a.status == "success"
+        assert result_b.status == "success"
+        assert FakeRunner.max_active == 1
