@@ -39,7 +39,7 @@ Notes:
 
 ## [Product] First-class Oikos surface adapter interface extraction (size: 4)
 
-Status (2026-03-05): Planned (research + spec in progress).
+Status (2026-03-05): Done.
 
 **Goal:** Define one modular adapter contract for inbound/outbound Oikos surfaces (web, telegram, voice, future channels) so new platform integrations plug in without touching core Oikos orchestration.
 
@@ -56,6 +56,7 @@ Notes:
 - 2026-03-05: Phase 1 foundation landed: added `zerg/surfaces` core modules (contract, registry, idempotency store, orchestrator), introduced `surface_ingress_claims` model + unique key semantics, and added backend contract tests (`test_surface_idempotency.py`, `test_surface_orchestrator.py`).
 - 2026-03-05: Phase 2 cutover landed: TelegramBridge now delegates inbound message handling to `SurfaceOrchestrator` + `TelegramSurfaceAdapter`, duplicate/run orchestration logic removed from bridge, fail-closed adapter exception handling added, and coverage expanded in adapter/bridge/orchestrator tests.
 - 2026-03-05: Phase 3 test matrix landed: added multi-surface orchestrator integration coverage (`test_surface_orchestrator_multi_surface.py`) validating end-to-end web/voice/telegram ingress behavior, surface-specific routing metadata, push-delivery behavior, and surface-scoped idempotency semantics.
+- 2026-03-05: Phase 4 cutover landed: web chat (`/api/oikos/chat`) and turn-based voice now route through first-class `WebSurfaceAdapter`/`VoiceSurfaceAdapter` + `SurfaceOrchestrator`, and voice turns now require explicit `message_id` (fail-closed idempotency contract, no server-side fallback IDs).
 
 ## [QA/Test] Verify landing-page provider claims (Claude/Codex/Gemini) (size: 2)
 

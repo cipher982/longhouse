@@ -6,8 +6,9 @@ import logging
 from dataclasses import dataclass
 
 from zerg.config import get_settings
-from zerg.database import db_session
-from zerg.services.oikos_service import OikosService
+from zerg.surfaces.adapters.voice import VoiceSurfaceAdapter
+from zerg.surfaces.base import SurfaceHandleStatus
+from zerg.surfaces.orchestrator import SurfaceOrchestrator
 from zerg.voice.stt_service import STTResult
 from zerg.voice.stt_service import get_stt_service
 
@@ -72,25 +73,45 @@ async def run_voice_turn(
     if effective_model is None and settings.testing:
         effective_model = "gpt-scripted"
 
+    if not message_id:
+        return VoiceTurnResult(
+            transcript=stt_result.text,
+            response_text=None,
+            status="error",
+            error="message_id is required for voice turns",
+            stt_model=stt_result.model,
+            message_id=message_id,
+        )
+
     try:
-        with db_session() as db:
-            oikos = OikosService(db)
-            result = await oikos.run_oikos(
-                owner_id=owner_id,
-                task=stt_result.text,
-                model_override=effective_model,
+        adapter = VoiceSurfaceAdapter(owner_id=owner_id)
+        orchestrator = SurfaceOrchestrator()
+        handle_result = await orchestrator.handle_inbound(
+            adapter,
+            raw_input={
+                "owner_id": owner_id,
+                "message_id": message_id,
+                "transcript": stt_result.text,
+                "conversation_id": "voice:default",
+                "model_override": effective_model,
+            },
+        )
+        if handle_result.status != SurfaceHandleStatus.PROCESSED:
+            return VoiceTurnResult(
+                transcript=stt_result.text,
+                response_text=None,
+                status="error",
+                error=f"voice surface orchestration failed: {handle_result.status}",
+                stt_model=stt_result.model,
                 message_id=message_id,
-                source_surface_id="voice",
-                source_conversation_id="voice:default",
-                source_message_id=message_id,
             )
 
         return VoiceTurnResult(
             transcript=stt_result.text,
-            response_text=result.result,
-            status=result.status,
-            run_id=result.run_id,
-            thread_id=result.thread_id,
+            response_text=handle_result.response_text,
+            status=handle_result.run_status or "success",
+            run_id=handle_result.run_id,
+            thread_id=handle_result.thread_id,
             stt_model=stt_result.model,
             message_id=message_id,
         )

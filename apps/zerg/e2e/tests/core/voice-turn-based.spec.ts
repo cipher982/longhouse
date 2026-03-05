@@ -41,6 +41,7 @@ test.beforeEach(async ({ request }) => {
 test.describe('Voice Turn-Based - Core', () => {
   test('transcribe + oikos response returns payload', async ({ request }) => {
     const audioBuffer = buildWavBuffer();
+    const messageId = randomUUID();
 
     const response = await request.post('/api/oikos/voice/turn', {
       multipart: {
@@ -50,6 +51,7 @@ test.describe('Voice Turn-Based - Core', () => {
           buffer: audioBuffer,
         },
         return_audio: 'true',
+        message_id: messageId,
       },
     });
 
@@ -65,6 +67,7 @@ test.describe('Voice Turn-Based - Core', () => {
     expect(data.tts).toBeTruthy();
     expect(typeof data.tts.audio_base64).toBe('string');
     expect(data.tts.audio_base64.length).toBeGreaterThan(0);
+    expect(data.message_id).toBe(messageId);
   });
 
   test('message_id passthrough for history correlation', async ({ request }) => {
