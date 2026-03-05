@@ -270,8 +270,9 @@ class TestEnvGeneration:
         with pytest.raises(ValueError):
             normalize_custom_env_overrides({"DATABASE_URL": "sqlite:///nope"})
 
-    def test_parse_custom_env_json_returns_empty_on_invalid_payload(self):
-        assert parse_custom_env_json("{not-json}") == {}
+    def test_parse_custom_env_json_raises_on_invalid_payload(self):
+        with pytest.raises(ValueError):
+            parse_custom_env_json("{not-json}")
 
 
 class TestOpenAIAllowlist:
@@ -439,6 +440,14 @@ class TestInstancesAPI:
             "OPENAI_API_KEY": "sk-proj-abc",
             "OPENAI_BASE_URL": None,
         }
+
+    def test_get_instance_custom_env_invalid_payload_fails_loudly(self, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(db_session, user, custom_env_json="{broken-json}")
+
+        resp = client.get(f"/api/instances/{inst.id}/custom-env", headers=ADMIN_HEADERS)
+        assert resp.status_code == 500
+        assert "invalid custom env JSON" in resp.json()["detail"]
 
     def test_update_instance_custom_env(self, client, db_session):
         user = _make_user(db_session)

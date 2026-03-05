@@ -142,22 +142,19 @@ def normalize_custom_env_overrides(overrides: dict[str, object] | None) -> dict[
 
 
 def parse_custom_env_json(raw: str | None) -> dict[str, str | None]:
-    """Parse persisted custom env JSON; fail-open to empty on invalid data."""
+    """Parse persisted custom env JSON strictly.
+
+    Raises ValueError on invalid JSON/payload so callers fail loudly.
+    """
     if not raw:
         return {}
     try:
         decoded = json.loads(raw)
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to decode custom env JSON; ignoring overrides")
-        return {}
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("invalid custom env JSON") from exc
     if not isinstance(decoded, dict):
-        logger.warning("Custom env JSON is not an object; ignoring overrides")
-        return {}
-    try:
-        return normalize_custom_env_overrides(decoded)
-    except ValueError as exc:
-        logger.warning("Invalid custom env JSON payload; ignoring overrides: %s", exc)
-        return {}
+        raise ValueError("custom env JSON must decode to an object")
+    return normalize_custom_env_overrides(decoded)
 
 
 def _apply_custom_env(env: dict[str, str], custom_env: dict[str, str | None] | None) -> dict[str, str]:

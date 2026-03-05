@@ -388,7 +388,11 @@ def get_instance_custom_env(instance_id: int, db: Session = Depends(get_db)):
     inst = db.query(Instance).filter(Instance.id == instance_id).first()
     if not inst:
         raise HTTPException(status_code=404, detail="instance not found")
-    return {"custom_env": parse_custom_env_json(inst.custom_env_json)}
+    try:
+        custom_env = parse_custom_env_json(inst.custom_env_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"custom_env": custom_env}
 
 
 @router.put("/{instance_id}/custom-env", dependencies=[Depends(require_admin)])
@@ -443,7 +447,10 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
     # Update running container env — requires deprovision + reprovision
     provisioner = Provisioner()
     provisioner.deprovision_instance(inst.container_name)
-    custom_env = parse_custom_env_json(inst.custom_env_json)
+    try:
+        custom_env = parse_custom_env_json(inst.custom_env_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     result = provisioner.provision_instance(
         inst.subdomain,
         owner_email=user.email,
@@ -490,7 +497,10 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     provisioner.deprovision_instance(inst.container_name)
-    custom_env = parse_custom_env_json(inst.custom_env_json)
+    try:
+        custom_env = parse_custom_env_json(inst.custom_env_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     result = provisioner.provision_instance(
         inst.subdomain,
         owner_email=user.email,

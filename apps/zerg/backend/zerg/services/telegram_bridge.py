@@ -105,8 +105,20 @@ class TelegramBridge:
             await self._persist_chat_id(owner_id, chat_id)
 
         idempotency_key = self._build_idempotency_key(chat_id, event)
-        if idempotency_key and await self._is_duplicate_inbound(owner_id, idempotency_key):
-            logger.info("TelegramBridge: deduped retry for chat %s key %s", chat_id, idempotency_key)
+        if not idempotency_key:
+            logger.error("TelegramBridge: missing update_id for chat %s; dropping inbound message", chat_id)
+            return
+
+        try:
+            if await self._is_duplicate_inbound(owner_id, idempotency_key):
+                logger.info("TelegramBridge: deduped retry for chat %s key %s", chat_id, idempotency_key)
+                return
+        except Exception:
+            logger.exception(
+                "TelegramBridge: dedupe lookup failed for chat %s key %s; dropping message",
+                chat_id,
+                idempotency_key,
+            )
             return
 
         # Send typing indicator and keep refreshing it while Oikos runs
@@ -167,9 +179,6 @@ class TelegramBridge:
         update_id = str(raw.get("update_id", "") or "")
         if update_id:
             return f"telegram:{chat_id}:{update_id}"
-        message_id = str(event.get("message_id", "") or "")
-        if message_id:
-            return f"telegram:{chat_id}:message:{message_id}"
         return None
 
     async def _is_duplicate_inbound(self, owner_id: int, idempotency_key: str) -> bool:
@@ -180,33 +189,25 @@ class TelegramBridge:
         from zerg.models.thread import ThreadMessage
         from zerg.services.oikos_service import OikosService
 
-        try:
-            with db_session() as db:
-                service = OikosService(db)
-                fiche = service.get_or_create_oikos_fiche(owner_id)
-                thread = service.get_or_create_oikos_thread(owner_id, fiche)
-                rows = (
-                    db.query(ThreadMessage.message_metadata)
-                    .filter(
-                        ThreadMessage.thread_id == thread.id,
-                        ThreadMessage.role == "user",
-                    )
-                    .order_by(ThreadMessage.id.desc())
-                    .limit(500)
-                    .all()
+        with db_session() as db:
+            service = OikosService(db)
+            fiche = service.get_or_create_oikos_fiche(owner_id)
+            thread = service.get_or_create_oikos_thread(owner_id, fiche)
+            rows = (
+                db.query(ThreadMessage.message_metadata)
+                .filter(
+                    ThreadMessage.thread_id == thread.id,
+                    ThreadMessage.role == "user",
                 )
-                for row in rows:
-                    metadata = row[0] or {}
-                    surface = metadata.get("surface") if isinstance(metadata, dict) else {}
-                    if isinstance(surface, dict) and surface.get("idempotency_key") == idempotency_key:
-                        return True
-        except Exception:
-            logger.warning(
-                "TelegramBridge: dedupe lookup failed for owner=%s key=%s; continuing without dedupe",
-                owner_id,
-                idempotency_key,
-                exc_info=True,
+                .order_by(ThreadMessage.id.desc())
+                .limit(500)
+                .all()
             )
+            for row in rows:
+                metadata = row[0] or {}
+                surface = metadata.get("surface") if isinstance(metadata, dict) else {}
+                if isinstance(surface, dict) and surface.get("idempotency_key") == idempotency_key:
+                    return True
         return False
 
     # --- Identity resolution ---
