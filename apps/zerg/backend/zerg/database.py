@@ -133,6 +133,7 @@ try:
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import Run  # noqa: F401
+    from zerg.models.models import SurfaceIngressClaim  # noqa: F401
     from zerg.models.models import Thread  # noqa: F401
     from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import Trigger  # noqa: F401
@@ -388,6 +389,7 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import Run  # noqa: F401
+    from zerg.models.models import SurfaceIngressClaim  # noqa: F401
     from zerg.models.models import Thread  # noqa: F401
     from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import User  # noqa: F401

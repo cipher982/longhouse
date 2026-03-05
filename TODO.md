@@ -43,16 +43,17 @@ Status (2026-03-05): Planned (research + spec in progress).
 
 **Goal:** Define one modular adapter contract for inbound/outbound Oikos surfaces (web, telegram, voice, future channels) so new platform integrations plug in without touching core Oikos orchestration.
 
-- [ ] Finalize `SurfaceAdapter` contract (normalized ingress, owner resolution, idempotency contract, delivery contract, capabilities)
-- [ ] Introduce central surface orchestrator/gateway that owns dedupe + run-serialization + `run_oikos()` invocation
+- [x] Finalize `SurfaceAdapter` contract (normalized ingress, owner resolution, idempotency contract, delivery contract, capabilities)
+- [x] Introduce central surface orchestrator/gateway that owns dedupe + run-serialization + `run_oikos()` invocation
 - [ ] Move Telegram-specific Oikos bridging onto the shared surface adapter contract (keep transport plugin isolated)
-- [ ] Add adapter contract test harness (shared tests every adapter must pass)
+- [x] Add adapter contract test harness (shared tests every adapter must pass)
 - [ ] Add end-to-end multi-surface behavior tests on orchestrator path (web + telegram + voice stubs)
 
 Notes:
 - 2026-03-05: Current code has transport plugin architecture (`zerg/channels/*`) plus a Telegram-specific Oikos bridge (`services/telegram_bridge.py`) and separate web/voice Oikos entrypoints.
 - 2026-03-05: New spec target will consolidate Oikos-facing integration behind one surface adapter layer while reusing existing channel plugins for transport mechanics.
 - 2026-03-05: Draft implementation spec landed at `docs/specs/oikos-surface-adapter-interface.md` (first-principles invariants, adapter contract, orchestrator contract, dedupe ledger, rollout, and test matrix).
+- 2026-03-05: Phase 1 foundation landed: added `zerg/surfaces` core modules (contract, registry, idempotency store, orchestrator), introduced `surface_ingress_claims` model + unique key semantics, and added backend contract tests (`test_surface_idempotency.py`, `test_surface_orchestrator.py`).
 
 ## [QA/Test] Verify landing-page provider claims (Claude/Codex/Gemini) (size: 2)
 

@@ -33,6 +33,7 @@ from .fiche import Fiche  # noqa: E402, F401
 from .fiche import FicheMessage  # noqa: E402, F401
 from .llm_audit import LLMAuditLog  # noqa: E402, F401
 from .run import Run  # noqa: E402, F401
+from .surface_ingress import SurfaceIngressClaim  # noqa: E402, F401
 from .thread import Thread  # noqa: E402, F401
 from .thread import ThreadMessage  # noqa: E402, F401
 from .trigger import Trigger  # noqa: E402, F401
