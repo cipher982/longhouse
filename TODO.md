@@ -33,7 +33,7 @@ Notes:
 - 2026-03-04: Existing Telegram bot bridge is live; current behavior still mixes Telegram + web turns in browser history due to missing surface filtering.
 - 2026-03-04: Draft architecture spec landed in `docs/specs/oikos-multi-surface-messaging.md`.
 - 2026-03-05: Phase A shipped: source-surface metadata persistence + `/api/oikos/history` surface filtering + web default (`surface_id=web`) with backend/frontend tests and full E2E pass.
-- 2026-03-05: Phase B shipped: Telegram inbound idempotency-key dedupe (`telegram:{chat_id}:{update_id}` fallback message ID), process-local per-owner run serialization in `OikosService.run_oikos()`, and bridge fail-open behavior when dedupe lookup errors.
+- 2026-03-05: Phase B shipped: Telegram inbound idempotency-key dedupe (`telegram:{chat_id}:{update_id}` only, no message-id fallback), process-local per-owner run serialization in `OikosService.run_oikos()`, and fail-closed dedupe behavior on missing/invalid transport metadata.
 - 2026-03-05: Phase C shipped: browser chat view toggle (`Web only` vs `All activity`) now reloads history with `view=all` when enabled and renders per-message surface badges (Telegram/Voice/System) from metadata.
 - 2026-03-05: Control-plane env durability shipped: added `cp_instances.custom_env_json`, admin GET/PUT endpoints for per-instance env overrides, merge semantics in provision/reprovision/deploy flows (including null-to-unset support), and test coverage for persistence across reprovision + password regen.
 

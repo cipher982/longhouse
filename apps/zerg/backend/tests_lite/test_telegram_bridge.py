@@ -133,6 +133,13 @@ class TestFormatForTelegram:
 
 @pytest.mark.asyncio
 class TestTelegramBridgeRouting:
+    @pytest.fixture(autouse=True)
+    def _stub_dedupe_lookup(self, monkeypatch):
+        async def _never_duplicate(*_args, **_kwargs):
+            return False
+
+        monkeypatch.setattr(TelegramBridge, "_is_duplicate_inbound", _never_duplicate)
+
     async def test_start_subscribes_to_channel(self):
         ch = _make_channel()
         bridge = TelegramBridge(ch)
@@ -243,29 +250,40 @@ class TestTelegramBridgeRouting:
         mock_run_oikos.assert_not_awaited()
         ch.send_message.assert_not_called()
 
-    async def test_dedupe_lookup_error_falls_back_to_run(self):
+    async def test_dedupe_lookup_error_drops_message(self):
         ch = _make_channel()
         bridge = TelegramBridge(ch)
         bridge.start()
-
-        class _BrokenCtx:
-            def __enter__(self):
-                raise RuntimeError("db down")
-
-            def __exit__(self, *_args):
-                return False
 
         mock_run_oikos = AsyncMock(return_value="ok")
         with (
             patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
             patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch("zerg.services.telegram_bridge.db_session", return_value=_BrokenCtx()),
+            patch.object(bridge, "_is_duplicate_inbound", new=AsyncMock(side_effect=RuntimeError("db down"))),
             patch.object(bridge, "_run_oikos", new=mock_run_oikos),
         ):
             await _dispatch(ch, _make_event("status?", chat_id="777"))
 
-        mock_run_oikos.assert_awaited_once()
-        ch.send_message.assert_awaited_once()
+        mock_run_oikos.assert_not_awaited()
+        ch.send_message.assert_not_called()
+
+    async def test_missing_update_id_drops_message(self):
+        ch = _make_channel()
+        bridge = TelegramBridge(ch)
+        bridge.start()
+
+        event = _make_event("status?", chat_id="777")
+        event["raw"] = {}
+        mock_run_oikos = AsyncMock(return_value="ok")
+        with (
+            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
+            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
+            patch.object(bridge, "_run_oikos", new=mock_run_oikos),
+        ):
+            await _dispatch(ch, event)
+
+        mock_run_oikos.assert_not_awaited()
+        ch.send_message.assert_not_called()
 
     async def test_send_failure_logged(self):
         """Delivery failure from channel should be logged, not silently dropped."""
