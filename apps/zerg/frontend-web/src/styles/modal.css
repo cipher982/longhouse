@@ -104,20 +104,55 @@
 
   /* Enrollment Info */
 
-  .enrollment-info {
-    margin-bottom: var(--space-6);
-  }
-
   .enrollment-description {
     color: var(--color-text-primary);
-    margin-bottom: var(--space-2);
+    margin: 0 0 var(--space-4) 0;
     line-height: var(--font-line-height-relaxed);
+    font-size: var(--font-size-sm);
   }
 
   .enrollment-expiry {
-    color: var(--color-intent-warning);
-    font-size: var(--font-size-base);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    margin: var(--space-3) 0 0 0;
+  }
+
+  /* Install method tabs (AddRunnerModal) */
+
+  .install-tabs {
+    display: flex;
+    margin-bottom: var(--space-3);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .install-tab {
+    flex: 1;
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: background var(--motion-duration-fast) var(--motion-easing-standard),
+                color var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .install-tab + .install-tab {
+    border-left: 1px solid var(--color-border-primary);
+  }
+
+  .install-tab:hover:not(.install-tab--active) {
+    background: var(--color-surface-section);
+    color: var(--color-text-primary);
+  }
+
+  .install-tab--active {
+    background: var(--color-surface-section);
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold);
   }
 
   /* Code Block */
