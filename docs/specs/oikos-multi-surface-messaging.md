@@ -1,7 +1,7 @@
 # Oikos Multi-Surface Messaging (Web + Telegram + Future Surfaces)
 
 Date: 2026-03-04
-Status: Draft v1 (implementation-oriented)
+Status: Implemented (2026-03-05)
 
 ## Why This Exists
 
@@ -115,7 +115,7 @@ async def run_oikos(
 
 `GET /api/oikos/history`
 
-### New query params
+### Query params
 
 - `surface_id` (default `web`)
 - `view` (`surface` default, `all` optional)
@@ -141,9 +141,12 @@ Existing fields remain unchanged for backward compatibility.
 
 Inbound Telegram messages must dedupe before starting Oikos:
 
-- key: `telegram:{chat_id}:{update_id}` (preferred) fallback `telegram:{chat_id}:{message_id}`
+- key: `telegram:{chat_id}:{update_id}` (required)
 - write key to `message_metadata.surface.idempotency_key`
 - pre-run check: if message with same key already exists in Oikos thread, skip execution and ACK webhook
+- fail-closed behavior:
+  - missing `update_id` => skip run
+  - dedupe lookup errors => skip run
 
 Implementation phase:
 - Phase 1: application-level lookup in thread messages (no new table)
@@ -196,7 +199,7 @@ Control plane:
 
 ## Rollout Phases
 
-### Phase A: Surface Metadata + Filtered History (must ship first)
+### Phase A: Surface Metadata + Filtered History (shipped)
 
 - pass source context through callers
 - persist metadata on user+assistant rows
@@ -207,7 +210,7 @@ Outcome:
 - web UI stops showing Telegram turns by default
 - shared reasoning context remains intact
 
-### Phase B: Reliability Hardening
+### Phase B: Reliability Hardening (shipped)
 
 - Telegram inbound dedupe
 - per-user run serialization
@@ -215,7 +218,7 @@ Outcome:
 Outcome:
 - retries/races stop creating duplicate or interleaved turn artifacts
 
-### Phase C: UX + Expansion
+### Phase C: UX + Expansion (shipped)
 
 - all-activity toggle in web UI
 - surface badges
@@ -231,17 +234,19 @@ Outcome:
 5. Concurrent web+Telegram prompts for same user execute serially.
 6. Reprovision no longer drops per-instance Telegram/OpenAI settings.
 
+Status: All six criteria implemented in code and verified in test/live checks on 2026-03-05.
+
 ## Non-Goals (v1)
 
 - no split into separate per-surface threads
 - no new dedicated runtime table for surface metadata
 - no timer-driven proactive notification automation heuristics
 
-## Open Questions
+## Remaining Questions
 
-1. Should proactive `send_telegram` create explicit assistant history rows, or remain tool-result-only in v1?
-2. In all-activity mode, should ordering remain strictly `sent_at`, or prefer insertion order `id` (recommended: `id` for determinism)?
-3. For control-plane custom env, do we need immediate Infisical-backed storage, or DB JSON first then Infisical later?
+1. Should proactive `send_telegram` persist explicit assistant timeline rows, or remain tool-result-only?
+2. Should per-owner run serialization move from process-local lock to distributed lock for multi-process scale?
+3. When adding new channels, should we add a channel-agnostic dedupe ledger table now or keep metadata-only dedupe until load requires it?
 
 ## Implementation Notes
 
