@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Callable
 
 from zerg.database import db_session
-from zerg.services.oikos_service import OikosService
 from zerg.surfaces.base import SurfaceAdapter
 from zerg.surfaces.base import SurfaceHandleResult
 from zerg.surfaces.base import SurfaceHandleStatus
 from zerg.surfaces.idempotency import SurfaceIdempotencyError
 from zerg.surfaces.idempotency import SurfaceIngressClaimStore
+
+if TYPE_CHECKING:
+    from zerg.services.oikos_service import OikosService
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +37,15 @@ class SurfaceOrchestrator:
         self,
         *,
         session_factory: Callable[[], Any] = db_session,
-        oikos_service_cls: type[OikosService] = OikosService,
+        oikos_service_cls: type["OikosService"] | None = None,
     ) -> None:
         self._session_factory = session_factory
-        self._oikos_service_cls = oikos_service_cls
+        if oikos_service_cls is None:
+            from zerg.services.oikos_service import OikosService
+
+            self._oikos_service_cls: type[Any] = OikosService
+        else:
+            self._oikos_service_cls = oikos_service_cls
 
     async def handle_inbound(self, adapter: SurfaceAdapter, raw_input: Any) -> SurfaceHandleResult:
         try:
@@ -76,7 +84,20 @@ class SurfaceOrchestrator:
             )
 
         with self._session_factory() as db:
-            owner_id = await adapter.resolve_owner_id(event, db)
+            try:
+                owner_id = await adapter.resolve_owner_id(event, db)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "SurfaceOrchestrator: resolve_owner_id failed for %s key %s",
+                    event.surface_id,
+                    event.dedupe_key,
+                )
+                return SurfaceHandleResult(
+                    status=SurfaceHandleStatus.REJECTED,
+                    surface_id=event.surface_id,
+                    dedupe_key=event.dedupe_key,
+                    message=f"resolve_owner failed: {exc}",
+                )
             if owner_id is None:
                 unresolved_handler = getattr(adapter, "handle_unresolved_owner", None)
                 if callable(unresolved_handler):
@@ -120,7 +141,21 @@ class SurfaceOrchestrator:
                     dedupe_key=event.dedupe_key,
                 )
 
-            run_kwargs = adapter.build_run_kwargs(event) or {}
+            try:
+                run_kwargs = adapter.build_run_kwargs(event) or {}
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "SurfaceOrchestrator: build_run_kwargs failed for %s key %s",
+                    event.surface_id,
+                    event.dedupe_key,
+                )
+                return SurfaceHandleResult(
+                    status=SurfaceHandleStatus.REJECTED,
+                    surface_id=event.surface_id,
+                    owner_id=owner_id,
+                    dedupe_key=event.dedupe_key,
+                    message=f"build_run_kwargs failed: {exc}",
+                )
             invalid = sorted(set(run_kwargs.keys()) - _ALLOWED_RUN_KWARGS)
             if invalid:
                 return SurfaceHandleResult(
@@ -132,16 +167,30 @@ class SurfaceOrchestrator:
                 )
 
             service = self._oikos_service_cls(db)
-            result = await service.run_oikos(
-                owner_id=owner_id,
-                task=event.text,
-                source_surface_id=event.surface_id,
-                source_conversation_id=event.conversation_id,
-                source_message_id=event.source_message_id,
-                source_event_id=event.source_event_id,
-                source_idempotency_key=event.dedupe_key,
-                **run_kwargs,
-            )
+            try:
+                result = await service.run_oikos(
+                    owner_id=owner_id,
+                    task=event.text,
+                    source_surface_id=event.surface_id,
+                    source_conversation_id=event.conversation_id,
+                    source_message_id=event.source_message_id,
+                    source_event_id=event.source_event_id,
+                    source_idempotency_key=event.dedupe_key,
+                    **run_kwargs,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "SurfaceOrchestrator: run_oikos failed for %s key %s",
+                    event.surface_id,
+                    event.dedupe_key,
+                )
+                return SurfaceHandleResult(
+                    status=SurfaceHandleStatus.REJECTED,
+                    surface_id=event.surface_id,
+                    owner_id=owner_id,
+                    dedupe_key=event.dedupe_key,
+                    message=f"run_oikos failed: {exc}",
+                )
 
             if adapter.mode == "push":
                 text = result.result or "Done."

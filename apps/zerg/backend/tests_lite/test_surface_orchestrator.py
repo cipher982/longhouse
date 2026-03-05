@@ -48,12 +48,24 @@ class FakeOikosService:
         return SimpleNamespace(run_id=9001, result="adapter response")
 
 
+class FailingOikosService:
+    def __init__(self, _db):
+        self._db = _db
+
+    async def run_oikos(self, **_kwargs):
+        raise RuntimeError("run blew up")
+
+
 @dataclass
 class FakeAdapter:
     event: SurfaceInboundEvent | None
     owner_id: int | None = 1
     mode: str = "push"
     run_kwargs: dict[str, Any] | None = None
+    normalize_error: Exception | None = None
+    resolve_error: Exception | None = None
+    run_kwargs_error: Exception | None = None
+    deliver_error: Exception | None = None
 
     def __post_init__(self) -> None:
         self.surface_id = "telegram"
@@ -61,15 +73,23 @@ class FakeAdapter:
         self.unresolved_events: list[SurfaceInboundEvent] = []
 
     async def normalize_inbound(self, _raw_input: Any) -> SurfaceInboundEvent | None:
+        if self.normalize_error is not None:
+            raise self.normalize_error
         return self.event
 
     async def resolve_owner_id(self, _event: SurfaceInboundEvent, _db) -> int | None:
+        if self.resolve_error is not None:
+            raise self.resolve_error
         return self.owner_id
 
     def build_run_kwargs(self, _event: SurfaceInboundEvent) -> dict[str, Any]:
+        if self.run_kwargs_error is not None:
+            raise self.run_kwargs_error
         return self.run_kwargs or {}
 
     async def deliver(self, *, owner_id: int, text: str, event: SurfaceInboundEvent) -> None:
+        if self.deliver_error is not None:
+            raise self.deliver_error
         self.deliveries.append({"owner_id": owner_id, "text": text, "event": event})
 
     async def handle_unresolved_owner(self, event: SurfaceInboundEvent) -> None:
@@ -263,3 +283,93 @@ async def test_orchestrator_rejects_invalid_run_kwargs(tmp_path):
 
     assert result.status == SurfaceHandleStatus.REJECTED
     assert "invalid run kwargs" in (result.message or "")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_when_run_oikos_throws(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(email="orch-run-fail@test.local", role="USER")
+        db.add(user)
+        db.commit()
+
+    adapter = FakeAdapter(event=_event(), owner_id=1)
+    orchestrator = SurfaceOrchestrator(
+        session_factory=lambda: _session_factory(SessionLocal),
+        oikos_service_cls=FailingOikosService,
+    )
+
+    result = await orchestrator.handle_inbound(adapter, raw_input={})
+
+    assert result.status == SurfaceHandleStatus.REJECTED
+    assert "run_oikos failed" in (result.message or "")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_when_normalize_throws(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    adapter = FakeAdapter(event=None, normalize_error=RuntimeError("normalize boom"))
+    orchestrator = SurfaceOrchestrator(
+        session_factory=lambda: _session_factory(SessionLocal),
+        oikos_service_cls=FakeOikosService,
+    )
+
+    result = await orchestrator.handle_inbound(adapter, raw_input={})
+
+    assert result.status == SurfaceHandleStatus.REJECTED
+    assert "normalize failed" in (result.message or "")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_when_resolve_owner_throws(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    adapter = FakeAdapter(event=_event(), resolve_error=RuntimeError("resolve boom"))
+    orchestrator = SurfaceOrchestrator(
+        session_factory=lambda: _session_factory(SessionLocal),
+        oikos_service_cls=FakeOikosService,
+    )
+
+    result = await orchestrator.handle_inbound(adapter, raw_input={})
+
+    assert result.status == SurfaceHandleStatus.REJECTED
+    assert "resolve_owner failed" in (result.message or "")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_when_build_run_kwargs_throws(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(email="orch-run-kwargs-fail@test.local", role="USER")
+        db.add(user)
+        db.commit()
+
+    adapter = FakeAdapter(event=_event(), run_kwargs_error=RuntimeError("kwargs boom"))
+    orchestrator = SurfaceOrchestrator(
+        session_factory=lambda: _session_factory(SessionLocal),
+        oikos_service_cls=FakeOikosService,
+    )
+
+    result = await orchestrator.handle_inbound(adapter, raw_input={})
+
+    assert result.status == SurfaceHandleStatus.REJECTED
+    assert "build_run_kwargs failed" in (result.message or "")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_returns_delivery_failed_when_deliver_throws(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(email="orch-delivery-fail@test.local", role="USER")
+        db.add(user)
+        db.commit()
+
+    adapter = FakeAdapter(event=_event(), deliver_error=RuntimeError("deliver boom"))
+    orchestrator = SurfaceOrchestrator(
+        session_factory=lambda: _session_factory(SessionLocal),
+        oikos_service_cls=FakeOikosService,
+    )
+
+    result = await orchestrator.handle_inbound(adapter, raw_input={})
+
+    assert result.status == SurfaceHandleStatus.DELIVERY_FAILED
+    assert result.run_id == 9001

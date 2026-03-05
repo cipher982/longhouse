@@ -23,6 +23,9 @@ from typing import Callable
 
 from zerg.config import get_settings
 from zerg.database import db_session
+from zerg.surfaces.adapters.telegram import TelegramSurfaceAdapter
+from zerg.surfaces.base import SurfaceHandleStatus
+from zerg.surfaces.orchestrator import SurfaceOrchestrator
 
 if TYPE_CHECKING:
     from zerg.channels.plugins.telegram import TelegramChannel
@@ -48,6 +51,7 @@ class TelegramBridge:
     def __init__(self, channel: "TelegramChannel") -> None:
         self._channel = channel
         self._unsubscribe: Callable[[], None] | None = None
+        self._orchestrator = SurfaceOrchestrator()
 
     def start(self) -> None:
         """Subscribe to inbound Telegram messages."""
@@ -85,130 +89,22 @@ class TelegramBridge:
             await self._send(chat_id, _WELCOME_MESSAGE)
             return
 
-        # Resolve to a Longhouse user
-        owner_id = await self._resolve_user(chat_id)
-        if owner_id is None:
-            await self._send(
-                chat_id,
-                (
-                    "Hi! I'm your Longhouse assistant.\n\n"
-                    "To link this chat to your account, run:\n"
-                    "<code>/link YOUR_TOKEN</code>\n\n"
-                    "Get your token from <b>Settings → Telegram</b> in the Longhouse web app."
-                ),
-            )
-            return
-
-        # Persist chat_id from DMs only — prevents group messages from
-        # overwriting the user's real chat_id (and hijacking notifications)
-        if event.get("chat_type") == "dm":
-            await self._persist_chat_id(owner_id, chat_id)
-
-        idempotency_key = self._build_idempotency_key(chat_id, event)
-        if not idempotency_key:
-            logger.error("TelegramBridge: missing update_id for chat %s; dropping inbound message", chat_id)
-            return
-
-        try:
-            if await self._is_duplicate_inbound(owner_id, idempotency_key):
-                logger.info("TelegramBridge: deduped retry for chat %s key %s", chat_id, idempotency_key)
-                return
-        except Exception:
-            logger.exception(
-                "TelegramBridge: dedupe lookup failed for chat %s key %s; dropping message",
-                chat_id,
-                idempotency_key,
-            )
-            return
+        adapter = TelegramSurfaceAdapter(
+            send_cb=self._send,
+            resolve_owner_cb=self._resolve_user,
+            persist_chat_id_cb=self._persist_chat_id,
+            formatter=_format_for_telegram,
+        )
 
         # Send typing indicator and keep refreshing it while Oikos runs
         typing_task = asyncio.create_task(self._keep_typing(chat_id))
         try:
-            raw = event.get("raw") or {}
-            source_message_id = str(event.get("message_id", "") or "")
-            source_event_id = str(raw.get("update_id", "") or "")
-            result_text = await self._run_oikos(
-                owner_id,
-                text,
-                chat_id=chat_id,
-                source_message_id=source_message_id or None,
-                source_event_id=source_event_id or None,
-                source_idempotency_key=idempotency_key,
-            )
-        except Exception as e:
-            logger.exception(f"TelegramBridge: oikos failed for chat {chat_id}: {e}")
-            result_text = "Sorry, I ran into an error. Please try again."
+            result = await self._orchestrator.handle_inbound(adapter, event)
         finally:
             typing_task.cancel()
 
-        await self._send(chat_id, _format_for_telegram(result_text or "Done."))
-
-    # --- Oikos execution ---
-
-    async def _run_oikos(
-        self,
-        owner_id: int,
-        task: str,
-        *,
-        chat_id: str,
-        source_message_id: str | None = None,
-        source_event_id: str | None = None,
-        source_idempotency_key: str | None = None,
-    ) -> str | None:
-        """Run OikosService and return the text result."""
-        from zerg.services.oikos_service import OikosService
-
-        with db_session() as db:
-            service = OikosService(db)
-            result = await service.run_oikos(
-                owner_id=owner_id,
-                task=task,
-                timeout=120,
-                return_on_deferred=False,
-                source_surface_id="telegram",
-                source_conversation_id=f"telegram:{chat_id}",
-                source_message_id=source_message_id,
-                source_event_id=source_event_id,
-                source_idempotency_key=source_idempotency_key,
-            )
-        return result.result
-
-    def _build_idempotency_key(self, chat_id: str, event: "ChannelMessageEvent") -> str | None:
-        """Build a stable key for Telegram webhook retry dedupe."""
-        raw = event.get("raw") or {}
-        update_id = str(raw.get("update_id", "") or "")
-        if update_id:
-            return f"telegram:{chat_id}:{update_id}"
-        return None
-
-    async def _is_duplicate_inbound(self, owner_id: int, idempotency_key: str) -> bool:
-        """Return True if this inbound Telegram message was already persisted."""
-        if not idempotency_key:
-            return False
-
-        from zerg.models.thread import ThreadMessage
-        from zerg.services.oikos_service import OikosService
-
-        with db_session() as db:
-            service = OikosService(db)
-            fiche = service.get_or_create_oikos_fiche(owner_id)
-            thread = service.get_or_create_oikos_thread(owner_id, fiche)
-            rows = (
-                db.query(ThreadMessage.message_metadata)
-                .filter(
-                    ThreadMessage.thread_id == thread.id,
-                    ThreadMessage.role == "user",
-                )
-                .order_by(ThreadMessage.id.desc())
-                .limit(500)
-                .all()
-            )
-            for row in rows:
-                metadata = row[0] or {}
-                surface = metadata.get("surface") if isinstance(metadata, dict) else {}
-                if isinstance(surface, dict) and surface.get("idempotency_key") == idempotency_key:
-                    return True
-        return False
+        if result.status == SurfaceHandleStatus.REJECTED:
+            await self._send(chat_id, "Sorry, I ran into an error. Please try again.")
 
     # --- Identity resolution ---
 
@@ -257,7 +153,10 @@ class TelegramBridge:
         if success:
             await self._send(chat_id, "✓ Account linked! You can now chat with your Longhouse assistant.")
         else:
-            await self._send(chat_id, "Invalid or expired token. Please generate a fresh one in <b>Settings → Telegram</b>.")
+            await self._send(
+                chat_id,
+                "Invalid or expired token. Please generate a fresh one in <b>Settings → Telegram</b>.",
+            )
 
     async def _link_account(self, telegram_chat_id: str, token: str) -> bool:
         """Validate token and write telegram_chat_id to the matching user's context."""
