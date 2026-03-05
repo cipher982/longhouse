@@ -80,6 +80,9 @@ async def run_voice_turn(
                 task=stt_result.text,
                 model_override=effective_model,
                 message_id=message_id,
+                source_surface_id="voice",
+                source_conversation_id="voice:default",
+                source_message_id=message_id,
             )
 
         return VoiceTurnResult(

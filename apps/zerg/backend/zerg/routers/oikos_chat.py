@@ -168,6 +168,9 @@ async def _chat_stream_generator(
                     model_override=model,
                     reasoning_effort=reasoning_effort,
                     return_on_deferred=False,
+                    source_surface_id="web",
+                    source_conversation_id="web:main",
+                    source_message_id=message_id,
                 )
         except Exception as e:
             logger.exception(f"Background oikos execution failed for run {run_id}: {e}")

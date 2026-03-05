@@ -672,10 +672,19 @@ class TelegramChannel(WebhookChannel):
             return
 
         # Build message event
-        event = self._build_message_event(message, edited=update.edited_message is not None)
+        event = self._build_message_event(
+            message,
+            edited=update.edited_message is not None,
+            update_id=update.update_id,
+        )
         self._emit_message(event)
 
-    def _build_message_event(self, message: Message, edited: bool = False) -> ChannelMessageEvent:
+    def _build_message_event(
+        self,
+        message: Message,
+        edited: bool = False,
+        update_id: int | None = None,
+    ) -> ChannelMessageEvent:
         """Build a ChannelMessageEvent from a Telegram message."""
         chat = message.chat
         sender = message.from_user
@@ -762,6 +771,7 @@ class TelegramChannel(WebhookChannel):
             raw={
                 "message_id": message.message_id,
                 "chat_id": chat.id,
+                "update_id": update_id,
                 "date": message.date.isoformat() if message.date else None,
             },
             timestamp=message.date or datetime.now(timezone.utc),
@@ -831,6 +841,7 @@ class TelegramChannel(WebhookChannel):
                 event = self._build_message_event(
                     message,
                     edited=update.edited_message is not None,
+                    update_id=update.update_id,
                 )
                 self._emit_message(event)
                 logger.debug(f"Processed webhook message: {message.message_id} from chat {message.chat.id}")
@@ -841,6 +852,7 @@ class TelegramChannel(WebhookChannel):
                 event = self._build_message_event(
                     channel_post,
                     edited=update.edited_channel_post is not None,
+                    update_id=update.update_id,
                 )
                 self._emit_message(event)
                 logger.debug(f"Processed channel post: {channel_post.message_id}")

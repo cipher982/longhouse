@@ -107,7 +107,16 @@ class TelegramBridge:
         # Send typing indicator and keep refreshing it while Oikos runs
         typing_task = asyncio.create_task(self._keep_typing(chat_id))
         try:
-            result_text = await self._run_oikos(owner_id, text)
+            raw = event.get("raw") or {}
+            source_message_id = str(event.get("message_id", "") or "")
+            source_event_id = str(raw.get("update_id", "") or "")
+            result_text = await self._run_oikos(
+                owner_id,
+                text,
+                chat_id=chat_id,
+                source_message_id=source_message_id or None,
+                source_event_id=source_event_id or None,
+            )
         except Exception as e:
             logger.exception(f"TelegramBridge: oikos failed for chat {chat_id}: {e}")
             result_text = "Sorry, I ran into an error. Please try again."
@@ -118,7 +127,15 @@ class TelegramBridge:
 
     # --- Oikos execution ---
 
-    async def _run_oikos(self, owner_id: int, task: str) -> str | None:
+    async def _run_oikos(
+        self,
+        owner_id: int,
+        task: str,
+        *,
+        chat_id: str,
+        source_message_id: str | None = None,
+        source_event_id: str | None = None,
+    ) -> str | None:
         """Run OikosService and return the text result."""
         from zerg.services.oikos_service import OikosService
 
@@ -129,6 +146,10 @@ class TelegramBridge:
                 task=task,
                 timeout=120,
                 return_on_deferred=False,
+                source_surface_id="telegram",
+                source_conversation_id=f"telegram:{chat_id}",
+                source_message_id=source_message_id,
+                source_event_id=source_event_id,
             )
         return result.result
 

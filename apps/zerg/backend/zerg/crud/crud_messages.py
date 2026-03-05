@@ -75,6 +75,7 @@ def create_thread_message(
     parent_id: Optional[int] = None,
     sent_at: Optional[datetime] = None,
     internal: bool = False,
+    message_metadata: Optional[Dict[str, Any]] = None,
     *,
     commit: bool = True,
 ):
@@ -115,6 +116,7 @@ def create_thread_message(
         parent_id=parent_id,
         sent_at=sent_at,
         internal=internal,
+        message_metadata=message_metadata,
     )
     db.add(db_message)
 

@@ -235,6 +235,7 @@ def read_thread_messages(
                 tool_calls=m.tool_calls,
                 tool_call_id=m.tool_call_id,
                 name=m.name,
+                message_metadata=m.message_metadata,
                 sent_at=m.sent_at,
                 processed=m.processed,
                 parent_id=m.parent_id,
@@ -275,6 +276,7 @@ def create_thread_message(
         role=message.role,
         content=message.content,
         sent_at=message.sent_at,
+        message_metadata=message.message_metadata,
     )
     logger.info(f"Created message with ID {new_message.id} in thread {thread_id}, processed={new_message.processed}")
 
