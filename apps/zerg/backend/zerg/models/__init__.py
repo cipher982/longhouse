@@ -26,6 +26,7 @@ from .models import UserSkill
 from .models import UserTask
 from .run import Run
 from .run_event import RunEvent
+from .surface_ingress import SurfaceIngressClaim
 
 # Re-export from other modules
 from .sync import SyncOperation
@@ -75,6 +76,7 @@ __all__ = [
     "UserTask",
     "UserSkill",
     "CommisJob",
+    "SurfaceIngressClaim",
     "FileReservation",
     "Insight",
 ]
