@@ -40,12 +40,34 @@ def hash_token(token: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def prune_enroll_tokens(db: Session, owner_id: int) -> int:
+    """Delete consumed or expired enrollment tokens for a user.
+
+    Called before creating a new token to keep the table tidy.
+
+    Returns:
+        Number of tokens deleted
+    """
+    from sqlalchemy import delete
+
+    now = utc_now_naive()
+    stmt = delete(RunnerEnrollToken).where(
+        RunnerEnrollToken.owner_id == owner_id,
+        (RunnerEnrollToken.used_at.isnot(None)) | (RunnerEnrollToken.expires_at <= now),
+    )
+    result = db.execute(stmt)
+    db.flush()
+    return result.rowcount
+
+
 def create_enroll_token(
     db: Session,
     owner_id: int,
     ttl_minutes: int = 10,
 ) -> tuple[RunnerEnrollToken, str]:
     """Create a new enrollment token.
+
+    Prunes consumed/expired tokens for this user before creating a new one.
 
     Args:
         db: Database session
@@ -55,6 +77,8 @@ def create_enroll_token(
     Returns:
         Tuple of (token_record, plaintext_token)
     """
+    prune_enroll_tokens(db, owner_id)
+
     token = generate_token()
     token_hash = hash_token(token)
 
