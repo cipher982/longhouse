@@ -663,22 +663,35 @@ def register_runner(
         # Use random suffix to avoid race conditions
         request.name = f"runner-{secrets.token_hex(4)}"
 
-    # Check for name conflicts
+    # Generate auth secret (used for both create and re-enroll)
+    auth_secret = runner_crud.generate_token()
+
+    # If a runner with this name already exists, rotate its secret (re-enroll path).
+    # This handles DB wipes, instance migrations, and lost-credential recovery without
+    # requiring delete + re-register.
     existing = runner_crud.get_runner_by_name(
         db=db,
         owner_id=token_record.owner_id,
         name=request.name,
     )
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Runner with name '{request.name}' already exists",
+        if existing.status == "revoked":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Runner '{request.name}' is revoked. Delete it before re-enrolling.",
+            )
+        # Rotate secret in-place — runner ID and history are preserved
+        existing.auth_secret_hash = runner_crud.hash_token(auth_secret)
+        existing.status = "offline"
+        db.commit()
+        logger.info(f"Re-enrolled runner '{request.name}' (id={existing.id}, owner={token_record.owner_id})")
+        return RunnerRegisterResponse(
+            runner_id=existing.id,
+            runner_secret=auth_secret,
+            name=existing.name,
         )
 
-    # Generate auth secret
-    auth_secret = runner_crud.generate_token()
-
-    # Create runner (if this fails, token is already consumed - that's intentional)
+    # New runner — create it
     try:
         runner = runner_crud.create_runner(
             db=db,
