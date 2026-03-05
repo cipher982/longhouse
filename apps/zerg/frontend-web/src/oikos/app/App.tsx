@@ -30,6 +30,7 @@ export default function App({ embedded = false }: AppProps) {
   const state = useAppState()
   const dispatch = useAppDispatch()
   const [isResetting, setIsResetting] = useState(false)
+  const [isSwitchingHistoryView, setIsSwitchingHistoryView] = useState(false)
   const { user } = useAuth()
 
   // Show debug panel for developers (local dev mode) or admins in production
@@ -109,6 +110,18 @@ export default function App({ embedded = false }: AppProps) {
     console.log('[App] Sync conversations')
   }, [])
 
+  const handleToggleHistoryView = useCallback(async () => {
+    const nextView = oikosApp.historyView === 'surface' ? 'all' : 'surface'
+    setIsSwitchingHistoryView(true)
+    try {
+      await oikosApp.setHistoryView(nextView)
+    } catch (error) {
+      console.warn('[App] Failed to switch history view:', error)
+    } finally {
+      setIsSwitchingHistoryView(false)
+    }
+  }, [oikosApp])
+
   // Map voice status for mic button
   const micStatus = state.voiceStatus as 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
 
@@ -179,7 +192,21 @@ export default function App({ embedded = false }: AppProps) {
         )}
 
         <div className="chat-settings-bar">
-          <ModelSelector />
+          <div className="chat-settings-bar__left">
+            <ModelSelector />
+            <button
+              type="button"
+              className={`chat-surface-toggle${oikosApp.historyView === 'all' ? ' chat-surface-toggle--all' : ''}`}
+              data-testid="surface-view-toggle"
+              onClick={handleToggleHistoryView}
+              disabled={isSwitchingHistoryView}
+              title={oikosApp.historyView === 'all' ? 'Showing all activity across surfaces' : 'Showing web messages only'}
+            >
+              {isSwitchingHistoryView
+                ? 'Switching...'
+                : (oikosApp.historyView === 'all' ? 'All activity' : 'Web only')}
+            </button>
+          </div>
           <QuotaPanel
             usage={usageQuery.data}
             isLoading={usageQuery.isLoading}
@@ -190,6 +217,7 @@ export default function App({ embedded = false }: AppProps) {
         <ChatContainer
           messages={state.messages}
           userTranscriptPreview={state.userTranscriptPreview}
+          showSurfaceBadges={oikosApp.historyView === 'all'}
         />
 
         <div className="bottom-controls">

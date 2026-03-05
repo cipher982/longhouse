@@ -321,6 +321,42 @@
   gap: var(--space-2);
 }
 
+.oikos-container .chat-settings-bar__left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.oikos-container .chat-surface-toggle {
+  border: 1px solid var(--color-border-muted);
+  background: #1a1410;
+  color: var(--color-text-secondary);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: var(--font-family-mono);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.oikos-container .chat-surface-toggle:hover {
+  border-color: rgba(93, 209, 183, 0.45);
+  color: var(--color-text-primary);
+}
+
+.oikos-container .chat-surface-toggle:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.oikos-container .chat-surface-toggle--all {
+  border-color: rgba(93, 209, 183, 0.55);
+  color: #a9f0de;
+  box-shadow: inset 0 0 0 1px rgba(93, 209, 183, 0.15);
+}
+
 .oikos-container .quota-panel {
   min-width: 250px;
   max-width: 420px;

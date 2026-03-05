@@ -297,4 +297,24 @@ describe('ChatContainer timeline ordering', () => {
       expect(run1ToolIdx).toBeLessThan(run2StartIdx);
     }
   });
+
+  it('shows Telegram badge for cross-surface messages in all-activity mode', () => {
+    const messages: ChatMessage[] = [
+      {
+        id: 'msg-1',
+        role: 'assistant',
+        content: 'I sent the follow-up to your phone.',
+        timestamp: new Date(),
+        originSurfaceId: 'telegram',
+        deliverySurfaceId: 'telegram',
+      },
+    ];
+
+    render(<ChatContainer messages={messages} showSurfaceBadges={true} />);
+
+    const badge = screen.getByTestId('message-surface-badge');
+    expect(badge).toBeVisible();
+    expect(badge).toHaveAttribute('data-surface-id', 'telegram');
+    expect(badge).toHaveTextContent('Telegram');
+  });
 });

@@ -85,6 +85,8 @@ interface OikosAppState {
   oikosClient: OikosAPIClient | null
 }
 
+export type OikosHistoryView = 'surface' | 'all'
+
 /**
  * Main hook for Oikos application
  */
@@ -111,6 +113,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
   const lastBootstrapResultRef = useRef<BootstrapResult | null>(null)
   const lastOikosTurnsRef = useRef<ConversationTurn[]>([])
   const initStartedRef = useRef(false)
+  const [historyView, setHistoryViewState] = useState<OikosHistoryView>('surface')
   // Track if messages were pre-hydrated (e.g., from OikosChatPage with ?thread= param)
   // If pre-hydrated, we should skip loading oikos thread to avoid state clobbering
   const messagesPreHydratedRef = useRef(appState.messages.length > 0)
@@ -244,7 +247,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
     }
   }, [dispatch, updateState])
 
-  const loadOikosHistory = useCallback(async () => {
+  const loadOikosHistory = useCallback(async (options?: { view?: OikosHistoryView }) => {
     if (!oikosChatRef.current) return []
 
     // Skip loading if messages were pre-hydrated (e.g., from OikosChatPage with ?thread=)
@@ -255,7 +258,11 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
 
     try {
       logger.info('[useOikosApp] Loading Oikos chat history...')
-      const messages = await oikosChatRef.current.loadHistory(50)
+      const view = options?.view || historyView
+      const messages = await oikosChatRef.current.loadHistory(50, {
+        surface_id: 'web',
+        view,
+      })
 
       if (messages.length > 0) {
         // Extract and hydrate tool calls from history
@@ -308,38 +315,49 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
 
         // Note: Internal orchestration messages are now filtered server-side via the
         // `internal` column on ThreadMessage. The history API only returns user-facing messages.
-        const history: ConversationTurn[] = messages.map(msg => ({
-          id: uuid(),
-          timestamp: msg.timestamp,
-          userTranscript: msg.role === 'user' ? msg.content : undefined,
-          assistantResponse: msg.role === 'assistant' ? msg.content : undefined,
-          assistantUsage: msg.role === 'assistant' ? msg.usage : undefined,
-        }))
-
-        lastOikosTurnsRef.current = history
-
-        // Convert to ChatMessages for React context
+        const history: ConversationTurn[] = []
         const chatMessages: ChatMessage[] = []
-        for (const turn of history) {
-          if (turn.userTranscript) {
-            chatMessages.push({
-              id: turn.id || uuid(),
-              role: 'user',
-              content: turn.userTranscript,
-              timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
+        for (const msg of messages) {
+          const msgId = uuid()
+          const timestamp = msg.timestamp ? new Date(msg.timestamp) : new Date()
+          if (msg.role === 'user') {
+            history.push({
+              id: msgId,
+              timestamp,
+              userTranscript: msg.content,
             })
-          }
-          if (turn.assistantResponse) {
             chatMessages.push({
-              id: `${turn.id}-asst`,
+              id: msgId,
+              role: 'user',
+              content: msg.content,
+              originSurfaceId: msg.origin_surface_id,
+              deliverySurfaceId: msg.delivery_surface_id,
+              visibility: msg.visibility,
+              timestamp,
+            })
+            continue
+          }
+          if (msg.role === 'assistant') {
+            history.push({
+              id: msgId,
+              timestamp,
+              assistantResponse: msg.content,
+              assistantUsage: msg.usage,
+            })
+            chatMessages.push({
+              id: `${msgId}-asst`,
               role: 'assistant',
-              content: turn.assistantResponse,
-              timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
-              usage: turn.assistantUsage,
+              content: msg.content,
+              originSurfaceId: msg.origin_surface_id,
+              deliverySurfaceId: msg.delivery_surface_id,
+              visibility: msg.visibility,
+              timestamp,
+              usage: msg.usage,
             })
           }
         }
 
+        lastOikosTurnsRef.current = history
         dispatch({ type: 'SET_MESSAGES', messages: chatMessages })
         logger.info(`[useOikosApp] Loaded ${messages.length} messages from history`)
         return history
@@ -351,7 +369,17 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
       logger.warn('[useOikosApp] Failed to load history (non-fatal):', error)
       return []
     }
-  }, [dispatch])
+  }, [dispatch, historyView])
+
+  const setHistoryView = useCallback(async (view: OikosHistoryView) => {
+    if (view === historyView) {
+      return
+    }
+    setHistoryViewState(view)
+    if (state.initialized && !messagesPreHydratedRef.current) {
+      await loadOikosHistory({ view })
+    }
+  }, [historyView, loadOikosHistory, state.initialized])
 
   const checkForActiveRun = useCallback(async () => {
     try {
@@ -855,6 +883,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
     reconnecting: state.reconnecting,
     voiceStatus: state.voiceStatus,
     bootstrap: state.bootstrap,
+    historyView,
 
     // Connection
     connect,
@@ -870,6 +899,8 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
     // Text
     sendText,
     clearHistory,
+    setHistoryView,
+    reloadHistory: loadOikosHistory,
 
     // Controllers (for advanced usage)
     voiceController,

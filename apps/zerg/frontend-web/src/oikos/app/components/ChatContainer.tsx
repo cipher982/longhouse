@@ -28,9 +28,51 @@ type TimelineEvent =
 interface ChatContainerProps {
   messages: ChatMessage[]
   userTranscriptPreview?: string  // Live voice transcript preview
+  showSurfaceBadges?: boolean
 }
 
-export function ChatContainer({ messages, userTranscriptPreview }: ChatContainerProps) {
+type SurfaceBadgeInfo = {
+  id: string
+  label: string
+}
+
+const SURFACE_BADGES: Record<string, SurfaceBadgeInfo> = {
+  telegram: { id: 'telegram', label: 'Telegram' },
+  voice: { id: 'voice', label: 'Voice' },
+  system: { id: 'system', label: 'System' },
+}
+
+function resolveSurfaceBadge(message: ChatMessage): SurfaceBadgeInfo | null {
+  const surfaceId = message.deliverySurfaceId || message.originSurfaceId
+  if (!surfaceId || surfaceId === 'web') {
+    return null
+  }
+  return SURFACE_BADGES[surfaceId] || { id: surfaceId, label: surfaceId }
+}
+
+function renderSurfaceIcon(surfaceId: string) {
+  if (surfaceId === 'telegram') {
+    return (
+      <svg className="message-surface-badge__icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M21.5 3.5L2.8 10.7c-1 .4-.9 1.8.1 2l4.7 1.4 1.8 5.5c.3 1 1.6 1.2 2.2.3l2.6-3.5 4.7 3.4c.8.6 2 .1 2.2-.9l2.4-14c.2-1.2-1-2.2-2.1-1.8z"
+          fill="currentColor"
+        />
+      </svg>
+    )
+  }
+  if (surfaceId === 'voice') {
+    return (
+      <svg className="message-surface-badge__icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V6a3 3 0 0 1 3-3z" fill="currentColor" />
+        <path d="M6 11a6 6 0 0 0 12 0h2a8 8 0 0 1-7 7.9V22h-2v-3.1A8 8 0 0 1 4 11h2z" fill="currentColor" />
+      </svg>
+    )
+  }
+  return null
+}
+
+export function ChatContainer({ messages, userTranscriptPreview, showSurfaceBadges = false }: ChatContainerProps) {
   // Ref on wrapper (scroll container) - scrolling now happens on outer element
   const wrapperRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
@@ -228,6 +270,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
     const isAssistant = message.role === 'assistant'
     const hasMessageContent = message.content && message.content.length > 0
     const isPending = isAssistant && message.status !== 'final' && message.status !== 'error' && message.status !== 'canceled'
+    const surfaceBadge = showSurfaceBadges ? resolveSurfaceBadge(message) : null
 
     // Hide thinking dots if commis are showing progress
     const showTypingDots = isPending && !hasMessageContent && !hasActiveCommis
@@ -241,6 +284,18 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
           data-role={`chat-message-${message.role}`}
         >
           <div className="message-bubble" tabIndex={isAssistant && usageTitle && usageLine ? 0 : undefined}>
+            {surfaceBadge && (
+              <div className="message-surface-row">
+                <span
+                  className={`message-surface-badge message-surface-badge--${surfaceBadge.id}`}
+                  data-testid="message-surface-badge"
+                  data-surface-id={surfaceBadge.id}
+                >
+                  {renderSurfaceIcon(surfaceBadge.id)}
+                  <span>{surfaceBadge.label}</span>
+                </span>
+              </div>
+            )}
             <div className="message-content">
               {showTypingDots ? (
                 <div className="thinking-dots thinking-dots--in-chat">
