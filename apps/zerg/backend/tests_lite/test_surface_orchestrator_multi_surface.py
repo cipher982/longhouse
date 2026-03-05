@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime
-from datetime import timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -16,8 +13,9 @@ from zerg.database import make_sessionmaker
 from zerg.models.surface_ingress import SurfaceIngressClaim
 from zerg.models.user import User
 from zerg.surfaces.adapters.telegram import TelegramSurfaceAdapter
+from zerg.surfaces.adapters.voice import VoiceSurfaceAdapter
+from zerg.surfaces.adapters.web import WebSurfaceAdapter
 from zerg.surfaces.base import SurfaceHandleStatus
-from zerg.surfaces.base import SurfaceInboundEvent
 from zerg.surfaces.orchestrator import SurfaceOrchestrator
 
 
@@ -48,44 +46,6 @@ class FakeOikosService:
         return SimpleNamespace(run_id=4242, result="adapter response")
 
 
-@dataclass
-class InlineSurfaceAdapter:
-    surface_id: str
-    conversation_id: str
-    dedupe_key: str
-    text: str
-    owner_id: int
-    mode: str = "inline"
-
-    def __post_init__(self) -> None:
-        self.delivery_calls = 0
-
-    async def normalize_inbound(self, _raw_input: Any) -> SurfaceInboundEvent | None:
-        return SurfaceInboundEvent(
-            surface_id=self.surface_id,
-            conversation_id=self.conversation_id,
-            dedupe_key=self.dedupe_key,
-            owner_hint=str(self.owner_id),
-            source_message_id=None,
-            source_event_id=None,
-            text=self.text,
-            timestamp_utc=datetime(2026, 3, 5, 12, 0, tzinfo=timezone.utc),
-            raw={},
-        )
-
-    async def resolve_owner_id(self, _event: SurfaceInboundEvent, _db) -> int | None:
-        return self.owner_id
-
-    def build_run_kwargs(self, _event: SurfaceInboundEvent) -> dict[str, Any]:
-        return {"timeout": 30, "return_on_deferred": False}
-
-    async def deliver(self, *, owner_id: int, text: str, event: SurfaceInboundEvent) -> None:
-        del owner_id
-        del text
-        del event
-        self.delivery_calls += 1
-
-
 @pytest.mark.asyncio
 async def test_orchestrator_multi_surface_end_to_end_with_telegram_delivery(tmp_path):
     SessionLocal = _make_db(tmp_path)
@@ -96,20 +56,8 @@ async def test_orchestrator_multi_surface_end_to_end_with_telegram_delivery(tmp_
         owner_id = user.id
 
     FakeOikosService.calls.clear()
-    web_adapter = InlineSurfaceAdapter(
-        surface_id="web",
-        conversation_id="web:main",
-        dedupe_key="web:main:1",
-        text="from web",
-        owner_id=owner_id,
-    )
-    voice_adapter = InlineSurfaceAdapter(
-        surface_id="voice",
-        conversation_id="voice:default",
-        dedupe_key="voice:default:1",
-        text="from voice",
-        owner_id=owner_id,
-    )
+    web_adapter = WebSurfaceAdapter(owner_id=owner_id)
+    voice_adapter = VoiceSurfaceAdapter(owner_id=owner_id)
 
     send_cb = AsyncMock()
     resolve_owner_cb = AsyncMock(return_value=owner_id)
@@ -133,17 +81,30 @@ async def test_orchestrator_multi_surface_end_to_end_with_telegram_delivery(tmp_
         oikos_service_cls=FakeOikosService,
     )
 
-    web_result = await orchestrator.handle_inbound(web_adapter, raw_input={})
-    voice_result = await orchestrator.handle_inbound(voice_adapter, raw_input={})
+    web_result = await orchestrator.handle_inbound(
+        web_adapter,
+        raw_input={
+            "owner_id": owner_id,
+            "message": "from web",
+            "message_id": "web-msg-1",
+            "conversation_id": "web:main",
+            "run_id": 2001,
+        },
+    )
+    voice_result = await orchestrator.handle_inbound(
+        voice_adapter,
+        raw_input={
+            "owner_id": owner_id,
+            "transcript": "from voice",
+            "message_id": "voice-msg-1",
+            "conversation_id": "voice:default",
+        },
+    )
     telegram_result = await orchestrator.handle_inbound(telegram_adapter, raw_input=telegram_event)
 
     assert web_result.status == SurfaceHandleStatus.PROCESSED
     assert voice_result.status == SurfaceHandleStatus.PROCESSED
     assert telegram_result.status == SurfaceHandleStatus.PROCESSED
-
-    # Inline surfaces do not receive push delivery.
-    assert web_adapter.delivery_calls == 0
-    assert voice_adapter.delivery_calls == 0
 
     resolve_owner_cb.assert_awaited_once_with("42")
     persist_chat_id_cb.assert_awaited_once_with(owner_id, "42")
@@ -153,7 +114,10 @@ async def test_orchestrator_multi_surface_end_to_end_with_telegram_delivery(tmp_
     calls_by_surface = {call["source_surface_id"]: call for call in FakeOikosService.calls}
     assert set(calls_by_surface) == {"web", "voice", "telegram"}
     assert calls_by_surface["web"]["source_conversation_id"] == "web:main"
+    assert calls_by_surface["web"]["message_id"] == "web-msg-1"
+    assert calls_by_surface["web"]["run_id"] == 2001
     assert calls_by_surface["voice"]["source_conversation_id"] == "voice:default"
+    assert calls_by_surface["voice"]["message_id"] == "voice-msg-1"
     assert calls_by_surface["telegram"]["source_conversation_id"] == "telegram:42"
     assert calls_by_surface["telegram"]["source_message_id"] == "77"
     assert calls_by_surface["telegram"]["source_event_id"] == "9001"
@@ -175,29 +139,43 @@ async def test_orchestrator_idempotency_is_surface_scoped(tmp_path):
         owner_id = user.id
 
     FakeOikosService.calls.clear()
-    web_adapter = InlineSurfaceAdapter(
-        surface_id="web",
-        conversation_id="web:main",
-        dedupe_key="same-key",
-        text="web event",
-        owner_id=owner_id,
-    )
-    voice_adapter = InlineSurfaceAdapter(
-        surface_id="voice",
-        conversation_id="voice:default",
-        dedupe_key="same-key",
-        text="voice event",
-        owner_id=owner_id,
-    )
+    web_adapter = WebSurfaceAdapter(owner_id=owner_id)
+    voice_adapter = VoiceSurfaceAdapter(owner_id=owner_id)
 
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
         oikos_service_cls=FakeOikosService,
     )
 
-    first = await orchestrator.handle_inbound(web_adapter, raw_input={})
-    second = await orchestrator.handle_inbound(voice_adapter, raw_input={})
-    third = await orchestrator.handle_inbound(web_adapter, raw_input={})
+    first = await orchestrator.handle_inbound(
+        web_adapter,
+        raw_input={
+            "owner_id": owner_id,
+            "message": "web event",
+            "message_id": "same-key",
+            "conversation_id": "web:main",
+            "run_id": 2010,
+        },
+    )
+    second = await orchestrator.handle_inbound(
+        voice_adapter,
+        raw_input={
+            "owner_id": owner_id,
+            "transcript": "voice event",
+            "message_id": "same-key",
+            "conversation_id": "voice:default",
+        },
+    )
+    third = await orchestrator.handle_inbound(
+        web_adapter,
+        raw_input={
+            "owner_id": owner_id,
+            "message": "web event",
+            "message_id": "same-key",
+            "conversation_id": "web:main",
+            "run_id": 2010,
+        },
+    )
 
     assert first.status == SurfaceHandleStatus.PROCESSED
     assert second.status == SurfaceHandleStatus.PROCESSED

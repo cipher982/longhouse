@@ -155,6 +155,9 @@ async def voice_turn(
     if len(audio_bytes) > MAX_AUDIO_BYTES:
         return _voice_turn_error(413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id)
 
+    if not message_id:
+        return _voice_turn_error(400, "message_id is required for voice turns", message_id)
+
     result = await run_voice_turn(
         owner_id=current_user.id,
         audio_bytes=audio_bytes,

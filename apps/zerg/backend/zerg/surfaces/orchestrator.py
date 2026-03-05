@@ -193,7 +193,11 @@ class SurfaceOrchestrator:
                 )
 
             if adapter.mode == "push":
-                text = result.result or "Done."
+                run_id = getattr(result, "run_id", None)
+                thread_id = getattr(result, "thread_id", None)
+                run_status = getattr(result, "status", None)
+                response_text = getattr(result, "result", None)
+                text = response_text or "Done."
                 try:
                     await adapter.deliver(owner_id=owner_id, text=text, event=event)
                 except Exception:  # noqa: BLE001
@@ -207,7 +211,10 @@ class SurfaceOrchestrator:
                         surface_id=event.surface_id,
                         owner_id=owner_id,
                         dedupe_key=event.dedupe_key,
-                        run_id=result.run_id,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        run_status=run_status,
+                        response_text=response_text,
                     )
 
             return SurfaceHandleResult(
@@ -215,5 +222,8 @@ class SurfaceOrchestrator:
                 surface_id=event.surface_id,
                 owner_id=owner_id,
                 dedupe_key=event.dedupe_key,
-                run_id=result.run_id,
+                run_id=getattr(result, "run_id", None),
+                thread_id=getattr(result, "thread_id", None),
+                run_status=getattr(result, "status", None),
+                response_text=getattr(result, "result", None),
             )

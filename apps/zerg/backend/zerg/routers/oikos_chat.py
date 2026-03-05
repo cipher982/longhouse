@@ -36,7 +36,10 @@ class OikosChatRequest(BaseModel):
     message_id: str = Field(..., description="Client-generated message ID (UUID)")
     model: Optional[str] = Field(None, description="Model to use for this request (e.g., gpt-5.2)")
     reasoning_effort: Optional[str] = Field(None, description="Reasoning effort: none, low, medium, high")
-    replay_scenario: Optional[str] = Field(None, description="Replay scenario name (dev only, requires REPLAY_MODE_ENABLED=true)")
+    replay_scenario: Optional[str] = Field(
+        None,
+        description="Replay scenario name (dev only, requires REPLAY_MODE_ENABLED=true)",
+    )
 
 
 async def _replay_stream_generator(
@@ -125,7 +128,10 @@ async def _replay_stream_generator(
 
         if not task_started:
             task_started = True
-            logger.info(f"Replay SSE: starting replay for run {run_id}, scenario={replay_scenario}", extra={"tag": "OIKOS"})
+            logger.info(
+                f"Replay SSE: starting replay for run {run_id}, scenario={replay_scenario}",
+                extra={"tag": "OIKOS"},
+            )
 
             # Run replay in background with error handling
             asyncio.create_task(_run_replay_with_error_handling())
@@ -152,26 +158,30 @@ async def _chat_stream_generator(
 
     async def run_oikos_background():
         """Execute oikos in background."""
-        from zerg.database import db_session
-        from zerg.services.oikos_service import OikosService
+        from zerg.surfaces.adapters.web import WebSurfaceAdapter
+        from zerg.surfaces.base import SurfaceHandleStatus
+        from zerg.surfaces.orchestrator import SurfaceOrchestrator
 
         try:
-            with db_session() as bg_db:
-                service = OikosService(bg_db)
-                await service.run_oikos(
-                    owner_id=owner_id,
-                    task=message,
-                    run_id=run_id,
-                    message_id=message_id,
-                    trace_id=trace_id,
-                    timeout=600,  # 10 min safety net; deferred state kicks in before this
-                    model_override=model,
-                    reasoning_effort=reasoning_effort,
-                    return_on_deferred=False,
-                    source_surface_id="web",
-                    source_conversation_id="web:main",
-                    source_message_id=message_id,
-                )
+            adapter = WebSurfaceAdapter(owner_id=owner_id)
+            orchestrator = SurfaceOrchestrator()
+            handle_result = await orchestrator.handle_inbound(
+                adapter,
+                raw_input={
+                    "owner_id": owner_id,
+                    "message": message,
+                    "message_id": message_id,
+                    "conversation_id": "web:main",
+                    "run_id": run_id,
+                    "trace_id": trace_id,
+                    "timeout": 600,  # 10 min safety net; deferred state kicks in before this
+                    "model_override": model,
+                    "reasoning_effort": reasoning_effort,
+                    "return_on_deferred": False,
+                },
+            )
+            if handle_result.status != SurfaceHandleStatus.PROCESSED:
+                raise RuntimeError(f"web surface orchestration failed: {handle_result.status}")
         except Exception as e:
             logger.exception(f"Background oikos execution failed for run {run_id}: {e}")
             # Emit error event so the stream knows to close

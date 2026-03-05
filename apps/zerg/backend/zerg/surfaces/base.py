@@ -49,6 +49,9 @@ class SurfaceHandleResult:
     dedupe_key: str | None = None
     owner_id: int | None = None
     run_id: int | None = None
+    thread_id: int | None = None
+    run_status: str | None = None
+    response_text: str | None = None
     message: str | None = None
 
 
