@@ -51,6 +51,8 @@ from control_plane.services.provisioner import (  # noqa: E402
     _labels_for,
     _openai_allowlist,
     _volume_for,
+    normalize_custom_env_overrides,
+    parse_custom_env_json,
 )
 from control_plane.routers.auth import _hash_password, _issue_session_token  # noqa: E402
 from control_plane.config import settings  # noqa: E402
@@ -238,6 +240,39 @@ class TestEnvGeneration:
             assert env["FROM_EMAIL"] == "noreply@test.com"
             assert env["NOTIFY_EMAIL"] == "owner@test.com"
 
+    def test_custom_env_overrides_merge_into_instance_env(self):
+        env = _env_for(
+            "testuser",
+            "owner@test.com",
+            custom_env={
+                "TELEGRAM_BOT_TOKEN": "tg-secret",
+                "OPENAI_API_KEY": "sk-proj-test",
+            },
+        )
+        assert env["TELEGRAM_BOT_TOKEN"] == "tg-secret"
+        assert env["OPENAI_API_KEY"] == "sk-proj-test"
+
+    def test_custom_env_null_value_removes_base_key(self):
+        with (
+            patch.object(settings, "instance_openai_allowlist", "testuser"),
+            patch.object(settings, "instance_openai_base_url", "https://llm.proxy"),
+            patch.object(settings, "instance_openai_api_key", "sk-default"),
+        ):
+            env = _env_for(
+                "testuser",
+                "owner@test.com",
+                custom_env={"OPENAI_BASE_URL": None, "OPENAI_API_KEY": "sk-override"},
+            )
+        assert "OPENAI_BASE_URL" not in env
+        assert env["OPENAI_API_KEY"] == "sk-override"
+
+    def test_normalize_custom_env_rejects_core_owned_key(self):
+        with pytest.raises(ValueError):
+            normalize_custom_env_overrides({"DATABASE_URL": "sqlite:///nope"})
+
+    def test_parse_custom_env_json_returns_empty_on_invalid_payload(self):
+        assert parse_custom_env_json("{not-json}") == {}
+
 
 class TestOpenAIAllowlist:
     def test_empty_allowlist(self):
@@ -390,6 +425,62 @@ class TestInstancesAPI:
         resp = client.get("/api/instances/999", headers=ADMIN_HEADERS)
         assert resp.status_code == 404
 
+    def test_get_instance_custom_env(self, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session,
+            user,
+            custom_env_json='{"OPENAI_API_KEY":"sk-proj-abc","OPENAI_BASE_URL":null}',
+        )
+
+        resp = client.get(f"/api/instances/{inst.id}/custom-env", headers=ADMIN_HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["custom_env"] == {
+            "OPENAI_API_KEY": "sk-proj-abc",
+            "OPENAI_BASE_URL": None,
+        }
+
+    def test_update_instance_custom_env(self, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(db_session, user)
+
+        resp = client.put(
+            f"/api/instances/{inst.id}/custom-env",
+            headers=ADMIN_HEADERS,
+            json={
+                "custom_env": {
+                    "TELEGRAM_BOT_TOKEN": "token-1",
+                    "OPENAI_BASE_URL": None,
+                }
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert resp.json()["custom_env"] == {
+            "TELEGRAM_BOT_TOKEN": "token-1",
+            "OPENAI_BASE_URL": None,
+        }
+
+        db_session.refresh(inst)
+        assert inst.custom_env_json is not None
+        persisted = parse_custom_env_json(inst.custom_env_json)
+        assert persisted == {
+            "TELEGRAM_BOT_TOKEN": "token-1",
+            "OPENAI_BASE_URL": None,
+        }
+
+    def test_update_instance_custom_env_rejects_core_key(self, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(db_session, user)
+
+        resp = client.put(
+            f"/api/instances/{inst.id}/custom-env",
+            headers=ADMIN_HEADERS,
+            json={"custom_env": {"DATABASE_URL": "sqlite:///should-not-pass"}},
+        )
+        assert resp.status_code == 400
+        assert "cannot be overridden" in resp.json()["detail"]
+
     def test_admin_hides_deprovisioned_e2e_rows_by_default(self, client, db_session):
         user_live = _make_user(db_session, email="live@test.com")
         _make_instance(db_session, user_live, subdomain="live", status="active")
@@ -457,6 +548,28 @@ class TestInstancesAPI:
         assert inst.last_health_at is None
 
     @patch("control_plane.routers.instances.Provisioner")
+    def test_reprovision_preserves_custom_env_overrides(self, MockProv, client, db_session):
+        prov = _mock_provisioner()
+        MockProv.return_value = prov
+
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session,
+            user,
+            status="deprovisioned",
+            custom_env_json='{"TELEGRAM_BOT_TOKEN":"tg-secret","OPENAI_BASE_URL":null}',
+        )
+
+        resp = client.post(f"/api/instances/{inst.id}/reprovision", headers=ADMIN_HEADERS)
+        assert resp.status_code == 200
+
+        _, call_kwargs = prov.provision_instance.call_args
+        assert call_kwargs["custom_env"] == {
+            "TELEGRAM_BOT_TOKEN": "tg-secret",
+            "OPENAI_BASE_URL": None,
+        }
+
+    @patch("control_plane.routers.instances.Provisioner")
     def test_reprovision_aborts_on_preflight_failure(self, MockProv, client, db_session):
         prov = _mock_provisioner()
         prov.run_migration_preflight.side_effect = RuntimeError("Migration preflight failed for inst1: boom")
@@ -497,6 +610,24 @@ class TestInstancesAPI:
         assert resp.json()["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
+
+    @patch("control_plane.routers.instances.Provisioner")
+    def test_regenerate_password_preserves_custom_env_overrides(self, MockProv, client, db_session):
+        prov = _mock_provisioner()
+        MockProv.return_value = prov
+
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session,
+            user,
+            custom_env_json='{"TELEGRAM_BOT_TOKEN":"tg-secret"}',
+        )
+
+        resp = client.post(f"/api/instances/{inst.id}/regenerate-password", headers=ADMIN_HEADERS)
+        assert resp.status_code == 200
+
+        _, call_kwargs = prov.provision_instance.call_args
+        assert call_kwargs["custom_env"] == {"TELEGRAM_BOT_TOKEN": "tg-secret"}
 
 
 class TestInstanceHealthCheck:

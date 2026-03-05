@@ -60,6 +60,17 @@ def _startup():
             if "duplicate" not in str(exc).lower():
                 logger.warning(f"email_verified migration skipped: {exc}")
 
+    # Migrate: add per-instance custom_env_json column if missing
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE cp_instances ADD COLUMN custom_env_json TEXT"))
+            conn.commit()
+            logger.info("Added custom_env_json column to cp_instances")
+        except Exception as exc:
+            conn.rollback()
+            if "duplicate" not in str(exc).lower():
+                logger.warning(f"custom_env_json migration skipped: {exc}")
+
     # Crash recovery: clean up stale deploy states from interrupted deploys
     _recover_stale_deploys()
 

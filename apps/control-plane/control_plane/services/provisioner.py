@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -14,6 +16,25 @@ import httpx
 from control_plane.config import settings
 
 logger = logging.getLogger(__name__)
+
+_ENV_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_CORE_OWNED_ENV_KEYS = {
+    "INSTANCE_ID",
+    "OWNER_EMAIL",
+    "ADMIN_EMAILS",
+    "SINGLE_TENANT",
+    "AUTH_DISABLED",
+    "APP_PUBLIC_URL",
+    "PUBLIC_SITE_URL",
+    "DATABASE_URL",
+    "JWT_SECRET",
+    "CONTROL_PLANE_JWT_SECRET",
+    "INTERNAL_API_SECRET",
+    "FERNET_SECRET",
+    "TRIGGER_SIGNING_SECRET",
+    "CONTROL_PLANE_URL",
+    "LONGHOUSE_PASSWORD",
+}
 
 
 def _generate_fernet_key() -> str:
@@ -89,7 +110,76 @@ def _openai_env_allowed(subdomain: str, owner_email: str) -> bool:
     return subdomain.lower() in allowlist or owner_email.lower() in allowlist
 
 
-def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> dict[str, str]:
+def normalize_custom_env_overrides(overrides: dict[str, object] | None) -> dict[str, str | None]:
+    """Validate and normalize per-instance env overrides.
+
+    Rules:
+    - keys must match POSIX-like env format (`^[A-Z][A-Z0-9_]*$`)
+    - core-owned keys are forbidden
+    - values must be string or null (null removes the key from merged env)
+    """
+    if not overrides:
+        return {}
+
+    normalized: dict[str, str | None] = {}
+    for raw_key, raw_value in overrides.items():
+        if not isinstance(raw_key, str):
+            raise ValueError("custom env keys must be strings")
+        key = raw_key.strip()
+        if not key:
+            raise ValueError("custom env key cannot be empty")
+        if key in _CORE_OWNED_ENV_KEYS:
+            raise ValueError(f"{key} is managed by control plane and cannot be overridden")
+        if not _ENV_KEY_PATTERN.match(key):
+            raise ValueError(f"invalid env key: {key}")
+        if raw_value is None:
+            normalized[key] = None
+            continue
+        if not isinstance(raw_value, str):
+            raise ValueError(f"custom env value for {key} must be a string or null")
+        normalized[key] = raw_value
+    return normalized
+
+
+def parse_custom_env_json(raw: str | None) -> dict[str, str | None]:
+    """Parse persisted custom env JSON; fail-open to empty on invalid data."""
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to decode custom env JSON; ignoring overrides")
+        return {}
+    if not isinstance(decoded, dict):
+        logger.warning("Custom env JSON is not an object; ignoring overrides")
+        return {}
+    try:
+        return normalize_custom_env_overrides(decoded)
+    except ValueError as exc:
+        logger.warning("Invalid custom env JSON payload; ignoring overrides: %s", exc)
+        return {}
+
+
+def _apply_custom_env(env: dict[str, str], custom_env: dict[str, str | None] | None) -> dict[str, str]:
+    if not custom_env:
+        return env
+
+    merged = dict(env)
+    for key, value in custom_env.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _env_for(
+    subdomain: str,
+    owner_email: str,
+    password: str | None = None,
+    *,
+    custom_env: dict[str, str | None] | None = None,
+) -> dict[str, str]:
     env: dict[str, str] = {
         "INSTANCE_ID": subdomain,
         "OWNER_EMAIL": owner_email,
@@ -152,7 +242,7 @@ def _env_for(subdomain: str, owner_email: str, password: str | None = None) -> d
     if settings.instance_daily_cost_global_cents > 0:
         env["DAILY_COST_GLOBAL_CENTS"] = str(settings.instance_daily_cost_global_cents)
 
-    return env
+    return _apply_custom_env(env, custom_env)
 
 
 def _volume_for(subdomain: str) -> tuple[str, dict[str, str]]:
@@ -234,6 +324,7 @@ class Provisioner:
         owner_email: str,
         *,
         password: str | None = None,
+        custom_env: dict[str, str | None] | None = None,
         image: str | None = None,
         skip_pull: bool = False,
     ) -> ProvisionResult:
@@ -254,7 +345,7 @@ class Provisioner:
 
         data_path, volumes = _volume_for(subdomain)
         labels = _labels_for(subdomain)
-        env = _env_for(subdomain, owner_email, password=password)
+        env = _env_for(subdomain, owner_email, password=password, custom_env=custom_env)
 
         ports = None
         if settings.publish_ports:

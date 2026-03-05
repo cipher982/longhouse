@@ -35,6 +35,10 @@ class InstanceList(BaseModel):
     instances: list[InstanceOut]
 
 
+class InstanceCustomEnvPayload(BaseModel):
+    custom_env: dict[str, str | None] = Field(default_factory=dict)
+
+
 class TokenOut(BaseModel):
     token: str
     expires_in: int

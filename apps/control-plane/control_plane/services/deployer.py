@@ -17,6 +17,7 @@ from control_plane.models import Deployment
 from control_plane.models import Instance
 from control_plane.models import User
 from control_plane.services.provisioner import Provisioner
+from control_plane.services.provisioner import parse_custom_env_json
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +47,14 @@ def _deploy_single_instance(
 
     try:
         provisioner.deprovision_instance(inst.container_name)
+        custom_env = parse_custom_env_json(inst.custom_env_json)
         # skip_pull=True: batch deploy pre-pulls once to avoid tag drift between instances
         result = provisioner.provision_instance(
-            inst.subdomain, owner_email=user.email, image=deploy.image, skip_pull=True
+            inst.subdomain,
+            owner_email=user.email,
+            custom_env=custom_env,
+            image=deploy.image,
+            skip_pull=True,
         )
         inst.container_name = result.container_name
 
@@ -74,8 +80,12 @@ def _deploy_single_instance(
         if inst.last_healthy_image and inst.last_healthy_image != deploy.image:
             try:
                 provisioner.deprovision_instance(inst.container_name)
+                custom_env = parse_custom_env_json(inst.custom_env_json)
                 result = provisioner.provision_instance(
-                    inst.subdomain, owner_email=user.email, image=inst.last_healthy_image
+                    inst.subdomain,
+                    owner_email=user.email,
+                    custom_env=custom_env,
+                    image=inst.last_healthy_image,
                 )
                 inst.container_name = result.container_name
                 provisioner.wait_for_health(inst.subdomain, timeout=120)

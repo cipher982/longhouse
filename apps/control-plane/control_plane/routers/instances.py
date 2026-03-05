@@ -25,12 +25,15 @@ from control_plane.db import get_db
 from control_plane.models import Instance
 from control_plane.models import User
 from control_plane.schemas import InstanceCreate
+from control_plane.schemas import InstanceCustomEnvPayload
 from control_plane.schemas import InstanceList
 from control_plane.schemas import MigrationStatusOut
 from control_plane.schemas import InstanceOut
 from control_plane.schemas import TokenOut
 from control_plane.services.provisioner import Provisioner
 from control_plane.services.provisioner import _generate_password
+from control_plane.services.provisioner import normalize_custom_env_overrides
+from control_plane.services.provisioner import parse_custom_env_json
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
 
@@ -380,6 +383,30 @@ def get_instance(instance_id: int, db: Session = Depends(get_db)):
     )
 
 
+@router.get("/{instance_id}/custom-env", dependencies=[Depends(require_admin)])
+def get_instance_custom_env(instance_id: int, db: Session = Depends(get_db)):
+    inst = db.query(Instance).filter(Instance.id == instance_id).first()
+    if not inst:
+        raise HTTPException(status_code=404, detail="instance not found")
+    return {"custom_env": parse_custom_env_json(inst.custom_env_json)}
+
+
+@router.put("/{instance_id}/custom-env", dependencies=[Depends(require_admin)])
+def update_instance_custom_env(instance_id: int, payload: InstanceCustomEnvPayload, db: Session = Depends(get_db)):
+    inst = db.query(Instance).filter(Instance.id == instance_id).first()
+    if not inst:
+        raise HTTPException(status_code=404, detail="instance not found")
+
+    try:
+        normalized = normalize_custom_env_overrides(payload.custom_env)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    inst.custom_env_json = json.dumps(normalized, separators=(",", ":"), sort_keys=True) if normalized else None
+    db.commit()
+    return {"ok": True, "custom_env": normalized}
+
+
 @router.post("/{instance_id}/deprovision", dependencies=[Depends(require_admin)])
 def deprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     inst = db.query(Instance).filter(Instance.id == instance_id).first()
@@ -416,7 +443,13 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
     # Update running container env — requires deprovision + reprovision
     provisioner = Provisioner()
     provisioner.deprovision_instance(inst.container_name)
-    result = provisioner.provision_instance(inst.subdomain, owner_email=user.email, password=password)
+    custom_env = parse_custom_env_json(inst.custom_env_json)
+    result = provisioner.provision_instance(
+        inst.subdomain,
+        owner_email=user.email,
+        password=password,
+        custom_env=custom_env,
+    )
     inst.container_name = result.container_name
     inst.status = "provisioning"
     inst.last_health_at = None
@@ -457,7 +490,12 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     provisioner.deprovision_instance(inst.container_name)
-    result = provisioner.provision_instance(inst.subdomain, owner_email=user.email)
+    custom_env = parse_custom_env_json(inst.custom_env_json)
+    result = provisioner.provision_instance(
+        inst.subdomain,
+        owner_email=user.email,
+        custom_env=custom_env,
+    )
 
     inst.status = "provisioning"
     inst.last_health_at = None

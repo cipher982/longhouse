@@ -150,6 +150,27 @@ class TestDeploySingleInstance:
         assert inst.last_healthy_image == deploy.image
         assert inst.status == "active"
 
+    def test_success_passes_instance_custom_env_to_provisioner(self, db_session):
+        user = _make_user(db_session)
+        deploy = _make_deployment(db_session)
+        inst = _make_instance(
+            db_session,
+            user,
+            deploy_id=deploy.id,
+            deploy_state="pending",
+            custom_env_json='{"TELEGRAM_BOT_TOKEN":"tg-secret","OPENAI_BASE_URL":null}',
+        )
+        prov = _mock_provisioner(succeed=True)
+
+        result = _deploy_single_instance(inst, user, deploy, prov, db_session)
+
+        assert result is True
+        _, call_kwargs = prov.provision_instance.call_args
+        assert call_kwargs["custom_env"] == {
+            "TELEGRAM_BOT_TOKEN": "tg-secret",
+            "OPENAI_BASE_URL": None,
+        }
+
     def test_failure_triggers_rollback(self, db_session):
         user = _make_user(db_session)
         deploy = _make_deployment(db_session)
