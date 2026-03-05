@@ -7,7 +7,6 @@ No real bot token or database required.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -16,7 +15,8 @@ import pytest
 
 from zerg.services.telegram_bridge import TelegramBridge
 from zerg.services.telegram_bridge import _format_for_telegram
-
+from zerg.surfaces.base import SurfaceHandleResult
+from zerg.surfaces.base import SurfaceHandleStatus
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -133,13 +133,6 @@ class TestFormatForTelegram:
 
 @pytest.mark.asyncio
 class TestTelegramBridgeRouting:
-    @pytest.fixture(autouse=True)
-    def _stub_dedupe_lookup(self, monkeypatch):
-        async def _never_duplicate(*_args, **_kwargs):
-            return False
-
-        monkeypatch.setattr(TelegramBridge, "_is_duplicate_inbound", _never_duplicate)
-
     async def test_start_subscribes_to_channel(self):
         ch = _make_channel()
         bridge = TelegramBridge(ch)
@@ -158,163 +151,79 @@ class TestTelegramBridgeRouting:
         ch = _make_channel()
         bridge = TelegramBridge(ch)
         bridge.start()
+        bridge._orchestrator.handle_inbound = AsyncMock(
+            return_value=SurfaceHandleResult(
+                status=SurfaceHandleStatus.PROCESSED,
+                surface_id="telegram",
+            )
+        )
 
-        with patch.object(bridge, "_run_oikos") as mock_oikos:
-            await _dispatch(ch, _make_event(""))
-            mock_oikos.assert_not_called()
+        await _dispatch(ch, _make_event(""))
 
+        bridge._orchestrator.handle_inbound.assert_not_awaited()
         ch.send_message.assert_not_called()
 
     async def test_start_command_sends_welcome(self):
         ch = _make_channel()
         bridge = TelegramBridge(ch)
         bridge.start()
+        bridge._orchestrator.handle_inbound = AsyncMock()
 
         await _dispatch(ch, _make_event("/start"))
 
         ch.send_message.assert_awaited_once()
         args = ch.send_message.call_args[0][0]
         assert "Longhouse" in args["text"]
+        bridge._orchestrator.handle_inbound.assert_not_awaited()
 
-    async def test_unknown_sender_multitenant_gets_link_prompt(self):
+    async def test_message_delegates_to_orchestrator(self):
         ch = _make_channel()
         bridge = TelegramBridge(ch)
         bridge.start()
-
-        with patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=None)):
-            await _dispatch(ch, _make_event("hello"))
-
-        ch.send_message.assert_awaited_once()
-        sent_text = ch.send_message.call_args[0][0]["text"]
-        assert "/link" in sent_text
-
-    async def test_message_routes_to_oikos_and_replies(self):
-        ch = _make_channel()
-        bridge = TelegramBridge(ch)
-        bridge.start()
-
-        with (
-            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
-            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch.object(bridge, "_run_oikos", new=AsyncMock(return_value="Here is your answer!")),
-        ):
-            await _dispatch(ch, _make_event("what is 2+2?", chat_id="777"))
-
-        ch.send_message.assert_awaited_once()
-        sent = ch.send_message.call_args[0][0]
-        assert sent["to"] == "777"
-        assert "Here is your answer!" in sent["text"]
-        assert sent.get("parse_mode") == "html"
-
-    async def test_message_passes_surface_context_to_oikos(self):
-        ch = _make_channel()
-        bridge = TelegramBridge(ch)
-        bridge.start()
-
-        event = _make_event("status?", chat_id="777")
-        event["message_id"] = "99"
-        event["raw"] = {"update_id": 444}
-
-        mock_run_oikos = AsyncMock(return_value="ok")
-        with (
-            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
-            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch.object(bridge, "_run_oikos", new=mock_run_oikos),
-        ):
-            await _dispatch(ch, event)
-
-        mock_run_oikos.assert_awaited_once_with(
-            7,
-            "status?",
-            chat_id="777",
-            source_message_id="99",
-            source_event_id="444",
-            source_idempotency_key="telegram:777:444",
+        bridge._orchestrator.handle_inbound = AsyncMock(
+            return_value=SurfaceHandleResult(
+                status=SurfaceHandleStatus.PROCESSED,
+                surface_id="telegram",
+                owner_id=7,
+                dedupe_key="telegram:777:123456",
+                run_id=1,
+            )
         )
 
-    async def test_duplicate_webhook_retry_is_deduped(self):
-        ch = _make_channel()
-        bridge = TelegramBridge(ch)
-        bridge.start()
+        await _dispatch(ch, _make_event("what is 2+2?", chat_id="777"))
 
-        mock_run_oikos = AsyncMock(return_value="ok")
-        with (
-            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
-            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch.object(bridge, "_is_duplicate_inbound", new=AsyncMock(return_value=True)) as mock_dedupe,
-            patch.object(bridge, "_run_oikos", new=mock_run_oikos),
-        ):
-            await _dispatch(ch, _make_event("status?", chat_id="777"))
-
-        mock_dedupe.assert_awaited_once_with(7, "telegram:777:123456")
-        mock_run_oikos.assert_not_awaited()
-        ch.send_message.assert_not_called()
-
-    async def test_dedupe_lookup_error_drops_message(self):
-        ch = _make_channel()
-        bridge = TelegramBridge(ch)
-        bridge.start()
-
-        mock_run_oikos = AsyncMock(return_value="ok")
-        with (
-            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
-            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch.object(bridge, "_is_duplicate_inbound", new=AsyncMock(side_effect=RuntimeError("db down"))),
-            patch.object(bridge, "_run_oikos", new=mock_run_oikos),
-        ):
-            await _dispatch(ch, _make_event("status?", chat_id="777"))
-
-        mock_run_oikos.assert_not_awaited()
-        ch.send_message.assert_not_called()
-
-    async def test_missing_update_id_drops_message(self):
-        ch = _make_channel()
-        bridge = TelegramBridge(ch)
-        bridge.start()
-
-        event = _make_event("status?", chat_id="777")
-        event["raw"] = {}
-        mock_run_oikos = AsyncMock(return_value="ok")
-        with (
-            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
-            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch.object(bridge, "_run_oikos", new=mock_run_oikos),
-        ):
-            await _dispatch(ch, event)
-
-        mock_run_oikos.assert_not_awaited()
-        ch.send_message.assert_not_called()
-
-    async def test_send_failure_logged(self):
-        """Delivery failure from channel should be logged, not silently dropped."""
-        ch = _make_channel()
-        ch.send_message = AsyncMock(return_value={"success": False, "error": "Forbidden", "error_code": "FORBIDDEN"})
-        bridge = TelegramBridge(ch)
-        bridge.start()
-
-        with (
-            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=1)),
-            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch.object(bridge, "_run_oikos", new=AsyncMock(return_value="reply")),
-            patch("zerg.services.telegram_bridge.logger") as mock_log,
-        ):
-            await _dispatch(ch, _make_event("hi", chat_id="555"))
-
-        mock_log.warning.assert_called()
-        warning_msg = str(mock_log.warning.call_args)
-        assert "555" in warning_msg or "send failed" in warning_msg.lower()
+        bridge._orchestrator.handle_inbound.assert_awaited_once()
 
     async def test_oikos_error_sends_error_message(self):
         ch = _make_channel()
         bridge = TelegramBridge(ch)
         bridge.start()
+        bridge._orchestrator.handle_inbound = AsyncMock(
+            return_value=SurfaceHandleResult(
+                status=SurfaceHandleStatus.REJECTED,
+                surface_id="telegram",
+                message="run_oikos failed: boom",
+            )
+        )
 
-        with (
-            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=1)),
-            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch.object(bridge, "_run_oikos", new=AsyncMock(side_effect=RuntimeError("boom"))),
-        ):
-            await _dispatch(ch, _make_event("do something", chat_id="888"))
+        await _dispatch(ch, _make_event("do something", chat_id="888"))
+
+        sent = ch.send_message.call_args[0][0]
+        assert "error" in sent["text"].lower()
+
+    async def test_any_rejected_result_sends_error_message(self):
+        ch = _make_channel()
+        bridge = TelegramBridge(ch)
+        bridge.start()
+        bridge._orchestrator.handle_inbound = AsyncMock(
+            return_value=SurfaceHandleResult(
+                status=SurfaceHandleStatus.REJECTED,
+                surface_id="telegram",
+                message="idempotency claim failed",
+            )
+        )
+
+        await _dispatch(ch, _make_event("do something", chat_id="777"))
 
         sent = ch.send_message.call_args[0][0]
         assert "error" in sent["text"].lower()
@@ -325,19 +234,34 @@ class TestTelegramBridgeRouting:
         bridge = TelegramBridge(ch)
         bridge.start()
 
-        # Make run_oikos slow enough that typing fires at least once
-        async def _slow_oikos(*_a, **_kw):
+        async def _slow_handle(*_a, **_kw):
             await asyncio.sleep(0.01)
-            return "ok"
+            return SurfaceHandleResult(
+                status=SurfaceHandleStatus.PROCESSED,
+                surface_id="telegram",
+                owner_id=1,
+                dedupe_key="telegram:321:123456",
+                run_id=1,
+            )
 
-        with (
-            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=1)),
-            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
-            patch.object(bridge, "_run_oikos", new=AsyncMock(side_effect=_slow_oikos)),
-        ):
-            await _dispatch(ch, _make_event("hi", chat_id="321"))
+        bridge._orchestrator.handle_inbound = AsyncMock(side_effect=_slow_handle)
+
+        await _dispatch(ch, _make_event("hi", chat_id="321"))
 
         assert ch.send_typing.await_count >= 1
+
+    async def test_send_failure_logged(self):
+        """Delivery failure from channel should be logged, not silently dropped."""
+        ch = _make_channel()
+        ch.send_message = AsyncMock(return_value={"success": False, "error": "Forbidden", "error_code": "FORBIDDEN"})
+        bridge = TelegramBridge(ch)
+
+        with patch("zerg.services.telegram_bridge.logger") as mock_log:
+            await bridge._send("555", "reply")
+
+        mock_log.warning.assert_called()
+        warning_msg = str(mock_log.warning.call_args)
+        assert "555" in warning_msg or "send failed" in warning_msg.lower()
 
 
 # ---------------------------------------------------------------------------
