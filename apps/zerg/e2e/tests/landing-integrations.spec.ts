@@ -14,12 +14,12 @@ const EXPECTED_PROVIDERS: ProviderExpectation[] = [
   },
   {
     name: 'Codex CLI',
-    description: 'OpenAI coding agent sessions',
+    description: 'Full session sync with tool calls',
     status: 'Syncing now',
   },
   {
     name: 'Gemini CLI',
-    description: 'Google AI coding sessions',
+    description: 'Full session sync with tool calls',
     status: 'Syncing now',
   },
   {
