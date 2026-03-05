@@ -15,6 +15,25 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Product] Oikos multi-surface messaging architecture (web + Telegram + future channels) (size: 5)
+
+Status (2026-03-04): In progress (spec + rollout plan in progress).
+
+**Goal:** Keep one canonical Oikos reasoning thread while giving each UI surface a clean, filtered conversation view and reliable cross-surface delivery semantics.
+
+- [ ] Finalize metadata contract on `ThreadMessage.message_metadata` (`origin`, `delivery`, `visibility`, idempotency key fields)
+- [x] Implement surface-aware Oikos execution context (`source_surface_id`, `source_conversation_id`) from web + Telegram + voice callers
+- [x] Add surface-aware history filtering (`/api/oikos/history`) with sane defaults (`web` only) and optional all-activity mode
+- [ ] Add inbound Telegram dedupe (idempotency on retried webhooks) before Oikos run spawn
+- [ ] Add per-user Oikos run serialization to avoid cross-surface races on the shared thread
+- [ ] Add browser UI surface badge + optional merged-view toggle
+- [ ] Harden control-plane reprovision so per-instance custom env vars persist (Telegram/OpenAI settings survive reprovision)
+
+Notes:
+- 2026-03-04: Existing Telegram bot bridge is live; current behavior still mixes Telegram + web turns in browser history due to missing surface filtering.
+- 2026-03-04: Draft architecture spec landed in `docs/specs/oikos-multi-surface-messaging.md`.
+- 2026-03-05: Phase A shipped: source-surface metadata persistence + `/api/oikos/history` surface filtering + web default (`surface_id=web`) with backend/frontend tests and full E2E pass.
+
 ## [QA/Test] Verify landing-page provider claims (Claude/Codex/Gemini) (size: 2)
 
 Status (2026-03-04): Done.

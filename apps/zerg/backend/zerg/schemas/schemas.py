@@ -120,6 +120,7 @@ class ThreadMessageBase(BaseModel):
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
+    message_metadata: Optional[Dict[str, Any]] = None
 
 
 class ThreadMessageCreate(ThreadMessageBase):

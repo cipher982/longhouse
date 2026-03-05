@@ -203,6 +203,8 @@ async def oikos_run(
                     run_id=run_id,  # Use the run created in the endpoint
                     timeout=120,
                     return_on_deferred=False,
+                    source_surface_id="web",
+                    source_conversation_id="web:manual-run",
                 )
         except Exception as e:
             logger.exception(f"Background oikos execution failed for run {run_id}: {e}")

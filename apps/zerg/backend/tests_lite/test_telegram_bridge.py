@@ -32,6 +32,7 @@ def _make_event(text: str, chat_id: str = "12345", sender_id: str = "99") -> dic
         "chat_id": chat_id,
         "chat_type": "dm",
         "text": text,
+        "raw": {"update_id": 123456},
     }
 
 
@@ -197,6 +198,31 @@ class TestTelegramBridgeRouting:
         assert sent["to"] == "777"
         assert "Here is your answer!" in sent["text"]
         assert sent.get("parse_mode") == "html"
+
+    async def test_message_passes_surface_context_to_oikos(self):
+        ch = _make_channel()
+        bridge = TelegramBridge(ch)
+        bridge.start()
+
+        event = _make_event("status?", chat_id="777")
+        event["message_id"] = "99"
+        event["raw"] = {"update_id": 444}
+
+        mock_run_oikos = AsyncMock(return_value="ok")
+        with (
+            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
+            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
+            patch.object(bridge, "_run_oikos", new=mock_run_oikos),
+        ):
+            await _dispatch(ch, event)
+
+        mock_run_oikos.assert_awaited_once_with(
+            7,
+            "status?",
+            chat_id="777",
+            source_message_id="99",
+            source_event_id="444",
+        )
 
     async def test_send_failure_logged(self):
         """Delivery failure from channel should be logged, not silently dropped."""

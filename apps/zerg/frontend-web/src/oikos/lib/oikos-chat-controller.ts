@@ -76,6 +76,9 @@ export interface OikosChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  origin_surface_id?: string;
+  delivery_surface_id?: string;
+  visibility?: string;
   usage?: {
     prompt_tokens?: number | null;
     completion_tokens?: number | null;
@@ -179,7 +182,11 @@ export class OikosChatController {
     try {
       logger.debug('[OikosChat] Loading history from server...');
 
-      const url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?limit=${limit}`);
+      const params = new URLSearchParams({
+        limit: String(limit),
+        surface_id: 'web',
+      });
+      const url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?${params.toString()}`);
       const response = await fetch(url, {
         method: 'GET',
         credentials: 'include', // Cookie auth
@@ -197,6 +204,9 @@ export class OikosChatController {
         role: msg.role,
         content: msg.content,
         timestamp: parseUTC(msg.timestamp),
+        origin_surface_id: msg.origin_surface_id || undefined,
+        delivery_surface_id: msg.delivery_surface_id || undefined,
+        visibility: msg.visibility || undefined,
         usage: msg.usage || undefined,
         tool_calls: msg.tool_calls || undefined,
       }));

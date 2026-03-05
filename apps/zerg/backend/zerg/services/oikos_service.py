@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -133,6 +134,78 @@ class OikosService:
             db: SQLAlchemy database session
         """
         self.db = db
+
+    @staticmethod
+    def _build_surface_metadata(
+        *,
+        source_surface_id: str,
+        source_conversation_id: str,
+        source_message_id: str | None = None,
+        source_event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Build canonical message metadata for cross-surface rendering."""
+        surface: dict[str, Any] = {
+            "origin_surface_id": source_surface_id,
+            "origin_conversation_id": source_conversation_id,
+            # For same-surface turns, delivery defaults to origin.
+            "delivery_surface_id": source_surface_id,
+            "delivery_conversation_id": source_conversation_id,
+            "visibility": "surface-local",
+        }
+        if source_message_id:
+            surface["source_message_id"] = source_message_id
+        if source_event_id:
+            surface["source_event_id"] = source_event_id
+        return {"surface": surface}
+
+    @staticmethod
+    def _merge_surface_metadata(existing: dict[str, Any] | None, surface_metadata: dict[str, Any]) -> dict[str, Any]:
+        """Merge surface metadata without clobbering unrelated metadata (for example usage)."""
+        merged = dict(existing or {})
+        merged_surface = dict(merged.get("surface") or {})
+        merged_surface.update(surface_metadata.get("surface") or {})
+        merged["surface"] = merged_surface
+        return merged
+
+    def _annotate_assistant_messages_with_surface_metadata(
+        self,
+        created_messages: list[Any],
+        surface_metadata: dict[str, Any],
+    ) -> None:
+        """Attach surface metadata to all assistant messages created in this run."""
+        updated = False
+        for row in created_messages:
+            if getattr(row, "role", None) != "assistant":
+                continue
+            row.message_metadata = self._merge_surface_metadata(getattr(row, "message_metadata", None), surface_metadata)
+            updated = True
+        if updated:
+            self.db.commit()
+
+    def _annotate_assistant_messages_after_id(
+        self,
+        *,
+        thread_id: int,
+        min_message_id: int,
+        surface_metadata: dict[str, Any],
+    ) -> None:
+        """Backfill surface metadata for assistant rows created after a known user message."""
+        from zerg.models.thread import ThreadMessage as ThreadMessageModel
+
+        rows = (
+            self.db.query(ThreadMessageModel)
+            .filter(
+                ThreadMessageModel.thread_id == thread_id,
+                ThreadMessageModel.id > min_message_id,
+                ThreadMessageModel.role == "assistant",
+            )
+            .all()
+        )
+        if not rows:
+            return
+        for row in rows:
+            row.message_metadata = self._merge_surface_metadata(row.message_metadata, surface_metadata)
+        self.db.commit()
 
     def get_or_create_oikos_fiche(self, owner_id: int) -> FicheModel:
         """Get or create the oikos fiche for a user.
@@ -285,6 +358,10 @@ class OikosService:
         model_override: str | None = None,
         reasoning_effort: str | None = None,
         return_on_deferred: bool = True,
+        source_surface_id: str = "web",
+        source_conversation_id: str = "web:main",
+        source_message_id: str | None = None,
+        source_event_id: str | None = None,
     ) -> OikosRunResult:
         """Run the oikos fiche with a task.
 
@@ -305,12 +382,22 @@ class OikosService:
             reasoning_effort: Optional reasoning effort (none, low, medium, high)
             return_on_deferred: If True, return a DEFERRED response once the timeout hits.
                 If False, emit OIKOS_DEFERRED but continue running in the background until completion.
+            source_surface_id: Source surface for this turn (web, telegram, voice, system)
+            source_conversation_id: Surface-native conversation identifier
+            source_message_id: Source platform message ID (if available)
+            source_event_id: Source platform event/update ID (if available)
 
         Returns:
             OikosRunResult with run details and result
         """
         start_time = datetime.now(timezone.utc)
         started_at_naive = start_time.replace(tzinfo=None)
+        surface_metadata = self._build_surface_metadata(
+            source_surface_id=source_surface_id,
+            source_conversation_id=source_conversation_id,
+            source_message_id=source_message_id,
+            source_event_id=source_event_id,
+        )
 
         # Get or create oikos components
         fiche = self.get_or_create_oikos_fiche(owner_id)
@@ -439,13 +526,14 @@ class OikosService:
             # Add task as user message
             # Continuation tasks are internal orchestration messages - they should be
             # stored for LLM context but NOT shown to users in chat history
-            crud.create_thread_message(
+            user_message_row = crud.create_thread_message(
                 db=self.db,
                 thread_id=thread.id,
                 role="user",
                 content=task,
                 processed=False,
                 internal=is_continuation,  # Mark continuation prompts as internal
+                message_metadata=surface_metadata,
             )
             self.db.commit()
 
@@ -509,6 +597,7 @@ class OikosService:
                     asyncio.shield(run_task),
                     timeout=timeout,
                 )
+                self._annotate_assistant_messages_with_surface_metadata(list(created_messages), surface_metadata)
             except asyncio.TimeoutError:
                 # Timeout migration: run continues in background, we return deferred status
                 # Calculate duration for the deferred event
@@ -569,8 +658,14 @@ class OikosService:
                 # Background mode: keep awaiting the original run_task to completion, then mark the run
                 # finished and persist the result (SSE streams can close on OIKOS_DEFERRED).
                 created_messages = await run_task
+                self._annotate_assistant_messages_with_surface_metadata(list(created_messages), surface_metadata)
 
             except FicheInterrupted as interrupt:
+                self._annotate_assistant_messages_after_id(
+                    thread_id=thread.id,
+                    min_message_id=user_message_row.id,
+                    surface_metadata=surface_metadata,
+                )
                 # Oikos interrupt (spawn_commis waiting for commis completion)
                 # Run state is persisted; we'll resume via Runner.run_continuation
                 end_time = datetime.now(timezone.utc)

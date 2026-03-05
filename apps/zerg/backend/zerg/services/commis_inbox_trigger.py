@@ -213,6 +213,9 @@ async def trigger_commis_inbox_run(
             model_override=original_run.model,
             reasoning_effort=original_run.reasoning_effort,
             timeout=120,  # Give continuation plenty of time
+            source_surface_id="system",
+            source_conversation_id="system:commis-inbox",
+            source_message_id=new_message_id,
         )
 
         logger.info(f"Inbox continuation run {continuation_run.id} completed with status {result.status}")

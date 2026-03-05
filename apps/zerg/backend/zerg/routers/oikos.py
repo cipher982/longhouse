@@ -260,6 +260,9 @@ class OikosChatMessage(UTCBaseModel):
     role: str = Field(..., description="Message role: user or assistant")
     content: str = Field(..., description="Message content")
     timestamp: datetime = Field(..., description="Message timestamp")
+    origin_surface_id: Optional[str] = Field(None, description="Origin surface for this message")
+    delivery_surface_id: Optional[str] = Field(None, description="Delivery surface for this message")
+    visibility: Optional[str] = Field(None, description="Visibility scope for this message")
     usage: Optional[dict] = Field(None, description="Optional LLM usage metadata for this assistant response")
     tool_calls: Optional[List[ToolCallInfo]] = Field(None, description="Tool calls made by this assistant message")
 
@@ -407,6 +410,8 @@ def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str])
 def oikos_history(
     limit: int = 50,
     offset: int = 0,
+    surface_id: str = "web",
+    view: str = "surface",
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> OikosHistoryResponse:
@@ -424,6 +429,9 @@ def oikos_history(
     Returns:
         OikosHistoryResponse with messages and total count
     """
+    if view not in {"surface", "all"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="view must be 'surface' or 'all'")
+
     from zerg.services.oikos_service import OikosService
 
     oikos_service = OikosService(db)
@@ -445,11 +453,33 @@ def oikos_history(
         .order_by(ThreadMessage.sent_at.asc())
     )
 
-    # Get total count
-    total = query.count()
+    all_messages = query.all()
 
-    # Get paginated messages
-    messages = query.offset(offset).limit(limit).all()
+    def _surface_info(msg: ThreadMessage) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        metadata = msg.message_metadata or {}
+        surface = metadata.get("surface") if isinstance(metadata, dict) else None
+        if not isinstance(surface, dict):
+            return None, None, None
+        return (
+            surface.get("origin_surface_id"),
+            surface.get("delivery_surface_id"),
+            surface.get("visibility"),
+        )
+
+    def _message_visible_for_surface(msg: ThreadMessage) -> bool:
+        origin_surface_id, delivery_surface_id, visibility = _surface_info(msg)
+        if visibility == "internal":
+            return False
+        if view == "all":
+            return True
+        # Backward compatibility: rows without surface metadata are treated as legacy web rows.
+        if not origin_surface_id and not delivery_surface_id:
+            return surface_id == "web"
+        return origin_surface_id == surface_id or delivery_surface_id == surface_id
+
+    filtered_messages = [msg for msg in all_messages if _message_visible_for_surface(msg)]
+    total = len(filtered_messages)
+    messages = filtered_messages[offset : offset + limit]
 
     # Collect all tool_call_ids that are spawn_workspace_commis to batch-fetch commis activity
     spawn_workspace_tool_call_ids = []
@@ -483,6 +513,7 @@ def oikos_history(
     # Convert to response format
     chat_messages = []
     for msg in messages:
+        origin_surface_id, delivery_surface_id, visibility = _surface_info(msg)
         tool_calls_info = None
         if msg.role == "assistant" and msg.tool_calls:
             tool_calls_info = []
@@ -528,6 +559,9 @@ def oikos_history(
                 role=msg.role,
                 content=msg.content or "",
                 timestamp=msg.sent_at,
+                origin_surface_id=origin_surface_id,
+                delivery_surface_id=delivery_surface_id,
+                visibility=visibility,
                 usage=(msg.message_metadata or {}).get("usage") if msg.role == "assistant" else None,
                 tool_calls=tool_calls_info,
             )
