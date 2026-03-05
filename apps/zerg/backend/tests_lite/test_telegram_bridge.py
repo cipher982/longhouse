@@ -222,7 +222,50 @@ class TestTelegramBridgeRouting:
             chat_id="777",
             source_message_id="99",
             source_event_id="444",
+            source_idempotency_key="telegram:777:444",
         )
+
+    async def test_duplicate_webhook_retry_is_deduped(self):
+        ch = _make_channel()
+        bridge = TelegramBridge(ch)
+        bridge.start()
+
+        mock_run_oikos = AsyncMock(return_value="ok")
+        with (
+            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
+            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
+            patch.object(bridge, "_is_duplicate_inbound", new=AsyncMock(return_value=True)) as mock_dedupe,
+            patch.object(bridge, "_run_oikos", new=mock_run_oikos),
+        ):
+            await _dispatch(ch, _make_event("status?", chat_id="777"))
+
+        mock_dedupe.assert_awaited_once_with(7, "telegram:777:123456")
+        mock_run_oikos.assert_not_awaited()
+        ch.send_message.assert_not_called()
+
+    async def test_dedupe_lookup_error_falls_back_to_run(self):
+        ch = _make_channel()
+        bridge = TelegramBridge(ch)
+        bridge.start()
+
+        class _BrokenCtx:
+            def __enter__(self):
+                raise RuntimeError("db down")
+
+            def __exit__(self, *_args):
+                return False
+
+        mock_run_oikos = AsyncMock(return_value="ok")
+        with (
+            patch.object(bridge, "_resolve_user", new=AsyncMock(return_value=7)),
+            patch.object(bridge, "_persist_chat_id", new=AsyncMock()),
+            patch("zerg.services.telegram_bridge.db_session", return_value=_BrokenCtx()),
+            patch.object(bridge, "_run_oikos", new=mock_run_oikos),
+        ):
+            await _dispatch(ch, _make_event("status?", chat_id="777"))
+
+        mock_run_oikos.assert_awaited_once()
+        ch.send_message.assert_awaited_once()
 
     async def test_send_failure_logged(self):
         """Delivery failure from channel should be logged, not silently dropped."""
