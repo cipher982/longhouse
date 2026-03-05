@@ -783,6 +783,21 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("Telegram startup failed (non-fatal) — bot will be unavailable")
 
+        # Mark all runners offline — any that were "online" before the restart
+        # will reconnect via WebSocket and flip back to online automatically.
+        try:
+            from sqlalchemy import update
+
+            from zerg.database import db_session
+            from zerg.models.models import Runner
+
+            with db_session() as db:
+                result = db.execute(update(Runner).where(Runner.status == "online").values(status="offline"))
+                if result.rowcount:
+                    logger.info("Startup: marked %d stale runner(s) offline", result.rowcount)
+        except Exception as e:
+            logger.warning("Startup: failed to reset runner statuses (non-fatal): %s", e)
+
         logger.info("Application startup complete")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
