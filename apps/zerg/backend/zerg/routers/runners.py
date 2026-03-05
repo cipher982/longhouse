@@ -131,8 +131,8 @@ def get_install_script(
         else:
             api_url = settings.app_public_url
 
-    # GitHub releases URL for binaries (hardcoded, not user-provided)
-    binary_url = "https://github.com/cipher982/longhouse/releases/latest/download"
+    # GitHub releases URL for binaries — tag is configurable via RUNNER_BINARY_TAG env var
+    binary_url = f"https://github.com/cipher982/longhouse/releases/download/{settings.runner_binary_tag}"
 
     # Shell-escape all user-provided values to prevent command injection
     safe_enroll_token = shlex.quote(enroll_token)

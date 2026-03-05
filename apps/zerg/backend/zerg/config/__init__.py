@@ -119,6 +119,7 @@ class Settings:  # noqa: D401 – simple data container
     public_site_url: str | None
     public_api_url: str | None
     runner_docker_image: str
+    runner_binary_tag: str  # GitHub release tag for runner binaries
     # Pub/Sub OIDC audience --------------------------------------------
     pubsub_audience: str | None
     gmail_pubsub_topic: str | None
@@ -457,6 +458,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         public_site_url=os.getenv("PUBLIC_SITE_URL") or os.getenv("APP_PUBLIC_URL"),
         public_api_url=os.getenv("PUBLIC_API_URL"),
         runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/longhouse-runner:latest"),
+        runner_binary_tag=os.getenv("RUNNER_BINARY_TAG", "runner-v0.1.1"),
         pubsub_audience=os.getenv("PUBSUB_AUDIENCE"),
         gmail_pubsub_topic=os.getenv("GMAIL_PUBSUB_TOPIC"),
         pubsub_sa_email=os.getenv("PUBSUB_SA_EMAIL"),
