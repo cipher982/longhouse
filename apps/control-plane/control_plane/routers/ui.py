@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import Form
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
@@ -620,10 +621,20 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/admin", response_class=HTMLResponse)
-def admin(db: Session = Depends(get_db)):
+def admin(show_all: bool = Query(False), db: Session = Depends(get_db)):
     rows = db.query(Instance, User).join(User, Instance.user_id == User.id).all()
     table_rows_rendered: list[str] = []
+    hidden_count = 0
     for inst, user in rows:
+        is_hidden_test_row = (
+            not show_all
+            and inst.status == "deprovisioned"
+            and inst.subdomain.startswith("e2e-")
+        )
+        if is_hidden_test_row:
+            hidden_count += 1
+            continue
+
         migration = _build_migration_status(inst)
         if migration.state == "pending":
             migration_text = f"pending ({migration.pending_count})"
@@ -640,6 +651,16 @@ def admin(db: Session = Depends(get_db)):
     if not table_rows:
         table_rows = '<tr><td colspan=5><em>No instances yet</em></td></tr>'
 
+    if hidden_count > 0:
+        hidden_note = (
+            f'<p><small>Hiding {hidden_count} deprovisioned test instances. '
+            f'<a href="/admin?show_all=1">Show all</a></small></p>'
+        )
+    elif show_all:
+        hidden_note = '<p><small><a href="/admin">Hide deprovisioned test instances</a></small></p>'
+    else:
+        hidden_note = ""
+
     body = f"""
     <h1>Provision Instance</h1>
     <div class="card">
@@ -653,6 +674,7 @@ def admin(db: Session = Depends(get_db)):
     </div>
     <div class="card">
       <h2>Instances</h2>
+      {hidden_note}
       <table>
         <thead><tr><th>ID</th><th>Email</th><th>Subdomain</th><th>Status</th><th>Migrations</th></tr></thead>
         <tbody>{table_rows}</tbody>

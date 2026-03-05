@@ -305,6 +305,7 @@ class TestInstancesAPI:
         assert data["subdomain"] == "newuser"
         assert data["status"] == "provisioning"
         assert data["password"] == "generated-pass-123"
+        assert data["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
         prov.provision_instance.assert_called_once_with("newuser", owner_email="new@test.com")
 
     @patch("control_plane.routers.instances.Provisioner")
@@ -319,6 +320,7 @@ class TestInstancesAPI:
         )
         assert resp.status_code == 200
         assert resp.json()["subdomain"] == "existing"
+        assert resp.json()["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
         MockProv.assert_not_called()
 
     def test_create_instance_requires_admin(self, client):
@@ -388,6 +390,33 @@ class TestInstancesAPI:
         resp = client.get("/api/instances/999", headers=ADMIN_HEADERS)
         assert resp.status_code == 404
 
+    def test_admin_hides_deprovisioned_e2e_rows_by_default(self, client, db_session):
+        user_live = _make_user(db_session, email="live@test.com")
+        _make_instance(db_session, user_live, subdomain="live", status="active")
+
+        user_e2e = _make_user(db_session, email="e2e-hidden@test.com")
+        _make_instance(db_session, user_e2e, subdomain="e2e-12345", status="deprovisioned")
+
+        resp = client.get("/admin")
+        assert resp.status_code == 200
+        assert "live" in resp.text
+        assert "e2e-12345" not in resp.text
+        assert "Hiding 1 deprovisioned test instances." in resp.text
+        assert "/admin?show_all=1" in resp.text
+
+    def test_admin_show_all_includes_deprovisioned_e2e_rows(self, client, db_session):
+        user_live = _make_user(db_session, email="live2@test.com")
+        _make_instance(db_session, user_live, subdomain="live2", status="active")
+
+        user_e2e = _make_user(db_session, email="e2e-visible@test.com")
+        _make_instance(db_session, user_e2e, subdomain="e2e-99999", status="deprovisioned")
+
+        resp = client.get("/admin?show_all=1")
+        assert resp.status_code == 200
+        assert "live2" in resp.text
+        assert "e2e-99999" in resp.text
+        assert "Hide deprovisioned test instances" in resp.text
+
     @patch("control_plane.routers.instances.Provisioner")
     def test_deprovision_instance(self, MockProv, client, db_session):
         prov = _mock_provisioner()
@@ -420,6 +449,7 @@ class TestInstancesAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "provisioning"
+        assert data["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
         prov.run_migration_preflight.assert_called_once_with("inst1", data_path="/tmp/test-data/inst1")
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
@@ -464,6 +494,7 @@ class TestInstancesAPI:
         resp = client.post(f"/api/instances/{inst.id}/regenerate-password", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         assert resp.json()["password"] is not None
+        assert resp.json()["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
 

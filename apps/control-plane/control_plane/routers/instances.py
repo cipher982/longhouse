@@ -327,6 +327,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
             status=existing.status,
             created_at=existing.created_at,
             last_health_at=existing.last_health_at,
+            migration=_build_migration_status(existing),
         )
 
     provisioner = Provisioner()
@@ -353,6 +354,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
         password=result.password,  # Shown once at creation
         created_at=instance.created_at,
         last_health_at=instance.last_health_at,
+        migration=_build_migration_status(instance),
     )
 
 
@@ -430,6 +432,7 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
         password=password,  # Shown once
         created_at=inst.created_at,
         last_health_at=inst.last_health_at,
+        migration=_build_migration_status(inst),
     )
 
 
@@ -476,6 +479,7 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         password=result.password,  # New password on reprovision
         created_at=inst.created_at,
         last_health_at=inst.last_health_at,
+        migration=_build_migration_status(inst),
     )
 
 
