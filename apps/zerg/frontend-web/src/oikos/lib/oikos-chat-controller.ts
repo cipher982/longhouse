@@ -93,6 +93,11 @@ export interface OikosChatConfig {
   retryDelay?: number;
 }
 
+export interface OikosHistoryOptions {
+  surface_id?: string;
+  view?: 'surface' | 'all';
+}
+
 type QuotaHint = {
   kind: 'run_cap' | 'budget';
   scope?: 'user' | 'global';
@@ -178,14 +183,17 @@ export class OikosChatController {
    * Load conversation history from server
    * Returns messages in the format expected by the UI
    */
-  async loadHistory(limit: number = 50): Promise<OikosChatMessage[]> {
+  async loadHistory(limit: number = 50, options: OikosHistoryOptions = {}): Promise<OikosChatMessage[]> {
     try {
       logger.debug('[OikosChat] Loading history from server...');
 
       const params = new URLSearchParams({
         limit: String(limit),
-        surface_id: 'web',
+        surface_id: options.surface_id || 'web',
       });
+      if (options.view === 'all') {
+        params.set('view', 'all');
+      }
       const url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?${params.toString()}`);
       const response = await fetch(url, {
         method: 'GET',

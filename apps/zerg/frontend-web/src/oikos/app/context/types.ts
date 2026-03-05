@@ -44,6 +44,9 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  originSurfaceId?: string
+  deliverySurfaceId?: string
+  visibility?: 'surface-local' | 'cross-surface' | 'internal' | string
   timestamp?: Date
   isStreaming?: boolean
   skipAnimation?: boolean

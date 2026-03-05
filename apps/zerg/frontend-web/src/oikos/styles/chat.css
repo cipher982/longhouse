@@ -91,6 +91,52 @@
   outline: none;
 }
 
+.oikos-container .message-surface-row {
+  display: flex;
+  margin-bottom: 4px;
+}
+
+.oikos-container .message.user .message-surface-row {
+  justify-content: flex-end;
+}
+
+.oikos-container .message-surface-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: 999px;
+  border: 1px solid #2b241a;
+  background: #16120e;
+  color: var(--color-text-secondary);
+  padding: 4px 8px;
+  font-family: var(--font-family-mono);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.oikos-container .message-surface-badge__icon {
+  width: 11px;
+  height: 11px;
+  display: inline-block;
+}
+
+.oikos-container .message-surface-badge--telegram {
+  border-color: rgba(61, 168, 255, 0.45);
+  color: #8ecbff;
+}
+
+.oikos-container .message-surface-badge--voice {
+  border-color: rgba(146, 112, 255, 0.45);
+  color: #c8b5ff;
+}
+
+.oikos-container .message-surface-badge--system {
+  border-color: rgba(255, 179, 96, 0.45);
+  color: #ffd094;
+}
+
 /* Avatars */
 .oikos-container .message-avatar {
   width: 28px;
