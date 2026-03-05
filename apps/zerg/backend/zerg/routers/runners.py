@@ -250,12 +250,19 @@ def get_install_script(
 
     template_path = Path(__file__).parent / "templates" / "install.sh"
     script = template_path.read_text()
-    script = (
-        script.replace("__ENROLL_TOKEN__", safe_enroll_token)
-        .replace("__RUNNER_NAME_EXPR__", safe_runner_name_expr)
-        .replace("__API_URL__", safe_api_url)
-        .replace("__BINARY_URL__", safe_binary_url)
-    )
+    # Single-pass replacement via regex to prevent placeholder-collision: if a
+    # substituted value itself contains another placeholder string, chained
+    # .replace() calls would corrupt it. re.sub processes each position once.
+    import re as _re
+
+    _substitutions = {
+        "__ENROLL_TOKEN__": safe_enroll_token,
+        "__RUNNER_NAME_EXPR__": safe_runner_name_expr,
+        "__API_URL__": safe_api_url,
+        "__BINARY_URL__": safe_binary_url,
+    }
+    _pattern = _re.compile("|".join(_re.escape(k) for k in _substitutions))
+    script = _pattern.sub(lambda m: _substitutions[m.group()], script)
 
     return Response(
         content=script,
@@ -362,7 +369,7 @@ def create_enroll_token(
 
 
 @router.post("/register", response_model=RunnerRegisterResponse)
-def register_runner(
+async def register_runner(
     request: RunnerRegisterRequest,
     db: Session = Depends(get_db),
 ) -> RunnerRegisterResponse:
@@ -416,6 +423,18 @@ def register_runner(
         existing.status = "offline"
         db.commit()
         logger.info(f"Re-enrolled runner '{request.name}' (id={existing.id}, owner={token_record.owner_id})")
+
+        # Kick any currently-connected socket with the old secret so it can't
+        # keep executing jobs. The runner must reconnect with the new secret.
+        connection_manager = get_runner_connection_manager()
+        ws = connection_manager.get_connection(token_record.owner_id, existing.id)
+        if ws:
+            try:
+                await ws.close(code=1008, reason="Runner re-enrolled with new secret")
+            except Exception as e:
+                logger.warning(f"Failed to close stale socket for runner {existing.id} on re-enroll: {e}")
+            connection_manager.unregister(token_record.owner_id, existing.id, ws)
+
         return RunnerRegisterResponse(
             runner_id=existing.id,
             runner_secret=auth_secret,
