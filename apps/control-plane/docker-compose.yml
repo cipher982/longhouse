@@ -3,7 +3,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      CONTROL_PLANE_DATABASE_URL: postgresql+psycopg://control_plane:${CONTROL_PLANE_DB_PASSWORD}@control-plane-db:5432/control_plane
+      CONTROL_PLANE_DATABASE_URL: ${CONTROL_PLANE_DATABASE_URL:-sqlite:////data/control-plane.db}
       CONTROL_PLANE_ADMIN_TOKEN: ${CONTROL_PLANE_ADMIN_TOKEN}
       CONTROL_PLANE_JWT_SECRET: ${CONTROL_PLANE_JWT_SECRET}
       CONTROL_PLANE_GOOGLE_CLIENT_ID: ${CONTROL_PLANE_GOOGLE_CLIENT_ID}
@@ -32,7 +32,6 @@ services:
       CONTROL_PLANE_INSTANCE_OPENAI_BASE_URL: ${CONTROL_PLANE_INSTANCE_OPENAI_BASE_URL}
       CONTROL_PLANE_INSTANCE_OPENAI_ALLOWLIST: ${CONTROL_PLANE_INSTANCE_OPENAI_ALLOWLIST}
     labels:
-      # Caddy labels for control.longhouse.ai routing via coolify-proxy
       caddy: control.longhouse.ai
       caddy.reverse_proxy: "{{upstreams 8085}}"
       caddy.tls: internal
@@ -40,27 +39,11 @@ services:
       - "8085:8085"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /var/app-data/longhouse-control-plane:/data
       - /var/app-data/longhouse:/var/app-data/longhouse
-    depends_on:
-      - control-plane-db
     networks:
-      - control-plane
       - coolify
 
-  control-plane-db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: control_plane
-      POSTGRES_USER: control_plane
-      POSTGRES_PASSWORD: ${CONTROL_PLANE_DB_PASSWORD}
-    volumes:
-      - /var/lib/docker/data/longhouse-control-plane/postgres:/var/lib/postgresql/data
-    networks:
-      - control-plane
-
 networks:
-  control-plane:
-    driver: bridge
   coolify:
     external: true

@@ -24,14 +24,14 @@ make qa-live                          # default: david010.longhouse.ai
 QA_INSTANCE_URL=https://other.longhouse.ai make qa-live  # other instance
 ```
 
-Tests: auth + timeline, forum (with session rows), session detail, health, agents API.
+Tests: auth + timeline, forum redirect, session detail, health, agents API, AI search toggle, recall panel, and briefings page.
 Exit 0 = pass. Fail screenshots → `/tmp/qa-live-fail-{test}.png`.
 
-Auth: reads `LONGHOUSE_PASSWORD` from env OR auto-fetches via `ssh zerg docker exec longhouse-david010`.
-API calls use `~/.claude/longhouse-device-token` (`X-Agents-Token` header). Browser uses JWT cookie.
+Auth: `qa-live.sh` now delegates to `run-prod-e2e.sh`, resolves the hosted instance by subdomain, and mints a fresh hosted login token through the control plane.
+API calls still use `~/.claude/longhouse-device-token` (`X-Agents-Token` header) for `/api/agents/*`; browser pages use the hosted session cookie exchanged from `SMOKE_LOGIN_TOKEN`.
 
 **Two auth systems — don't mix them:**
-- Browser pages: password-login JWT → `longhouse_session` cookie
+- Browser pages: hosted login-token → `longhouse_session` cookie
 - `/api/agents/*` endpoints: device token → `X-Agents-Token` header
 
 ## Reprovision User Instance
