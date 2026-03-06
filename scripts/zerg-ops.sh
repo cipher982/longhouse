@@ -4,7 +4,7 @@ set -euo pipefail
 MODE="run"
 
 # Opinionated zerg defaults live in code on purpose.
-LIVE_ROOT="/var/lib/docker/data/longhouse"
+LIVE_ROOT="/var/app-data/longhouse"
 BACKUP_ROOT="/var/app-data/longhouse-backups"
 TMP_BACKUP_DIR="$BACKUP_ROOT/tmp"
 KEEP_SNAPSHOTS=5

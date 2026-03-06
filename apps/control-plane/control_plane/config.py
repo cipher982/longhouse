@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     docker_host: str = "unix:///var/run/docker.sock"
     image: str = "ghcr.io/cipher982/longhouse-runtime:latest"
     instance_port: int = 8000
-    instance_data_root: str = "/var/lib/docker/data/longhouse"
+    instance_data_root: str = "/var/app-data/longhouse"
     publish_ports: bool = False
 
     # Routing/proxy

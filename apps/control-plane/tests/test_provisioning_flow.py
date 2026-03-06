@@ -139,13 +139,17 @@ def _expected_instance_url(subdomain: str) -> str:
 def _mock_provisioner():
     """Create a mock Provisioner that simulates successful provisioning."""
     prov = MagicMock(spec=Provisioner)
-    prov.provision_instance.return_value = ProvisionResult(
-        container_name="longhouse-testuser",
-        data_path="/tmp/test-data/testuser",
-        password="generated-pass-123",
-        password_hash="pbkdf2:sha256:600000$aabb$ccdd",
-        image="ghcr.io/test/app:latest",
-    )
+
+    def _provision(subdomain, **kwargs):
+        return ProvisionResult(
+            container_name=f"longhouse-{subdomain}",
+            data_path=kwargs.get("data_path") or f"/tmp/test-data/{subdomain}",
+            password="generated-pass-123",
+            password_hash="pbkdf2:sha256:600000$aabb$ccdd",
+            image="ghcr.io/test/app:latest",
+        )
+
+    prov.provision_instance.side_effect = _provision
     prov.deprovision_instance.return_value = None
     prov.wait_for_health.return_value = True
     prov.run_migration_preflight.return_value = '{"pending_before":[],"pending_after":[]}'
@@ -561,8 +565,13 @@ class TestInstancesAPI:
         prov.run_migration_preflight.assert_called_once_with("inst1", data_path="/tmp/test-data/inst1")
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
+        _, call_kwargs = prov.provision_instance.call_args
+        assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
+        _, call_kwargs = prov.provision_instance.call_args
+        assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
         db_session.refresh(inst)
         assert inst.last_health_at is None
+        assert inst.data_path == "/tmp/test-data/inst1"
 
     @patch("control_plane.routers.instances.Provisioner")
     def test_reprovision_preserves_custom_env_overrides(self, MockProv, client, db_session):
@@ -585,6 +594,7 @@ class TestInstancesAPI:
             "TELEGRAM_BOT_TOKEN": "tg-secret",
             "OPENAI_BASE_URL": None,
         }
+        assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
 
     @patch("control_plane.routers.instances.Provisioner")
     def test_reprovision_aborts_on_preflight_failure(self, MockProv, client, db_session):
@@ -627,6 +637,8 @@ class TestInstancesAPI:
         assert resp.json()["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
+        _, call_kwargs = prov.provision_instance.call_args
+        assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
 
     @patch("control_plane.routers.instances.Provisioner")
     def test_regenerate_password_preserves_custom_env_overrides(self, MockProv, client, db_session):
@@ -645,6 +657,7 @@ class TestInstancesAPI:
 
         _, call_kwargs = prov.provision_instance.call_args
         assert call_kwargs["custom_env"] == {"TELEGRAM_BOT_TOKEN": "tg-secret"}
+        assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
 
 
     def test_my_instance(self, client, db_session):
@@ -1090,6 +1103,7 @@ class TestProvisionerClass:
         result = provisioner.provision_instance("existing", owner_email="e@test.com")
 
         assert result.container_name == "longhouse-existing"
+        assert result.data_path == os.path.join(settings.instance_data_root, "existing")
         assert result.password is None
         mock_client.containers.run.assert_not_called()
 

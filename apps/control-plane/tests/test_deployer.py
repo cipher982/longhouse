@@ -84,6 +84,7 @@ def _make_instance(db, user, subdomain="inst1", **kwargs) -> Instance:
         "deploy_state": "idle",
         "current_image": "ghcr.io/test/app:old",
         "last_healthy_image": "ghcr.io/test/app:old",
+        "data_path": f"/tmp/test-data/{subdomain}",
     }
     defaults.update(kwargs)
     inst = Instance(**defaults)
@@ -121,6 +122,7 @@ def _mock_provisioner(succeed=True):
     def _provision_side_effect(subdomain, **kwargs):
         return FakeProvisionResult(
             container_name=f"longhouse-{subdomain}",
+            data_path=kwargs.get("data_path") or f"/tmp/test-data/{subdomain}",
             image="ghcr.io/test/app:new",
             image_digest="ghcr.io/test/app@sha256:abc123",
         )
@@ -149,6 +151,7 @@ class TestDeploySingleInstance:
         assert inst.current_image == deploy.image
         assert inst.last_healthy_image == deploy.image
         assert inst.status == "active"
+        assert inst.data_path == "/tmp/test-data/inst1"
 
     def test_success_passes_instance_custom_env_to_provisioner(self, db_session):
         user = _make_user(db_session)
@@ -170,6 +173,7 @@ class TestDeploySingleInstance:
             "TELEGRAM_BOT_TOKEN": "tg-secret",
             "OPENAI_BASE_URL": None,
         }
+        assert call_kwargs["data_path"] == inst.data_path
 
     def test_failure_triggers_rollback(self, db_session):
         user = _make_user(db_session)

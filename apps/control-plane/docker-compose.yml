@@ -13,6 +13,7 @@ services:
       CONTROL_PLANE_STRIPE_PRICE_ID: ${CONTROL_PLANE_STRIPE_PRICE_ID}
       CONTROL_PLANE_DOCKER_HOST: unix:///var/run/docker.sock
       CONTROL_PLANE_IMAGE: ${CONTROL_PLANE_IMAGE}
+      CONTROL_PLANE_INSTANCE_DATA_ROOT: ${CONTROL_PLANE_INSTANCE_DATA_ROOT:-/var/app-data/longhouse}
       CONTROL_PLANE_ROOT_DOMAIN: ${CONTROL_PLANE_ROOT_DOMAIN}
       CONTROL_PLANE_PROXY_PROVIDER: ${CONTROL_PLANE_PROXY_PROVIDER}
       CONTROL_PLANE_PROXY_NETWORK: ${CONTROL_PLANE_PROXY_NETWORK}
@@ -39,7 +40,7 @@ services:
       - "8085:8085"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/data/longhouse:/var/lib/docker/data/longhouse
+      - /var/app-data/longhouse:/var/app-data/longhouse
     depends_on:
       - control-plane-db
     networks:

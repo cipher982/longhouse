@@ -53,10 +53,12 @@ def _deploy_single_instance(
             inst.subdomain,
             owner_email=user.email,
             custom_env=custom_env,
+            data_path=inst.data_path,
             image=deploy.image,
             skip_pull=True,
         )
         inst.container_name = result.container_name
+        inst.data_path = result.data_path
 
         # wait_for_health raises RuntimeError on timeout (never returns False)
         provisioner.wait_for_health(inst.subdomain, timeout=120)
@@ -85,9 +87,11 @@ def _deploy_single_instance(
                     inst.subdomain,
                     owner_email=user.email,
                     custom_env=custom_env,
+                    data_path=inst.data_path,
                     image=inst.last_healthy_image,
                 )
                 inst.container_name = result.container_name
+                inst.data_path = result.data_path
                 provisioner.wait_for_health(inst.subdomain, timeout=120)
                 inst.deploy_state = "rolled_back"
                 inst.current_image = inst.last_healthy_image

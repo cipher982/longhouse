@@ -242,15 +242,23 @@ def _env_for(
     return _apply_custom_env(env, custom_env)
 
 
-def _volume_for(subdomain: str) -> tuple[str, dict[str, str]]:
-    data_path = os.path.join(settings.instance_data_root, subdomain)
+def _data_path_for(subdomain: str, *, data_path: str | None = None) -> str:
+    return data_path or os.path.join(settings.instance_data_root, subdomain)
+
+
+def _ensure_data_path(data_path: str) -> None:
     os.makedirs(data_path, exist_ok=True)
     # Set ownership to UID 1000 (longhouse user inside container) when possible.
     if os.geteuid() == 0:
         os.chown(data_path, 1000, 1000)
     else:
         os.chmod(data_path, 0o777)
-    return data_path, {data_path: {"bind": "/data", "mode": "rw"}}
+
+
+def _volume_for(subdomain: str, *, data_path: str | None = None) -> tuple[str, dict[str, dict[str, str]]]:
+    target_data_path = _data_path_for(subdomain, data_path=data_path)
+    _ensure_data_path(target_data_path)
+    return target_data_path, {target_data_path: {"bind": "/data", "mode": "rw"}}
 
 
 class Provisioner:
@@ -269,13 +277,7 @@ class Provisioner:
         Runs a one-shot container on the target data volume:
         `python -m zerg.cli.main migrate --database-url sqlite:////data/longhouse.db --apply --json`
         """
-        target_data_path = data_path or os.path.join(settings.instance_data_root, subdomain)
-        os.makedirs(target_data_path, exist_ok=True)
-
-        if os.geteuid() == 0:
-            os.chown(target_data_path, 1000, 1000)
-        else:
-            os.chmod(target_data_path, 0o777)
+        target_data_path, volumes = _volume_for(subdomain, data_path=data_path)
 
         command = [
             "python",
@@ -293,7 +295,7 @@ class Provisioner:
                 image=settings.image,
                 command=command,
                 remove=True,
-                volumes={target_data_path: {"bind": "/data", "mode": "rw"}},
+                volumes=volumes,
                 environment={
                     "DATABASE_URL": "sqlite:////data/longhouse.db",
                     "AUTH_DISABLED": "1",
@@ -322,6 +324,7 @@ class Provisioner:
         *,
         password: str | None = None,
         custom_env: dict[str, str | None] | None = None,
+        data_path: str | None = None,
         image: str | None = None,
         skip_pull: bool = False,
     ) -> ProvisionResult:
@@ -330,7 +333,7 @@ class Provisioner:
 
         try:
             container = self.client.containers.get(container_name)
-            return ProvisionResult(container_name=container.name, data_path="")
+            return ProvisionResult(container_name=container.name, data_path=_data_path_for(subdomain, data_path=data_path))
         except docker.errors.NotFound:
             pass
 
@@ -340,7 +343,7 @@ class Provisioner:
         else:
             password, password_hash = _generate_password()
 
-        data_path, volumes = _volume_for(subdomain)
+        data_path, volumes = _volume_for(subdomain, data_path=data_path)
         labels = _labels_for(subdomain)
         env = _env_for(subdomain, owner_email, password=password, custom_env=custom_env)
 

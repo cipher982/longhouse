@@ -465,8 +465,10 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
         owner_email=user.email,
         password=password,
         custom_env=custom_env,
+        data_path=inst.data_path,
     )
     inst.container_name = result.container_name
+    inst.data_path = result.data_path
     inst.status = "provisioning"
     inst.last_health_at = None
     db.commit()
@@ -515,11 +517,13 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         inst.subdomain,
         owner_email=user.email,
         custom_env=custom_env,
+        data_path=inst.data_path,
     )
 
     inst.status = "provisioning"
     inst.last_health_at = None
     inst.container_name = result.container_name
+    inst.data_path = result.data_path
     if result.password_hash:
         inst.password_hash = result.password_hash
     # Track image version
