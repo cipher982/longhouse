@@ -1,14 +1,5 @@
 import { test as base, expect, type APIRequestContext, type BrowserContext } from '@playwright/test';
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-}
-
-/** Type for playwright fixture's request factory */
 type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: number }) => Promise<APIRequestContext> };
 
 /**
@@ -59,14 +50,13 @@ export async function waitForHealthy(
       }
     }
 
-    // Timeout reached - log warning but don't fail (tests may still work)
     console.warn(`[health] Timeout after ${attempt} attempts - proceeding anyway`);
   } finally {
     await healthRequest.dispose();
   }
 }
 
-function normalizeSecret(value: string | undefined): string | undefined {
+function normalizeToken(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
   if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
@@ -75,16 +65,39 @@ function normalizeSecret(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function buildRunId(): string {
-  if (process.env.E2E_RUN_ID) return process.env.E2E_RUN_ID;
-  const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `prod-${ts}-${rand}`;
+async function exchangeLoginToken(
+  requestFactory: RequestFactory,
+  apiBaseUrl: string,
+  loginToken: string
+): Promise<string> {
+  const authRequest = await requestFactory.newContext({
+    baseURL: apiBaseUrl,
+    timeout: 30_000,
+  });
+
+  try {
+    const response = await authRequest.post('/api/auth/accept-token', {
+      data: { token: loginToken },
+    });
+
+    if (!response.ok()) {
+      const body = await response.text();
+      throw new Error(`accept-token failed: ${response.status()} ${body}`);
+    }
+
+    const payload = await response.json();
+    if (!payload?.access_token) {
+      throw new Error(`accept-token missing access_token: ${JSON.stringify(payload)}`);
+    }
+
+    return payload.access_token;
+  } finally {
+    await authRequest.dispose();
+  }
 }
 
 type LiveFixtures = {
   apiBaseUrl: string;
-  runId: string;
   authToken: string;
   request: APIRequestContext;
   context: BrowserContext;
@@ -92,49 +105,27 @@ type LiveFixtures = {
 
 export const test = base.extend<LiveFixtures>({
   apiBaseUrl: async ({}, use) => {
-    const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL || process.env.E2E_API_URL || 'https://api.longhouse.ai';
+    const apiBaseUrl = process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || process.env.E2E_API_URL || '';
     await use(apiBaseUrl);
   },
 
-  runId: async ({}, use) => {
-    await use(buildRunId());
-  },
-
-  authToken: async ({ apiBaseUrl, runId, playwright }, use) => {
+  authToken: async ({ apiBaseUrl, playwright }, use) => {
     if (!process.env.RUN_LIVE_E2E) {
       test.skip(true, 'RUN_LIVE_E2E not set; skipping live prod E2E');
     }
 
-    const secret = normalizeSecret(process.env.SMOKE_TEST_SECRET);
-    if (!secret) {
-      test.skip(true, 'SMOKE_TEST_SECRET not set; skipping live prod E2E');
+    if (!apiBaseUrl) {
+      test.skip(true, 'API_URL or PLAYWRIGHT_API_BASE_URL required; skipping live prod E2E');
     }
 
-    // Wait for API health before attempting auth (prevents flaky 502s during deploys)
+    const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
+    if (!loginToken) {
+      test.skip(true, 'SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
+    }
+
     await waitForHealthy(playwright.request, apiBaseUrl);
-
-    const authRequest = await playwright.request.newContext({
-      baseURL: apiBaseUrl,
-      extraHTTPHeaders: {
-        'X-Service-Secret': secret,
-        'X-Smoke-Run-Id': runId,
-      },
-      timeout: 30_000,
-    });
-
-    const response = await authRequest.post('/api/auth/service-login');
-    if (!response.ok()) {
-      const body = await response.text();
-      throw new Error(`service-login failed: ${response.status()} ${body}`);
-    }
-
-    const payload = await response.json();
-    if (!payload?.access_token) {
-      throw new Error(`service-login missing access_token: ${JSON.stringify(payload)}`);
-    }
-
-    await use(payload.access_token);
-    await authRequest.dispose();
+    const accessToken = await exchangeLoginToken(playwright.request, apiBaseUrl, loginToken);
+    await use(accessToken);
   },
 
   request: async ({ playwright, apiBaseUrl, authToken }, use) => {
@@ -170,8 +161,6 @@ export const test = base.extend<LiveFixtures>({
     await context.close();
   },
 });
-
-// Keep the test user clean between specs
 
 test.beforeEach(async ({ request }) => {
   try {
