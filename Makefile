@@ -661,7 +661,7 @@ verify-prod: ## Full prod validation: API + browser tests (~80s, requires hosted
 	@./scripts/check-cp-credentials.sh
 	@echo "✅ Production verified"
 
-qa-live: ## Run live QA against production instance (david010.longhouse.ai, ~60s)
+qa-live: ## Run live QA against hosted instance (~60s, default subdomain david010)
 	@./scripts/qa-live.sh
 
 test-ci: ## @internal CI-ready tests (unit + build + contracts)
