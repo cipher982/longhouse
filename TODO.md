@@ -15,6 +15,32 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [QA/Test] Runner detail metadata typing cleanup (size: 1)
+
+Status (2026-03-06): Done.
+
+**Goal:** Stop treating `runner_metadata` as a typed object in the UI when the OpenAPI contract exposes it as `Record<string, unknown>`.
+
+- [x] Add one local metadata normalizer in `RunnerDetailPage` instead of indexing `unknown` fields directly
+- [x] Re-run frontend type validation after the generated OpenAPI regen
+
+Notes:
+- 2026-03-06: This surfaced while regenerating OpenAPI types for the hosted alias cleanup. It is a real UI type hole, not fallout from the docstring-only changes.
+- 2026-03-06: Added a local `normalizeRunnerMetadata()` helper in `RunnerDetailPage` so the UI stops indexing `Record<string, unknown>` as if it were a typed object. `bun run validate:types` then passed.
+
+## [Docs/Drift] Hosted alias example cleanup (size: 1)
+
+Status (2026-03-06): Done.
+
+**Goal:** Stop teaching dead `david.longhouse.ai` examples in operator-facing code paths and generated API docs.
+
+- [x] Update live CLI/docstring examples to use `api.longhouse.ai` or `{subdomain}.longhouse.ai`, whichever actually matches the surface
+- [x] Regenerate frontend OpenAPI types after the backend docstring/source changes
+
+Notes:
+- 2026-03-06: This is not a historical-spec cleanup. The target is live help text, docstrings, and generated types that people actually read while operating the system.
+- 2026-03-06: Updated live examples in `mcp_serve.py`, `shipper/hooks.py`, and auth route docstrings, fixed the broken `frontend-web` `generate:api` script by switching it to `bunx openapi-typescript`, and regenerated `src/generated/openapi-types.ts`.
+
 ## [Tech Debt] qa-live wrapper cleanup (size: 1)
 
 Status (2026-03-06): Done.

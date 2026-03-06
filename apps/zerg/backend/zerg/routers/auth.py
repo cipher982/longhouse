@@ -640,7 +640,7 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
 
     This endpoint validates the token and sets a session cookie.
     Used when OAuth happens on longhouse.ai and user is redirected
-    back to their subdomain (e.g., david.longhouse.ai) with a token.
+    back to their subdomain (e.g., david010.longhouse.ai or {subdomain}.longhouse.ai) with a token.
 
     Tokens may come from:
     1. The instance itself (sub=numeric user_id, signed with JWT_SECRET)
@@ -776,7 +776,7 @@ def sso_redirect(token: str, response: Response, db: Session = Depends(get_db)):
     """Cross-subdomain SSO: accept token via URL param, set cookie, redirect.
 
     Used by the control plane to sign users into their instance:
-    control.longhouse.ai → david.longhouse.ai/auth/sso?token=xxx → /timeline
+    control.longhouse.ai → {subdomain}.longhouse.ai/auth/sso?token=xxx → /timeline
     """
     from fastapi.responses import RedirectResponse as _Redirect
 
