@@ -46,7 +46,6 @@ WORKDIR /repo/apps/zerg/backend
 
 # Copy pyproject files for dependency caching
 COPY apps/zerg/backend/uv.lock apps/zerg/backend/pyproject.toml ./
-COPY packages/hatch-agent /repo/packages/hatch-agent
 
 RUN uv sync --frozen --no-install-project --no-dev
 
@@ -65,7 +64,6 @@ WORKDIR /repo/apps/zerg/backend
 
 # Copy virtual environment from dependencies stage
 COPY --from=dependencies /repo/apps/zerg/backend/.venv ./.venv
-COPY --from=dependencies /repo/packages /repo/packages
 
 # Copy backend source
 COPY apps/zerg/backend/ ./

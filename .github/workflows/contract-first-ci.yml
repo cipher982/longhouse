@@ -84,9 +84,6 @@ jobs:
     - name: Run Shipper E2E (fixture -> engine ship -> API -> DB)
       run: make test-shipper-e2e
 
-    - name: Run Hatch-Agent Tests
-      run: make test-hatch-agent
-
     - name: Run Install-Runner Tests
       run: make test-install-runner
 

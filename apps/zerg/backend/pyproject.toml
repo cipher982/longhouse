@@ -43,6 +43,7 @@ dependencies = [
     "mcp>=1.0",
     "pyyaml>=6.0",
     "zstandard>=0.23.0",
+    "hatch-agent @ git+https://github.com/cipher982/hatch.git@main",
 ]
 
 [project.optional-dependencies]
@@ -85,9 +86,6 @@ packages = ["zerg"]
 [tool.uv]
 # Keep cache inside repo for hermetic test runs
 cache-dir = "./.uv_cache"
-
-[tool.uv.sources]
-# hatch-agent = { path = "../../../packages/hatch-agent" }  # Removed for PyPI
 
 [tool.ruff]
 line-length = 140

@@ -647,6 +647,11 @@ wheels = [
 ]
 
 [[package]]
+name = "hatch-agent"
+version = "0.1.0"
+source = { git = "https://github.com/cipher982/hatch.git?rev=main#4a55da5e8c6bff7363bc602a295f001c8d804181" }
+
+[[package]]
 name = "hpack"
 version = "4.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -964,6 +969,7 @@ dependencies = [
     { name = "edge-tts" },
     { name = "fastapi" },
     { name = "google-auth" },
+    { name = "hatch-agent" },
     { name = "httpx", extra = ["http2"] },
     { name = "jsonschema" },
     { name = "mcp" },
@@ -1015,6 +1021,7 @@ requires-dist = [
     { name = "edge-tts", specifier = ">=7.0.0" },
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "google-auth", specifier = ">=2.40.3" },
+    { name = "hatch-agent", git = "https://github.com/cipher982/hatch.git?rev=main" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "langchain-core", marker = "extra == 'dev'", specifier = ">=1.2.5" },

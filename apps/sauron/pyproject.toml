@@ -25,8 +25,8 @@ dependencies = [
     # Environment
     "python-dotenv>=1.0.0",
 
-    # Zerg jobs infrastructure (from monorepo) - includes SQLAlchemy
-    "zerg",
+    # Longhouse backend distribution provides the zerg Python package
+    "longhouse",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +38,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-zerg = { path = "../zerg/backend", editable = true }
+longhouse = { path = "../zerg/backend", editable = true }
 
 [project.scripts]
 sauron = "sauron.cli:app"

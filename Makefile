@@ -391,13 +391,18 @@ test-frontend-unit: ## @internal Run frontend unit tests only
 		cd apps/zerg/frontend-web && bun run test; \
 	fi
 
-test-hatch-agent: ## @internal Run hatch-agent package tests
+test-hatch-agent: ## @internal Run hatch-agent package tests from sibling repo
+	@if [ ! -d ../hatch ]; then \
+		echo "❌ hatch repo not found at ../hatch"; \
+		echo "Clone it with: gh repo clone cipher982/hatch ../hatch"; \
+		exit 1; \
+	fi
 	@if [ "$(MINIMAL)" = "1" ]; then \
 		echo "🧪 Running hatch-agent tests (minimal)..."; \
-		cd packages/hatch-agent && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py -q; \
+		cd ../hatch && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py -q; \
 	else \
 		echo "🧪 Running hatch-agent tests..."; \
-		cd packages/hatch-agent && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py; \
+		cd ../hatch && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py; \
 	fi
 
 test-runner-unit: ## @internal Run runner unit tests
