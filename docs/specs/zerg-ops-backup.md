@@ -31,7 +31,8 @@ No env-file config surface. Operational defaults live in code.
 
 Must protect:
 
-- `/var/lib/docker/data/longhouse/<instance>/longhouse.db`
+- `/var/app-data/longhouse/<instance>/longhouse.db` (physical storage on zerg secondary disk)
+- Compatibility bind mount remains at `/var/lib/docker/data/longhouse/<instance>/longhouse.db` so existing provisioner/runtime paths keep working
 
 Everything else is derived/replaceable.
 

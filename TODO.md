@@ -369,6 +369,8 @@ Notes (2026-03-03):
   - Scoped execution now uses CLI `--instance` instead of env overrides.
 - Dead-man switch remains via `zerg-ops monitor` and systemd monitor timer.
 - 2026-03-05: Tightened local retention to 5 snapshots, added backup-volume usage warnings at 80%, and auto-pruned stale unmanaged raw `longhouse*.db` dumps after 2 days so manual prod backups cannot quietly fill `/var/app-data`.
+- 2026-03-06: Moved live Longhouse tenant data off root on zerg by bind-mounting `/var/app-data/longhouse` onto `/var/lib/docker/data/longhouse`; root usage dropped from 69% to 18%, app-data now carries the mutable instance state.
+- 2026-03-06: Restart during the storage migration exposed two legacy `runs.assistant_message_id` sentinel strings in `david010` (`live-voice-*`, `live-web-*`); repaired rows 25 and 26 in place so startup recovery can boot. If the pattern reappears, add a code-side sanitizer in fiche run recovery.
 
 ---
 
