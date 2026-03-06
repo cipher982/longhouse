@@ -17,19 +17,21 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Infra] Tenant data root cleanup + repair tooling (size: 3)
 
-Status (2026-03-06): In progress.
+Status (2026-03-06): Done.
 
 **Goal:** Make `/var/app-data/longhouse` the canonical hosted data root, ship an automated tenant GUID repair tool, remove the host compatibility bind mount, then use the cleanup to delete more drift.
 
 - [x] Commit persistent spec for the cleanup sprint
 - [x] Add one-shot tenant DB GUID scan/repair tooling
 - [x] Canonicalize control-plane/runtime data root to `/var/app-data/longhouse`
-- [ ] Migrate persisted instance `data_path` rows and remove the host compatibility bind mount on `zerg`
-- [ ] Run full verification (`make test`, `make test-e2e`, deploy/reprovision, `make qa-live`)
-- [ ] Land three more simplifications focused on deleting drift/duplicate code
+- [x] Migrate persisted instance `data_path` rows and remove the host compatibility bind mount on `zerg`
+- [x] Run full verification (`make test`, `make test-e2e`, deploy/reprovision, `make qa-live`)
+- [x] Land three more simplifications focused on deleting drift/duplicate code
 
 Notes:
-- 2026-03-06: Current live state on `zerg` still uses a host compatibility bind mount from `/var/app-data/longhouse` to `/var/lib/docker/data/longhouse`; root pressure is fixed, but the old path is still part of the contract.
+- 2026-03-06: Live on `zerg`, `cp_instances.data_path` rows now point at `/var/app-data/longhouse/<subdomain>`, the control-plane Coolify app mounts `/var/app-data/longhouse` directly, and the old compatibility bind mount is gone.
+- 2026-03-06: Verification passed end to end: `make test`, `make test-e2e`, live tenant-GUID scan, active-instance reprovision, post-unmount reprovision, and `make qa-live`.
+- 2026-03-06: Additional simplifications landed: extracted shared control-plane recreate/deploy helpers, corrected the ship skill examples, and removed stale old-path references from docs/scripts.
 - Spec: `docs/specs/tenant-data-root-cleanup.md`.
 
 ## [Tech Debt] Startup recovery should survive malformed legacy run UUIDs (size: 1)
@@ -400,7 +402,7 @@ Notes (2026-03-03):
   - Scoped execution now uses CLI `--instance` instead of env overrides.
 - Dead-man switch remains via `zerg-ops monitor` and systemd monitor timer.
 - 2026-03-05: Tightened local retention to 5 snapshots, added backup-volume usage warnings at 80%, and auto-pruned stale unmanaged raw `longhouse*.db` dumps after 2 days so manual prod backups cannot quietly fill `/var/app-data`.
-- 2026-03-06: Moved live Longhouse tenant data off root on zerg by bind-mounting `/var/app-data/longhouse` onto `/var/lib/docker/data/longhouse`; root usage dropped from 69% to 18%, app-data now carries the mutable instance state.
+- 2026-03-06: Moved live Longhouse tenant data off root on zerg onto `/var/app-data/longhouse`; root usage dropped from 69% to 23%, app-data now carries the mutable instance state, and the temporary compatibility bind mount has since been removed.
 - 2026-03-06: Restart during the storage migration exposed two legacy `runs.assistant_message_id` sentinel strings in `david010` (`live-voice-*`, `live-web-*`); repaired rows 25 and 26 in place on the host, then fixed app code so startup recovery no longer ORM-loads malformed GUID columns and Oikos now rejects non-UUID assistant message IDs at ingress.
 
 ---

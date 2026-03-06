@@ -1,15 +1,15 @@
 # Tenant Data Root Cleanup
 
-Status: In progress (2026-03-06)
+Status: Done (2026-03-06)
 
 ## Executive Summary
 
 This sprint finishes the hosted-instance storage cleanup that started with moving live tenant data off `/` on `zerg`.
 
-The current system still has two architectural leaks:
+The sprint started with two architectural leaks:
 
-1. Control-plane code and docs still treat `/var/lib/docker/data/longhouse` as canonical.
-2. Repairing malformed tenant SQLite GUID values still requires manual sqlite surgery.
+1. Control-plane code and docs treated `/var/lib/docker/data/longhouse` as canonical.
+2. Repairing malformed tenant SQLite GUID values required manual sqlite surgery.
 
 This sprint does four things:
 
@@ -27,11 +27,11 @@ This sprint does four things:
 
 ## Decision Log
 
-### Decision: Provisioner should not manage host paths from inside the control-plane container
-Context: `_volume_for()` and `run_migration_preflight()` currently call `os.makedirs/chown/chmod` on `settings.instance_data_root`. That only behaves correctly because the old path is bind-mounted into the control-plane container.
-Choice: Treat host data paths as opaque strings and let Docker mount/create them when needed instead of mutating the host filesystem from inside the control-plane container.
-Rationale: This removes the hidden dependency on the old mount path and simplifies the control-plane runtime contract.
-Revisit if: New-instance provisioning needs host-side ownership initialization that Docker alone does not provide.
+### Decision: Keep host-path preparation, but only against the canonical mounted root
+Context: `_volume_for()` and `run_migration_preflight()` already create/chown/chmod the target instance directory. Removing that behavior entirely would require a second ownership-initialization path for new instances.
+Choice: Keep the host-path preparation logic, centralize it in one helper, and mount `/var/app-data/longhouse` directly into the control-plane container.
+Rationale: This keeps provisioning simple and robust without relying on the old compatibility bind mount.
+Revisit if: A future provisioner path can initialize ownership without any direct host-path mount.
 
 ### Decision: Existing instance records should be migrated, not supported forever
 Context: `cp_instances.data_path` currently stores old-path values like `/var/lib/docker/data/longhouse/david010`.
@@ -45,11 +45,11 @@ Choice: Auto-fix only the safe nullable columns and fail/report on unsupported m
 Rationale: This solves the real operational problem without pretending a generic GUID rewrites tool is safe.
 Revisit if: We find malformed GUIDs in key columns that need a dedicated migration.
 
-### Decision: Removing the host compatibility bind mount matters more than removing every old-path reference in infra immediately
-Context: Coolify storage editing is brittle. The dangerous dependency is the host bind mount from `/var/app-data/longhouse` back onto `/var/lib/docker/data/longhouse`.
-Choice: Remove the host bind mount in this sprint. Old Coolify storage definitions can remain temporarily if they are no longer used for live data.
-Rationale: This gets root-path data flow out of the system without creating unnecessary Coolify risk.
-Revisit if: Coolify keeps re-creating or writing to the old path after the code/config cutover.
+### Decision: Change the Coolify app definition once, then remove the compatibility bind mount
+Context: Coolify storage editing is brittle, but the control-plane app only had one relevant mount to change. Leaving the old definition in place would keep future reprovisions coupled to the compatibility bind mount.
+Choice: Update the control-plane Coolify storage + env to `/var/app-data/longhouse`, reprovision active instances onto the new path, then remove the host compatibility bind mount.
+Rationale: One explicit app-definition change is simpler than inventing a second provisioning mechanism or carrying dead mounts forever.
+Revisit if: Coolify exposes a safer first-class storage API and this process can be codified further.
 
 ## Design
 
@@ -119,7 +119,7 @@ Acceptance criteria:
 Acceptance criteria:
 
 - Control-plane default `instance_data_root` is `/var/app-data/longhouse`.
-- Provisioner no longer depends on host-path mutation from inside the control-plane container.
+- Provisioner host-path preparation is centralized in one helper and points at the mounted canonical root.
 - Reprovision path uses persisted `inst.data_path` when present.
 - Host-ops tooling defaults use `/var/app-data/longhouse`.
 - Repo docs/scripts stop presenting the old root path as canonical.
