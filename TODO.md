@@ -15,6 +15,19 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Tech Debt] qa-live wrapper cleanup (size: 1)
+
+Status (2026-03-06): Done.
+
+**Goal:** Keep `qa-live.sh` as a thin alias to the prod E2E runner instead of a second command-line surface to maintain.
+
+- [x] Drop the bespoke `qa-live.sh` flag parser and banner
+- [x] Keep the useful env overrides (`QA_INSTANCE_SUBDOMAIN`, `QA_INSTANCE_URL`) and validate the default + direct-URL paths
+
+Notes:
+- 2026-03-06: `qa-live.sh` already delegates to `run-prod-e2e.sh`, so the extra parsing/printing layer was just more wrapper drift.
+- 2026-03-06: `scripts/qa-live.sh` now stays a 32-line env shim over `run-prod-e2e.sh`. Validation passed with `make qa-live` (8/8) and a direct-URL override run using `SMOKE_LOGIN_TOKEN`.
+
 ## [Tech Debt] Hosted test target helper dedupe (size: 1)
 
 Status (2026-03-06): Done.
