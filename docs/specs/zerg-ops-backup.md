@@ -21,8 +21,9 @@ A single script (`zerg-ops`) with an opinionated contract:
 3. Compress + manifest each snapshot.
 4. Restore-verify every snapshot (`hash`, `integrity_check`, row-count parity).
 5. Keep latest `N` snapshots per instance.
-6. Optionally sync snapshot+manifest offsite via neutral SSH alias (`longhouse-offsite`).
-7. Monitor freshness + offsite parity and fail loudly when broken.
+6. Prune stale unmanaged raw `longhouse*.db` dumps so one-off manual backups do not silently fill the backup volume.
+7. Optionally sync snapshot+manifest offsite via neutral SSH alias (`longhouse-offsite`).
+8. Monitor freshness + offsite parity + backup-volume usage and fail loudly when broken.
 
 No env-file config surface. Operational defaults live in code.
 
@@ -42,22 +43,23 @@ Everything else is derived/replaceable.
 4. Decompress + verify byte hash + `PRAGMA integrity_check` + row counts.
 5. Persist archive + matching manifest.
 6. Prune older local snapshots beyond retention.
-7. Sync archive+manifest to offsite alias when enabled.
+7. Prune stale unmanaged raw `longhouse*.db` dumps older than the local grace window.
+8. Sync archive+manifest to offsite alias when enabled.
 
 ## 5. Command Surface
 
 - `zerg-ops run` — backup + verify + prune + cleanup + docker prune + report
 - `zerg-ops backup` — backup + verify + prune + cleanup
 - `zerg-ops verify` — verify latest snapshot per instance
-- `zerg-ops monitor` — freshness + offsite artifact/size checks
-- `zerg-ops cleanup` — prune/cleanup + docker prune + report
+- `zerg-ops monitor` — freshness + offsite artifact/size + backup-volume checks
+- `zerg-ops cleanup` — prune/cleanup + raw-backup cleanup + docker prune + report
 - `zerg-ops report` — disk + backup inventory
 
 Minimal scoped flags:
 
 - `--instance <name>` (repeatable)
 - `--no-offsite`
-- test-only path overrides: `--live-root`, `--backup-root`, `--tmp-backup-dir`
+- test-only path overrides: `--live-root`, `--backup-root`, `--tmp-backup-dir`, `--backup-volume-warn-pct`
 
 ## 6. Offsite Design
 
@@ -81,8 +83,9 @@ Host longhouse-offsite
 1. Multi-instance backup works in one run.
 2. Restore verification fails hard on corruption/mismatch.
 3. Retention prunes to exactly configured count.
-4. Local contract test passes: `make test-zerg-ops-backup`.
-5. Monitor fails when backup freshness or offsite parity is broken.
+4. Stale unmanaged raw `longhouse*.db` dumps are removed automatically.
+5. Local contract test passes: `make test-zerg-ops-backup`.
+6. Monitor fails when backup freshness, offsite parity, or backup-volume usage is broken.
 
 ## 8. Rollout + Verify
 

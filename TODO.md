@@ -368,6 +368,7 @@ Notes (2026-03-03):
   - Offsite sync now uses neutral SSH alias `longhouse-offsite`; alias mapping lives only in host ssh config.
   - Scoped execution now uses CLI `--instance` instead of env overrides.
 - Dead-man switch remains via `zerg-ops monitor` and systemd monitor timer.
+- 2026-03-05: Tightened local retention to 5 snapshots, added backup-volume usage warnings at 80%, and auto-pruned stale unmanaged raw `longhouse*.db` dumps after 2 days so manual prod backups cannot quietly fill `/var/app-data`.
 
 ---
 

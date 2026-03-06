@@ -7,9 +7,10 @@ MODE="run"
 LIVE_ROOT="/var/lib/docker/data/longhouse"
 BACKUP_ROOT="/var/app-data/longhouse-backups"
 TMP_BACKUP_DIR="$BACKUP_ROOT/tmp"
-KEEP_SNAPSHOTS=14
+KEEP_SNAPSHOTS=5
 VERIFY_ON_BACKUP="true"
 MONITOR_MAX_AGE_HOURS=30
+RAW_DB_KEEP_DAYS=2
 
 # Offsite sync uses a neutral SSH alias. Map this alias in host ssh config.
 OFFSITE_ENABLED="true"
@@ -20,6 +21,7 @@ OFFSITE_KEEP_SNAPSHOTS=30
 ENABLE_DOCKER_PRUNE="true"
 DOCKER_PRUNE_UNTIL_HOURS=240
 ROOT_WARN_PCT=85
+BACKUP_VOLUME_WARN_PCT=80
 LOCK_FILE="/run/zerg-ops.lock"
 
 TARGET_INSTANCES=()
@@ -51,13 +53,14 @@ Usage:
   zerg-ops report
 
 Options:
-  --instance <name>       Scope run to one instance (repeatable)
-  --live-root <path>      Override live DB root (testing)
-  --backup-root <path>    Override backup root (testing)
-  --tmp-backup-dir <path> Override temporary working directory (testing)
-  --no-offsite            Disable offsite sync/check for this invocation
-  --no-docker-prune       Disable docker prune for this invocation
-  -h, --help              Show help
+  --instance <name>            Scope run to one instance (repeatable)
+  --live-root <path>           Override live DB root (testing)
+  --backup-root <path>         Override backup root (testing)
+  --tmp-backup-dir <path>      Override temporary working directory (testing)
+  --backup-volume-warn-pct <n> Override backup volume warning threshold (testing)
+  --no-offsite                 Disable offsite sync/check for this invocation
+  --no-docker-prune            Disable docker prune for this invocation
+  -h, --help                   Show help
 USAGE
 }
 
@@ -88,6 +91,11 @@ parse_args() {
       --tmp-backup-dir)
         [[ -n "${2:-}" ]] || die "--tmp-backup-dir requires a value"
         TMP_BACKUP_DIR="$2"
+        shift 2
+        ;;
+      --backup-volume-warn-pct)
+        [[ -n "${2:-}" ]] || die "--backup-volume-warn-pct requires a value"
+        BACKUP_VOLUME_WARN_PCT="$2"
         shift 2
         ;;
       --no-offsite)
@@ -126,6 +134,15 @@ stat_bytes() {
     stat -f%z "$path"
   else
     stat -c%s "$path"
+  fi
+}
+
+df_use_pct() {
+  local path="$1"
+  if df --output=pcent "$path" >/dev/null 2>&1; then
+    df --output=pcent "$path" | tail -1 | tr -dc '0-9'
+  else
+    df -P "$path" | awk 'NR == 2 { gsub(/%/, "", $5); print $5 }'
   fi
 }
 
@@ -364,6 +381,24 @@ discover_backup_instances() {
     [[ -d "$dir" ]] || continue
     [[ "$(basename "$dir")" == "tmp" ]] && continue
     ls "$dir"/longhouse.*.sqlite.* >/dev/null 2>&1 || continue
+    basename "$dir"
+  done | sort -u
+}
+
+discover_backup_dirs() {
+  if ((${#TARGET_INSTANCES[@]} > 0)); then
+    discover_instances_from_targets
+    return
+  fi
+
+  if [[ ! -d "$BACKUP_ROOT" ]]; then
+    return
+  fi
+
+  local dir
+  for dir in "$BACKUP_ROOT"/*; do
+    [[ -d "$dir" ]] || continue
+    [[ "$(basename "$dir")" == "tmp" ]] && continue
     basename "$dir"
   done | sort -u
 }
@@ -666,6 +701,18 @@ monitor_instance() {
   return 0
 }
 
+monitor_backup_volume_usage() {
+  local use_pct
+  use_pct="$(df_use_pct "$BACKUP_ROOT")"
+  if (( use_pct >= BACKUP_VOLUME_WARN_PCT )); then
+    log "ERROR backup volume usage ${use_pct}% (>= ${BACKUP_VOLUME_WARN_PCT}%) path=$BACKUP_ROOT"
+    return 1
+  fi
+
+  log "monitor backup volume usage ${use_pct}% path=$BACKUP_ROOT"
+  return 0
+}
+
 monitor_all() {
   local fail=0 count=0 instance
 
@@ -689,6 +736,10 @@ monitor_all() {
     return 1
   fi
 
+  if ! monitor_backup_volume_usage; then
+    fail=$((fail + 1))
+  fi
+
   if (( fail > 0 )); then
     log "ERROR monitor failures=$fail checked_instances=$count"
     return 1
@@ -707,6 +758,43 @@ cleanup_tmp_artifacts() {
     rm -f "$file"
     log "deleted old tmp artifact $file"
   done < <(find "$TMP_BACKUP_DIR" -type f -mtime +3 -print 2>/dev/null)
+}
+
+cleanup_unmanaged_raw_backups() {
+  local instance instance_dir file removed=0
+
+  while IFS= read -r instance; do
+    [[ -n "$instance" ]] || continue
+    instance_dir="$BACKUP_ROOT/$instance"
+    while IFS= read -r file; do
+      [[ -n "$file" ]] || continue
+      rm -f "$file"
+      removed=$((removed + 1))
+      log "deleted unmanaged raw backup $file"
+    done < <(find "$instance_dir" -type f -name 'longhouse*.db' -mtime +$RAW_DB_KEEP_DAYS -print 2>/dev/null)
+  done < <(discover_backup_dirs)
+
+  if (( removed > 0 )); then
+    log "raw backup cleanup removed=$removed retention_days=$RAW_DB_KEEP_DAYS"
+  fi
+}
+
+report_unmanaged_raw_backups() {
+  local instance instance_dir file raw_count=0 raw_bytes=0
+
+  while IFS= read -r instance; do
+    [[ -n "$instance" ]] || continue
+    instance_dir="$BACKUP_ROOT/$instance"
+    while IFS= read -r file; do
+      [[ -n "$file" ]] || continue
+      raw_count=$((raw_count + 1))
+      raw_bytes=$((raw_bytes + $(stat_bytes "$file")))
+    done < <(find "$instance_dir" -type f -name 'longhouse*.db' -print 2>/dev/null)
+  done < <(discover_backup_dirs)
+
+  if (( raw_count > 0 )); then
+    log "WARNING unmanaged raw backups files=$raw_count bytes=$raw_bytes path=$BACKUP_ROOT"
+  fi
 }
 
 cleanup_docker() {
@@ -756,12 +844,21 @@ report() {
     fi
   done
 
-  local root_use
-  root_use="$(df --output=pcent / | tail -1 | tr -dc '0-9')"
+  report_unmanaged_raw_backups
+
+  local root_use backup_use
+  root_use="$(df_use_pct /)"
+  backup_use="$(df_use_pct "$BACKUP_ROOT")"
   if (( root_use >= ROOT_WARN_PCT )); then
     log "WARNING root disk usage ${root_use}% (>= ${ROOT_WARN_PCT}%)"
   else
     log "root disk usage ${root_use}%"
+  fi
+
+  if (( backup_use >= BACKUP_VOLUME_WARN_PCT )); then
+    log "WARNING backup volume usage ${backup_use}% (>= ${BACKUP_VOLUME_WARN_PCT}%) path=$BACKUP_ROOT"
+  else
+    log "backup volume usage ${backup_use}% path=$BACKUP_ROOT"
   fi
 }
 
@@ -794,6 +891,7 @@ main() {
       verify_latest_all
       prune_all_local
       cleanup_tmp_artifacts
+      cleanup_unmanaged_raw_backups
       cleanup_docker
       report
       ;;
@@ -804,6 +902,7 @@ main() {
       fi
       prune_all_local
       cleanup_tmp_artifacts
+      cleanup_unmanaged_raw_backups
       ;;
     verify)
       verify_latest_all
@@ -814,6 +913,7 @@ main() {
     cleanup)
       prune_all_local
       cleanup_tmp_artifacts
+      cleanup_unmanaged_raw_backups
       cleanup_docker
       report
       ;;
