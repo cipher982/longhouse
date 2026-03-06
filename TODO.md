@@ -21,7 +21,7 @@ Status (2026-03-06): In progress.
 
 **Goal:** Keep deleting hosted-runtime drift now that auth and storage are standardized. Focus on removing one-off auth paths, fragile ops entrypoints, and repeated control-plane state shaping.
 
-- [ ] Make `qa-live` use hosted login tokens instead of scraping `LONGHOUSE_PASSWORD` from the live container
+- [x] Make `qa-live` use hosted login tokens instead of scraping `LONGHOUSE_PASSWORD` from the live container
 - [ ] Make tenant GUID repair/admin tooling runnable without fake app env bootstrapping or hidden `/app/.venv` knowledge
 - [ ] Flatten remaining repeated `InstanceOut` / control-plane response shaping in `routers/instances.py`
 - [ ] Decide whether `Instance.data_path` should be derived or centrally wrapped instead of read ad hoc
@@ -30,6 +30,7 @@ Status (2026-03-06): In progress.
 - [ ] Add a repo-level way to assert/fix the control-plane Coolify env + storage contract without hand-editing Coolify internals
 
 Notes:
+- 2026-03-06: `scripts/qa-live.sh` now delegates to `scripts/run-prod-e2e.sh`, uses the control-plane login-token flow, and live `make qa-live` passed 8/8 against `david010`.
 - 2026-03-06: Immediate priority order is `qa-live` auth, maintenance-tool bootstrap simplification, then control-plane response/helper dedupe.
 - 2026-03-06: Stale preview-only `CONTROL_PLANE_INSTANCE_DATA_ROOT` drift was already found and deleted live while landing the tenant-data-root cleanup, which is a signal to keep reducing hidden Coolify state.
 
