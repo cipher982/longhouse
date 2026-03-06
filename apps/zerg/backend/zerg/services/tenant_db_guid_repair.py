@@ -7,10 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from zerg.database import Base
-from zerg.models.agents import AgentsBase
-from zerg.models.types import GUID
-
 Action = Literal["set_null", "report_only"]
 
 
@@ -39,45 +35,32 @@ class RepairSummary:
     unsupported_count: int
 
 
-SAFE_NULL_COLUMNS: set[tuple[str, str]] = {
-    ("runs", "assistant_message_id"),
-    ("runs", "trace_id"),
-    ("commis_jobs", "trace_id"),
-    ("llm_audit_log", "trace_id"),
-    ("llm_audit_log", "span_id"),
-    ("insights", "session_id"),
-    ("action_proposals", "reflection_run_id"),
-}
-
 _DEFAULT_ROOT = Path("/var/app-data/longhouse")
 
-
-def _guid_column_specs() -> list[GuidColumnSpec]:
-    specs: list[GuidColumnSpec] = []
-    seen: set[tuple[str, str]] = set()
-    for metadata in (Base.metadata, AgentsBase.metadata):
-        for table in metadata.sorted_tables:
-            pk_columns = tuple(column.name for column in table.primary_key.columns)
-            for column in table.columns:
-                if not isinstance(column.type, GUID):
-                    continue
-                key = (table.name, column.name)
-                if key in seen:
-                    continue
-                seen.add(key)
-                action: Action = "set_null" if key in SAFE_NULL_COLUMNS else "report_only"
-                specs.append(
-                    GuidColumnSpec(
-                        table=table.name,
-                        column=column.name,
-                        primary_key_columns=pk_columns,
-                        action=action,
-                    )
-                )
-    return specs
-
-
-GUID_COLUMN_SPECS = tuple(_guid_column_specs())
+# Keep this explicit so the repair tool stays stdlib-only and runnable without
+# booting the full app config. Update it when tenant SQLite schema adds/removes
+# GUID-backed columns.
+GUID_COLUMN_SPECS: tuple[GuidColumnSpec, ...] = (
+    GuidColumnSpec("device_tokens", "id", ("id",), "report_only"),
+    GuidColumnSpec("memories", "id", ("id",), "report_only"),
+    GuidColumnSpec("runs", "trace_id", ("id",), "set_null"),
+    GuidColumnSpec("runs", "assistant_message_id", ("id",), "set_null"),
+    GuidColumnSpec("commis_jobs", "trace_id", ("id",), "set_null"),
+    GuidColumnSpec("llm_audit_log", "trace_id", ("id",), "set_null"),
+    GuidColumnSpec("llm_audit_log", "span_id", ("id",), "set_null"),
+    GuidColumnSpec("action_proposals", "id", ("id",), "report_only"),
+    GuidColumnSpec("action_proposals", "insight_id", ("id",), "report_only"),
+    GuidColumnSpec("action_proposals", "reflection_run_id", ("id",), "set_null"),
+    GuidColumnSpec("file_reservations", "id", ("id",), "report_only"),
+    GuidColumnSpec("insights", "id", ("id",), "report_only"),
+    GuidColumnSpec("insights", "session_id", ("id",), "set_null"),
+    GuidColumnSpec("reflection_runs", "id", ("id",), "report_only"),
+    GuidColumnSpec("sessions", "id", ("id",), "report_only"),
+    GuidColumnSpec("events", "session_id", ("id",), "report_only"),
+    GuidColumnSpec("session_branches", "session_id", ("id",), "report_only"),
+    GuidColumnSpec("session_embeddings", "session_id", ("id",), "report_only"),
+    GuidColumnSpec("source_lines", "session_id", ("id",), "report_only"),
+)
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
