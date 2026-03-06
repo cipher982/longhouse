@@ -61,6 +61,7 @@ main() {
     --live-root "$live_root"
     --backup-root "$backup_root"
     --tmp-backup-dir "$tmp_root"
+    --backup-volume-warn-pct 100
     --no-offsite
     --no-docker-prune
   )
@@ -76,11 +77,30 @@ main() {
   bash "$OPS_SCRIPT" verify "${common_args[@]}" >/dev/null
   bash "$OPS_SCRIPT" monitor "${common_args[@]}" >/dev/null
 
+  local old_raw="$backup_root/alice/longhouse.pre-old.db"
+  local fresh_raw="$backup_root/bob/longhouse.pre-fresh.db"
+  cp "$live_root/alice/longhouse.db" "$old_raw"
+  cp "$live_root/bob/longhouse.db" "$fresh_raw"
+  python3 - "$old_raw" <<'PY'
+import os
+import sys
+import time
+
+path = sys.argv[1]
+old = time.time() - (3 * 24 * 60 * 60)
+os.utime(path, (old, old))
+PY
+
+  bash "$OPS_SCRIPT" cleanup "${common_args[@]}" >/dev/null
+  [[ ! -f "$old_raw" ]] || fail "expected stale unmanaged raw backup to be deleted"
+  [[ -f "$fresh_raw" ]] || fail "expected fresh unmanaged raw backup to be preserved"
+  rm -f "$fresh_raw"
+
   local instance count manifests latest ts manifest restore expected_sha actual_sha
   for instance in alice bob; do
     count="$(ls -1 "$backup_root/$instance"/longhouse.*.sqlite.* 2>/dev/null | wc -l | tr -d ' ')"
     manifests="$(ls -1 "$backup_root/$instance"/longhouse.*.manifest.json 2>/dev/null | wc -l | tr -d ' ')"
-    [[ "$count" == "14" ]] || fail "expected 14 archives for $instance, got $count"
+    [[ "$count" == "5" ]] || fail "expected 5 archives for $instance, got $count"
     [[ "$manifests" == "$count" ]] || fail "manifest/archive count mismatch for $instance"
 
     latest="$(ls -1t "$backup_root/$instance"/longhouse.*.sqlite.* | head -n1)"
