@@ -242,7 +242,7 @@ def _env_for(
     return _apply_custom_env(env, custom_env)
 
 
-def _data_path_for(subdomain: str, *, data_path: str | None = None) -> str:
+def resolve_instance_data_path(subdomain: str, *, data_path: str | None = None) -> str:
     return data_path or os.path.join(settings.instance_data_root, subdomain)
 
 
@@ -256,7 +256,7 @@ def _ensure_data_path(data_path: str) -> None:
 
 
 def _volume_for(subdomain: str, *, data_path: str | None = None) -> tuple[str, dict[str, dict[str, str]]]:
-    target_data_path = _data_path_for(subdomain, data_path=data_path)
+    target_data_path = resolve_instance_data_path(subdomain, data_path=data_path)
     _ensure_data_path(target_data_path)
     return target_data_path, {target_data_path: {"bind": "/data", "mode": "rw"}}
 
@@ -333,7 +333,7 @@ class Provisioner:
 
         try:
             container = self.client.containers.get(container_name)
-            return ProvisionResult(container_name=container.name, data_path=_data_path_for(subdomain, data_path=data_path))
+            return ProvisionResult(container_name=container.name, data_path=resolve_instance_data_path(subdomain, data_path=data_path))
         except docker.errors.NotFound:
             pass
 

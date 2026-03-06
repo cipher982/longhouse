@@ -24,12 +24,13 @@ Status (2026-03-06): In progress.
 - [x] Make `qa-live` use hosted login tokens instead of scraping `LONGHOUSE_PASSWORD` from the live container
 - [x] Make tenant GUID repair/admin tooling runnable without fake app env bootstrapping or hidden `/app/.venv` knowledge
 - [x] Flatten remaining repeated `InstanceOut` / control-plane response shaping in `routers/instances.py`
-- [ ] Decide whether `Instance.data_path` should be derived or centrally wrapped instead of read ad hoc
+- [x] Decide whether `Instance.data_path` should be derived or centrally wrapped instead of read ad hoc
 - [ ] Remove preview-env drift for infra apps so stale preview-only vars cannot quietly override prod assumptions
 - [ ] Consider moving the control-plane SQLite DB under `/var/app-data` too so mutable app state follows one rule
 - [ ] Add a repo-level way to assert/fix the control-plane Coolify env + storage contract without hand-editing Coolify internals
 
 Notes:
+- 2026-03-06: Decision: keep persisted `Instance.data_path` for migration and host-move flexibility, but route fallback logic through `resolve_instance_data_path()` so router/deployer/provisioner stop open-coding it.
 - 2026-03-06: `routers/instances.py` now builds `InstanceOut` through one `_instance_out()` helper instead of repeating the same response payload shape across the admin and self-service routes.
 - 2026-03-06: `tenant_db_guid_repair.py` is now stdlib-only with an explicit GUID-column map, the CLI runs under plain `python3`, and a stripped-env subprocess regression test locks that in.
 - 2026-03-06: `scripts/qa-live.sh` now delegates to `scripts/run-prod-e2e.sh`, uses the control-plane login-token flow, and live `make qa-live` passed 8/8 against `david010`.

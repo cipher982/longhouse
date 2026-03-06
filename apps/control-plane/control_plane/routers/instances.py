@@ -34,6 +34,7 @@ from control_plane.services.provisioner import Provisioner
 from control_plane.services.provisioner import _generate_password
 from control_plane.services.provisioner import normalize_custom_env_overrides
 from control_plane.services.provisioner import parse_custom_env_json
+from control_plane.services.provisioner import resolve_instance_data_path
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
 
@@ -108,9 +109,7 @@ def _refresh_instance_health_if_ready(
 
 
 def _instance_db_path(inst: Instance) -> Path:
-    if inst.data_path:
-        return Path(inst.data_path) / "longhouse.db"
-    return Path(settings.instance_data_root) / inst.subdomain / "longhouse.db"
+    return Path(resolve_instance_data_path(inst.subdomain, data_path=inst.data_path)) / "longhouse.db"
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -225,7 +224,7 @@ def _recreate_instance(
         owner_email=user.email,
         password=password,
         custom_env=custom_env,
-        data_path=inst.data_path,
+        data_path=resolve_instance_data_path(inst.subdomain, data_path=inst.data_path),
     )
     inst.container_name = result.container_name
     inst.data_path = result.data_path
@@ -468,7 +467,10 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
 
     provisioner = Provisioner()
     try:
-        provisioner.run_migration_preflight(inst.subdomain, data_path=inst.data_path)
+        provisioner.run_migration_preflight(
+            inst.subdomain,
+            data_path=resolve_instance_data_path(inst.subdomain, data_path=inst.data_path),
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     result = _recreate_instance(inst, user, provisioner)

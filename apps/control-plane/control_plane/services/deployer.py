@@ -18,6 +18,7 @@ from control_plane.models import Instance
 from control_plane.models import User
 from control_plane.services.provisioner import Provisioner
 from control_plane.services.provisioner import parse_custom_env_json
+from control_plane.services.provisioner import resolve_instance_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def _provision_deploy_instance(
         inst.subdomain,
         owner_email=user.email,
         custom_env=custom_env,
-        data_path=inst.data_path,
+        data_path=resolve_instance_data_path(inst.subdomain, data_path=inst.data_path),
         image=image,
         skip_pull=skip_pull,
     )
