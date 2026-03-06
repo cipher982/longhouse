@@ -184,7 +184,7 @@ curl -s -H "X-Admin-Token: $TOKEN" https://control.longhouse.ai/api/instances
 # Reprovision (stops old container, creates new one with latest image + current secrets)
 curl -s -X POST -H "X-Admin-Token: $TOKEN" https://control.longhouse.ai/api/instances/<id>/reprovision
 ```
-Note: reprovisioning generates a new password. Data is safe — SQLite lives on a host bind mount, not inside the container.
+Note: reprovisioning generates a new password. Data is safe — SQLite lives on a host bind mount at `/var/app-data/longhouse/<subdomain>`, not inside the container.
 
 ### Verify Deploy
 ```bash
