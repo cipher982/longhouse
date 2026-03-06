@@ -2,6 +2,8 @@
 
 Status: In progress.
 
+Phase 2 completed 2026-03-06: transient and historical docs removed.
+
 ## Executive Summary
 
 Longhouse has accumulated too many Markdown docs that duplicate the code, repeat completed implementation work, or preserve session-by-session historical context that git history already stores.

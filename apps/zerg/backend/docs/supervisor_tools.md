@@ -3,7 +3,7 @@
 ## Status
 
 - **Canonical source of truth:** `apps/zerg/backend/zerg/tools/builtin/oikos_tools.py`
-- **Companion architecture spec:** `apps/zerg/backend/docs/specs/unified-memory-bridge.md`
+- **Companion source of truth:** `apps/zerg/backend/zerg/tools/builtin/oikos_tools.py` and `apps/zerg/backend/zerg/services/`
 - **Doc status:** current as of 2026-02-10
 
 This document replaces older milestone-era descriptions that referenced removed components (e.g. `CommisRunner`) or non-existent test/doc paths.
@@ -65,13 +65,12 @@ Current utility categories include:
 
 From first-principles review (2026-02-10), docs/prompt/runtime had drift around delegation semantics.
 
-Target contract (tracked in the spec):
+Current contract:
 
 1. Oikos dispatches by intent: direct answer vs quick tool vs CLI delegation.
 2. Backend intent should be explicit (Claude/Codex/Gemini), not hidden.
 3. Delegation modes should be explicit (repo workspace vs scratch workspace).
 
-See `apps/zerg/backend/docs/specs/unified-memory-bridge.md` Phase 3 for implementation details.
 
 ## Tests
 
