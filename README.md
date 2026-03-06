@@ -47,11 +47,11 @@ curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve --demo  # Try with sample data
 ```
 
-See [Install Guide](docs/install-guide.md) for what the installer does, onboarding wizard details, and manual install options.
+The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
 
-### 2. pip install (Alternate)
+### 2. Manual install
 ```bash
-pip install longhouse
+uv tool install longhouse
 longhouse onboard
 longhouse serve --demo  # Try with sample data
 ```
@@ -118,6 +118,7 @@ longhouse serve      # Start the server
 longhouse serve --demo   # Start with sample data
 longhouse serve --demo-fresh # Rebuild demo data on start
 longhouse connect    # Sync Claude Code sessions (continuous)
+longhouse connect --install  # Install hooks + background engine service
 longhouse ship       # One-time sync
 longhouse status     # Show configuration
 longhouse onboard    # Re-run setup wizard
@@ -182,8 +183,6 @@ longhouse doctor   # verify
 ```
 
 ## Documentation
-
-See the [Install Guide](docs/install-guide.md) for detailed setup instructions, onboarding wizard walkthrough, and troubleshooting.
 
 This README is the canonical user guide. Product direction lives in `VISION.md`, and the execution roadmap lives in `TODO.md`.
 
