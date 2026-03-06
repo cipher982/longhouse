@@ -90,6 +90,10 @@ fail() { echo -e "  ${RED}✗${NC} $1"; FAILED=$((FAILED + 1)); }
 warn() { echo -e "  ${YELLOW}⚠${NC} $1"; WARNINGS=$((WARNINGS + 1)); }
 info() { echo -e "  ${BLUE}ℹ${NC} $1"; }
 
+new_message_id() {
+    (uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-$(date +%s)") | tr '[:upper:]' '[:lower:]'
+}
+
 section() {
     echo ""
     echo "--- $1 ---"
@@ -202,7 +206,7 @@ test_chat() {
     local expected_regex="${5:-}"
 
     local msg_id
-    msg_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-$(date +%s)")
+    msg_id="$(new_message_id)"
 
     # Send chat request, capture SSE stream with timeout
     local response
@@ -276,7 +280,7 @@ test_voice() {
     local timeout_secs="${3:-30}"
 
     local msg_id
-    msg_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-voice-$(date +%s)")
+    msg_id="$(new_message_id)"
 
     # Create minimal valid WAV file (44-byte header + 1600 bytes of silence = 100ms at 8kHz 16-bit mono)
     local wav_file
