@@ -12,10 +12,10 @@ export interface paths {
             cookie?: never;
         };
         /** Read Fiches */
-        get: operations["read_fiches_api_fiches_get"];
+        get: operations["read_fiches_fiches_get"];
         put?: never;
         /** Create Fiche */
-        post: operations["create_fiche_api_fiches_post"];
+        post: operations["create_fiche_fiches_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -30,10 +30,10 @@ export interface paths {
             cookie?: never;
         };
         /** Read Fiches */
-        get: operations["read_fiches_api_fiches__get"];
+        get: operations["read_fiches_fiches__get"];
         put?: never;
         /** Create Fiche */
-        post: operations["create_fiche_api_fiches__post"];
+        post: operations["create_fiche_fiches__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -48,7 +48,7 @@ export interface paths {
             cookie?: never;
         };
         /** Read Dashboard Snapshot */
-        get: operations["read_dashboard_snapshot_api_fiches_dashboard_get"];
+        get: operations["read_dashboard_snapshot_fiches_dashboard_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -65,12 +65,12 @@ export interface paths {
             cookie?: never;
         };
         /** Read Fiche */
-        get: operations["read_fiche_api_fiches__fiche_id__get"];
+        get: operations["read_fiche_fiches__fiche_id__get"];
         /** Update Fiche */
-        put: operations["update_fiche_api_fiches__fiche_id__put"];
+        put: operations["update_fiche_fiches__fiche_id__put"];
         post?: never;
         /** Delete Fiche */
-        delete: operations["delete_fiche_api_fiches__fiche_id__delete"];
+        delete: operations["delete_fiche_fiches__fiche_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -84,7 +84,7 @@ export interface paths {
             cookie?: never;
         };
         /** Read Fiche Details */
-        get: operations["read_fiche_details_api_fiches__fiche_id__details_get"];
+        get: operations["read_fiche_details_fiches__fiche_id__details_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -101,10 +101,10 @@ export interface paths {
             cookie?: never;
         };
         /** Read Fiche Messages */
-        get: operations["read_fiche_messages_api_fiches__fiche_id__messages_get"];
+        get: operations["read_fiche_messages_fiches__fiche_id__messages_get"];
         put?: never;
         /** Create Fiche Message */
-        post: operations["create_fiche_message_api_fiches__fiche_id__messages_post"];
+        post: operations["create_fiche_message_fiches__fiche_id__messages_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -121,7 +121,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Run Fiche Task */
-        post: operations["run_fiche_task_api_fiches__fiche_id__task_post"];
+        post: operations["run_fiche_task_fiches__fiche_id__task_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -139,13 +139,13 @@ export interface paths {
          * List Mcp Servers
          * @description List all MCP servers configured for a fiche.
          */
-        get: operations["list_mcp_servers_api_fiches__fiche_id__mcp_servers__get"];
+        get: operations["list_mcp_servers_fiches__fiche_id__mcp_servers__get"];
         put?: never;
         /**
          * Add Mcp Server
          * @description Add an MCP server to a fiche.
          */
-        post: operations["add_mcp_server_api_fiches__fiche_id__mcp_servers__post"];
+        post: operations["add_mcp_server_fiches__fiche_id__mcp_servers__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -166,7 +166,7 @@ export interface paths {
          * Remove Mcp Server
          * @description Remove an MCP server from a fiche.
          */
-        delete: operations["remove_mcp_server_api_fiches__fiche_id__mcp_servers__server_name__delete"];
+        delete: operations["remove_mcp_server_fiches__fiche_id__mcp_servers__server_name__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -185,7 +185,7 @@ export interface paths {
          * Test Mcp Connection
          * @description Test connection to an MCP server without saving it.
          */
-        post: operations["test_mcp_connection_api_fiches__fiche_id__mcp_servers_test_post"];
+        post: operations["test_mcp_connection_fiches__fiche_id__mcp_servers_test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -203,7 +203,7 @@ export interface paths {
          * Get Available Tools
          * @description Get all available tools for a fiche (built-in + MCP).
          */
-        get: operations["get_available_tools_api_fiches__fiche_id__mcp_servers_available_tools_get"];
+        get: operations["get_available_tools_fiches__fiche_id__mcp_servers_available_tools_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -225,13 +225,13 @@ export interface paths {
          *
          *     If `title` is provided, returns threads matching that title.
          */
-        get: operations["read_threads_api_threads_get"];
+        get: operations["read_threads_threads_get"];
         put?: never;
         /**
          * Create Thread
          * @description Create a new thread
          */
-        post: operations["create_thread_api_threads_post"];
+        post: operations["create_thread_threads_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -251,13 +251,13 @@ export interface paths {
          *
          *     If `title` is provided, returns threads matching that title.
          */
-        get: operations["read_threads_api_threads__get"];
+        get: operations["read_threads_threads__get"];
         put?: never;
         /**
          * Create Thread
          * @description Create a new thread
          */
-        post: operations["create_thread_api_threads__post"];
+        post: operations["create_thread_threads__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -275,18 +275,18 @@ export interface paths {
          * Read Thread
          * @description Get a specific thread by ID
          */
-        get: operations["read_thread_api_threads__thread_id__get"];
+        get: operations["read_thread_threads__thread_id__get"];
         /**
          * Update Thread
          * @description Update a thread
          */
-        put: operations["update_thread_api_threads__thread_id__put"];
+        put: operations["update_thread_threads__thread_id__put"];
         post?: never;
         /**
          * Delete Thread
          * @description Delete a thread
          */
-        delete: operations["delete_thread_api_threads__thread_id__delete"];
+        delete: operations["delete_thread_threads__thread_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -309,13 +309,13 @@ export interface paths {
          *
          *     See crud.get_thread_messages() for implementation details on the .order_by(ThreadMessage.id) guarantee.
          */
-        get: operations["read_thread_messages_api_threads__thread_id__messages_get"];
+        get: operations["read_thread_messages_threads__thread_id__messages_get"];
         put?: never;
         /**
          * Create Thread Message
          * @description Create a new message in a thread
          */
-        post: operations["create_thread_message_api_threads__thread_id__messages_post"];
+        post: operations["create_thread_message_threads__thread_id__messages_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -335,7 +335,7 @@ export interface paths {
          * Start Thread Run
          * @description Process any unprocessed messages in the thread and stream back the result.
          */
-        post: operations["start_thread_run_api_threads__thread_id__runs_post"];
+        post: operations["start_thread_run_threads__thread_id__runs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -353,7 +353,7 @@ export interface paths {
          * Get Models
          * @description Return available models filtered for non-admins if allowlist set.
          */
-        get: operations["get_models_api_models__get"];
+        get: operations["get_models_models__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -373,7 +373,7 @@ export interface paths {
          * Get Super Admin Status
          * @description Check if the current user is a super admin and if password confirmation is required.
          */
-        get: operations["get_super_admin_status_api_admin_super_admin_status_get"];
+        get: operations["get_super_admin_status_admin_super_admin_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -398,7 +398,7 @@ export interface paths {
          *     Requires super admin privileges (user must be in ADMIN_EMAILS).
          *     In production environments, requires additional password confirmation.
          */
-        post: operations["reset_database_api_admin_reset_database_post"];
+        post: operations["reset_database_admin_reset_database_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -418,7 +418,7 @@ export interface paths {
          * Seed Scenario Data
          * @description Seed deterministic scenario data for demos and E2E tests.
          */
-        post: operations["seed_scenario_data_api_admin_seed_scenario_post"];
+        post: operations["seed_scenario_data_admin_seed_scenario_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -436,7 +436,7 @@ export interface paths {
          * Get Migration Log
          * @description Get the migration log from container startup.
          */
-        get: operations["get_migration_log_api_admin_migration_log_get"];
+        get: operations["get_migration_log_admin_migration_log_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -458,7 +458,7 @@ export interface paths {
          * Fix Database Schema
          * @description Directly fix the missing updated_at column issue.
          */
-        post: operations["fix_database_schema_api_admin_fix_database_schema_post"];
+        post: operations["fix_database_schema_admin_fix_database_schema_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -478,7 +478,7 @@ export interface paths {
          *
          *     TESTING-only. Returns table counts for debugging.
          */
-        get: operations["debug_db_schema_api_admin_debug_db_schema_get"];
+        get: operations["debug_db_schema_admin_debug_db_schema_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -509,7 +509,7 @@ export interface paths {
          *     Returns:
          *         Success message with fiche ID
          */
-        post: operations["configure_test_model_api_admin_configure_test_model_post"];
+        post: operations["configure_test_model_admin_configure_test_model_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -530,7 +530,7 @@ export interface paths {
          *     Returns users sorted by the specified field with usage stats for today, 7d, and 30d.
          *     Admin-only endpoint.
          */
-        get: operations["list_users_with_usage_api_admin_users_get"];
+        get: operations["list_users_with_usage_admin_users_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -557,7 +557,7 @@ export interface paths {
          *
          *     Admin-only endpoint.
          */
-        get: operations["get_user_usage_details_api_admin_users__user_id__usage_get"];
+        get: operations["get_user_usage_details_admin_users__user_id__usage_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -582,7 +582,7 @@ export interface paths {
          *     This replaces file-based seeding from ~/.config/zerg/user_context.json.
          *     Seeds context for all admin users (idempotent - skips users with existing context).
          */
-        post: operations["seed_context_api_admin_bootstrap_context_post"];
+        post: operations["seed_context_admin_bootstrap_context_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -605,7 +605,7 @@ export interface paths {
          *     This replaces file-based seeding from ~/.config/zerg/runners.json.
          *     Idempotent - skips runners that already exist.
          */
-        post: operations["seed_runners_api_admin_bootstrap_runners_post"];
+        post: operations["seed_runners_admin_bootstrap_runners_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -629,7 +629,7 @@ export interface paths {
          *     All credentials are Fernet-encrypted before storage.
          *     Idempotent - skips credentials that already exist.
          */
-        post: operations["seed_credentials_api_admin_bootstrap_credentials_post"];
+        post: operations["seed_credentials_admin_bootstrap_credentials_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -647,7 +647,7 @@ export interface paths {
          * Get Bootstrap Status
          * @description Get status of what's configured vs missing.
          */
-        get: operations["get_bootstrap_status_api_admin_bootstrap_status_get"];
+        get: operations["get_bootstrap_status_admin_bootstrap_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -674,7 +674,7 @@ export interface paths {
          *     to a specific user and run the Gmail *history* API to fetch only the new
          *     messages.
          */
-        post: operations["gmail_webhook_api_email_webhook_google_post"];
+        post: operations["gmail_webhook_email_webhook_google_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -701,7 +701,7 @@ export interface paths {
          *     Returns:
          *         202 Accepted with status message
          */
-        post: operations["gmail_pubsub_webhook_api_email_webhook_google_pubsub_post"];
+        post: operations["gmail_pubsub_webhook_email_webhook_google_pubsub_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -735,7 +735,7 @@ export interface paths {
          *     Raises:
          *         HTTPException: If channel not found, not a webhook channel, or validation fails
          */
-        post: operations["channel_webhook_api_webhooks_channels__channel_id__post"];
+        post: operations["channel_webhook_webhooks_channels__channel_id__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -750,7 +750,7 @@ export interface paths {
             cookie?: never;
         };
         /** List Connectors */
-        get: operations["list_connectors_api_connectors_get"];
+        get: operations["list_connectors_connectors_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -770,7 +770,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Delete Connector */
-        delete: operations["delete_connector_api_connectors__connector_id__delete"];
+        delete: operations["delete_connector_connectors__connector_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -793,7 +793,7 @@ export interface paths {
          *     Connector-managed providers (like Gmail) are not affected by trigger
          *     deletion (watch lifecycle is per-connector).
          */
-        delete: operations["delete_trigger_api_triggers__trigger_id__delete"];
+        delete: operations["delete_trigger_triggers__trigger_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -810,7 +810,7 @@ export interface paths {
          * List Triggers
          * @description List all triggers, optionally filtered by fiche_id.
          */
-        get: operations["list_triggers_api_triggers__get"];
+        get: operations["list_triggers_triggers__get"];
         put?: never;
         /**
          * Create Trigger
@@ -821,7 +821,7 @@ export interface paths {
          *     call is awaited so tests (which run inside the same event-loop) can verify
          *     the side-effects synchronously without sprinkling ``asyncio.sleep`` hacks.
          */
-        post: operations["create_trigger_api_triggers__post"];
+        post: operations["create_trigger_triggers__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -855,7 +855,7 @@ export interface paths {
          *         404 Not Found: invalid token OR unknown trigger (don't leak existence)
          *         413 Payload Too Large: request body exceeds 256 KiB limit
          */
-        post: operations["fire_trigger_event_api_triggers__trigger_id__events_post"];
+        post: operations["fire_trigger_event_triggers__trigger_id__events_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -873,7 +873,7 @@ export interface paths {
          * List Sources
          * @description List user's knowledge sources.
          */
-        get: operations["list_sources_api_knowledge_sources_get"];
+        get: operations["list_sources_knowledge_sources_get"];
         put?: never;
         /**
          * Create Source
@@ -881,7 +881,7 @@ export interface paths {
          *
          *     Supported source_types: url, github_repo
          */
-        post: operations["create_source_api_knowledge_sources_post"];
+        post: operations["create_source_knowledge_sources_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -899,18 +899,18 @@ export interface paths {
          * Get Source
          * @description Get a knowledge source by ID.
          */
-        get: operations["get_source_api_knowledge_sources__source_id__get"];
+        get: operations["get_source_knowledge_sources__source_id__get"];
         /**
          * Update Source
          * @description Update a knowledge source.
          */
-        put: operations["update_source_api_knowledge_sources__source_id__put"];
+        put: operations["update_source_knowledge_sources__source_id__put"];
         post?: never;
         /**
          * Delete Source
          * @description Delete a knowledge source and all its documents.
          */
-        delete: operations["delete_source_api_knowledge_sources__source_id__delete"];
+        delete: operations["delete_source_knowledge_sources__source_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -932,7 +932,7 @@ export interface paths {
          *     Note: This endpoint performs a synchronous sync and returns when complete.
          *     The response contains the updated source with current sync_status.
          */
-        post: operations["sync_source_api_knowledge_sources__source_id__sync_post"];
+        post: operations["sync_source_knowledge_sources__source_id__sync_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -952,7 +952,7 @@ export interface paths {
          *
          *     Optionally filter by source_id.
          */
-        get: operations["list_documents_api_knowledge_documents_get"];
+        get: operations["list_documents_knowledge_documents_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -972,7 +972,7 @@ export interface paths {
          * Get Document
          * @description Get a knowledge document by ID.
          */
-        get: operations["get_document_api_knowledge_documents__document_id__get"];
+        get: operations["get_document_knowledge_documents__document_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -994,7 +994,7 @@ export interface paths {
          *
          *     Phase 0: Simple keyword search.
          */
-        get: operations["search_api_knowledge_search_get"];
+        get: operations["search_knowledge_search_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1017,7 +1017,7 @@ export interface paths {
          *     V1: This endpoint mirrors GitHub's /user/repos listing (no global search).
          *     The UI search box filters locally across loaded pages and uses "Load more".
          */
-        get: operations["list_github_repos_api_knowledge_github_repos_get"];
+        get: operations["list_github_repos_knowledge_github_repos_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1037,7 +1037,7 @@ export interface paths {
          * List Repo Branches
          * @description List branches for a GitHub repository.
          */
-        get: operations["list_repo_branches_api_knowledge_github_repos__owner___repo__branches_get"];
+        get: operations["list_repo_branches_knowledge_github_repos__owner___repo__branches_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1057,7 +1057,7 @@ export interface paths {
          * List Runs
          * @description Return latest *limit* runs for the given fiche (descending).
          */
-        get: operations["list_runs_api_fiches__fiche_id__runs_get"];
+        get: operations["list_runs_fiches__fiche_id__runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1074,7 +1074,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Run */
-        get: operations["get_run_api_runs__run_id__get"];
+        get: operations["get_run_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1109,7 +1109,7 @@ export interface paths {
          *
          *     No authentication required - this is for bootstrapping new runners.
          */
-        get: operations["get_install_script_api_runners_install_sh_get"];
+        get: operations["get_install_script_runners_install_sh_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1139,7 +1139,7 @@ export interface paths {
          *
          *     No authentication required.
          */
-        get: operations["get_uninstall_script_api_runners_uninstall_sh_get"];
+        get: operations["get_uninstall_script_runners_uninstall_sh_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1164,7 +1164,7 @@ export interface paths {
          *     Returns a one-time token and setup instructions including a complete
          *     docker run command for easy deployment.
          */
-        post: operations["create_enroll_token_api_runners_enroll_token_post"];
+        post: operations["create_enroll_token_runners_enroll_token_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1190,7 +1190,7 @@ export interface paths {
          *     Token consumption is committed BEFORE runner creation to prevent
          *     token reuse even if runner creation fails.
          */
-        post: operations["register_runner_api_runners_register_post"];
+        post: operations["register_runner_runners_register_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1211,7 +1211,7 @@ export interface paths {
          *     Returns a lightweight summary of runner status for UI health indicators.
          *     Useful for detecting broken runner connections early.
          */
-        get: operations["get_runner_status_api_runners_status_get"];
+        get: operations["get_runner_status_runners_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1231,7 +1231,7 @@ export interface paths {
          * List Runners
          * @description List all runners for the authenticated user.
          */
-        get: operations["list_runners_api_runners__get"];
+        get: operations["list_runners_runners__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1251,7 +1251,7 @@ export interface paths {
          * Get Runner
          * @description Get details of a specific runner.
          */
-        get: operations["get_runner_api_runners__runner_id__get"];
+        get: operations["get_runner_runners__runner_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1261,7 +1261,7 @@ export interface paths {
          * Update Runner
          * @description Update a runner's configuration (name, labels, capabilities).
          */
-        patch: operations["update_runner_api_runners__runner_id__patch"];
+        patch: operations["update_runner_runners__runner_id__patch"];
         trace?: never;
     };
     "/api/runners/{runner_id}/revoke": {
@@ -1280,7 +1280,7 @@ export interface paths {
          *     The runner will be disconnected and cannot reconnect. Jobs will no longer
          *     be routed to this runner.
          */
-        post: operations["revoke_runner_api_runners__runner_id__revoke_post"];
+        post: operations["revoke_runner_runners__runner_id__revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1305,7 +1305,7 @@ export interface paths {
          *
          *     WARNING: The new secret is returned only once. Store it securely.
          */
-        post: operations["rotate_runner_secret_api_runners__runner_id__rotate_secret_post"];
+        post: operations["rotate_runner_secret_runners__runner_id__rotate_secret_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1329,7 +1329,7 @@ export interface paths {
          *     Creates/returns a token for dev@local admin user.
          *     Also sets longhouse_session cookie for browser auth.
          */
-        post: operations["dev_login_api_auth_dev_login_post"];
+        post: operations["dev_login_auth_dev_login_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1352,7 +1352,7 @@ export interface paths {
          *     Expected JSON body: `{ "id_token": "<JWT from Google>" }`.
          *     Also sets longhouse_session cookie for browser auth.
          */
-        post: operations["google_sign_in_api_auth_google_post"];
+        post: operations["google_sign_in_auth_google_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1375,7 +1375,7 @@ export interface paths {
          *
          *     In development mode (AUTH_DISABLED=1), always returns 204.
          */
-        get: operations["verify_session_api_auth_verify_get"];
+        get: operations["verify_session_auth_verify_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1395,7 +1395,7 @@ export interface paths {
          * Auth Status
          * @description Return auth status without throwing 401 (browser-friendly).
          */
-        get: operations["auth_status_api_auth_status_get"];
+        get: operations["auth_status_auth_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1419,7 +1419,7 @@ export interface paths {
          *
          *     Returns 204 on success. Safe to call even if not logged in.
          */
-        post: operations["logout_api_auth_logout_post"];
+        post: operations["logout_auth_logout_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1441,11 +1441,38 @@ export interface paths {
          *
          *     This endpoint validates the token and sets a session cookie.
          *     Used when OAuth happens on longhouse.ai and user is redirected
-         *     back to their subdomain (e.g., david.longhouse.ai) with a token.
+         *     back to their subdomain (e.g., david010.longhouse.ai or {subdomain}.longhouse.ai) with a token.
+         *
+         *     Tokens may come from:
+         *     1. The instance itself (sub=numeric user_id, signed with JWT_SECRET)
+         *     2. The control plane (sub=numeric cp user_id + email claim, signed with CONTROL_PLANE_JWT_SECRET)
          *
          *     Expected JSON body: `{ "token": "<JWT>" }`.
          */
-        post: operations["accept_token_api_auth_accept_token_post"];
+        post: operations["accept_token_auth_accept_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/sso": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sso Redirect
+         * @description Cross-subdomain SSO: accept token via URL param, set cookie, redirect.
+         *
+         *     Used by the control plane to sign users into their instance:
+         *     control.longhouse.ai → {subdomain}.longhouse.ai/auth/sso?token=xxx → /timeline
+         */
+        get: operations["sso_redirect_auth_sso_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1463,7 +1490,7 @@ export interface paths {
          * Get Auth Methods
          * @description Return available auth methods for frontend.
          */
-        get: operations["get_auth_methods_api_auth_methods_get"];
+        get: operations["get_auth_methods_auth_methods_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1488,7 +1515,33 @@ export interface paths {
          *     Expected JSON body: `{ "password": "<configured password>" }`.
          *     Returns a JWT token and sets session cookie on success.
          */
-        post: operations["password_login_api_auth_password_post"];
+        post: operations["password_login_auth_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/cli-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cli Login
+         * @description Password login for CLI tools. Returns a short-lived JWT for device token creation.
+         *
+         *     This endpoint is used by `longhouse connect` to auto-create a device token
+         *     without requiring the user to open a browser. The returned JWT is valid for
+         *     5 minutes -- just long enough to call POST /api/devices/tokens.
+         *
+         *     Expected JSON body: `{ "password": "<configured password>" }`.
+         */
+        post: operations["cli_login_auth_cli_login_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1514,7 +1567,7 @@ export interface paths {
          *     - Optionally attempts to register a Gmail watch if ``callback_url`` is provided.
          *     - Returns the ``connector_id``.
          */
-        post: operations["connect_gmail_api_auth_google_gmail_post"];
+        post: operations["connect_gmail_auth_google_gmail_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1535,7 +1588,7 @@ export interface paths {
          *     Redirects user to GitHub's authorization page. After approval,
          *     GitHub redirects back to /oauth/github/callback with an authorization code.
          */
-        get: operations["github_authorize_api_oauth_github_authorize_get"];
+        get: operations["github_authorize_oauth_github_authorize_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1560,7 +1613,7 @@ export interface paths {
          *
          *     Returns an HTML page that closes the popup and notifies the parent window.
          */
-        get: operations["github_callback_api_oauth_github_callback_get"];
+        get: operations["github_callback_oauth_github_callback_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1580,12 +1633,12 @@ export interface paths {
          * Read Current User
          * @description Return the authenticated user's profile.
          */
-        get: operations["read_current_user_api_users_me_get"];
+        get: operations["read_current_user_users_me_get"];
         /**
          * Update Current User
          * @description Patch the authenticated user's profile (display name, avatar, prefs).
          */
-        put: operations["update_current_user_api_users_me_put"];
+        put: operations["update_current_user_users_me_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1608,7 +1661,7 @@ export interface paths {
          *     The `limit` field always reflects today's daily limit usage,
          *     regardless of the selected period.
          */
-        get: operations["read_current_user_usage_api_users_me_usage_get"];
+        get: operations["read_current_user_usage_users_me_usage_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1630,7 +1683,7 @@ export interface paths {
          * Upload Current User Avatar
          * @description Handle *multipart/form-data* avatar upload for the authenticated user.
          */
-        post: operations["upload_current_user_avatar_api_users_me_avatar_post"];
+        post: operations["upload_current_user_avatar_users_me_avatar_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1652,7 +1705,7 @@ export interface paths {
          *     integrations, preferences, and other user-specific data used
          *     for prompt composition.
          */
-        get: operations["get_user_context_api_users_me_context_get"];
+        get: operations["get_user_context_users_me_context_get"];
         /**
          * Replace User Context
          * @description Replace the authenticated user's entire context.
@@ -1665,7 +1718,7 @@ export interface paths {
          *     The context is validated against the UserContext schema to catch common
          *     errors early, but extra fields are allowed for flexibility.
          */
-        put: operations["replace_user_context_api_users_me_context_put"];
+        put: operations["replace_user_context_users_me_context_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1683,7 +1736,7 @@ export interface paths {
          *     The merged context is validated against the UserContext schema to catch
          *     common errors, but extra fields are allowed for flexibility.
          */
-        patch: operations["update_user_context_api_users_me_context_patch"];
+        patch: operations["update_user_context_users_me_context_patch"];
         trace?: never;
     };
     "/api/user/contacts/email": {
@@ -1697,13 +1750,13 @@ export interface paths {
          * List Email Contacts
          * @description List all approved email contacts for the current user.
          */
-        get: operations["list_email_contacts_api_user_contacts_email_get"];
+        get: operations["list_email_contacts_user_contacts_email_get"];
         put?: never;
         /**
          * Create Email Contact
          * @description Add a new approved email contact.
          */
-        post: operations["create_email_contact_api_user_contacts_email_post"];
+        post: operations["create_email_contact_user_contacts_email_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1722,13 +1775,13 @@ export interface paths {
          * Update Email Contact
          * @description Update an existing email contact.
          */
-        put: operations["update_email_contact_api_user_contacts_email__contact_id__put"];
+        put: operations["update_email_contact_user_contacts_email__contact_id__put"];
         post?: never;
         /**
          * Delete Email Contact
          * @description Delete an email contact.
          */
-        delete: operations["delete_email_contact_api_user_contacts_email__contact_id__delete"];
+        delete: operations["delete_email_contact_user_contacts_email__contact_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1745,13 +1798,13 @@ export interface paths {
          * List Phone Contacts
          * @description List all approved phone contacts for the current user.
          */
-        get: operations["list_phone_contacts_api_user_contacts_phone_get"];
+        get: operations["list_phone_contacts_user_contacts_phone_get"];
         put?: never;
         /**
          * Create Phone Contact
          * @description Add a new approved phone contact.
          */
-        post: operations["create_phone_contact_api_user_contacts_phone_post"];
+        post: operations["create_phone_contact_user_contacts_phone_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1770,13 +1823,13 @@ export interface paths {
          * Update Phone Contact
          * @description Update an existing phone contact.
          */
-        put: operations["update_phone_contact_api_user_contacts_phone__contact_id__put"];
+        put: operations["update_phone_contact_user_contacts_phone__contact_id__put"];
         post?: never;
         /**
          * Delete Phone Contact
          * @description Delete a phone contact.
          */
-        delete: operations["delete_phone_contact_api_user_contacts_phone__contact_id__delete"];
+        delete: operations["delete_phone_contact_user_contacts_phone__contact_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1803,7 +1856,7 @@ export interface paths {
          *     Returns:
          *         List of fiche summaries
          */
-        get: operations["list_oikos_fiches_api_oikos_fiches_get"];
+        get: operations["list_oikos_fiches_oikos_fiches_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1835,7 +1888,7 @@ export interface paths {
          *     Returns:
          *         List of run summaries ordered by created_at descending
          */
-        get: operations["list_oikos_runs_api_oikos_runs_get"];
+        get: operations["list_oikos_runs_oikos_runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1867,7 +1920,7 @@ export interface paths {
          *     Returns:
          *         JSONResponse with run details if found, or 204 No Content
          */
-        get: operations["get_active_run_api_oikos_runs_active_get"];
+        get: operations["get_active_run_oikos_runs_active_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1901,7 +1954,7 @@ export interface paths {
          *     Raises:
          *         HTTPException: 404 if run not found or not owned by user
          */
-        get: operations["get_run_status_api_oikos_runs__run_id__get"];
+        get: operations["get_run_status_oikos_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1933,7 +1986,7 @@ export interface paths {
          *     Returns:
          *         EventSourceResponse for SSE streaming
          */
-        get: operations["attach_to_run_stream_api_oikos_runs__run_id__stream_get"];
+        get: operations["attach_to_run_stream_oikos_runs__run_id__stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1969,7 +2022,7 @@ export interface paths {
          *     Raises:
          *         HTTPException: 404 if run not found or not owned by user
          */
-        get: operations["get_run_events_api_oikos_runs__run_id__events_get"];
+        get: operations["get_run_events_oikos_runs__run_id__events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2003,7 +2056,7 @@ export interface paths {
          *     Raises:
          *         HTTPException: 404 if run not found or not owned by user
          */
-        get: operations["get_run_timeline_api_oikos_runs__run_id__timeline_get"];
+        get: operations["get_run_timeline_oikos_runs__run_id__timeline_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2041,7 +2094,7 @@ export interface paths {
          *         409: Fiche already running
          *         500: Execution error
          */
-        post: operations["oikos_dispatch_api_oikos_dispatch_post"];
+        post: operations["oikos_dispatch_oikos_dispatch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2091,7 +2144,7 @@ export interface paths {
          *             "stream_url": "/api/stream/runs/456"
          *         }
          */
-        post: operations["oikos_run_api_oikos_run_post"];
+        post: operations["oikos_run_oikos_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2125,7 +2178,7 @@ export interface paths {
          *     Raises:
          *         HTTPException 404: If run not found or doesn't belong to user
          */
-        post: operations["oikos_run_cancel_api_oikos_run__run_id__cancel_post"];
+        post: operations["oikos_run_cancel_oikos_run__run_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2146,7 +2199,7 @@ export interface paths {
          * @description Resume a WAITING run when a commis completes.
          *
          *     Called internally when a commis completes while the oikos run was
-         *     WAITING (interrupted by spawn_commis). Uses FicheRunner.run_continuation()
+         *     WAITING (interrupted by spawn_workspace_commis). Uses FicheRunner.run_continuation()
          *     to continue the oikos loop from persisted history.
          *
          *     Args:
@@ -2161,7 +2214,7 @@ export interface paths {
          *         404: Run not found
          *         500: Error resuming run
          */
-        post: operations["resume_run_api_oikos_internal_runs__run_id__resume_post"];
+        post: operations["resume_run_oikos_internal_runs__run_id__resume_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2201,7 +2254,7 @@ export interface paths {
          *         - oikos_thinking: Oikos analyzing
          *         - oikos_complete: Final response with result
          */
-        post: operations["oikos_chat_api_oikos_chat_post"];
+        post: operations["oikos_chat_oikos_chat_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2224,7 +2277,7 @@ export interface paths {
          *     Returns audio data directly in the response body.
          *     Content-Type will be audio/mpeg for MP3 format.
          */
-        post: operations["convert_text_to_speech_api_oikos_tts_post"];
+        post: operations["convert_text_to_speech_oikos_tts_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2247,7 +2300,7 @@ export interface paths {
          *     Use this endpoint to check if TTS would succeed without actually
          *     generating the audio. Useful for validation.
          */
-        post: operations["convert_text_to_speech_json_api_oikos_tts_json_post"];
+        post: operations["convert_text_to_speech_json_oikos_tts_json_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2268,7 +2321,7 @@ export interface paths {
          *     For now, this streams the complete audio once generated.
          *     Future: implement true streaming with ElevenLabs.
          */
-        get: operations["stream_text_to_speech_api_oikos_tts_stream_get"];
+        get: operations["stream_text_to_speech_oikos_tts_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2288,7 +2341,7 @@ export interface paths {
          * Get Tts Status
          * @description Get TTS service status and configuration.
          */
-        get: operations["get_tts_status_api_oikos_tts_status_get"];
+        get: operations["get_tts_status_oikos_tts_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2314,7 +2367,7 @@ export interface paths {
          *     Returns:
          *         List of available voices with metadata
          */
-        get: operations["list_voices_api_oikos_tts_voices_get"];
+        get: operations["list_voices_oikos_tts_voices_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2341,7 +2394,7 @@ export interface paths {
          *     - System transcribes
          *     - Oikos responds with text
          */
-        post: operations["voice_turn_api_oikos_voice_turn_post"];
+        post: operations["voice_turn_oikos_voice_turn_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2361,7 +2414,7 @@ export interface paths {
          * Voice Transcribe
          * @description Transcribe audio to text (no oikos execution).
          */
-        post: operations["voice_transcribe_api_oikos_voice_transcribe_post"];
+        post: operations["voice_transcribe_oikos_voice_transcribe_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2381,7 +2434,7 @@ export interface paths {
          * Voice Tts
          * @description Convert text to speech (no oikos execution).
          */
-        post: operations["voice_tts_api_oikos_voice_tts_post"];
+        post: operations["voice_tts_oikos_voice_tts_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2404,7 +2457,7 @@ export interface paths {
          *     Oikos is treated as a normal client (like the dashboard). It authenticates
          *     using the same JWT bearer token as other frontend clients.
          */
-        post: operations["oikos_auth_api_oikos_auth_post"];
+        post: operations["oikos_auth_oikos_auth_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2422,7 +2475,7 @@ export interface paths {
          * List Oikos Agents
          * @description Compatibility alias for fiche listing (historical /agents path).
          */
-        get: operations["list_oikos_agents_api_oikos_agents_get"];
+        get: operations["list_oikos_agents_oikos_agents_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2463,7 +2516,7 @@ export interface paths {
          *     Returns:
          *         EventSourceResponse streaming SSE events
          */
-        get: operations["oikos_events_api_oikos_events_get"];
+        get: operations["oikos_events_oikos_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2495,7 +2548,7 @@ export interface paths {
          *     Returns:
          *         OikosHistoryResponse with messages and total count
          */
-        get: operations["oikos_history_api_oikos_history_get"];
+        get: operations["oikos_history_oikos_history_get"];
         put?: never;
         post?: never;
         /**
@@ -2512,7 +2565,7 @@ export interface paths {
          *         db: Database session
          *         current_user: Authenticated user
          */
-        delete: operations["oikos_clear_history_api_oikos_history_delete"];
+        delete: operations["oikos_clear_history_oikos_history_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2534,7 +2587,7 @@ export interface paths {
          *
          *     This is the single source of truth for Oikos configuration.
          */
-        get: operations["oikos_bootstrap_api_oikos_bootstrap_get"];
+        get: operations["oikos_bootstrap_oikos_bootstrap_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2556,7 +2609,7 @@ export interface paths {
          *
          *     Returns basic information about the user's oikos thread.
          */
-        get: operations["get_oikos_thread_api_oikos_thread_get"];
+        get: operations["get_oikos_thread_oikos_thread_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2585,7 +2638,7 @@ export interface paths {
          *     Saves preferences to the user's context in the database.
          *     Only provided fields are updated; others remain unchanged.
          */
-        patch: operations["oikos_update_preferences_api_oikos_preferences_patch"];
+        patch: operations["oikos_update_preferences_oikos_preferences_patch"];
         trace?: never;
     };
     "/api/oikos/session": {
@@ -2601,13 +2654,13 @@ export interface paths {
          *
          *     Directly calls OpenAI's API - no separate oikos-server needed.
          */
-        get: operations["oikos_session_get_api_oikos_session_get"];
+        get: operations["oikos_session_get_oikos_session_get"];
         put?: never;
         /**
          * Oikos Session Post
          * @description Backwards compatibility: some clients may still POST.
          */
-        post: operations["oikos_session_post_api_oikos_session_post"];
+        post: operations["oikos_session_post_oikos_session_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2629,7 +2682,7 @@ export interface paths {
          *
          *     Directly calls OpenAI's API - no separate oikos-server needed.
          */
-        post: operations["oikos_conversation_title_api_oikos_conversation_title_post"];
+        post: operations["oikos_conversation_title_oikos_conversation_title_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2650,7 +2703,7 @@ export interface paths {
          * @description Resume a WAITING run when a commis completes.
          *
          *     Called internally when a commis completes while the oikos run was
-         *     WAITING (interrupted by spawn_commis). Uses FicheRunner.run_continuation()
+         *     WAITING (interrupted by spawn_workspace_commis). Uses FicheRunner.run_continuation()
          *     to continue the oikos loop from persisted history.
          *
          *     Args:
@@ -2665,7 +2718,7 @@ export interface paths {
          *         404: Run not found
          *         500: Error resuming run
          */
-        post: operations["resume_run_api_internal_runs__run_id__resume_post"];
+        post: operations["resume_run_internal_runs__run_id__resume_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2685,7 +2738,7 @@ export interface paths {
          * Record Commis Tool Event
          * @description Record a commis tool event from Claude Code hooks.
          */
-        post: operations["record_commis_tool_event_api_internal_commis_tool_event_post"];
+        post: operations["record_commis_tool_event_internal_commis_tool_event_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2717,7 +2770,7 @@ export interface paths {
          *     Returns:
          *         PushResponse with acknowledged operation IDs and next cursor
          */
-        post: operations["push_sync_operations_api_oikos_sync_push_post"];
+        post: operations["push_sync_operations_oikos_sync_push_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2747,7 +2800,7 @@ export interface paths {
          *     Returns:
          *         PullResponse with operations and next cursor
          */
-        get: operations["pull_sync_operations_api_oikos_sync_pull_get"];
+        get: operations["pull_sync_operations_oikos_sync_pull_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2806,7 +2859,7 @@ export interface paths {
          *         # Skip token events (for bandwidth optimization)
          *         GET /api/stream/runs/123?include_tokens=false
          */
-        get: operations["stream_run_replay_api_stream_runs__run_id__get"];
+        get: operations["stream_run_replay_stream_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2826,7 +2879,7 @@ export interface paths {
          * System Info
          * @description Return non-sensitive runtime switches used by the SPA at startup.
          */
-        get: operations["system_info_api_system_info_get"];
+        get: operations["system_info_system_info_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2846,10 +2899,10 @@ export interface paths {
          * System Capabilities
          * @description Return system capability flags for graceful degradation.
          *
-         *     Used by frontend to determine which features are available based on
-         *     configured API keys and services.
+         *     Legacy flat format for backwards compatibility. The richer endpoint
+         *     is GET /api/system/capabilities on the capabilities router.
          */
-        get: operations["system_capabilities_api_system_capabilities_get"];
+        get: operations["system_capabilities_system_capabilities_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2874,7 +2927,7 @@ export interface paths {
          *     Used by ui-capture for deterministic empty state testing.
          *     Disabled in production.
          */
-        post: operations["reset_sessions_api_system_reset_sessions_post"];
+        post: operations["reset_sessions_system_reset_sessions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2895,9 +2948,163 @@ export interface paths {
          * @description Seed demo agent sessions for marketing/onboarding.
          *
          *     Public endpoint (no auth) for dev/demo purposes.
-         *     Disabled in production.
+         *     Disabled in production unless demo_mode is enabled.
          */
-        post: operations["seed_demo_sessions_api_system_seed_demo_sessions_post"];
+        post: operations["seed_demo_sessions_system_seed_demo_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/email/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Email Status
+         * @description Show which email keys are configured and from what source.
+         */
+        get: operations["email_status_system_email_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/email/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Email Config
+         * @description Save email config as JobSecret rows (encrypted). Only saves non-None fields.
+         */
+        put: operations["save_email_config_system_email_config_put"];
+        post?: never;
+        /**
+         * Delete Email Config
+         * @description Remove all email config overrides (revert to platform/env defaults).
+         */
+        delete: operations["delete_email_config_system_email_config_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/email/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Email
+         * @description Send a test email using current config (DB + env resolved).
+         */
+        post: operations["test_email_system_email_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/capabilities/llm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Llm Capabilities
+         * @description Return LLM capability status for text and embedding with feature lists.
+         *
+         *     Public endpoint (no auth) so frontend can check at startup.
+         *     Uses env-var check + DB scan (single-tenant: any user's config).
+         */
+        get: operations["llm_capabilities_capabilities_llm_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/llm/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Llm Providers
+         * @description List configured LLM providers for the current user (keys never returned).
+         */
+        get: operations["list_llm_providers_llm_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/llm/providers/{capability}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upsert Llm Provider
+         * @description Create or update an LLM provider config (key encrypted at rest).
+         */
+        put: operations["upsert_llm_provider_llm_providers__capability__put"];
+        post?: never;
+        /**
+         * Delete Llm Provider
+         * @description Remove a provider config (reverts to env var fallback).
+         */
+        delete: operations["delete_llm_provider_llm_providers__capability__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/llm/providers/{capability}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Llm Provider
+         * @description Validate an API key with a minimal API call before saving.
+         *
+         *     For text: sends a tiny chat completion.
+         *     For embedding: sends a tiny embedding request.
+         */
+        post: operations["test_llm_provider_llm_providers__capability__test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2915,7 +3122,7 @@ export interface paths {
          * Get Frontend Errors
          * @description Admin-only: view recent frontend errors captured via beacon.
          */
-        get: operations["get_frontend_errors_api_ops_errors_get"];
+        get: operations["get_frontend_errors_ops_errors_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2935,7 +3142,7 @@ export interface paths {
          * Get Summary
          * @description Return primary KPIs for the Ops dashboard (admin-only).
          */
-        get: operations["get_summary_api_ops_summary_get"];
+        get: operations["get_summary_ops_summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2952,7 +3159,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Timeseries */
-        get: operations["get_timeseries_api_ops_timeseries_get"];
+        get: operations["get_timeseries_ops_timeseries_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2969,7 +3176,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Top */
-        get: operations["get_top_api_ops_top_get"];
+        get: operations["get_top_ops_top_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2989,7 +3196,7 @@ export interface paths {
          * Read Container Policy
          * @description Return the container execution policy derived from environment settings.
          */
-        get: operations["read_container_policy_api_config_container_policy_get"];
+        get: operations["read_container_policy_config_container_policy_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3014,7 +3221,7 @@ export interface paths {
          *     - Whether credentials are configured for this fiche
          *     - Test status and metadata from last test
          */
-        get: operations["list_fiche_connectors_api_fiches__fiche_id__connectors__get"];
+        get: operations["list_fiche_connectors_fiches__fiche_id__connectors__get"];
         put?: never;
         /**
          * Configure Connector
@@ -3025,7 +3232,7 @@ export interface paths {
          *
          *     Test status is reset to 'untested' when credentials are updated.
          */
-        post: operations["configure_connector_api_fiches__fiche_id__connectors__post"];
+        post: operations["configure_connector_fiches__fiche_id__connectors__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3048,7 +3255,7 @@ export interface paths {
          *     This endpoint allows testing credentials without persisting them.
          *     Useful for validating credentials in the UI before committing.
          */
-        post: operations["test_credentials_before_save_api_fiches__fiche_id__connectors_test_post"];
+        post: operations["test_credentials_before_save_fiches__fiche_id__connectors_test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3070,7 +3277,7 @@ export interface paths {
          *
          *     Tests the stored credentials and updates the test_status and metadata.
          */
-        post: operations["test_configured_connector_api_fiches__fiche_id__connectors__connector_type__test_post"];
+        post: operations["test_configured_connector_fiches__fiche_id__connectors__connector_type__test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3093,7 +3300,7 @@ export interface paths {
          *
          *     This deletes the stored credentials permanently.
          */
-        delete: operations["delete_connector_api_fiches__fiche_id__connectors__connector_type__delete"];
+        delete: operations["delete_connector_fiches__fiche_id__connectors__connector_type__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3115,7 +3322,7 @@ export interface paths {
          *     - Whether credentials are configured at account level
          *     - Test status and metadata from last test
          */
-        get: operations["list_account_connectors_api_account_connectors__get"];
+        get: operations["list_account_connectors_account_connectors__get"];
         put?: never;
         /**
          * Configure Account Connector
@@ -3126,7 +3333,7 @@ export interface paths {
          *
          *     Test status is reset to 'untested' when credentials are updated.
          */
-        post: operations["configure_account_connector_api_account_connectors__post"];
+        post: operations["configure_account_connector_account_connectors__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3149,7 +3356,7 @@ export interface paths {
          *     This endpoint allows testing credentials without persisting them.
          *     Useful for validating credentials in the UI before committing.
          */
-        post: operations["test_credentials_before_save_api_account_connectors_test_post"];
+        post: operations["test_credentials_before_save_account_connectors_test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3171,7 +3378,7 @@ export interface paths {
          *
          *     Tests the stored credentials and updates the test_status and metadata.
          */
-        post: operations["test_configured_connector_api_account_connectors__connector_type__test_post"];
+        post: operations["test_configured_connector_account_connectors__connector_type__test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3195,7 +3402,7 @@ export interface paths {
          *     This deletes the stored credentials permanently.
          *     Note: Any fiches with per-fiche overrides will still work.
          */
-        delete: operations["delete_account_connector_api_account_connectors__connector_type__delete"];
+        delete: operations["delete_account_connector_account_connectors__connector_type__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3214,7 +3421,7 @@ export interface paths {
          * Track Batch
          * @description Track multiple events in one request (reduces network calls).
          */
-        post: operations["track_batch_api_funnel_batch_post"];
+        post: operations["track_batch_funnel_batch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3235,7 +3442,7 @@ export interface paths {
          *     Args:
          *         hours: Time period in hours (default 24)
          */
-        get: operations["get_stats_api_funnel_stats_get"];
+        get: operations["get_stats_funnel_stats_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3257,7 +3464,7 @@ export interface paths {
          * Stitch Visitor
          * @description Link anonymous visitor to authenticated user.
          */
-        post: operations["stitch_visitor_api_funnel_stitch_visitor_post"];
+        post: operations["stitch_visitor_funnel_stitch_visitor_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3278,7 +3485,7 @@ export interface paths {
          *     Args:
          *         hours: Time period in hours (default 72 = 3 days)
          */
-        get: operations["get_attribution_api_funnel_attribution_get"];
+        get: operations["get_attribution_funnel_attribution_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3298,12 +3505,156 @@ export interface paths {
         put?: never;
         /**
          * Join Waitlist
-         * @description Add email to waitlist.
+         * @description Add email to waitlist via Discord webhook.
          *
-         *     This endpoint is public (no auth required) since we want to collect
-         *     signups from visitors who haven't signed up yet.
+         *     This endpoint is public (no auth required). Discord is the durable
+         *     record — the call is synchronous so we know if it succeeded before
+         *     telling the user.
          */
-        post: operations["join_waitlist_api_waitlist_post"];
+        post: operations["join_waitlist_waitlist_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Job Secrets
+         * @description List all secret keys for the current user (values never returned).
+         */
+        get: operations["list_job_secrets_jobs_secrets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/secrets/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upsert Job Secret
+         * @description Create or update a secret (value encrypted at rest).
+         */
+        put: operations["upsert_job_secret_jobs_secrets__key__put"];
+        post?: never;
+        /**
+         * Delete Job Secret
+         * @description Delete a secret.
+         */
+        delete: operations["delete_job_secret_jobs_secrets__key__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/secrets/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Secrets Status
+         * @description Show which secrets a job declares and whether each is configured.
+         *
+         *     Checks the DB secrets store and env vars for each declared key.
+         */
+        get: operations["get_job_secrets_status_jobs__job_id__secrets_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/repo/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Repo Config
+         * @description Get current repo config. Falls back to env vars if no DB config.
+         */
+        get: operations["get_repo_config_jobs_repo_config_get"];
+        put?: never;
+        /**
+         * Set Repo Config
+         * @description Set or update repo config (token encrypted at rest).
+         *
+         *     On update, only fields explicitly included in the request body are
+         *     changed.  Omitting ``branch`` or ``token`` preserves the existing value.
+         *
+         *     After committing, starts git sync immediately (hot-start) so the user
+         *     doesn't need to restart the instance.
+         */
+        post: operations["set_repo_config_jobs_repo_config_post"];
+        /**
+         * Delete Repo Config
+         * @description Remove repo config (reverts to env vars or local-only).
+         */
+        delete: operations["delete_repo_config_jobs_repo_config_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/repo/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Repo Config
+         * @description Test-clone the repo to validate URL + token without persisting.
+         */
+        post: operations["verify_repo_config_jobs_repo_verify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/settings/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger Repo Sync
+         * @description Trigger an immediate git pull (uses the currently active git sync service).
+         *
+         *     Note: This is distinct from /api/jobs/repo/sync (admin-only, local repo sync).
+         *     This endpoint triggers a remote fetch + reset on the git sync service.
+         */
+        post: operations["trigger_repo_sync_jobs_settings_sync_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3327,7 +3678,7 @@ export interface paths {
          *     - Last commit time and message
          *     - Number of jobs in the manifest
          */
-        get: operations["get_jobs_repo_status_api_jobs_repo_get"];
+        get: operations["get_jobs_repo_status_jobs_repo_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3357,7 +3708,7 @@ export interface paths {
          *     This is normally done automatically on first boot, but can be
          *     triggered manually if needed.
          */
-        post: operations["init_jobs_repo_api_jobs_repo_init_post"];
+        post: operations["init_jobs_repo_jobs_repo_init_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3386,7 +3737,52 @@ export interface paths {
          *
          *     Currently returns not_implemented as remote sync is not yet built.
          */
-        post: operations["sync_jobs_repo_api_jobs_repo_sync_post"];
+        post: operations["sync_jobs_repo_jobs_repo_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/runs/recent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Recent Job Runs
+         * @description Get recent job runs across all jobs (for dashboard).
+         *
+         *     Returns the most recent runs ordered by created_at descending.
+         */
+        get: operations["get_recent_job_runs_jobs_runs_recent_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/runs/last": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Last Job Runs
+         * @description Get the most recent run for each job.
+         *
+         *     Returns a dict mapping job_id to its latest JobRunHistoryInfo.
+         *     More accurate than the capped /runs/recent for the "Last Run" column.
+         */
+        get: operations["get_last_job_runs_jobs_runs_last_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3407,7 +3803,7 @@ export interface paths {
          *     Args:
          *         enabled_only: If True, only return enabled jobs
          */
-        get: operations["list_jobs_api_jobs__get"];
+        get: operations["list_jobs_jobs__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3427,7 +3823,30 @@ export interface paths {
          * Get Job
          * @description Get details for a specific job.
          */
-        get: operations["get_job_api_jobs__job_id__get"];
+        get: operations["get_job_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Runs
+         * @description Get run history for a specific job.
+         *
+         *     Returns runs for the given job ordered by created_at descending,
+         *     with pagination support via limit/offset.
+         */
+        get: operations["get_job_runs_jobs__job_id__runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3457,7 +3876,7 @@ export interface paths {
          *
          *     The job runs with full retry support and timeout enforcement.
          */
-        post: operations["run_job_api_jobs__job_id__run_post"];
+        post: operations["run_job_jobs__job_id__run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3476,8 +3895,11 @@ export interface paths {
         /**
          * Enable Job
          * @description Enable a job for scheduled execution.
+         *
+         *     Checks that all required secrets are configured before enabling.
+         *     Returns 409 Conflict if required secrets are missing (use force=true to bypass).
          */
-        post: operations["enable_job_api_jobs__job_id__enable_post"];
+        post: operations["enable_job_jobs__job_id__enable_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3497,7 +3919,7 @@ export interface paths {
          * Disable Job
          * @description Disable a job from scheduled execution.
          */
-        post: operations["disable_job_api_jobs__job_id__disable_post"];
+        post: operations["disable_job_jobs__job_id__disable_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3518,7 +3940,7 @@ export interface paths {
          *     Returns recent entries from the job queue for debugging.
          *     Queue must be enabled (JOB_QUEUE_ENABLED=1) for entries to exist.
          */
-        get: operations["get_queue_state_api_jobs_queue_state_get"];
+        get: operations["get_queue_state_jobs_queue_state_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3541,7 +3963,7 @@ export interface paths {
          *     Returns recent traces sorted by creation time for discovery.
          *     Use this to find trace IDs to debug.
          */
-        get: operations["list_traces_api_traces__get"];
+        get: operations["list_traces_traces__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3568,7 +3990,7 @@ export interface paths {
          *     - full: Include LLM message details
          *     - errors: Only show errors and anomalies
          */
-        get: operations["get_trace_api_traces__trace_id__get"];
+        get: operations["get_trace_traces__trace_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3590,7 +4012,7 @@ export interface paths {
          *
          *     Returns commis pool status, recent error counts, and overall health indicator.
          */
-        get: operations["system_health_api_reliability_system_health_get"];
+        get: operations["system_health_reliability_system_health_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3612,7 +4034,7 @@ export interface paths {
          *
          *     Returns recent failed runs with error details for analysis.
          */
-        get: operations["error_analysis_api_reliability_errors_get"];
+        get: operations["error_analysis_reliability_errors_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3635,7 +4057,7 @@ export interface paths {
          *     Returns latency percentiles for oikos runs.
          *     Limited to 10000 samples to prevent memory issues.
          */
-        get: operations["performance_metrics_api_reliability_performance_get"];
+        get: operations["performance_metrics_reliability_performance_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3658,7 +4080,7 @@ export interface paths {
          *     Returns commis that have been running longer than the threshold,
          *     which may indicate stuck or failed processes.
          */
-        get: operations["stuck_commis_api_reliability_commis_stuck_get"];
+        get: operations["stuck_commis_reliability_commis_stuck_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3680,7 +4102,7 @@ export interface paths {
          *
          *     Returns status of all runners in the system.
          */
-        get: operations["runner_status_api_reliability_runners_get"];
+        get: operations["runner_status_reliability_runners_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3703,13 +4125,13 @@ export interface paths {
          *     Returns skills from all sources (bundled, user, workspace) with
          *     eligibility information based on current environment.
          */
-        get: operations["list_skills_api_skills_get"];
+        get: operations["list_skills_skills_get"];
         put?: never;
         /**
          * Create Skill
          * @description Create a new user-managed skill.
          */
-        post: operations["create_skill_api_skills_post"];
+        post: operations["create_skill_skills_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3730,7 +4152,7 @@ export interface paths {
          *     Returns skills that can be invoked via slash commands,
          *     formatted for UI command palettes.
          */
-        get: operations["list_skill_commands_api_skills_commands_get"];
+        get: operations["list_skill_commands_skills_commands_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3753,7 +4175,7 @@ export interface paths {
          *     Returns a formatted markdown prompt containing eligible skills,
          *     suitable for including in an fiche's system prompt.
          */
-        get: operations["get_skills_prompt_api_skills_prompt_get"];
+        get: operations["get_skills_prompt_skills_prompt_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3775,21 +4197,21 @@ export interface paths {
          *
          *     Returns the skill's content, requirements, and eligibility status.
          */
-        get: operations["get_skill_api_skills__skill_name__get"];
+        get: operations["get_skill_skills__skill_name__get"];
         put?: never;
         post?: never;
         /**
          * Delete Skill
          * @description Delete a user-managed skill.
          */
-        delete: operations["delete_skill_api_skills__skill_name__delete"];
+        delete: operations["delete_skill_skills__skill_name__delete"];
         options?: never;
         head?: never;
         /**
          * Update Skill
          * @description Update an existing user-managed skill.
          */
-        patch: operations["update_skill_api_skills__skill_name__patch"];
+        patch: operations["update_skill_skills__skill_name__patch"];
         trace?: never;
     };
     "/api/skills/reload": {
@@ -3807,7 +4229,7 @@ export interface paths {
          *
          *     Forces a reload of all skills, useful after adding/modifying skills.
          */
-        post: operations["reload_skills_api_skills_reload_post"];
+        post: operations["reload_skills_skills_reload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3846,7 +4268,7 @@ export interface paths {
          *         409: Session is locked by another request
          *         500: Internal error
          */
-        post: operations["chat_with_session_api_sessions__session_id__chat_post"];
+        post: operations["chat_with_session_sessions__session_id__chat_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3866,7 +4288,7 @@ export interface paths {
          *
          *     Used by UI to show lock status before attempting to chat.
          */
-        get: operations["get_session_lock_status_api_sessions__session_id__lock_get"];
+        get: operations["get_session_lock_status_sessions__session_id__lock_get"];
         put?: never;
         post?: never;
         /**
@@ -3875,7 +4297,7 @@ export interface paths {
          *
          *     Use with caution - may cause issues if a chat is in progress.
          */
-        delete: operations["force_release_lock_api_sessions__session_id__lock_delete"];
+        delete: operations["force_release_lock_sessions__session_id__lock_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3902,9 +4324,169 @@ export interface paths {
          *
          *     Features:
          *     - Accepts gzip-compressed payloads (Content-Encoding: gzip)
-         *     - Rate limiting: 1000 events/min per device_id (returns 429 if exceeded)
+         *     - Triggers async background summary generation after successful ingest
          */
-        post: operations["ingest_session_api_agents_ingest_post"];
+        post: operations["ingest_session_agents_ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/briefing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Briefing
+         * @description Pre-computed session summaries formatted for AI context injection.
+         *
+         *     Returns a compact briefing of recent sessions for a project, suitable
+         *     for injection into Claude Code's ``additionalContext`` via the SessionStart hook.
+         *
+         *     Only includes sessions that have a pre-computed summary (generated async
+         *     after ingest).
+         */
+        get: operations["get_briefing_agents_briefing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/backfill-summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backfill Progress
+         * @description Check backfill progress.
+         */
+        get: operations["backfill_progress_agents_backfill_summaries_get"];
+        put?: never;
+        /**
+         * Backfill Summaries
+         * @description Start backfilling missing summaries as a background task.
+         *
+         *     Returns immediately. Check progress via GET /backfill-summaries.
+         */
+        post: operations["backfill_summaries_agents_backfill_summaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/backfill-embeddings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backfill Embeddings Progress
+         * @description Check embedding backfill progress.
+         */
+        get: operations["backfill_embeddings_progress_agents_backfill_embeddings_get"];
+        put?: never;
+        /**
+         * Backfill Embeddings
+         * @description Start backfilling embeddings for sessions that need them.
+         */
+        post: operations["backfill_embeddings_agents_backfill_embeddings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/semantic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Semantic Search Sessions
+         * @description Search sessions by semantic similarity using embeddings.
+         *
+         *     Falls back to empty results if embeddings are not configured.
+         */
+        get: operations["semantic_search_sessions_agents_sessions_semantic_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/recall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recall Sessions
+         * @description Recall specific knowledge from past sessions.
+         *
+         *     Searches turn-level embeddings and returns context windows around matches.
+         */
+        get: operations["recall_sessions_agents_recall_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/ingest-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ingest Health
+         * @description Check ingest freshness — detects if sessions have stopped shipping.
+         */
+        get: operations["get_ingest_health_agents_ingest_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/usage-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Usage Stats
+         * @description Session activity statistics by provider, queried live from sessions table.
+         */
+        get: operations["get_usage_stats_agents_usage_stats_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3925,7 +4507,7 @@ export interface paths {
          *     Returns sessions sorted by start time (most recent first).
          *     By default, test and e2e sessions are excluded.
          */
-        get: operations["list_sessions_api_agents_sessions_get"];
+        get: operations["list_sessions_agents_sessions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3945,7 +4527,7 @@ export interface paths {
          * List Session Summaries
          * @description List session summaries for picker UI.
          */
-        get: operations["list_session_summaries_api_agents_sessions_summary_get"];
+        get: operations["list_session_summaries_agents_sessions_summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3963,9 +4545,9 @@ export interface paths {
         };
         /**
          * List Active Sessions
-         * @description Return session summaries for Forum live mode.
+         * @description Return active/recent session summaries for the live sessions surface.
          */
-        get: operations["list_active_sessions_api_agents_sessions_active_get"];
+        get: operations["list_active_sessions_agents_sessions_active_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3985,7 +4567,7 @@ export interface paths {
          * Preview Session
          * @description Get a preview of a session's recent messages.
          */
-        get: operations["preview_session_api_agents_sessions__session_id__preview_get"];
+        get: operations["preview_session_agents_sessions__session_id__preview_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4008,7 +4590,7 @@ export interface paths {
          *     Returns lists of distinct projects and providers found in sessions
          *     from the specified time range.
          */
-        get: operations["get_filters_api_agents_filters_get"];
+        get: operations["get_filters_agents_filters_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4028,9 +4610,41 @@ export interface paths {
         put?: never;
         /**
          * Seed Demo Sessions
-         * @description Seed demo sessions for the timeline (idempotent).
+         * @description Seed missing demo sessions for the timeline (idempotent top-up).
          */
-        post: operations["seed_demo_sessions_api_agents_demo_post"];
+        post: operations["seed_demo_sessions_agents_demo_post"];
+        /**
+         * Reset Demo Sessions
+         * @description Delete all demo-seeded sessions (provider_session_id LIKE 'demo-%').
+         *
+         *     Only available when AUTH_DISABLED=1. Used by the zerg-ui skill to set up
+         *     a clean empty state before screenshot capture (SCENE=empty).
+         */
+        delete: operations["reset_demo_sessions_agents_demo_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/action": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Session Action
+         * @description Set user-driven bucket state for a session (park/snooze/archive/resume).
+         *
+         *     - park: keep visible but visually dimmed; user is aware, not acting
+         *     - snooze: hide from live sessions view until the session signals again
+         *     - archive: hide from live sessions view permanently (still searchable)
+         *     - resume: return to active (un-park/snooze/archive)
+         */
+        post: operations["set_session_action_agents_sessions__session_id__action_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4048,7 +4662,7 @@ export interface paths {
          * Get Session
          * @description Get a single session by ID.
          */
-        get: operations["get_session_api_agents_sessions__session_id__get"];
+        get: operations["get_session_agents_sessions__session_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4068,7 +4682,7 @@ export interface paths {
          * Get Session Events
          * @description Get events for a session.
          */
-        get: operations["get_session_events_api_agents_sessions__session_id__events_get"];
+        get: operations["get_session_events_agents_sessions__session_id__events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4091,7 +4705,51 @@ export interface paths {
          *     Returns the session as a JSONL file with headers containing
          *     session metadata for the session continuity service.
          */
-        get: operations["export_session_api_agents_sessions__session_id__export_get"];
+        get: operations["export_session_agents_sessions__session_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/reflect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger Reflection
+         * @description Trigger a reflection run to analyze recent sessions and extract insights.
+         *
+         *     Analyzes sessions that haven't been reflected on yet (reflected_at IS NULL)
+         *     within the specified time window. Uses LLM to identify patterns, failures,
+         *     and learnings across sessions.
+         */
+        post: operations["trigger_reflection_agents_reflect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/reflections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Reflections
+         * @description Query reflection run history.
+         */
+        get: operations["list_reflections_agents_reflections_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4117,7 +4775,50 @@ export interface paths {
          *     Only available when AUTH_DISABLED=1. Used by E2E tests to clean up
          *     test data after runs.
          */
-        delete: operations["cleanup_test_sessions_api_agents_test_cleanup_delete"];
+        delete: operations["cleanup_test_sessions_agents_test_cleanup_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Heartbeat
+         * @description Accept a heartbeat from an engine daemon.
+         *
+         *     Upserts (inserts) a new heartbeat row per device. History is retained
+         *     for 30 days; older rows are cleaned up by the stale agent detection job.
+         */
+        post: operations["ingest_heartbeat_agents_heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upsert Presence
+         * @description Upsert real-time presence state for a session.
+         */
+        post: operations["upsert_presence_agents_presence_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4137,7 +4838,7 @@ export interface paths {
          *     By default, only shows valid (non-revoked) tokens.
          *     Use include_revoked=true to see revoked tokens as well.
          */
-        get: operations["list_device_tokens_api_devices_tokens_get"];
+        get: operations["list_device_tokens_devices_tokens_get"];
         put?: never;
         /**
          * Create Device Token
@@ -4146,7 +4847,7 @@ export interface paths {
          *     The plain token is returned only once during creation. Store it securely.
          *     Subsequent API calls will use this token in the X-Agents-Token header.
          */
-        post: operations["create_device_token_api_devices_tokens_post"];
+        post: operations["create_device_token_devices_tokens_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4164,7 +4865,7 @@ export interface paths {
          * Get Device Token
          * @description Get details of a specific device token.
          */
-        get: operations["get_device_token_api_devices_tokens__token_id__get"];
+        get: operations["get_device_token_devices_tokens__token_id__get"];
         put?: never;
         post?: never;
         /**
@@ -4174,13 +4875,60 @@ export interface paths {
          *     A revoked token can no longer be used for authentication.
          *     This action cannot be undone.
          */
-        delete: operations["revoke_device_token_api_devices_tokens__token_id__delete"];
+        delete: operations["revoke_device_token_devices_tokens__token_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/admin/reset-database": {
+    "/api/insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Insights
+         * @description Query insights with filters.
+         */
+        get: operations["list_insights_insights_get"];
+        put?: never;
+        /**
+         * Create Insight
+         * @description Create or deduplicate an insight.
+         *
+         *     If an insight with the same title AND project exists within the last 7 days,
+         *     updates its confidence and appends to observations instead of creating a new one.
+         */
+        post: operations["create_insight_insights_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Proposals
+         * @description List action proposals with filters.
+         */
+        get: operations["list_proposals_proposals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/proposals/{proposal_id}/approve": {
         parameters: {
             query?: never;
             header?: never;
@@ -4189,9 +4937,95 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Legacy Reset Database */
-        post: operations["_legacy_reset_database_admin_reset_database_post"];
+        /**
+         * Approve Proposal
+         * @description Approve a proposal — sets status to approved and generates a task description.
+         */
+        post: operations["approve_proposal_proposals__proposal_id__approve_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/proposals/{proposal_id}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decline Proposal
+         * @description Decline a proposal — sets status to declined.
+         */
+        post: operations["decline_proposal_proposals__proposal_id__decline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reservations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Reservation
+         * @description Reserve a file to prevent edit conflicts.
+         *
+         *     Cleans expired reservations first, then checks for existing active
+         *     reservations on the same file+project. Returns 409 if already reserved.
+         */
+        post: operations["create_reservation_reservations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reservations/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check Reservation
+         * @description Check if a file is currently reserved.
+         */
+        get: operations["check_reservation_reservations_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reservations/{reservation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Release Reservation
+         * @description Release a file reservation.
+         */
+        delete: operations["release_reservation_reservations__reservation_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4333,11 +5167,13 @@ export interface components {
              * Metadata
              * @description Metadata from last successful test
              */
-            metadata?: Record<string, never> | null;
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ActiveSessionResponse
-         * @description Response for active session summary (Forum UI).
+         * @description Response for active session summary (Live Sessions UI).
          */
         ActiveSessionResponse: {
             /**
@@ -4417,6 +5253,27 @@ export interface components {
              * @description Tool call count
              */
             tool_calls: number;
+            /**
+             * Presence State
+             * @description Real-time state: thinking|running|idle|needs_user|blocked
+             */
+            presence_state?: string | null;
+            /**
+             * Presence Tool
+             * @description Tool currently executing (when state=running or blocked)
+             */
+            presence_tool?: string | null;
+            /**
+             * Presence Updated At
+             * @description When presence was last signalled
+             */
+            presence_updated_at?: string | null;
+            /**
+             * User State
+             * @description User classification: active|parked|snoozed|archived
+             * @default active
+             */
+            user_state: string;
         };
         /**
          * ActiveSessionsResponse
@@ -4480,8 +5337,120 @@ export interface components {
             /** Offset */
             offset: number;
         };
-        /** Body_upload_current_user_avatar_api_users_me_avatar_post */
-        Body_upload_current_user_avatar_api_users_me_avatar_post: {
+        /**
+         * BackfillEmbeddingsProgressResponse
+         * @description Response for embedding backfill progress check.
+         */
+        BackfillEmbeddingsProgressResponse: {
+            /** Running */
+            running: boolean;
+            /**
+             * Embedded
+             * @default 0
+             */
+            embedded: number;
+            /**
+             * Skipped
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Errors
+             * @default 0
+             */
+            errors: number;
+            /**
+             * Remaining
+             * @default 0
+             */
+            remaining: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        };
+        /**
+         * BackfillEmbeddingsResponse
+         * @description Response for embedding backfill endpoint.
+         */
+        BackfillEmbeddingsResponse: {
+            /**
+             * Status
+             * @description 'started', 'already_running', or 'nothing_to_do'
+             */
+            status: string;
+            /**
+             * Total
+             * @description Total sessions to process
+             * @default 0
+             */
+            total: number;
+            /**
+             * Message
+             * @description Human-readable status message
+             * @default
+             */
+            message: string;
+        };
+        /**
+         * BackfillProgressResponse
+         * @description Response for backfill progress check.
+         */
+        BackfillProgressResponse: {
+            /** Running */
+            running: boolean;
+            /**
+             * Backfilled
+             * @default 0
+             */
+            backfilled: number;
+            /**
+             * Skipped
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Errors
+             * @default 0
+             */
+            errors: number;
+            /**
+             * Remaining
+             * @default 0
+             */
+            remaining: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        };
+        /**
+         * BackfillSummariesResponse
+         * @description Response for summary backfill endpoint.
+         */
+        BackfillSummariesResponse: {
+            /**
+             * Status
+             * @description 'started', 'already_running', or 'nothing_to_do'
+             */
+            status: string;
+            /**
+             * Total
+             * @description Total sessions to process
+             * @default 0
+             */
+            total: number;
+            /**
+             * Message
+             * @description Human-readable status message
+             * @default
+             */
+            message: string;
+        };
+        /** Body_upload_current_user_avatar_users_me_avatar_post */
+        Body_upload_current_user_avatar_users_me_avatar_post: {
             /**
              * File
              * Format: binary
@@ -4489,8 +5458,8 @@ export interface components {
              */
             file: string;
         };
-        /** Body_voice_transcribe_api_oikos_voice_transcribe_post */
-        Body_voice_transcribe_api_oikos_voice_transcribe_post: {
+        /** Body_voice_transcribe_oikos_voice_transcribe_post */
+        Body_voice_transcribe_oikos_voice_transcribe_post: {
             /**
              * Audio
              * Format: binary
@@ -4518,8 +5487,8 @@ export interface components {
              */
             message_id?: string | null;
         };
-        /** Body_voice_turn_api_oikos_voice_turn_post */
-        Body_voice_turn_api_oikos_voice_turn_post: {
+        /** Body_voice_turn_oikos_voice_turn_post */
+        Body_voice_turn_oikos_voice_turn_post: {
             /**
              * Audio
              * Format: binary
@@ -4615,7 +5584,21 @@ export interface components {
              * Details
              * @description Additional details
              */
-            details?: Record<string, never> | null;
+            details?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * BriefingResponse
+         * @description Response for the briefing endpoint.
+         */
+        BriefingResponse: {
+            /** Project */
+            project: string;
+            /** Session Count */
+            session_count: number;
+            /** Briefing */
+            briefing?: string | null;
         };
         /**
          * BudgetInfo
@@ -4628,6 +5611,27 @@ export interface components {
             used_usd: number;
             /** Percent */
             percent: number | null;
+        };
+        /** CLILoginRequest */
+        CLILoginRequest: {
+            /** Password */
+            password: string;
+        };
+        /** CapabilitiesResponse */
+        CapabilitiesResponse: {
+            text: components["schemas"]["CapabilityStatus"];
+            embedding: components["schemas"]["CapabilityStatus"];
+        };
+        /** CapabilityStatus */
+        CapabilityStatus: {
+            /** Available */
+            available: boolean;
+            /** Source */
+            source?: string | null;
+            /** Provider Name */
+            provider_name?: string | null;
+            /** Features */
+            features: string[];
         };
         /**
          * CleanupRequest
@@ -4681,7 +5685,7 @@ export interface components {
         };
         /**
          * CommisInfo
-         * @description Commis spawned by spawn_commis tool.
+         * @description Commis spawned by spawn_workspace_commis tool.
          */
         CommisInfo: {
             /** Job Id */
@@ -4732,7 +5736,9 @@ export interface components {
              * Tool Input
              * @description Tool input payload
              */
-            tool_input?: Record<string, never> | null;
+            tool_input?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Tool Use Id
              * @description Tool call identifier
@@ -4867,7 +5873,9 @@ export interface components {
              * Metadata
              * @description Metadata from last successful test
              */
-            metadata?: Record<string, never> | null;
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ConnectorSuccessResponse
@@ -4917,7 +5925,9 @@ export interface components {
              * Metadata
              * @description Discovered metadata (e.g., username, scopes)
              */
-            metadata?: Record<string, never> | null;
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ContainerPolicyResponse
@@ -4947,7 +5957,9 @@ export interface components {
          */
         ContextResponse: {
             /** Context */
-            context: Record<string, never>;
+            context: {
+                [key: string]: unknown;
+            };
         };
         /**
          * ContextSeedRequest
@@ -4961,12 +5973,16 @@ export interface components {
              * Servers
              * @description List of servers with name, ip, purpose, ssh_user, etc.
              */
-            servers?: Record<string, never>[];
+            servers?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Integrations
              * @description Integration configs (github, email, etc.)
              */
-            integrations?: Record<string, never>;
+            integrations?: {
+                [key: string]: unknown;
+            };
             /**
              * Display Name
              * @description User's preferred display name
@@ -4996,7 +6012,9 @@ export interface components {
          */
         ContextUpdate: {
             /** Context */
-            context: Record<string, never>;
+            context: {
+                [key: string]: unknown;
+            };
         };
         /**
          * CreateTokenRequest
@@ -5138,6 +6156,33 @@ export interface components {
             seeded: boolean;
             /** Sessions Created */
             sessions_created: number;
+            /**
+             * Sessions Failed
+             * @default 0
+             */
+            sessions_failed: number;
+            /**
+             * Sessions Deleted
+             * @default 0
+             */
+            sessions_deleted: number;
+        };
+        /** EmailConfigRequest */
+        EmailConfigRequest: {
+            /** Aws Ses Access Key Id */
+            aws_ses_access_key_id?: string | null;
+            /** Aws Ses Secret Access Key */
+            aws_ses_secret_access_key?: string | null;
+            /** Aws Ses Region */
+            aws_ses_region?: string | null;
+            /** From Email */
+            from_email?: string | null;
+            /** Notify Email */
+            notify_email?: string | null;
+            /** Digest Email */
+            digest_email?: string | null;
+            /** Alert Email */
+            alert_email?: string | null;
         };
         /**
          * EmailContactCreate
@@ -5195,6 +6240,47 @@ export interface components {
             email?: string | null;
             /** Notes */
             notes?: string | null;
+        };
+        /** EmailKeyStatus */
+        EmailKeyStatus: {
+            /** Key */
+            key: string;
+            /** Configured */
+            configured: boolean;
+            /** Source */
+            source?: string | null;
+        };
+        /** EmailStatusResponse */
+        EmailStatusResponse: {
+            /**
+             * Configured
+             * @description Whether email can send (SES creds + FROM_EMAIL present)
+             */
+            configured: boolean;
+            /**
+             * Source
+             * @description Primary source: 'db', 'env', or None
+             */
+            source?: string | null;
+            /** Keys */
+            keys: components["schemas"]["EmailKeyStatus"][];
+        };
+        /** EmailTestRequest */
+        EmailTestRequest: {
+            /**
+             * To Email
+             * @description Override recipient (defaults to NOTIFY_EMAIL or user email)
+             */
+            to_email?: string | null;
+        };
+        /** EmailTestResponse */
+        EmailTestResponse: {
+            /** Success */
+            success: boolean;
+            /** Message */
+            message: string;
+            /** Message Id */
+            message_id?: string | null;
         };
         /**
          * EnrollTokenResponse
@@ -5257,18 +6343,42 @@ export interface components {
              * Tool Input Json
              * @description Tool input
              */
-            tool_input_json?: Record<string, never> | null;
+            tool_input_json?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Tool Output Text
              * @description Tool output
              */
             tool_output_text?: string | null;
             /**
+             * Tool Call Id
+             * @description Cross-provider call/result linkage ID
+             */
+            tool_call_id?: string | null;
+            /**
              * Timestamp
              * Format: date-time
              * @description Event timestamp
              */
             timestamp: string;
+            /**
+             * In Active Context
+             * @description True when event is inside the current active model context boundary
+             * @default true
+             */
+            in_active_context: boolean;
+            /**
+             * Branch Id
+             * @description Session branch ID for rewind-aware projections
+             */
+            branch_id?: number | null;
+            /**
+             * Is Head Branch
+             * @description True when event belongs to the active head branch
+             * @default true
+             */
+            is_head_branch: boolean;
         };
         /**
          * EventsListResponse
@@ -5279,6 +6389,18 @@ export interface components {
             events: components["schemas"]["EventResponse"][];
             /** Total */
             total: number;
+            /**
+             * Branch Mode
+             * @description Branch projection mode: head|all
+             * @default head
+             */
+            branch_mode: string;
+            /**
+             * Abandoned Events
+             * @description Events excluded from head projection due to rewind branches
+             * @default 0
+             */
+            abandoned_events: number;
         };
         /** Fiche */
         Fiche: {
@@ -5293,7 +6415,9 @@ export interface components {
             /** Schedule */
             schedule?: string | null;
             /** Config */
-            config?: Record<string, never> | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
             /** Last Error */
             last_error?: string | null;
             /** Allowed Tools */
@@ -5344,7 +6468,9 @@ export interface components {
             /** Schedule */
             schedule?: string | null;
             /** Config */
-            config?: Record<string, never> | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
             /** Allowed Tools */
             allowed_tools?: string[] | null;
         };
@@ -5364,7 +6490,9 @@ export interface components {
             /** Runs */
             runs?: unknown[] | null;
             /** Stats */
-            stats?: Record<string, never> | null;
+            stats?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** FicheMessage */
         FicheMessage: {
@@ -5401,7 +6529,9 @@ export interface components {
             /** Schedule */
             schedule?: string | null;
             /** Config */
-            config?: Record<string, never> | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
             /** Last Error */
             last_error?: string | null;
             /** Allowed Tools */
@@ -5416,11 +6546,66 @@ export interface components {
             projects: string[];
             /** Providers */
             providers: string[];
+            /**
+             * Machines
+             * @default []
+             */
+            machines: string[];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HeartbeatIn
+         * @description Payload from the engine daemon.
+         */
+        HeartbeatIn: {
+            /** Version */
+            version?: string | null;
+            /** Daemon Pid */
+            daemon_pid?: number | null;
+            /** Last Ship At */
+            last_ship_at?: string | null;
+            /**
+             * Spool Pending Count
+             * @default 0
+             */
+            spool_pending_count: number;
+            /**
+             * Parse Error Count 1H
+             * @default 0
+             */
+            parse_error_count_1h: number;
+            /**
+             * Consecutive Ship Failures
+             * @default 0
+             */
+            consecutive_ship_failures: number;
+            /**
+             * Disk Free Bytes
+             * @default 0
+             */
+            disk_free_bytes: number;
+            /**
+             * Is Offline
+             * @default false
+             */
+            is_offline: boolean;
+        };
+        /** IngestHealthResponse */
+        IngestHealthResponse: {
+            /** Status */
+            status: string;
+            /** Last Session At */
+            last_session_at?: string | null;
+            /** Gap Hours */
+            gap_hours?: number | null;
+            /** Threshold Hours */
+            threshold_hours: number;
+            /** Session Count */
+            session_count: number;
         };
         /**
          * IngestResponse
@@ -5435,6 +6620,99 @@ export interface components {
             events_skipped: number;
             /** Session Created */
             session_created: boolean;
+        };
+        /**
+         * InsightCreateRequest
+         * @description Request body for creating an insight.
+         */
+        InsightCreateRequest: {
+            /**
+             * Insight Type
+             * @description Type: pattern, failure, improvement, learning
+             */
+            insight_type: string;
+            /**
+             * Title
+             * @description Short summary of the insight
+             */
+            title: string;
+            /**
+             * Description
+             * @description Detailed explanation
+             */
+            description?: string | null;
+            /**
+             * Project
+             * @description Project name
+             */
+            project?: string | null;
+            /**
+             * Severity
+             * @description Severity: info, warning, critical
+             * @default info
+             */
+            severity: string;
+            /**
+             * Confidence
+             * @description Confidence score 0.0-1.0
+             */
+            confidence?: number | null;
+            /**
+             * Tags
+             * @description Tags for categorization
+             */
+            tags?: string[] | null;
+            /**
+             * Session Id
+             * @description Source session UUID
+             */
+            session_id?: string | null;
+        };
+        /**
+         * InsightListResponse
+         * @description Response for insight list.
+         */
+        InsightListResponse: {
+            /** Insights */
+            insights: components["schemas"]["InsightResponse"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * InsightResponse
+         * @description Response for a single insight.
+         */
+        InsightResponse: {
+            /**
+             * Id
+             * @description Insight UUID
+             */
+            id: string;
+            /** Insight Type */
+            insight_type: string;
+            /** Title */
+            title: string;
+            /** Description */
+            description?: string | null;
+            /** Project */
+            project?: string | null;
+            /**
+             * Severity
+             * @default info
+             */
+            severity: string;
+            /** Confidence */
+            confidence?: number | null;
+            /** Tags */
+            tags?: string[] | null;
+            /** Observations */
+            observations?: string[] | null;
+            /** Session Id */
+            session_id?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
         };
         /**
          * JobInfo
@@ -5457,6 +6735,21 @@ export interface components {
             project: string | null;
             /** Description */
             description: string;
+            /**
+             * Secrets
+             * @default []
+             */
+            secrets: components["schemas"]["SecretFieldInfo"][];
+        };
+        /**
+         * JobLastRunResponse
+         * @description Last run per job for dashboard overview.
+         */
+        JobLastRunResponse: {
+            /** Last Runs */
+            last_runs: {
+                [key: string]: components["schemas"]["JobRunHistoryInfo"];
+            };
         };
         /**
          * JobListResponse
@@ -5465,6 +6758,105 @@ export interface components {
         JobListResponse: {
             /** Jobs */
             jobs: components["schemas"]["JobInfo"][];
+            /** Total */
+            total: number;
+            /**
+             * Registration Warnings
+             * @default []
+             */
+            registration_warnings: string[];
+        };
+        /**
+         * JobRepoConfigRequest
+         * @description Request body for setting/updating repo config.
+         */
+        JobRepoConfigRequest: {
+            /**
+             * Repo Url
+             * @description Git repo HTTPS URL
+             */
+            repo_url: string;
+            /**
+             * Branch
+             * @description Branch to clone
+             * @default main
+             */
+            branch: string;
+            /**
+             * Token
+             * @description PAT for private repos (encrypted server-side)
+             */
+            token?: string | null;
+        };
+        /**
+         * JobRepoConfigResponse
+         * @description Repo config response (token never exposed).
+         */
+        JobRepoConfigResponse: {
+            /** Repo Url */
+            repo_url: string;
+            /** Branch */
+            branch: string;
+            /**
+             * Has Token
+             * @description Whether a PAT is stored (never exposed)
+             */
+            has_token: boolean;
+            /** Last Sync Sha */
+            last_sync_sha?: string | null;
+            /** Last Sync At */
+            last_sync_at?: string | null;
+            /** Last Sync Error */
+            last_sync_error?: string | null;
+            /**
+             * Source
+             * @description 'database' or 'environment'
+             */
+            source: string;
+        };
+        /**
+         * JobRepoVerifyResponse
+         * @description Result of a test-clone verification.
+         */
+        JobRepoVerifyResponse: {
+            /** Success */
+            success: boolean;
+            /** Error */
+            error?: string | null;
+            /** Commit Sha */
+            commit_sha?: string | null;
+        };
+        /**
+         * JobRunHistoryInfo
+         * @description Single job run record for history queries.
+         */
+        JobRunHistoryInfo: {
+            /** Id */
+            id: string;
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** Error Message */
+            error_message: string | null;
+            /** Error Type */
+            error_type?: string | null;
+            /** Created At */
+            created_at: string;
+        };
+        /**
+         * JobRunHistoryResponse
+         * @description Response for job run history queries.
+         */
+        JobRunHistoryResponse: {
+            /** Runs */
+            runs: components["schemas"]["JobRunHistoryInfo"][];
             /** Total */
             total: number;
         };
@@ -5480,11 +6872,65 @@ export interface components {
             /** Duration Ms */
             duration_ms: number;
             /** Result */
-            result?: Record<string, never> | null;
+            result?: {
+                [key: string]: unknown;
+            } | null;
             /** Error */
             error?: string | null;
             /** Error Type */
             error_type?: string | null;
+        };
+        /**
+         * JobSecretListItem
+         * @description Single secret entry in list response (value never exposed).
+         */
+        JobSecretListItem: {
+            /**
+             * Key
+             * @description Secret key identifier
+             */
+            key: string;
+            /**
+             * Description
+             * @description Optional hint for UI
+             */
+            description?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * JobSecretUpsertRequest
+         * @description Request body for creating or updating a secret.
+         */
+        JobSecretUpsertRequest: {
+            /**
+             * Value
+             * @description Plaintext value (encrypted server-side)
+             */
+            value: string;
+            /**
+             * Description
+             * @description Optional description/hint
+             */
+            description?: string | null;
+        };
+        /**
+         * JobSecretsStatusResponse
+         * @description Response for GET /jobs/{job_id}/secrets/status.
+         */
+        JobSecretsStatusResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Secrets */
+            secrets: components["schemas"]["SecretStatusItem"][];
         };
         /**
          * JobsRepoInitResponse
@@ -5541,7 +6987,9 @@ export interface components {
             /** Content Hash */
             content_hash: string;
             /** Doc Metadata */
-            doc_metadata?: Record<string, never> | null;
+            doc_metadata?: {
+                [key: string]: unknown;
+            } | null;
             /** Id */
             id: number;
             /** Source Id */
@@ -5583,7 +7031,9 @@ export interface components {
             /** Source Type */
             source_type: string;
             /** Config */
-            config: Record<string, never>;
+            config: {
+                [key: string]: unknown;
+            };
             /** Sync Schedule */
             sync_schedule?: string | null;
             /** Id */
@@ -5614,7 +7064,9 @@ export interface components {
             /** Source Type */
             source_type: string;
             /** Config */
-            config: Record<string, never>;
+            config: {
+                [key: string]: unknown;
+            };
             /** Sync Schedule */
             sync_schedule?: string | null;
         };
@@ -5623,7 +7075,9 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Config */
-            config?: Record<string, never> | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
             /** Sync Schedule */
             sync_schedule?: string | null;
         };
@@ -5636,6 +7090,56 @@ export interface components {
             p50: number;
             /** P95 */
             p95: number;
+        };
+        /** LlmProviderInfo */
+        LlmProviderInfo: {
+            /** Capability */
+            capability: string;
+            /** Provider Name */
+            provider_name: string;
+            /** Base Url */
+            base_url?: string | null;
+            /**
+             * Source
+             * @default database
+             */
+            source: string;
+            /**
+             * Has Key
+             * @default true
+             */
+            has_key: boolean;
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        };
+        /** LlmProviderTestRequest */
+        LlmProviderTestRequest: {
+            /** Provider Name */
+            provider_name: string;
+            /** Api Key */
+            api_key: string;
+            /** Base Url */
+            base_url?: string | null;
+            /** Model */
+            model?: string | null;
+        };
+        /** LlmProviderTestResponse */
+        LlmProviderTestResponse: {
+            /** Success */
+            success: boolean;
+            /** Message */
+            message: string;
+        };
+        /** LlmProviderUpsertRequest */
+        LlmProviderUpsertRequest: {
+            /** Provider Name */
+            provider_name: string;
+            /** Api Key */
+            api_key: string;
+            /** Base Url */
+            base_url?: string | null;
         };
         /**
          * MCPServerAddRequest
@@ -5825,12 +7329,16 @@ export interface components {
              * Enabled Tools
              * @description List of available tools
              */
-            enabled_tools: Record<string, never>[];
+            enabled_tools: {
+                [key: string]: unknown;
+            }[];
             /**
              * User Context
              * @description User context summary (safe subset)
              */
-            user_context: Record<string, never>;
+            user_context: {
+                [key: string]: unknown;
+            };
             /**
              * Available Models
              * @description Models available for selection
@@ -5861,10 +7369,27 @@ export interface components {
              */
             timestamp: string;
             /**
+             * Origin Surface Id
+             * @description Origin surface for this message
+             */
+            origin_surface_id?: string | null;
+            /**
+             * Delivery Surface Id
+             * @description Delivery surface for this message
+             */
+            delivery_surface_id?: string | null;
+            /**
+             * Visibility
+             * @description Visibility scope for this message
+             */
+            visibility?: string | null;
+            /**
              * Usage
              * @description Optional LLM usage metadata for this assistant response
              */
-            usage?: Record<string, never> | null;
+            usage?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Tool Calls
              * @description Tool calls made by this assistant message
@@ -5883,6 +7408,7 @@ export interface components {
             message: string;
             /**
              * Message Id
+             * Format: uuid
              * @description Client-generated message ID (UUID)
              */
             message_id: string;
@@ -6002,7 +7528,9 @@ export interface components {
              * Capabilities
              * @description Model capabilities (reasoning, etc.)
              */
-            capabilities?: Record<string, never> | null;
+            capabilities?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * OikosPreferences
@@ -6071,12 +7599,16 @@ export interface components {
              * Context
              * @description Optional context including conversation_id and previous_messages
              */
-            context?: Record<string, never> | null;
+            context?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Preferences
              * @description Optional preferences like verbosity and notify_on_complete
              */
-            preferences?: Record<string, never> | null;
+            preferences?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * OikosRunResponse
@@ -6184,10 +7716,14 @@ export interface components {
          * @description Operations summary with all KPIs.
          */
         OpsSummary: {
-            /** Runs Today */
-            runs_today: number;
-            /** Cost Today Usd */
-            cost_today_usd: number | null;
+            /** Window */
+            window: string;
+            /** Window Label */
+            window_label: string;
+            /** Runs */
+            runs: number;
+            /** Cost Usd */
+            cost_usd: number | null;
             budget_user: components["schemas"]["BudgetInfo"];
             budget_global: components["schemas"]["BudgetInfo"];
             /** Active Users 24H */
@@ -6199,8 +7735,8 @@ export interface components {
             latency_ms: components["schemas"]["LatencyStats"];
             /** Errors Last Hour */
             errors_last_hour: number;
-            /** Top Fiches Today */
-            top_fiches_today: components["schemas"]["OpsTopFiche"][];
+            /** Top Fiches */
+            top_fiches: components["schemas"]["OpsTopFiche"][];
         };
         /**
          * OpsTopFiche
@@ -6304,6 +7840,80 @@ export interface components {
             notes?: string | null;
         };
         /**
+         * PresenceIn
+         * @description Payload from a Claude Code hook.
+         */
+        PresenceIn: {
+            /** Session Id */
+            session_id: string;
+            /** State */
+            state: string;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /**
+             * Provider
+             * @default claude
+             */
+            provider: string | null;
+        };
+        /**
+         * ProposalActionResponse
+         * @description Response after approving or declining a proposal.
+         */
+        ProposalActionResponse: {
+            proposal: components["schemas"]["ProposalResponse"];
+            /**
+             * Task Created
+             * @default false
+             */
+            task_created: boolean;
+        };
+        /**
+         * ProposalListResponse
+         * @description Response for proposal list.
+         */
+        ProposalListResponse: {
+            /** Proposals */
+            proposals: components["schemas"]["ProposalResponse"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * ProposalResponse
+         * @description Response for a single action proposal.
+         */
+        ProposalResponse: {
+            /** Id */
+            id: string;
+            /** Insight Id */
+            insight_id: string;
+            /** Reflection Run Id */
+            reflection_run_id?: string | null;
+            /** Project */
+            project?: string | null;
+            /** Title */
+            title: string;
+            /** Action Blurb */
+            action_blurb: string;
+            /**
+             * Status
+             * @default pending
+             */
+            status: string;
+            /** Decided At */
+            decided_at?: string | null;
+            /** Task Description */
+            task_description?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Insight Type */
+            insight_type?: string | null;
+            /** Severity */
+            severity?: string | null;
+        };
+        /**
          * PullResponse
          * @description Response from pull operation.
          */
@@ -6312,7 +7922,9 @@ export interface components {
              * Ops
              * @description Operations since cursor
              */
-            ops: Record<string, never>[];
+            ops: {
+                [key: string]: unknown;
+            }[];
             /**
              * Nextcursor
              * @description Updated cursor position
@@ -6395,6 +8007,203 @@ export interface components {
             queue_enabled: boolean;
         };
         /**
+         * RecallMatch
+         * @description A single recall match with context.
+         */
+        RecallMatch: {
+            /** Session Id */
+            session_id: string;
+            /** Chunk Index */
+            chunk_index: number;
+            /** Score */
+            score: number;
+            /** Event Index Start */
+            event_index_start?: number | null;
+            /** Event Index End */
+            event_index_end?: number | null;
+            /**
+             * Total Events
+             * @default 0
+             */
+            total_events: number;
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            }[];
+            /** Match Event Id */
+            match_event_id?: number | null;
+        };
+        /**
+         * RecallResponse
+         * @description Response for recall endpoint.
+         */
+        RecallResponse: {
+            /** Matches */
+            matches: components["schemas"]["RecallMatch"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * ReflectRequest
+         * @description Request body for triggering reflection.
+         */
+        ReflectRequest: {
+            /**
+             * Project
+             * @description Project to reflect on (None = all)
+             */
+            project?: string | null;
+            /**
+             * Window Hours
+             * @description Hours to look back
+             * @default 24
+             */
+            window_hours: number;
+        };
+        /**
+         * ReflectionListResponse
+         * @description Response for reflection run history.
+         */
+        ReflectionListResponse: {
+            /** Runs */
+            runs: components["schemas"]["ReflectionRunResponse"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * ReflectionRunResponse
+         * @description Response for a single reflection run.
+         */
+        ReflectionRunResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Project */
+            project?: string | null;
+            /**
+             * Status
+             * @default completed
+             */
+            status: string;
+            /**
+             * Session Count
+             * @default 0
+             */
+            session_count: number;
+            /**
+             * Insights Created
+             * @default 0
+             */
+            insights_created: number;
+            /**
+             * Insights Merged
+             * @default 0
+             */
+            insights_merged: number;
+            /**
+             * Insights Skipped
+             * @default 0
+             */
+            insights_skipped: number;
+            /** Model */
+            model?: string | null;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Error */
+            error?: string | null;
+        };
+        /**
+         * ReservationCheckResponse
+         * @description Response for reservation check.
+         */
+        ReservationCheckResponse: {
+            /** Reserved */
+            reserved: boolean;
+            reservation?: components["schemas"]["ReservationResponse"] | null;
+        };
+        /**
+         * ReservationCreateRequest
+         * @description Request body for creating a file reservation.
+         */
+        ReservationCreateRequest: {
+            /**
+             * File Path
+             * @description Path to the file to reserve
+             */
+            file_path: string;
+            /**
+             * Project
+             * @description Project context
+             */
+            project?: string | null;
+            /**
+             * Agent
+             * @description Agent name
+             * @default claude
+             */
+            agent: string;
+            /**
+             * Reason
+             * @description Why the file is being reserved
+             */
+            reason?: string | null;
+            /**
+             * Duration Minutes
+             * @description Reservation duration in minutes
+             * @default 60
+             */
+            duration_minutes: number;
+        };
+        /**
+         * ReservationReleaseResponse
+         * @description Response for reservation release.
+         */
+        ReservationReleaseResponse: {
+            /** Released */
+            released: boolean;
+            /** Id */
+            id: string;
+        };
+        /**
+         * ReservationResponse
+         * @description Response for a single reservation.
+         */
+        ReservationResponse: {
+            /**
+             * Id
+             * @description Reservation UUID
+             */
+            id: string;
+            /** File Path */
+            file_path: string;
+            /** Project */
+            project: string;
+            /** Agent */
+            agent: string;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Released At */
+            released_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /**
          * ResetType
          * @description Database reset operation types.
          * @enum {string}
@@ -6420,7 +8229,9 @@ export interface components {
             /** Event Type */
             event_type: string;
             /** Payload */
-            payload: Record<string, never>;
+            payload: {
+                [key: string]: unknown;
+            };
             /**
              * Created At
              * Format: date-time
@@ -6535,7 +8346,9 @@ export interface components {
              * Metadata
              * @description Runner metadata (hostname, os, arch, etc.)
              */
-            metadata?: Record<string, never> | null;
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * RunnerRegisterResponse
@@ -6580,7 +8393,9 @@ export interface components {
             /** Last Seen At */
             last_seen_at?: string | null;
             /** Runner Metadata */
-            runner_metadata?: Record<string, never> | null;
+            runner_metadata?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Created At
              * Format: date-time
@@ -6751,6 +8566,89 @@ export interface components {
             clean: boolean;
         };
         /**
+         * SecretFieldInfo
+         * @description Secret field metadata for API responses.
+         */
+        SecretFieldInfo: {
+            /** Key */
+            key: string;
+            /** Label */
+            label?: string | null;
+            /**
+             * Type
+             * @default password
+             */
+            type: string;
+            /** Placeholder */
+            placeholder?: string | null;
+            /** Description */
+            description?: string | null;
+            /**
+             * Required
+             * @default true
+             */
+            required: boolean;
+        };
+        /**
+         * SecretStatusItem
+         * @description Per-secret status showing metadata and whether it's configured.
+         */
+        SecretStatusItem: {
+            /** Key */
+            key: string;
+            /** Label */
+            label?: string | null;
+            /**
+             * Type
+             * @default password
+             */
+            type: string;
+            /** Placeholder */
+            placeholder?: string | null;
+            /** Description */
+            description?: string | null;
+            /**
+             * Required
+             * @default true
+             */
+            required: boolean;
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
+        };
+        /**
+         * SemanticSearchResponse
+         * @description Response for semantic search.
+         */
+        SemanticSearchResponse: {
+            /** Sessions */
+            sessions: components["schemas"]["SessionResponse"][];
+            /** Total */
+            total: number;
+            /**
+             * Has Real Sessions
+             * @default true
+             */
+            has_real_sessions: boolean;
+        };
+        /** SessionActionRequest */
+        SessionActionRequest: {
+            /**
+             * Action
+             * @description park | snooze | archive | resume
+             */
+            action: string;
+        };
+        /** SessionActionResponse */
+        SessionActionResponse: {
+            /** Session Id */
+            session_id: string;
+            /** User State */
+            user_state: string;
+        };
+        /**
          * SessionChatRequest
          * @description Request to chat with a session.
          */
@@ -6847,6 +8745,11 @@ export interface components {
              */
             device_id?: string | null;
             /**
+             * Environment
+             * @description Environment (production, development, test, e2e, commis)
+             */
+            environment?: string | null;
+            /**
              * Cwd
              * @description Working directory
              */
@@ -6888,6 +8791,26 @@ export interface components {
              */
             tool_calls: number;
             /**
+             * Last Activity At
+             * @description Most recent event timestamp
+             */
+            last_activity_at?: string | null;
+            /**
+             * Summary
+             * @description Session summary
+             */
+            summary?: string | null;
+            /**
+             * Summary Title
+             * @description Short session title
+             */
+            summary_title?: string | null;
+            /**
+             * First User Message
+             * @description First user message (truncated)
+             */
+            first_user_message?: string | null;
+            /**
              * Match Event Id
              * @description Matching event id for search queries
              */
@@ -6902,6 +8825,17 @@ export interface components {
              * @description Role for matching event
              */
             match_role?: string | null;
+            /**
+             * Match Score
+             * @description Semantic similarity score (0–1) when result is from vector search
+             */
+            match_score?: number | null;
+            /**
+             * Is Sidechain
+             * @description True when session is a Task sub-agent (not human-initiated)
+             * @default false
+             */
+            is_sidechain: boolean;
         };
         /**
          * SessionSummaryResponse
@@ -6951,7 +8885,7 @@ export interface components {
             duration_minutes?: number | null;
             /**
              * Turn Count
-             * @description Total user + assistant messages
+             * @description Number of user messages (exchanges)
              */
             turn_count: number;
             /**
@@ -6974,6 +8908,12 @@ export interface components {
             sessions: components["schemas"]["SessionResponse"][];
             /** Total */
             total: number;
+            /**
+             * Has Real Sessions
+             * @description True if any non-demo sessions exist (device_id != 'demo-mac'). False means only demo-seeded data is present.
+             * @default true
+             */
+            has_real_sessions: boolean;
         };
         /**
          * SessionsSummaryResponse
@@ -7169,7 +9109,9 @@ export interface components {
              * Body
              * @description Operation payload
              */
-            body: Record<string, never>;
+            body: {
+                [key: string]: unknown;
+            };
             /**
              * Lamport
              * @description Lamport timestamp for ordering
@@ -7269,7 +9211,9 @@ export interface components {
             /** Title */
             title: string;
             /** Fiche State */
-            fiche_state?: Record<string, never> | null;
+            fiche_state?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Memory Strategy
              * @default buffer
@@ -7310,7 +9254,9 @@ export interface components {
             /** Title */
             title: string;
             /** Fiche State */
-            fiche_state?: Record<string, never> | null;
+            fiche_state?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Memory Strategy
              * @default buffer
@@ -7336,11 +9282,17 @@ export interface components {
             /** Content */
             content: string;
             /** Tool Calls */
-            tool_calls?: Record<string, never>[] | null;
+            tool_calls?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Tool Call Id */
             tool_call_id?: string | null;
             /** Name */
             name?: string | null;
+            /** Message Metadata */
+            message_metadata?: {
+                [key: string]: unknown;
+            } | null;
             /** Sent At */
             sent_at?: string | null;
         };
@@ -7351,11 +9303,17 @@ export interface components {
             /** Content */
             content: string;
             /** Tool Calls */
-            tool_calls?: Record<string, never>[] | null;
+            tool_calls?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Tool Call Id */
             tool_call_id?: string | null;
             /** Name */
             name?: string | null;
+            /** Message Metadata */
+            message_metadata?: {
+                [key: string]: unknown;
+            } | null;
             /** Id */
             id: number;
             /** Thread Id */
@@ -7385,7 +9343,9 @@ export interface components {
             /** Title */
             title: string;
             /** Fiche State */
-            fiche_state?: Record<string, never> | null;
+            fiche_state?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Memory Strategy
              * @default buffer
@@ -7421,7 +9381,9 @@ export interface components {
             /** Title */
             title?: string | null;
             /** Fiche State */
-            fiche_state?: Record<string, never> | null;
+            fiche_state?: {
+                [key: string]: unknown;
+            } | null;
             /** Memory Strategy */
             memory_strategy?: string | null;
             /** Active */
@@ -7449,7 +9411,9 @@ export interface components {
             /** Offset Ms */
             offset_ms: number;
             /** Metadata */
-            metadata?: Record<string, never> | null;
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * TimelineResponse
@@ -7568,7 +9532,9 @@ export interface components {
             /** Tool Name */
             tool_name: string;
             /** Args */
-            args?: Record<string, never> | null;
+            args?: {
+                [key: string]: unknown;
+            } | null;
             /** Result */
             result?: string | null;
             commis?: components["schemas"]["CommisInfo"] | null;
@@ -7633,7 +9599,9 @@ export interface components {
              */
             type: string;
             /** Config */
-            config?: Record<string, never> | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
             /** Id */
             id: number;
             /** Secret */
@@ -7654,7 +9622,9 @@ export interface components {
              */
             type: string;
             /** Config */
-            config?: Record<string, never> | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * UsageLimit
@@ -7683,6 +9653,28 @@ export interface components {
              */
             status: "ok" | "warning" | "exceeded" | "unlimited";
         };
+        /** UsageStatsByProvider */
+        UsageStatsByProvider: {
+            /** Provider */
+            provider: string;
+            /** Sessions */
+            sessions: number;
+            /** Messages */
+            messages: number;
+        };
+        /** UsageStatsResponse */
+        UsageStatsResponse: {
+            /** Total Sessions */
+            total_sessions: number;
+            /** Total Messages */
+            total_messages: number;
+            /** Date Range */
+            date_range: {
+                [key: string]: string;
+            };
+            /** By Provider */
+            by_provider: components["schemas"]["UsageStatsByProvider"][];
+        };
         /** UserOut */
         UserOut: {
             /** Id */
@@ -7701,7 +9693,9 @@ export interface components {
             /** Avatar Url */
             avatar_url?: string | null;
             /** Prefs */
-            prefs?: Record<string, never> | null;
+            prefs?: {
+                [key: string]: unknown;
+            } | null;
             /** Last Login */
             last_login?: string | null;
             /**
@@ -7722,7 +9716,9 @@ export interface components {
             /** Avatar Url */
             avatar_url?: string | null;
             /** Prefs */
-            prefs?: Record<string, never> | null;
+            prefs?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * UserUsageResponse
@@ -7906,11 +9902,9 @@ export interface components {
             email: string;
             /**
              * Source
-             * @default pricing_pro
+             * @default pricing_hosted
              */
             source: string;
-            /** Notes */
-            notes?: string | null;
         };
         /**
          * WaitlistResponse
@@ -7957,7 +9951,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    read_fiches_api_fiches_get: {
+    read_fiches_fiches_get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -7991,7 +9985,7 @@ export interface operations {
             };
         };
     };
-    create_fiche_api_fiches_post: {
+    create_fiche_fiches_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8028,7 +10022,7 @@ export interface operations {
             };
         };
     };
-    read_fiches_api_fiches__get: {
+    read_fiches_fiches__get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -8062,7 +10056,7 @@ export interface operations {
             };
         };
     };
-    create_fiche_api_fiches__post: {
+    create_fiche_fiches__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8099,7 +10093,7 @@ export interface operations {
             };
         };
     };
-    read_dashboard_snapshot_api_fiches_dashboard_get: {
+    read_dashboard_snapshot_fiches_dashboard_get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -8134,7 +10128,7 @@ export interface operations {
             };
         };
     };
-    read_fiche_api_fiches__fiche_id__get: {
+    read_fiche_fiches__fiche_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8167,7 +10161,7 @@ export interface operations {
             };
         };
     };
-    update_fiche_api_fiches__fiche_id__put: {
+    update_fiche_fiches__fiche_id__put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8204,7 +10198,7 @@ export interface operations {
             };
         };
     };
-    delete_fiche_api_fiches__fiche_id__delete: {
+    delete_fiche_fiches__fiche_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8235,7 +10229,7 @@ export interface operations {
             };
         };
     };
-    read_fiche_details_api_fiches__fiche_id__details_get: {
+    read_fiche_details_fiches__fiche_id__details_get: {
         parameters: {
             query?: {
                 include?: string | null;
@@ -8269,7 +10263,7 @@ export interface operations {
             };
         };
     };
-    read_fiche_messages_api_fiches__fiche_id__messages_get: {
+    read_fiche_messages_fiches__fiche_id__messages_get: {
         parameters: {
             query?: {
                 skip?: number;
@@ -8304,7 +10298,7 @@ export interface operations {
             };
         };
     };
-    create_fiche_message_api_fiches__fiche_id__messages_post: {
+    create_fiche_message_fiches__fiche_id__messages_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8341,7 +10335,7 @@ export interface operations {
             };
         };
     };
-    run_fiche_task_api_fiches__fiche_id__task_post: {
+    run_fiche_task_fiches__fiche_id__task_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8374,7 +10368,7 @@ export interface operations {
             };
         };
     };
-    list_mcp_servers_api_fiches__fiche_id__mcp_servers__get: {
+    list_mcp_servers_fiches__fiche_id__mcp_servers__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8407,7 +10401,7 @@ export interface operations {
             };
         };
     };
-    add_mcp_server_api_fiches__fiche_id__mcp_servers__post: {
+    add_mcp_server_fiches__fiche_id__mcp_servers__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8444,7 +10438,7 @@ export interface operations {
             };
         };
     };
-    remove_mcp_server_api_fiches__fiche_id__mcp_servers__server_name__delete: {
+    remove_mcp_server_fiches__fiche_id__mcp_servers__server_name__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8476,7 +10470,7 @@ export interface operations {
             };
         };
     };
-    test_mcp_connection_api_fiches__fiche_id__mcp_servers_test_post: {
+    test_mcp_connection_fiches__fiche_id__mcp_servers_test_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8513,7 +10507,7 @@ export interface operations {
             };
         };
     };
-    get_available_tools_api_fiches__fiche_id__mcp_servers_available_tools_get: {
+    get_available_tools_fiches__fiche_id__mcp_servers_available_tools_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8532,7 +10526,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -8546,7 +10542,7 @@ export interface operations {
             };
         };
     };
-    read_threads_api_threads_get: {
+    read_threads_threads_get: {
         parameters: {
             query?: {
                 fiche_id?: number | null;
@@ -8582,7 +10578,7 @@ export interface operations {
             };
         };
     };
-    create_thread_api_threads_post: {
+    create_thread_threads_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8617,7 +10613,7 @@ export interface operations {
             };
         };
     };
-    read_threads_api_threads__get: {
+    read_threads_threads__get: {
         parameters: {
             query?: {
                 fiche_id?: number | null;
@@ -8653,7 +10649,7 @@ export interface operations {
             };
         };
     };
-    create_thread_api_threads__post: {
+    create_thread_threads__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8688,7 +10684,7 @@ export interface operations {
             };
         };
     };
-    read_thread_api_threads__thread_id__get: {
+    read_thread_threads__thread_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8721,7 +10717,7 @@ export interface operations {
             };
         };
     };
-    update_thread_api_threads__thread_id__put: {
+    update_thread_threads__thread_id__put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8758,7 +10754,7 @@ export interface operations {
             };
         };
     };
-    delete_thread_api_threads__thread_id__delete: {
+    delete_thread_threads__thread_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8789,7 +10785,7 @@ export interface operations {
             };
         };
     };
-    read_thread_messages_api_threads__thread_id__messages_get: {
+    read_thread_messages_threads__thread_id__messages_get: {
         parameters: {
             query?: {
                 skip?: number;
@@ -8824,7 +10820,7 @@ export interface operations {
             };
         };
     };
-    create_thread_message_api_threads__thread_id__messages_post: {
+    create_thread_message_threads__thread_id__messages_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8861,7 +10857,7 @@ export interface operations {
             };
         };
     };
-    start_thread_run_api_threads__thread_id__runs_post: {
+    start_thread_run_threads__thread_id__runs_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8894,7 +10890,7 @@ export interface operations {
             };
         };
     };
-    get_models_api_models__get: {
+    get_models_models__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8925,7 +10921,7 @@ export interface operations {
             };
         };
     };
-    get_super_admin_status_api_admin_super_admin_status_get: {
+    get_super_admin_status_admin_super_admin_status_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8956,7 +10952,7 @@ export interface operations {
             };
         };
     };
-    reset_database_api_admin_reset_database_post: {
+    reset_database_admin_reset_database_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -8991,7 +10987,7 @@ export interface operations {
             };
         };
     };
-    seed_scenario_data_api_admin_seed_scenario_post: {
+    seed_scenario_data_admin_seed_scenario_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9026,7 +11022,7 @@ export interface operations {
             };
         };
     };
-    get_migration_log_api_admin_migration_log_get: {
+    get_migration_log_admin_migration_log_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9057,7 +11053,7 @@ export interface operations {
             };
         };
     };
-    fix_database_schema_api_admin_fix_database_schema_post: {
+    fix_database_schema_admin_fix_database_schema_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9088,7 +11084,7 @@ export interface operations {
             };
         };
     };
-    debug_db_schema_api_admin_debug_db_schema_get: {
+    debug_db_schema_admin_debug_db_schema_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9119,7 +11115,7 @@ export interface operations {
             };
         };
     };
-    configure_test_model_api_admin_configure_test_model_post: {
+    configure_test_model_admin_configure_test_model_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9154,7 +11150,7 @@ export interface operations {
             };
         };
     };
-    list_users_with_usage_api_admin_users_get: {
+    list_users_with_usage_admin_users_get: {
         parameters: {
             query?: {
                 /** @description Sort field: cost_today, cost_7d, cost_30d, email, created_at */
@@ -9195,7 +11191,7 @@ export interface operations {
             };
         };
     };
-    get_user_usage_details_api_admin_users__user_id__usage_get: {
+    get_user_usage_details_admin_users__user_id__usage_get: {
         parameters: {
             query?: {
                 /** @description Period for daily breakdown */
@@ -9230,7 +11226,7 @@ export interface operations {
             };
         };
     };
-    seed_context_api_admin_bootstrap_context_post: {
+    seed_context_admin_bootstrap_context_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9267,7 +11263,7 @@ export interface operations {
             };
         };
     };
-    seed_runners_api_admin_bootstrap_runners_post: {
+    seed_runners_admin_bootstrap_runners_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9304,7 +11300,7 @@ export interface operations {
             };
         };
     };
-    seed_credentials_api_admin_bootstrap_credentials_post: {
+    seed_credentials_admin_bootstrap_credentials_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9341,7 +11337,7 @@ export interface operations {
             };
         };
     };
-    get_bootstrap_status_api_admin_bootstrap_status_get: {
+    get_bootstrap_status_admin_bootstrap_status_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9374,7 +11370,7 @@ export interface operations {
             };
         };
     };
-    gmail_webhook_api_email_webhook_google_post: {
+    gmail_webhook_email_webhook_google_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9390,7 +11386,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never> | null;
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
             };
         };
         responses: {
@@ -9414,7 +11412,7 @@ export interface operations {
             };
         };
     };
-    gmail_pubsub_webhook_api_email_webhook_google_pubsub_post: {
+    gmail_pubsub_webhook_email_webhook_google_pubsub_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9431,7 +11429,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -9445,7 +11445,7 @@ export interface operations {
             };
         };
     };
-    channel_webhook_api_webhooks_channels__channel_id__post: {
+    channel_webhook_webhooks_channels__channel_id__post: {
         parameters: {
             query?: never;
             header?: {
@@ -9464,7 +11464,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -9478,7 +11480,7 @@ export interface operations {
             };
         };
     };
-    list_connectors_api_connectors_get: {
+    list_connectors_connectors_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9495,7 +11497,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -9509,7 +11513,7 @@ export interface operations {
             };
         };
     };
-    delete_connector_api_connectors__connector_id__delete: {
+    delete_connector_connectors__connector_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9540,7 +11544,7 @@ export interface operations {
             };
         };
     };
-    delete_trigger_api_triggers__trigger_id__delete: {
+    delete_trigger_triggers__trigger_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9571,7 +11575,7 @@ export interface operations {
             };
         };
     };
-    list_triggers_api_triggers__get: {
+    list_triggers_triggers__get: {
         parameters: {
             query?: {
                 /** @description Filter triggers by fiche ID */
@@ -9604,7 +11608,7 @@ export interface operations {
             };
         };
     };
-    create_trigger_api_triggers__post: {
+    create_trigger_triggers__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9639,7 +11643,7 @@ export interface operations {
             };
         };
     };
-    fire_trigger_event_api_triggers__trigger_id__events_post: {
+    fire_trigger_event_triggers__trigger_id__events_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9654,7 +11658,9 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never> | null;
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
             };
         };
         responses: {
@@ -9678,7 +11684,7 @@ export interface operations {
             };
         };
     };
-    list_sources_api_knowledge_sources_get: {
+    list_sources_knowledge_sources_get: {
         parameters: {
             query?: {
                 skip?: number;
@@ -9711,7 +11717,7 @@ export interface operations {
             };
         };
     };
-    create_source_api_knowledge_sources_post: {
+    create_source_knowledge_sources_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9746,7 +11752,7 @@ export interface operations {
             };
         };
     };
-    get_source_api_knowledge_sources__source_id__get: {
+    get_source_knowledge_sources__source_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9779,7 +11785,7 @@ export interface operations {
             };
         };
     };
-    update_source_api_knowledge_sources__source_id__put: {
+    update_source_knowledge_sources__source_id__put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9816,7 +11822,7 @@ export interface operations {
             };
         };
     };
-    delete_source_api_knowledge_sources__source_id__delete: {
+    delete_source_knowledge_sources__source_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9847,7 +11853,7 @@ export interface operations {
             };
         };
     };
-    sync_source_api_knowledge_sources__source_id__sync_post: {
+    sync_source_knowledge_sources__source_id__sync_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9880,7 +11886,7 @@ export interface operations {
             };
         };
     };
-    list_documents_api_knowledge_documents_get: {
+    list_documents_knowledge_documents_get: {
         parameters: {
             query?: {
                 source_id?: number | null;
@@ -9914,7 +11920,7 @@ export interface operations {
             };
         };
     };
-    get_document_api_knowledge_documents__document_id__get: {
+    get_document_knowledge_documents__document_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -9947,7 +11953,7 @@ export interface operations {
             };
         };
     };
-    search_api_knowledge_search_get: {
+    search_knowledge_search_get: {
         parameters: {
             query: {
                 q: string;
@@ -9980,7 +11986,7 @@ export interface operations {
             };
         };
     };
-    list_github_repos_api_knowledge_github_repos_get: {
+    list_github_repos_knowledge_github_repos_get: {
         parameters: {
             query?: {
                 page?: number;
@@ -10013,7 +12019,7 @@ export interface operations {
             };
         };
     };
-    list_repo_branches_api_knowledge_github_repos__owner___repo__branches_get: {
+    list_repo_branches_knowledge_github_repos__owner___repo__branches_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10047,7 +12053,7 @@ export interface operations {
             };
         };
     };
-    list_runs_api_fiches__fiche_id__runs_get: {
+    list_runs_fiches__fiche_id__runs_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -10081,7 +12087,7 @@ export interface operations {
             };
         };
     };
-    get_run_api_runs__run_id__get: {
+    get_run_runs__run_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10114,7 +12120,7 @@ export interface operations {
             };
         };
     };
-    get_install_script_api_runners_install_sh_get: {
+    get_install_script_runners_install_sh_get: {
         parameters: {
             query: {
                 enroll_token: string;
@@ -10148,7 +12154,7 @@ export interface operations {
             };
         };
     };
-    get_uninstall_script_api_runners_uninstall_sh_get: {
+    get_uninstall_script_runners_uninstall_sh_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10168,7 +12174,7 @@ export interface operations {
             };
         };
     };
-    create_enroll_token_api_runners_enroll_token_post: {
+    create_enroll_token_runners_enroll_token_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10199,7 +12205,7 @@ export interface operations {
             };
         };
     };
-    register_runner_api_runners_register_post: {
+    register_runner_runners_register_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10234,7 +12240,7 @@ export interface operations {
             };
         };
     };
-    get_runner_status_api_runners_status_get: {
+    get_runner_status_runners_status_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10265,7 +12271,7 @@ export interface operations {
             };
         };
     };
-    list_runners_api_runners__get: {
+    list_runners_runners__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10296,7 +12302,7 @@ export interface operations {
             };
         };
     };
-    get_runner_api_runners__runner_id__get: {
+    get_runner_runners__runner_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10329,7 +12335,7 @@ export interface operations {
             };
         };
     };
-    update_runner_api_runners__runner_id__patch: {
+    update_runner_runners__runner_id__patch: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10366,7 +12372,7 @@ export interface operations {
             };
         };
     };
-    revoke_runner_api_runners__runner_id__revoke_post: {
+    revoke_runner_runners__runner_id__revoke_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10399,7 +12405,7 @@ export interface operations {
             };
         };
     };
-    rotate_runner_secret_api_runners__runner_id__rotate_secret_post: {
+    rotate_runner_secret_runners__runner_id__rotate_secret_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10432,7 +12438,7 @@ export interface operations {
             };
         };
     };
-    dev_login_api_auth_dev_login_post: {
+    dev_login_auth_dev_login_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10463,7 +12469,7 @@ export interface operations {
             };
         };
     };
-    google_sign_in_api_auth_google_post: {
+    google_sign_in_auth_google_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10500,7 +12506,7 @@ export interface operations {
             };
         };
     };
-    verify_session_api_auth_verify_get: {
+    verify_session_auth_verify_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10529,7 +12535,7 @@ export interface operations {
             };
         };
     };
-    auth_status_api_auth_status_get: {
+    auth_status_auth_status_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10560,7 +12566,7 @@ export interface operations {
             };
         };
     };
-    logout_api_auth_logout_post: {
+    logout_auth_logout_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -10578,7 +12584,7 @@ export interface operations {
             };
         };
     };
-    accept_token_api_auth_accept_token_post: {
+    accept_token_auth_accept_token_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10615,7 +12621,39 @@ export interface operations {
             };
         };
     };
-    get_auth_methods_api_auth_methods_get: {
+    sso_redirect_auth_sso_get: {
+        parameters: {
+            query: {
+                token: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auth_methods_auth_methods_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10635,7 +12673,7 @@ export interface operations {
             };
         };
     };
-    password_login_api_auth_password_post: {
+    password_login_auth_password_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10670,7 +12708,44 @@ export interface operations {
             };
         };
     };
-    connect_gmail_api_auth_google_gmail_post: {
+    cli_login_auth_cli_login_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CLILoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_gmail_auth_google_gmail_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10709,7 +12784,7 @@ export interface operations {
             };
         };
     };
-    github_authorize_api_oauth_github_authorize_get: {
+    github_authorize_oauth_github_authorize_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10740,7 +12815,7 @@ export interface operations {
             };
         };
     };
-    github_callback_api_oauth_github_callback_get: {
+    github_callback_oauth_github_callback_get: {
         parameters: {
             query: {
                 code: string;
@@ -10775,7 +12850,7 @@ export interface operations {
             };
         };
     };
-    read_current_user_api_users_me_get: {
+    read_current_user_users_me_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10806,7 +12881,7 @@ export interface operations {
             };
         };
     };
-    update_current_user_api_users_me_put: {
+    update_current_user_users_me_put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10841,7 +12916,7 @@ export interface operations {
             };
         };
     };
-    read_current_user_usage_api_users_me_usage_get: {
+    read_current_user_usage_users_me_usage_get: {
         parameters: {
             query?: {
                 /** @description Time period for usage stats */
@@ -10874,7 +12949,7 @@ export interface operations {
             };
         };
     };
-    upload_current_user_avatar_api_users_me_avatar_post: {
+    upload_current_user_avatar_users_me_avatar_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10885,7 +12960,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_upload_current_user_avatar_api_users_me_avatar_post"];
+                "multipart/form-data": components["schemas"]["Body_upload_current_user_avatar_users_me_avatar_post"];
             };
         };
         responses: {
@@ -10909,7 +12984,7 @@ export interface operations {
             };
         };
     };
-    get_user_context_api_users_me_context_get: {
+    get_user_context_users_me_context_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10940,7 +13015,7 @@ export interface operations {
             };
         };
     };
-    replace_user_context_api_users_me_context_put: {
+    replace_user_context_users_me_context_put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10975,7 +13050,7 @@ export interface operations {
             };
         };
     };
-    update_user_context_api_users_me_context_patch: {
+    update_user_context_users_me_context_patch: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11010,7 +13085,7 @@ export interface operations {
             };
         };
     };
-    list_email_contacts_api_user_contacts_email_get: {
+    list_email_contacts_user_contacts_email_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11041,7 +13116,7 @@ export interface operations {
             };
         };
     };
-    create_email_contact_api_user_contacts_email_post: {
+    create_email_contact_user_contacts_email_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11076,7 +13151,7 @@ export interface operations {
             };
         };
     };
-    update_email_contact_api_user_contacts_email__contact_id__put: {
+    update_email_contact_user_contacts_email__contact_id__put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11113,7 +13188,7 @@ export interface operations {
             };
         };
     };
-    delete_email_contact_api_user_contacts_email__contact_id__delete: {
+    delete_email_contact_user_contacts_email__contact_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11144,7 +13219,7 @@ export interface operations {
             };
         };
     };
-    list_phone_contacts_api_user_contacts_phone_get: {
+    list_phone_contacts_user_contacts_phone_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11175,7 +13250,7 @@ export interface operations {
             };
         };
     };
-    create_phone_contact_api_user_contacts_phone_post: {
+    create_phone_contact_user_contacts_phone_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11210,7 +13285,7 @@ export interface operations {
             };
         };
     };
-    update_phone_contact_api_user_contacts_phone__contact_id__put: {
+    update_phone_contact_user_contacts_phone__contact_id__put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11247,7 +13322,7 @@ export interface operations {
             };
         };
     };
-    delete_phone_contact_api_user_contacts_phone__contact_id__delete: {
+    delete_phone_contact_user_contacts_phone__contact_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11278,7 +13353,7 @@ export interface operations {
             };
         };
     };
-    list_oikos_fiches_api_oikos_fiches_get: {
+    list_oikos_fiches_oikos_fiches_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11311,7 +13386,7 @@ export interface operations {
             };
         };
     };
-    list_oikos_runs_api_oikos_runs_get: {
+    list_oikos_runs_oikos_runs_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -11346,7 +13421,7 @@ export interface operations {
             };
         };
     };
-    get_active_run_api_oikos_runs_active_get: {
+    get_active_run_oikos_runs_active_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11379,7 +13454,7 @@ export interface operations {
             };
         };
     };
-    get_run_status_api_oikos_runs__run_id__get: {
+    get_run_status_oikos_runs__run_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11414,7 +13489,7 @@ export interface operations {
             };
         };
     };
-    attach_to_run_stream_api_oikos_runs__run_id__stream_get: {
+    attach_to_run_stream_oikos_runs__run_id__stream_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11449,7 +13524,7 @@ export interface operations {
             };
         };
     };
-    get_run_events_api_oikos_runs__run_id__events_get: {
+    get_run_events_oikos_runs__run_id__events_get: {
         parameters: {
             query?: {
                 event_type?: string | null;
@@ -11486,7 +13561,7 @@ export interface operations {
             };
         };
     };
-    get_run_timeline_api_oikos_runs__run_id__timeline_get: {
+    get_run_timeline_oikos_runs__run_id__timeline_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11521,7 +13596,7 @@ export interface operations {
             };
         };
     };
-    oikos_dispatch_api_oikos_dispatch_post: {
+    oikos_dispatch_oikos_dispatch_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11558,7 +13633,7 @@ export interface operations {
             };
         };
     };
-    oikos_run_api_oikos_run_post: {
+    oikos_run_oikos_run_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11595,7 +13670,7 @@ export interface operations {
             };
         };
     };
-    oikos_run_cancel_api_oikos_run__run_id__cancel_post: {
+    oikos_run_cancel_oikos_run__run_id__cancel_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11630,7 +13705,7 @@ export interface operations {
             };
         };
     };
-    resume_run_api_oikos_internal_runs__run_id__resume_post: {
+    resume_run_oikos_internal_runs__run_id__resume_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -11667,7 +13742,7 @@ export interface operations {
             };
         };
     };
-    oikos_chat_api_oikos_chat_post: {
+    oikos_chat_oikos_chat_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11704,7 +13779,7 @@ export interface operations {
             };
         };
     };
-    convert_text_to_speech_api_oikos_tts_post: {
+    convert_text_to_speech_oikos_tts_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11739,7 +13814,7 @@ export interface operations {
             };
         };
     };
-    convert_text_to_speech_json_api_oikos_tts_json_post: {
+    convert_text_to_speech_json_oikos_tts_json_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11776,7 +13851,7 @@ export interface operations {
             };
         };
     };
-    stream_text_to_speech_api_oikos_tts_stream_get: {
+    stream_text_to_speech_oikos_tts_stream_get: {
         parameters: {
             query: {
                 text: string;
@@ -11811,7 +13886,7 @@ export interface operations {
             };
         };
     };
-    get_tts_status_api_oikos_tts_status_get: {
+    get_tts_status_oikos_tts_status_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11844,7 +13919,7 @@ export interface operations {
             };
         };
     };
-    list_voices_api_oikos_tts_voices_get: {
+    list_voices_oikos_tts_voices_get: {
         parameters: {
             query?: {
                 provider?: string | null;
@@ -11878,7 +13953,7 @@ export interface operations {
             };
         };
     };
-    voice_turn_api_oikos_voice_turn_post: {
+    voice_turn_oikos_voice_turn_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11891,7 +13966,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_voice_turn_api_oikos_voice_turn_post"];
+                "multipart/form-data": components["schemas"]["Body_voice_turn_oikos_voice_turn_post"];
             };
         };
         responses: {
@@ -11915,7 +13990,7 @@ export interface operations {
             };
         };
     };
-    voice_transcribe_api_oikos_voice_transcribe_post: {
+    voice_transcribe_oikos_voice_transcribe_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11928,7 +14003,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_voice_transcribe_api_oikos_voice_transcribe_post"];
+                "multipart/form-data": components["schemas"]["Body_voice_transcribe_oikos_voice_transcribe_post"];
             };
         };
         responses: {
@@ -11952,7 +14027,7 @@ export interface operations {
             };
         };
     };
-    voice_tts_api_oikos_voice_tts_post: {
+    voice_tts_oikos_voice_tts_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -11989,7 +14064,7 @@ export interface operations {
             };
         };
     };
-    oikos_auth_api_oikos_auth_post: {
+    oikos_auth_oikos_auth_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12024,7 +14099,7 @@ export interface operations {
             };
         };
     };
-    list_oikos_agents_api_oikos_agents_get: {
+    list_oikos_agents_oikos_agents_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12057,7 +14132,7 @@ export interface operations {
             };
         };
     };
-    oikos_events_api_oikos_events_get: {
+    oikos_events_oikos_events_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12090,11 +14165,13 @@ export interface operations {
             };
         };
     };
-    oikos_history_api_oikos_history_get: {
+    oikos_history_oikos_history_get: {
         parameters: {
             query?: {
                 limit?: number;
                 offset?: number;
+                surface_id?: string;
+                view?: string;
                 session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
@@ -12125,7 +14202,7 @@ export interface operations {
             };
         };
     };
-    oikos_clear_history_api_oikos_history_delete: {
+    oikos_clear_history_oikos_history_delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12156,7 +14233,7 @@ export interface operations {
             };
         };
     };
-    oikos_bootstrap_api_oikos_bootstrap_get: {
+    oikos_bootstrap_oikos_bootstrap_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12189,7 +14266,7 @@ export interface operations {
             };
         };
     };
-    get_oikos_thread_api_oikos_thread_get: {
+    get_oikos_thread_oikos_thread_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12222,7 +14299,7 @@ export interface operations {
             };
         };
     };
-    oikos_update_preferences_api_oikos_preferences_patch: {
+    oikos_update_preferences_oikos_preferences_patch: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12259,7 +14336,7 @@ export interface operations {
             };
         };
     };
-    oikos_session_get_api_oikos_session_get: {
+    oikos_session_get_oikos_session_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12292,7 +14369,7 @@ export interface operations {
             };
         };
     };
-    oikos_session_post_api_oikos_session_post: {
+    oikos_session_post_oikos_session_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12325,7 +14402,7 @@ export interface operations {
             };
         };
     };
-    oikos_conversation_title_api_oikos_conversation_title_post: {
+    oikos_conversation_title_oikos_conversation_title_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -12358,7 +14435,7 @@ export interface operations {
             };
         };
     };
-    resume_run_api_internal_runs__run_id__resume_post: {
+    resume_run_internal_runs__run_id__resume_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12395,7 +14472,7 @@ export interface operations {
             };
         };
     };
-    record_commis_tool_event_api_internal_commis_tool_event_post: {
+    record_commis_tool_event_internal_commis_tool_event_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12430,7 +14507,7 @@ export interface operations {
             };
         };
     };
-    push_sync_operations_api_oikos_sync_push_post: {
+    push_sync_operations_oikos_sync_push_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12467,7 +14544,7 @@ export interface operations {
             };
         };
     };
-    pull_sync_operations_api_oikos_sync_pull_get: {
+    pull_sync_operations_oikos_sync_pull_get: {
         parameters: {
             query?: {
                 /** @description Cursor position to pull from */
@@ -12502,7 +14579,7 @@ export interface operations {
             };
         };
     };
-    stream_run_replay_api_stream_runs__run_id__get: {
+    stream_run_replay_stream_runs__run_id__get: {
         parameters: {
             query?: {
                 after_event_id?: number;
@@ -12539,7 +14616,7 @@ export interface operations {
             };
         };
     };
-    system_info_api_system_info_get: {
+    system_info_system_info_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12554,12 +14631,14 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
     };
-    system_capabilities_api_system_capabilities_get: {
+    system_capabilities_system_capabilities_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12574,12 +14653,14 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
     };
-    reset_sessions_api_system_reset_sessions_post: {
+    reset_sessions_system_reset_sessions_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12594,12 +14675,14 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
     };
-    seed_demo_sessions_api_system_seed_demo_sessions_post: {
+    seed_demo_sessions_system_seed_demo_sessions_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12614,12 +14697,319 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
     };
-    get_frontend_errors_api_ops_errors_get: {
+    email_status_system_email_status_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_email_config_system_email_config_put: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_email_config_system_email_config_delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_email_system_email_test_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    llm_capabilities_capabilities_llm_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_llm_providers_llm_providers_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmProviderInfo"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_llm_provider_llm_providers__capability__put: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                capability: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LlmProviderUpsertRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_llm_provider_llm_providers__capability__delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                capability: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_llm_provider_llm_providers__capability__test_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                capability: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LlmProviderTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmProviderTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_frontend_errors_ops_errors_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12650,9 +15040,10 @@ export interface operations {
             };
         };
     };
-    get_summary_api_ops_summary_get: {
+    get_summary_ops_summary_get: {
         parameters: {
             query?: {
+                window?: string;
                 session_factory?: unknown;
             };
             header?: never;
@@ -12681,7 +15072,7 @@ export interface operations {
             };
         };
     };
-    get_timeseries_api_ops_timeseries_get: {
+    get_timeseries_ops_timeseries_get: {
         parameters: {
             query: {
                 metric: string;
@@ -12714,7 +15105,7 @@ export interface operations {
             };
         };
     };
-    get_top_api_ops_top_get: {
+    get_top_ops_top_get: {
         parameters: {
             query?: {
                 kind?: string;
@@ -12748,7 +15139,7 @@ export interface operations {
             };
         };
     };
-    read_container_policy_api_config_container_policy_get: {
+    read_container_policy_config_container_policy_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12779,7 +15170,7 @@ export interface operations {
             };
         };
     };
-    list_fiche_connectors_api_fiches__fiche_id__connectors__get: {
+    list_fiche_connectors_fiches__fiche_id__connectors__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12812,7 +15203,7 @@ export interface operations {
             };
         };
     };
-    configure_connector_api_fiches__fiche_id__connectors__post: {
+    configure_connector_fiches__fiche_id__connectors__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12849,7 +15240,7 @@ export interface operations {
             };
         };
     };
-    test_credentials_before_save_api_fiches__fiche_id__connectors_test_post: {
+    test_credentials_before_save_fiches__fiche_id__connectors_test_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12886,7 +15277,7 @@ export interface operations {
             };
         };
     };
-    test_configured_connector_api_fiches__fiche_id__connectors__connector_type__test_post: {
+    test_configured_connector_fiches__fiche_id__connectors__connector_type__test_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12920,7 +15311,7 @@ export interface operations {
             };
         };
     };
-    delete_connector_api_fiches__fiche_id__connectors__connector_type__delete: {
+    delete_connector_fiches__fiche_id__connectors__connector_type__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12952,7 +15343,7 @@ export interface operations {
             };
         };
     };
-    list_account_connectors_api_account_connectors__get: {
+    list_account_connectors_account_connectors__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -12983,7 +15374,7 @@ export interface operations {
             };
         };
     };
-    configure_account_connector_api_account_connectors__post: {
+    configure_account_connector_account_connectors__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13018,7 +15409,7 @@ export interface operations {
             };
         };
     };
-    test_credentials_before_save_api_account_connectors_test_post: {
+    test_credentials_before_save_account_connectors_test_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13053,7 +15444,7 @@ export interface operations {
             };
         };
     };
-    test_configured_connector_api_account_connectors__connector_type__test_post: {
+    test_configured_connector_account_connectors__connector_type__test_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13086,7 +15477,7 @@ export interface operations {
             };
         };
     };
-    delete_account_connector_api_account_connectors__connector_type__delete: {
+    delete_account_connector_account_connectors__connector_type__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13117,7 +15508,7 @@ export interface operations {
             };
         };
     };
-    track_batch_api_funnel_batch_post: {
+    track_batch_funnel_batch_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13137,7 +15528,7 @@ export interface operations {
             };
         };
     };
-    get_stats_api_funnel_stats_get: {
+    get_stats_funnel_stats_get: {
         parameters: {
             query?: {
                 hours?: number;
@@ -13168,7 +15559,7 @@ export interface operations {
             };
         };
     };
-    stitch_visitor_api_funnel_stitch_visitor_post: {
+    stitch_visitor_funnel_stitch_visitor_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13188,7 +15579,7 @@ export interface operations {
             };
         };
     };
-    get_attribution_api_funnel_attribution_get: {
+    get_attribution_funnel_attribution_get: {
         parameters: {
             query?: {
                 hours?: number;
@@ -13219,11 +15610,9 @@ export interface operations {
             };
         };
     };
-    join_waitlist_api_waitlist_post: {
+    join_waitlist_waitlist_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13254,7 +15643,306 @@ export interface operations {
             };
         };
     };
-    get_jobs_repo_status_api_jobs_repo_get: {
+    list_job_secrets_jobs_secrets_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobSecretListItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_job_secret_jobs_secrets__key__put: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobSecretUpsertRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_job_secret_jobs_secrets__key__delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_secrets_status_jobs__job_id__secrets_status_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobSecretsStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_repo_config_jobs_repo_config_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRepoConfigResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_repo_config_jobs_repo_config_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobRepoConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_repo_config_jobs_repo_config_delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_repo_config_jobs_repo_verify_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobRepoConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRepoVerifyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_repo_sync_jobs_settings_sync_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_jobs_repo_status_jobs_repo_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13285,7 +15973,7 @@ export interface operations {
             };
         };
     };
-    init_jobs_repo_api_jobs_repo_init_post: {
+    init_jobs_repo_jobs_repo_init_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13316,7 +16004,7 @@ export interface operations {
             };
         };
     };
-    sync_jobs_repo_api_jobs_repo_sync_post: {
+    sync_jobs_repo_jobs_repo_sync_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13347,7 +16035,71 @@ export interface operations {
             };
         };
     };
-    list_jobs_api_jobs__get: {
+    get_recent_job_runs_jobs_runs_recent_get: {
+        parameters: {
+            query?: {
+                /** @description Max results to return */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRunHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_last_job_runs_jobs_runs_last_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobLastRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_jobs_jobs__get: {
         parameters: {
             query?: {
                 enabled_only?: boolean;
@@ -13379,7 +16131,7 @@ export interface operations {
             };
         };
     };
-    get_job_api_jobs__job_id__get: {
+    get_job_jobs__job_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13412,7 +16164,44 @@ export interface operations {
             };
         };
     };
-    run_job_api_jobs__job_id__run_post: {
+    get_job_runs_jobs__job_id__runs_get: {
+        parameters: {
+            query?: {
+                /** @description Max results to return */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRunHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_job_jobs__job_id__run_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13445,7 +16234,42 @@ export interface operations {
             };
         };
     };
-    enable_job_api_jobs__job_id__enable_post: {
+    enable_job_jobs__job_id__enable_post: {
+        parameters: {
+            query?: {
+                /** @description Bypass secret checks */
+                force?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disable_job_jobs__job_id__disable_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13478,40 +16302,7 @@ export interface operations {
             };
         };
     };
-    disable_job_api_jobs__job_id__disable_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JobInfo"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_queue_state_api_jobs_queue_state_get: {
+    get_queue_state_jobs_queue_state_get: {
         parameters: {
             query?: {
                 limit?: number;
@@ -13543,7 +16334,7 @@ export interface operations {
             };
         };
     };
-    list_traces_api_traces__get: {
+    list_traces_traces__get: {
         parameters: {
             query?: {
                 /** @description Maximum traces to return */
@@ -13578,7 +16369,7 @@ export interface operations {
             };
         };
     };
-    get_trace_api_traces__trace_id__get: {
+    get_trace_traces__trace_id__get: {
         parameters: {
             query?: {
                 /** @description Detail level */
@@ -13615,7 +16406,7 @@ export interface operations {
             };
         };
     };
-    system_health_api_reliability_system_health_get: {
+    system_health_reliability_system_health_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13646,7 +16437,7 @@ export interface operations {
             };
         };
     };
-    error_analysis_api_reliability_errors_get: {
+    error_analysis_reliability_errors_get: {
         parameters: {
             query?: {
                 /** @description Time window in hours */
@@ -13681,7 +16472,7 @@ export interface operations {
             };
         };
     };
-    performance_metrics_api_reliability_performance_get: {
+    performance_metrics_reliability_performance_get: {
         parameters: {
             query?: {
                 /** @description Time window in hours */
@@ -13714,7 +16505,7 @@ export interface operations {
             };
         };
     };
-    stuck_commis_api_reliability_commis_stuck_get: {
+    stuck_commis_reliability_commis_stuck_get: {
         parameters: {
             query?: {
                 /** @description Threshold in minutes */
@@ -13747,7 +16538,7 @@ export interface operations {
             };
         };
     };
-    runner_status_api_reliability_runners_get: {
+    runner_status_reliability_runners_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13778,7 +16569,7 @@ export interface operations {
             };
         };
     };
-    list_skills_api_skills_get: {
+    list_skills_skills_get: {
         parameters: {
             query?: {
                 /** @description Workspace path to load skills from */
@@ -13815,7 +16606,7 @@ export interface operations {
             };
         };
     };
-    create_skill_api_skills_post: {
+    create_skill_skills_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13850,7 +16641,7 @@ export interface operations {
             };
         };
     };
-    list_skill_commands_api_skills_commands_get: {
+    list_skill_commands_skills_commands_get: {
         parameters: {
             query?: {
                 workspace_path?: string | null;
@@ -13882,7 +16673,7 @@ export interface operations {
             };
         };
     };
-    get_skills_prompt_api_skills_prompt_get: {
+    get_skills_prompt_skills_prompt_get: {
         parameters: {
             query?: {
                 workspace_path?: string | null;
@@ -13916,7 +16707,7 @@ export interface operations {
             };
         };
     };
-    get_skill_api_skills__skill_name__get: {
+    get_skill_skills__skill_name__get: {
         parameters: {
             query?: {
                 workspace_path?: string | null;
@@ -13950,7 +16741,7 @@ export interface operations {
             };
         };
     };
-    delete_skill_api_skills__skill_name__delete: {
+    delete_skill_skills__skill_name__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -13969,7 +16760,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -13983,7 +16776,7 @@ export interface operations {
             };
         };
     };
-    update_skill_api_skills__skill_name__patch: {
+    update_skill_skills__skill_name__patch: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14020,7 +16813,7 @@ export interface operations {
             };
         };
     };
-    reload_skills_api_skills_reload_post: {
+    reload_skills_skills_reload_post: {
         parameters: {
             query?: {
                 workspace_path?: string | null;
@@ -14038,7 +16831,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -14052,7 +16847,7 @@ export interface operations {
             };
         };
     };
-    chat_with_session_api_sessions__session_id__chat_post: {
+    chat_with_session_sessions__session_id__chat_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14091,7 +16886,7 @@ export interface operations {
             };
         };
     };
-    get_session_lock_status_api_sessions__session_id__lock_get: {
+    get_session_lock_status_sessions__session_id__lock_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -14126,7 +16921,7 @@ export interface operations {
             };
         };
     };
-    force_release_lock_api_sessions__session_id__lock_delete: {
+    force_release_lock_sessions__session_id__lock_delete: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -14147,7 +16942,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -14161,7 +16958,7 @@ export interface operations {
             };
         };
     };
-    ingest_session_api_agents_ingest_post: {
+    ingest_session_agents_ingest_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14192,7 +16989,330 @@ export interface operations {
             };
         };
     };
-    list_sessions_api_agents_sessions_get: {
+    get_briefing_agents_briefing_get: {
+        parameters: {
+            query: {
+                /** @description Project name to get briefing for */
+                project: string;
+                /** @description Max sessions to include */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BriefingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_progress_agents_backfill_summaries_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillProgressResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_summaries_agents_backfill_summaries_post: {
+        parameters: {
+            query?: {
+                /** @description Max concurrent LLM requests */
+                concurrency?: number;
+                /** @description Optional project filter */
+                project?: string | null;
+                /** @description Re-summarize sessions that already have summaries */
+                force?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillSummariesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_embeddings_progress_agents_backfill_embeddings_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillEmbeddingsProgressResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_embeddings_agents_backfill_embeddings_post: {
+        parameters: {
+            query?: {
+                /** @description Max concurrent embedding requests */
+                concurrency?: number;
+                /** @description Sessions per batch */
+                batch_size?: number;
+                /** @description Max batches to process */
+                max_batches?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillEmbeddingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    semantic_search_sessions_agents_sessions_semantic_get: {
+        parameters: {
+            query: {
+                /** @description Search query */
+                query: string;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
+                /** @description Filter by environment (production, development, test, e2e) */
+                environment?: string | null;
+                /** @description Days to look back */
+                days_back?: number;
+                /** @description Max results */
+                limit?: number;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SemanticSearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recall_sessions_agents_recall_get: {
+        parameters: {
+            query: {
+                /** @description What to search for */
+                query: string;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Days to look back */
+                since_days?: number;
+                /** @description Max matches */
+                max_results?: number;
+                /** @description Context turns before/after match */
+                context_turns?: number;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ingest_health_agents_ingest_health_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestHealthResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_usage_stats_agents_usage_stats_get: {
+        parameters: {
+            query?: {
+                /** @description Days to look back (max 365) */
+                days?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageStatsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sessions_agents_sessions_get: {
         parameters: {
             query?: {
                 /** @description Filter by project */
@@ -14203,6 +17323,8 @@ export interface operations {
                 environment?: string | null;
                 /** @description Include test/e2e sessions (default: False) */
                 include_test?: boolean;
+                /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
+                hide_autonomous?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
                 /** @description Days to look back */
@@ -14213,6 +17335,12 @@ export interface operations {
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
+                /** @description Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present. */
+                sort?: string | null;
+                /** @description Search mode: lexical|semantic|hybrid. Default: lexical. */
+                mode?: string | null;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
                 session_factory?: unknown;
             };
             header?: never;
@@ -14241,7 +17369,7 @@ export interface operations {
             };
         };
     };
-    list_session_summaries_api_agents_sessions_summary_get: {
+    list_session_summaries_agents_sessions_summary_get: {
         parameters: {
             query?: {
                 /** @description Filter by project */
@@ -14262,6 +17390,8 @@ export interface operations {
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
+                /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
+                hide_autonomous?: boolean;
                 session_factory?: unknown;
             };
             header?: never;
@@ -14290,7 +17420,7 @@ export interface operations {
             };
         };
     };
-    list_active_sessions_api_agents_sessions_active_get: {
+    list_active_sessions_agents_sessions_active_get: {
         parameters: {
             query?: {
                 /** @description Filter by project */
@@ -14331,7 +17461,7 @@ export interface operations {
             };
         };
     };
-    preview_session_api_agents_sessions__session_id__preview_get: {
+    preview_session_agents_sessions__session_id__preview_get: {
         parameters: {
             query?: {
                 /** @description Number of messages to return */
@@ -14366,7 +17496,7 @@ export interface operations {
             };
         };
     };
-    get_filters_api_agents_filters_get: {
+    get_filters_agents_filters_get: {
         parameters: {
             query?: {
                 /** @description Days to look back for distinct values */
@@ -14399,7 +17529,40 @@ export interface operations {
             };
         };
     };
-    seed_demo_sessions_api_agents_demo_post: {
+    seed_demo_sessions_agents_demo_post: {
+        parameters: {
+            query?: {
+                /** @description Delete existing demo sessions before seeding fresh demo data */
+                replace?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoSeedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_demo_sessions_agents_demo_delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14430,7 +17593,44 @@ export interface operations {
             };
         };
     };
-    get_session_api_agents_sessions__session_id__get: {
+    set_session_action_agents_sessions__session_id__action_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_agents_sessions__session_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14463,11 +17663,19 @@ export interface operations {
             };
         };
     };
-    get_session_events_api_agents_sessions__session_id__events_get: {
+    get_session_events_agents_sessions__session_id__events_get: {
         parameters: {
             query?: {
                 /** @description Comma-separated roles to filter */
                 roles?: string | null;
+                /** @description Exact tool name filter, e.g. Bash */
+                tool_name?: string | null;
+                /** @description Content search within session events */
+                query?: string | null;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
                 /** @description Max results */
                 limit?: number;
                 /** @description Offset for pagination */
@@ -14502,9 +17710,11 @@ export interface operations {
             };
         };
     };
-    export_session_api_agents_sessions__session_id__export_get: {
+    export_session_agents_sessions__session_id__export_get: {
         parameters: {
             query?: {
+                /** @description Branch projection mode for export: head|all */
+                branch_mode?: string;
                 session_factory?: unknown;
             };
             header?: never;
@@ -14535,7 +17745,77 @@ export interface operations {
             };
         };
     };
-    cleanup_test_sessions_api_agents_test_cleanup_delete: {
+    trigger_reflection_agents_reflect_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReflectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReflectionRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_reflections_agents_reflections_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Max results */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReflectionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cleanup_test_sessions_agents_test_cleanup_delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14570,7 +17850,73 @@ export interface operations {
             };
         };
     };
-    list_device_tokens_api_devices_tokens_get: {
+    ingest_heartbeat_agents_heartbeat_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HeartbeatIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_presence_agents_presence_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresenceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_device_tokens_devices_tokens_get: {
         parameters: {
             query?: {
                 include_revoked?: boolean;
@@ -14602,7 +17948,7 @@ export interface operations {
             };
         };
     };
-    create_device_token_api_devices_tokens_post: {
+    create_device_token_devices_tokens_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14637,7 +17983,7 @@ export interface operations {
             };
         };
     };
-    get_device_token_api_devices_tokens__token_id__get: {
+    get_device_token_devices_tokens__token_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14670,7 +18016,7 @@ export interface operations {
             };
         };
     };
-    revoke_device_token_api_devices_tokens__token_id__delete: {
+    revoke_device_token_devices_tokens__token_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14701,7 +18047,46 @@ export interface operations {
             };
         };
     };
-    _legacy_reset_database_admin_reset_database_post: {
+    list_insights_insights_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by type */
+                insight_type?: string | null;
+                /** @description Hours to look back (default 168 = 7 days) */
+                since_hours?: number;
+                /** @description Max results */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_insight_insights_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -14712,7 +18097,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["DatabaseResetRequest"];
+                "application/json": components["schemas"]["InsightCreateRequest"];
             };
         };
         responses: {
@@ -14722,7 +18107,213 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["InsightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_proposals_proposals_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by status: pending, approved, declined */
+                status?: string | null;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Max results */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_proposal_proposals__proposal_id__approve_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decline_proposal_proposals__proposal_id__decline_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_reservation_reservations_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReservationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_reservation_reservations_check_get: {
+        parameters: {
+            query: {
+                /** @description File path to check */
+                file_path: string;
+                /** @description Project context */
+                project?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReservationCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_reservation_reservations__reservation_id__delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                reservation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReservationReleaseResponse"];
                 };
             };
             /** @description Validation Error */

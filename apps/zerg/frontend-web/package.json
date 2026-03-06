@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "node ./scripts/run-vitest.mjs",
-    "generate:api": "openapi-typescript ../openapi.json --output src/generated/openapi-types.ts",
+    "generate:api": "bunx openapi-typescript ../openapi.json --output src/generated/openapi-types.ts",
     "validate:contracts": "bun ./scripts/contract-validator.ts",
     "validate:types": "tsc --noEmit --skipLibCheck",
     "precommit": "bun run validate:types && bun run validate:contracts && bun run test -- --run"

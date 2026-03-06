@@ -13,6 +13,27 @@ import {
 import { parseUTC } from "../lib/dateUtils";
 import "../styles/runner-detail.css";
 
+type RunnerMetadataSummary = {
+  platform?: string;
+  arch?: string;
+  hostname?: string;
+  dockerAvailable?: boolean;
+};
+
+function normalizeRunnerMetadata(metadata: unknown): RunnerMetadataSummary | null {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+
+  const record = metadata as Record<string, unknown>;
+  return {
+    platform: typeof record.platform === "string" ? record.platform : undefined,
+    arch: typeof record.arch === "string" ? record.arch : undefined,
+    hostname: typeof record.hostname === "string" ? record.hostname : undefined,
+    dockerAvailable: typeof record.docker_available === "boolean" ? record.docker_available : undefined,
+  };
+}
+
 export default function RunnerDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -20,6 +41,7 @@ export default function RunnerDetailPage() {
   const confirm = useConfirm();
 
   const { data: runner, isLoading, error } = useRunner(runnerId);
+  const runnerMetadata = normalizeRunnerMetadata(runner?.runner_metadata);
   const updateRunnerMutation = useUpdateRunner();
   const revokeRunnerMutation = useRevokeRunner();
   const rotateSecretMutation = useRotateRunnerSecret();
@@ -211,24 +233,24 @@ export default function RunnerDetailPage() {
                 <span className="detail-label">Last Seen:</span>
                 <span className="detail-value">{formatTimestamp(runner.last_seen_at)}</span>
               </div>
-              {runner.runner_metadata && (
+              {runnerMetadata && (
                 <>
                   <div className="detail-item">
                     <span className="detail-label">Platform:</span>
-                    <span className="detail-value">{runner.runner_metadata.platform}</span>
+                    <span className="detail-value">{runnerMetadata.platform ?? "Unknown"}</span>
                   </div>
                   <div className="detail-item">
                     <span className="detail-label">Architecture:</span>
-                    <span className="detail-value">{runner.runner_metadata.arch}</span>
+                    <span className="detail-value">{runnerMetadata.arch ?? "Unknown"}</span>
                   </div>
                   <div className="detail-item">
                     <span className="detail-label">Hostname:</span>
-                    <span className="detail-value">{runner.runner_metadata.hostname}</span>
+                    <span className="detail-value">{runnerMetadata.hostname ?? "Unknown"}</span>
                   </div>
                   <div className="detail-item">
                     <span className="detail-label">Docker Available:</span>
                     <span className="detail-value">
-                      {runner.runner_metadata.docker_available ? "Yes" : "No"}
+                      {runnerMetadata.dockerAvailable === undefined ? "Unknown" : runnerMetadata.dockerAvailable ? "Yes" : "No"}
                     </span>
                   </div>
                 </>

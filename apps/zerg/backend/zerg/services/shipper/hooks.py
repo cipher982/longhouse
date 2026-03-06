@@ -23,7 +23,7 @@ Two hooks are installed:
 Usage:
     from zerg.services.shipper.hooks import install_hooks
 
-    actions = install_hooks(url="https://david.longhouse.ai")
+    actions = install_hooks(url="https://api.longhouse.ai")
     for action in actions:
         print(action)
 """

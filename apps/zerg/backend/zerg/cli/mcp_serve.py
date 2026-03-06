@@ -47,7 +47,7 @@ def mcp_server(
 
     Examples:
         longhouse mcp-server
-        longhouse mcp-server --url https://david.longhouse.ai --transport http --port 9000
+        longhouse mcp-server --url https://api.longhouse.ai --transport http --port 9000
     """
     if not url:
         url = get_zerg_url() or "http://localhost:8080"
