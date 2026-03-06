@@ -87,7 +87,7 @@ import sys
 import time
 
 path = sys.argv[1]
-old = time.time() - (3 * 24 * 60 * 60)
+old = time.time() - (49 * 60 * 60)
 os.utime(path, (old, old))
 PY
 
