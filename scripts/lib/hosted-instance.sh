@@ -248,13 +248,14 @@ lh_hosted_authenticate_cookie_jar() {
   lh_hosted_accept_login_token "$token" "$cookie_jar" "$LH_INSTANCE_URL"
 }
 
-lh_hosted_reprovision() {
-  local instance_id="${1:-${LH_INSTANCE_ID:-}}"
+_lh_hosted_post_instance_action() {
+  local instance_id="$1"
+  local action="$2"
   local response_file=""
   local http_code=""
 
   if [[ -z "$instance_id" ]]; then
-    echo "Missing instance id for reprovision request" >&2
+    echo "Missing instance id for ${action} request" >&2
     return 1
   fi
 
@@ -264,14 +265,24 @@ lh_hosted_reprovision() {
   http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
     -X POST \
     -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
-    "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/reprovision")"
+    "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/${action}")"
 
   if [[ "$http_code" != "200" ]]; then
-    echo "Failed to reprovision instance ${instance_id} (HTTP ${http_code})" >&2
+    echo "Failed to ${action} instance ${instance_id} (HTTP ${http_code})" >&2
     cat "$response_file" >&2
     rm -f "$response_file"
     return 1
   fi
 
   rm -f "$response_file"
+}
+
+lh_hosted_reprovision() {
+  local instance_id="${1:-${LH_INSTANCE_ID:-}}"
+  _lh_hosted_post_instance_action "$instance_id" "reprovision"
+}
+
+lh_hosted_deprovision() {
+  local instance_id="${1:-${LH_INSTANCE_ID:-}}"
+  _lh_hosted_post_instance_action "$instance_id" "deprovision"
 }

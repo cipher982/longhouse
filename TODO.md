@@ -15,6 +15,20 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Tech Debt] Provision live script helper dedupe (size: 1)
+
+Status (2026-03-06): Done.
+
+**Goal:** Make `scripts/provision-e2e-live.sh` use the same hosted helper contract as smoke/E2E instead of rebuilding control-plane and SSO logic again.
+
+- [x] Source `scripts/lib/hosted-instance.sh` in the live provisioning script and normalize admin-token/control-plane URL setup
+- [x] Stop deriving the instance URL from `ROOT_DOMAIN` when the control-plane create response already returns a canonical `url`
+- [x] Reuse the hosted helper for login-token and deprovision actions
+
+Notes:
+- 2026-03-06: This is the last obvious hosted-ops drift script after smoke, prod E2E, CI env export, and qa-live were unified.
+- 2026-03-06: `provision-e2e-live.sh` now reads the canonical instance URL from the create response, normalizes `CONTROL_PLANE_ADMIN_TOKEN`, uses the hosted helper for login-token + accept-token + deprovision, and passed a full live create/health/SSO/cleanup run against production control plane.
+
 ## [QA/Test] Runner detail metadata typing cleanup (size: 1)
 
 Status (2026-03-06): Done.
