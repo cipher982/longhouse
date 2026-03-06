@@ -22,7 +22,7 @@ Status (2026-03-05): In progress (spec landed; implementation pending).
 **Goal:** Collapse hosted deploy/auth/smoke onto one control-plane-driven path for paid, dev, and CI instances while keeping OSS local simple and separate.
 
 - [x] Finalize canonical hosted target model (`subdomain` + computed control-plane URL)
-- [ ] Switch hosted smoke auth to `login-token -> /api/auth/accept-token`
+- [x] Switch hosted smoke auth to `login-token -> /api/auth/accept-token`
 - [ ] Replace hardcoded hosted URLs with control-plane target resolution
 - [ ] Unify deploy/verify helpers around reprovision + shared smoke entrypoint
 - [x] Define rollout, cleanup, and acceptance criteria in a spec
@@ -32,6 +32,8 @@ Notes:
 - Primary dev instance is `david010.longhouse.ai`; user instances are provisioner-managed, not Coolify-managed.
 - 2026-03-05: Draft redesign spec landed in `docs/specs/hosted-runtime-simplification.md` with scope, non-goals, phased rollout, and acceptance criteria.
 - 2026-03-05: Phase 1 landed: control-plane `InstanceOut` now includes canonical `url`, instance endpoints return it consistently, and `scripts/lib/hosted-instance.sh` centralizes hosted instance resolve/login-token/reprovision helpers.
+- 2026-03-05: Phase 2 landed: `scripts/smoke-prod.sh` now resolves hosted targets via control-plane metadata when `INSTANCE_SUBDOMAIN` is set and authenticates via `login-token -> /api/auth/accept-token`; live login-token validation passed against `david010`, but the new control-plane `url` field still needs deployment before helper-based resolution works against prod.
+
 
 ## [Product] Oikos multi-surface messaging architecture (web + Telegram + future channels) (size: 5)
 

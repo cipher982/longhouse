@@ -10,9 +10,11 @@
 #   ./scripts/smoke-prod.sh --wait    # wait 90s then test (post-deploy)
 #
 # Environment:
-#   SMOKE_TEST_SECRET  - Service account secret for authenticated tests
-#   SMOKE_TEST_EMAIL   - Email target for email tool test (default: david010@gmail.com)
-#   SMOKE_RUN_ID       - Optional run id for isolated smoke user/thread
+#   INSTANCE_SUBDOMAIN        - Hosted instance subdomain (defaults to david010 when control-plane auth is configured)
+#   CONTROL_PLANE_URL         - Control-plane base URL for hosted instance resolution
+#   CONTROL_PLANE_ADMIN_TOKEN - Control-plane admin token for hosted instance resolution/login-token
+#   FRONTEND_URL / API_URL    - Optional direct URL overrides when not resolving via control plane
+#   SMOKE_TEST_EMAIL          - Email target for email tool test (default: david010@gmail.com)
 
 set -e
 
@@ -25,14 +27,41 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     set +a
 fi
 
-# Configuration - split deployment
-FRONTEND_URL="${FRONTEND_URL:-https://david.longhouse.ai}"
-API_URL="${API_URL:-$FRONTEND_URL}"
+HOSTED_INSTANCE_HELPER="$ROOT_DIR/scripts/lib/hosted-instance.sh"
+if [[ -f "$HOSTED_INSTANCE_HELPER" ]]; then
+    # shellcheck disable=SC1090
+    . "$HOSTED_INSTANCE_HELPER"
+fi
+
+CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-${CP_URL:-https://control.longhouse.ai}}"
+CP_URL="$CONTROL_PLANE_URL"
+INSTANCE_SUBDOMAIN="${INSTANCE_SUBDOMAIN:-}"
+if [[ -z "$INSTANCE_SUBDOMAIN" && -z "${FRONTEND_URL:-}" && -n "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]]; then
+    INSTANCE_SUBDOMAIN="david010"
+fi
+
+if [[ -n "$INSTANCE_SUBDOMAIN" ]]; then
+    if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
+        echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
+        exit 1
+    fi
+    lh_hosted_resolve_instance "$INSTANCE_SUBDOMAIN"
+    FRONTEND_URL="${FRONTEND_URL:-$LH_INSTANCE_URL}"
+    API_URL="${API_URL:-$LH_INSTANCE_URL}"
+else
+    FRONTEND_URL="${FRONTEND_URL:-}"
+    API_URL="${API_URL:-$FRONTEND_URL}"
+fi
+
+if [[ -z "$FRONTEND_URL" || -z "$API_URL" ]]; then
+    echo "Set INSTANCE_SUBDOMAIN + CONTROL_PLANE_* or FRONTEND_URL/API_URL before running smoke-prod.sh" >&2
+    exit 1
+fi
+
 MARKETING_URL="${MARKETING_URL:-https://longhouse.ai}"
-CP_URL="${CP_URL:-https://control.longhouse.ai}"
 WAIT_SECS="${WAIT_SECS:-90}"
 SMOKE_TEST_EMAIL="${SMOKE_TEST_EMAIL:-david010@gmail.com}"
-SMOKE_RUN_ID="${SMOKE_RUN_ID:-}"
+INSTANCE_AUTH_ENABLED="unknown"
 
 # Counters
 PASSED=0
@@ -55,10 +84,6 @@ else
     # Fallback: no timeout (warn user)
     TIMEOUT_CMD=""
 fi
-
-gen_id() {
-    uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-$(date +%s)"
-}
 
 pass() { echo -e "  ${GREEN}✓${NC} $1"; PASSED=$((PASSED + 1)); }
 fail() { echo -e "  ${RED}✗${NC} $1"; FAILED=$((FAILED + 1)); }
@@ -452,7 +477,14 @@ test_caddy() {
 run_health_checks() {
     run_test test_http "API health" "$API_URL/api/health" "200"
     run_test test_json "Health status" "$API_URL/api/health" ".status" "healthy"
-    run_test test_json "Auth enabled" "$API_URL/api/health" ".checks.environment.auth_enabled" "true"
+    INSTANCE_AUTH_ENABLED=$(curl -s "$API_URL/api/health" 2>/dev/null | jq -r '.checks.environment.auth_enabled // "unknown"' 2>/dev/null)
+    if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
+        pass "Auth enabled (true)"
+    elif [[ "$INSTANCE_AUTH_ENABLED" == "false" ]]; then
+        pass "Auth enabled (false)"
+    else
+        warn "Auth enabled state unknown ($INSTANCE_AUTH_ENABLED)"
+    fi
     run_test test_json "DB connected" "$API_URL/api/health" ".checks.database.status" "pass"
 }
 
@@ -684,62 +716,60 @@ run_cors_checks
 section "Auth gates (unauthenticated)"
 run_auth_gate_checks
 
-# Authenticated tests (requires SMOKE_TEST_SECRET)
-if [[ -n "$SMOKE_TEST_SECRET" ]]; then
-    section "Authenticated"
+# Authenticated tests (hosted login-token flow when auth is enabled)
+if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
+    if [[ -z "$INSTANCE_SUBDOMAIN" ]]; then
+        echo ""
+        warn "Auth enabled but INSTANCE_SUBDOMAIN is not set - skipping authenticated + LLM tests"
+    else
+        section "Authenticated"
+        COOKIE_JAR=$(mktemp)
 
-    if [[ -z "$SMOKE_RUN_ID" ]]; then
-        SMOKE_RUN_ID="smoke-$(gen_id)"
-    fi
-    info "Smoke run id: $SMOKE_RUN_ID"
+        if lh_hosted_authenticate_cookie_jar "$INSTANCE_SUBDOMAIN" "$COOKIE_JAR"; then
+            pass "Hosted login token accepted"
+            run_test test_http_auth "Oikos bootstrap (authed)" "$API_URL/api/oikos/bootstrap" "200" "$COOKIE_JAR"
+            run_test test_http_auth "Oikos history (authed)" "$API_URL/api/oikos/history" "200" "$COOKIE_JAR"
+            run_test test_http_auth "Oikos runs (authed)" "$API_URL/api/oikos/runs?limit=1" "200" "$COOKIE_JAR"
+            run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
+            run_test test_http_auth "Sessions API (authed)" "$API_URL/api/agents/sessions?limit=1" "200" "$COOKIE_JAR"
 
-    COOKIE_JAR=$(mktemp)
-    LOGIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/api/auth/service-login" \
-        -H "X-Service-Secret: $SMOKE_TEST_SECRET" \
-        -H "X-Smoke-Run-Id: $SMOKE_RUN_ID" \
-        -c "$COOKIE_JAR")
-
-    if [[ "$LOGIN_STATUS" == "200" ]]; then
-        pass "Service login ($LOGIN_STATUS)"
-        run_test test_http_auth "Oikos bootstrap (authed)" "$API_URL/api/oikos/bootstrap" "200" "$COOKIE_JAR"
-        run_test test_http_auth "Oikos history (authed)" "$API_URL/api/oikos/history" "200" "$COOKIE_JAR"
-        run_test test_http_auth "Oikos runs (authed)" "$API_URL/api/oikos/runs?limit=1" "200" "$COOKIE_JAR"
-        run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
-        run_test test_http_auth "Sessions API (authed)" "$API_URL/api/agents/sessions?limit=1" "200" "$COOKIE_JAR"
-
-        if [[ $RUN_LLM -eq 1 ]]; then
-            llm_available=$(curl -s "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
-            if [[ "$llm_available" != "true" ]]; then
-                warn "LLM unavailable (llm_available=$llm_available) - skipping LLM tests"
+            if [[ $RUN_LLM -eq 1 ]]; then
+                llm_available=$(curl -s "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
+                if [[ "$llm_available" != "true" ]]; then
+                    warn "LLM unavailable (llm_available=$llm_available) - skipping LLM tests"
+                else
+                    section "LLM"
+                    run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
+                    run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
+                    run_test test_voice "Voice transcribe + TTS" "$COOKIE_JAR" 45
+                fi
             else
-                section "LLM"
-                run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
-                run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
-                run_test test_voice "Voice transcribe + TTS" "$COOKIE_JAR" 45
+                info "LLM test skipped (--no-llm)"
+            fi
+
+            if [[ "$MODE" == "full" ]]; then
+                section "Contacts CRUD"
+                run_contacts_crud "$COOKIE_JAR"
+
+                section "Email tool"
+                run_email_tool_test "$COOKIE_JAR"
+            else
+                info "Full tests skipped (pass --full to enable CRUD/email/infra)"
             fi
         else
-            info "LLM test skipped (--no-llm)"
+            fail "Hosted login token auth failed"
         fi
 
-        if [[ "$MODE" == "full" ]]; then
-            section "Contacts CRUD"
-            run_contacts_crud "$COOKIE_JAR"
-
-            section "Email tool"
-            run_email_tool_test "$COOKIE_JAR"
-        else
-            info "Full tests skipped (pass --full to enable CRUD/email/infra)"
-        fi
-
-    else
-        fail "Service login (got $LOGIN_STATUS)"
+        rm -f "$COOKIE_JAR"
     fi
-
-    rm -f "$COOKIE_JAR"
+elif [[ "$INSTANCE_AUTH_ENABLED" == "false" ]]; then
+    echo ""
+    info "Auth disabled on target - skipping authenticated + LLM tests"
 else
     echo ""
-    warn "SMOKE_TEST_SECRET not set - skipping authenticated + LLM tests"
+    warn "Auth state unknown - skipping authenticated + LLM tests"
 fi
+
 
 if [[ "$MODE" == "full" ]]; then
     section "Infrastructure"
