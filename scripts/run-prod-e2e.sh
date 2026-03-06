@@ -12,43 +12,23 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
 fi
 
 HOSTED_INSTANCE_HELPER="$ROOT_DIR/scripts/lib/hosted-instance.sh"
-if [[ -f "$HOSTED_INSTANCE_HELPER" ]]; then
-  # shellcheck disable=SC1090
-  . "$HOSTED_INSTANCE_HELPER"
+if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
+  echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
+  exit 1
 fi
 
-CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-${CP_URL:-https://control.longhouse.ai}}"
-CP_URL="$CONTROL_PLANE_URL"
+# shellcheck disable=SC1090
+. "$HOSTED_INSTANCE_HELPER"
+
 INSTANCE_SUBDOMAIN="${INSTANCE_SUBDOMAIN:-${E2E_INSTANCE_SUBDOMAIN:-}}"
-
-if [[ -z "$INSTANCE_SUBDOMAIN" && -z "${PLAYWRIGHT_BASE_URL:-${E2E_FRONTEND_URL:-}}" && -n "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]]; then
-  INSTANCE_SUBDOMAIN="david010"
-fi
-
 FRONTEND_URL="${PLAYWRIGHT_BASE_URL:-${E2E_FRONTEND_URL:-${FRONTEND_URL:-}}}"
 API_URL="${PLAYWRIGHT_API_BASE_URL:-${E2E_API_URL:-${API_URL:-$FRONTEND_URL}}}"
 
-if [[ -n "$INSTANCE_SUBDOMAIN" ]]; then
-  if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
-    echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
-    exit 1
-  fi
-
-  lh_hosted_resolve_instance "$INSTANCE_SUBDOMAIN"
-  FRONTEND_URL="${PLAYWRIGHT_BASE_URL:-${E2E_FRONTEND_URL:-${FRONTEND_URL:-$LH_INSTANCE_URL}}}"
-  API_URL="${PLAYWRIGHT_API_BASE_URL:-${E2E_API_URL:-${API_URL:-$LH_INSTANCE_URL}}}"
-  SMOKE_LOGIN_TOKEN="${SMOKE_LOGIN_TOKEN:-$(lh_hosted_issue_login_token "$LH_INSTANCE_ID")}"
-fi
-
-if [[ -z "$FRONTEND_URL" || -z "$API_URL" ]]; then
-  echo "Set INSTANCE_SUBDOMAIN + CONTROL_PLANE_* or PLAYWRIGHT_BASE_URL/PLAYWRIGHT_API_BASE_URL before running prod E2E." >&2
-  exit 1
-fi
-
-if [[ -z "${SMOKE_LOGIN_TOKEN:-}" ]]; then
-  echo "Set SMOKE_LOGIN_TOKEN or INSTANCE_SUBDOMAIN + CONTROL_PLANE_* before running prod E2E." >&2
-  exit 1
-fi
+lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" "$FRONTEND_URL" "$API_URL" "david010"
+FRONTEND_URL="$LH_TARGET_FRONTEND_URL"
+API_URL="$LH_TARGET_API_URL"
+INSTANCE_SUBDOMAIN="${LH_TARGET_SUBDOMAIN:-$INSTANCE_SUBDOMAIN}"
+SMOKE_LOGIN_TOKEN="${SMOKE_LOGIN_TOKEN:-$(lh_hosted_resolved_login_token "$INSTANCE_SUBDOMAIN")}"
 
 export PLAYWRIGHT_BASE_URL="$FRONTEND_URL"
 export PLAYWRIGHT_API_BASE_URL="$API_URL"

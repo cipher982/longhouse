@@ -15,6 +15,19 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Tech Debt] Hosted test target helper dedupe (size: 1)
+
+Status (2026-03-06): Done.
+
+**Goal:** Stop duplicating hosted target resolution and login-token setup across smoke, prod E2E, and CI helper scripts.
+
+- [x] Move the shared control-plane URL + target resolution + login-token bootstrap into `scripts/lib/hosted-instance.sh`
+- [x] Make `smoke-prod.sh`, `run-prod-e2e.sh`, and `export-hosted-instance-env.sh` use the shared helper
+
+Notes:
+- 2026-03-06: The same default-subdomain and URL/bootstrap logic had drifted across three scripts, which makes future auth changes land in too many places.
+- 2026-03-06: `lh_hosted_prepare_target()` and `lh_hosted_resolved_login_token()` now own that bootstrap path. Validation passed through `./scripts/ci/export-hosted-instance-env.sh david010`, `make qa-live`, and `make verify-prod`.
+
 ## [QA/Test] Prod verify harness cleanup (size: 1)
 
 Status (2026-03-06): Done.

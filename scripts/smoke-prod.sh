@@ -28,35 +28,22 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
 fi
 
 HOSTED_INSTANCE_HELPER="$ROOT_DIR/scripts/lib/hosted-instance.sh"
-if [[ -f "$HOSTED_INSTANCE_HELPER" ]]; then
-    # shellcheck disable=SC1090
-    . "$HOSTED_INSTANCE_HELPER"
-fi
-
-CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-${CP_URL:-https://control.longhouse.ai}}"
-CP_URL="$CONTROL_PLANE_URL"
-INSTANCE_SUBDOMAIN="${INSTANCE_SUBDOMAIN:-}"
-if [[ -z "$INSTANCE_SUBDOMAIN" && -z "${FRONTEND_URL:-}" && -n "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]]; then
-    INSTANCE_SUBDOMAIN="david010"
-fi
-
-if [[ -n "$INSTANCE_SUBDOMAIN" ]]; then
-    if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
-        echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
-        exit 1
-    fi
-    lh_hosted_resolve_instance "$INSTANCE_SUBDOMAIN"
-    FRONTEND_URL="${FRONTEND_URL:-$LH_INSTANCE_URL}"
-    API_URL="${API_URL:-$LH_INSTANCE_URL}"
-else
-    FRONTEND_URL="${FRONTEND_URL:-}"
-    API_URL="${API_URL:-$FRONTEND_URL}"
-fi
-
-if [[ -z "$FRONTEND_URL" || -z "$API_URL" ]]; then
-    echo "Set INSTANCE_SUBDOMAIN + CONTROL_PLANE_* or FRONTEND_URL/API_URL before running smoke-prod.sh" >&2
+if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
+    echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
     exit 1
 fi
+
+# shellcheck disable=SC1090
+. "$HOSTED_INSTANCE_HELPER"
+
+INSTANCE_SUBDOMAIN="${INSTANCE_SUBDOMAIN:-}"
+FRONTEND_URL="${FRONTEND_URL:-}"
+API_URL="${API_URL:-$FRONTEND_URL}"
+
+lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" "$FRONTEND_URL" "$API_URL" "david010"
+FRONTEND_URL="$LH_TARGET_FRONTEND_URL"
+API_URL="$LH_TARGET_API_URL"
+INSTANCE_SUBDOMAIN="${LH_TARGET_SUBDOMAIN:-$INSTANCE_SUBDOMAIN}"
 
 MARKETING_URL="${MARKETING_URL:-https://longhouse.ai}"
 WAIT_SECS="${WAIT_SECS:-90}"

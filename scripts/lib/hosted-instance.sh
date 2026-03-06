@@ -103,6 +103,64 @@ lh_hosted_resolve_instance() {
   export LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN
 }
 
+lh_hosted_default_control_plane_url() {
+  CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-${CP_URL:-https://control.longhouse.ai}}"
+  CP_URL="$CONTROL_PLANE_URL"
+  export CONTROL_PLANE_URL CP_URL
+}
+
+lh_hosted_prepare_target() {
+  local subdomain="${1:-}"
+  local frontend_url="${2:-}"
+  local api_url="${3:-}"
+  local default_subdomain="${4:-}"
+
+  lh_hosted_default_control_plane_url
+
+  if [[ -z "$subdomain" && -z "$frontend_url" && -n "${CONTROL_PLANE_ADMIN_TOKEN:-}" && -n "$default_subdomain" ]]; then
+    subdomain="$default_subdomain"
+  fi
+
+  if [[ -n "$subdomain" ]]; then
+    lh_hosted_resolve_instance "$subdomain" || return 1
+    frontend_url="${frontend_url:-$LH_INSTANCE_URL}"
+    api_url="${api_url:-${frontend_url}}"
+    subdomain="$LH_INSTANCE_SUBDOMAIN"
+  else
+    api_url="${api_url:-$frontend_url}"
+  fi
+
+  if [[ -z "$frontend_url" || -z "$api_url" ]]; then
+    echo "Set INSTANCE_SUBDOMAIN + CONTROL_PLANE_* or FRONTEND_URL/API_URL before preparing hosted target." >&2
+    return 1
+  fi
+
+  LH_TARGET_SUBDOMAIN="$subdomain"
+  LH_TARGET_FRONTEND_URL="$frontend_url"
+  LH_TARGET_API_URL="$api_url"
+  export LH_TARGET_SUBDOMAIN LH_TARGET_FRONTEND_URL LH_TARGET_API_URL
+}
+
+lh_hosted_resolved_login_token() {
+  local subdomain="${1:-${LH_TARGET_SUBDOMAIN:-${LH_INSTANCE_SUBDOMAIN:-}}}"
+
+  if [[ -n "${SMOKE_LOGIN_TOKEN:-}" ]]; then
+    printf '%s\n' "$SMOKE_LOGIN_TOKEN"
+    return 0
+  fi
+
+  if [[ -z "$subdomain" ]]; then
+    echo "Set SMOKE_LOGIN_TOKEN or INSTANCE_SUBDOMAIN + CONTROL_PLANE_* before requesting a hosted login token." >&2
+    return 1
+  fi
+
+  if [[ -z "${LH_INSTANCE_ID:-}" || "${LH_INSTANCE_SUBDOMAIN:-}" != "$subdomain" ]]; then
+    lh_hosted_resolve_instance "$subdomain" || return 1
+  fi
+
+  lh_hosted_issue_login_token "$LH_INSTANCE_ID"
+}
+
 _lh_hosted_parse_token() {
   local response_file="$1"
   local python_bin
