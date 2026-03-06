@@ -15,6 +15,20 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Tech Debt] Startup recovery should survive malformed legacy run UUIDs (size: 1)
+
+Status (2026-03-06): Done.
+
+**Goal:** Instance restart should recover orphaned runs even if legacy rows contain malformed UUID-like sentinel strings in unrelated columns.
+
+- [x] Narrow startup run recovery to the fields it actually needs
+- [x] Add a regression test for malformed `assistant_message_id` rows discovered on `david010`
+
+Notes:
+- 2026-03-06: Discovered during the zerg tenant-data bind-mount migration. `david010` had two legacy `runs.assistant_message_id` values (`live-voice-*`, `live-web-*`) that crashed startup recovery via eager ORM GUID parsing.
+- 2026-03-06: Fixed in app code by querying only the scalar run fields needed for startup recovery, enforcing UUID-only `message_id` values before `run_oikos()` persists `assistant_message_id`, and updating the live voice SSE test to use a real UUID.
+
+
 ## [Infra] Hosted runtime simplification (control plane + auth + smoke) (size: 4)
 
 Status (2026-03-06): Done.
@@ -370,7 +384,7 @@ Notes (2026-03-03):
 - Dead-man switch remains via `zerg-ops monitor` and systemd monitor timer.
 - 2026-03-05: Tightened local retention to 5 snapshots, added backup-volume usage warnings at 80%, and auto-pruned stale unmanaged raw `longhouse*.db` dumps after 2 days so manual prod backups cannot quietly fill `/var/app-data`.
 - 2026-03-06: Moved live Longhouse tenant data off root on zerg by bind-mounting `/var/app-data/longhouse` onto `/var/lib/docker/data/longhouse`; root usage dropped from 69% to 18%, app-data now carries the mutable instance state.
-- 2026-03-06: Restart during the storage migration exposed two legacy `runs.assistant_message_id` sentinel strings in `david010` (`live-voice-*`, `live-web-*`); repaired rows 25 and 26 in place so startup recovery can boot. If the pattern reappears, add a code-side sanitizer in fiche run recovery.
+- 2026-03-06: Restart during the storage migration exposed two legacy `runs.assistant_message_id` sentinel strings in `david010` (`live-voice-*`, `live-web-*`); repaired rows 25 and 26 in place on the host, then fixed app code so startup recovery no longer ORM-loads malformed GUID columns and Oikos now rejects non-UUID assistant message IDs at ingress.
 
 ---
 

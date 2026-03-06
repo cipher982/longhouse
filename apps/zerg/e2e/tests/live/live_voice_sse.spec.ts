@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { test, expect } from './fixtures';
 
 function buildWavBuffer(durationMs = 120, sampleRate = 8000): Buffer {
@@ -31,7 +32,7 @@ test.describe('Prod Live Voice SSE', () => {
   test('voice transcribe + chat SSE uses message_id (TTS audio as input)', async ({ request }) => {
     test.setTimeout(120_000);
 
-    const messageId = `live-voice-${Date.now()}`;
+    const messageId = randomUUID();
 
     // Use TTS to generate real speech audio for reliable STT in prod.
     const ttsResponse = await request.post('/api/oikos/voice/tts', {
