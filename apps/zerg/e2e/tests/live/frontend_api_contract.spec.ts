@@ -27,7 +27,7 @@ test.describe('Frontend API Contract', () => {
     await page.waitForLoadState('networkidle');
 
     // LLM Providers section should render
-    await expect(page.getByText('LLM Providers')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole('heading', { name: 'LLM Providers' })).toBeVisible({ timeout: 10_000 });
 
     // No API errors should have occurred
     expect(apiErrors, `API errors on settings page: ${apiErrors.join(', ')}`).toHaveLength(0);

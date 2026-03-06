@@ -15,6 +15,19 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [QA/Test] Prod verify harness cleanup (size: 1)
+
+Status (2026-03-06): Done.
+
+**Goal:** Keep `make verify-prod` honest without tripping over local-only UUID casing or brittle text selectors.
+
+- [x] Canonicalize smoke-test UUID generation so macOS `uuidgen` matches API UUID serialization
+- [x] Tighten the live settings contract test selector so it asserts the heading instead of any matching text blob
+
+Notes:
+- 2026-03-06: `make verify-prod` passed smoke but the live browser phase failed on a strict-mode selector collision, not an actual API contract break.
+- 2026-03-06: Fixed by centralizing lowercase UUID generation in `scripts/smoke-prod.sh` and switching the settings-page contract check to a role-based heading locator. `make verify-prod` then passed end to end (36 smoke + 21 live browser checks).
+
 ## [Tech Debt] Hosted follow-up simplifications (size: 4)
 
 Status (2026-03-06): Done.
