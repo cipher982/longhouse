@@ -146,6 +146,30 @@ df_use_pct() {
   fi
 }
 
+list_stale_raw_backups() {
+  local instance_dir="$1"
+  python3 - "$instance_dir" "$RAW_DB_KEEP_DAYS" <<'PY'
+import os
+import sys
+import time
+
+instance_dir = sys.argv[1]
+keep_days = int(sys.argv[2])
+cutoff = time.time() - (keep_days * 24 * 60 * 60)
+
+for root, _, files in os.walk(instance_dir):
+    for name in sorted(files):
+        if not name.startswith("longhouse") or not name.endswith(".db"):
+            continue
+        path = os.path.join(root, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                print(path)
+        except FileNotFoundError:
+            continue
+PY
+}
+
 sha256_file() {
   local path="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -771,7 +795,7 @@ cleanup_unmanaged_raw_backups() {
       rm -f "$file"
       removed=$((removed + 1))
       log "deleted unmanaged raw backup $file"
-    done < <(find "$instance_dir" -type f -name 'longhouse*.db' -mtime +$RAW_DB_KEEP_DAYS -print 2>/dev/null)
+    done < <(list_stale_raw_backups "$instance_dir")
   done < <(discover_backup_dirs)
 
   if (( removed > 0 )); then
