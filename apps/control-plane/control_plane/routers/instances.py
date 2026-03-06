@@ -192,6 +192,37 @@ def _build_migration_status(inst: Instance) -> MigrationStatusOut:
     )
 
 
+def _recreate_instance(
+    inst: Instance,
+    user: User,
+    provisioner: Provisioner,
+    *,
+    password: str | None = None,
+) -> Any:
+    provisioner.deprovision_instance(inst.container_name)
+    try:
+        custom_env = parse_custom_env_json(inst.custom_env_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    result = provisioner.provision_instance(
+        inst.subdomain,
+        owner_email=user.email,
+        password=password,
+        custom_env=custom_env,
+        data_path=inst.data_path,
+    )
+    inst.container_name = result.container_name
+    inst.data_path = result.data_path
+    inst.status = "provisioning"
+    inst.last_health_at = None
+    if result.password_hash:
+        inst.password_hash = result.password_hash
+    if result.image:
+        inst.current_image = result.image
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -453,24 +484,8 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
     inst.password_hash = password_hash
     db.commit()
 
-    # Update running container env — requires deprovision + reprovision
     provisioner = Provisioner()
-    provisioner.deprovision_instance(inst.container_name)
-    try:
-        custom_env = parse_custom_env_json(inst.custom_env_json)
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    result = provisioner.provision_instance(
-        inst.subdomain,
-        owner_email=user.email,
-        password=password,
-        custom_env=custom_env,
-        data_path=inst.data_path,
-    )
-    inst.container_name = result.container_name
-    inst.data_path = result.data_path
-    inst.status = "provisioning"
-    inst.last_health_at = None
+    result = _recreate_instance(inst, user, provisioner, password=password)
     db.commit()
     db.refresh(inst)
 
@@ -508,27 +523,7 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         provisioner.run_migration_preflight(inst.subdomain, data_path=inst.data_path)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    provisioner.deprovision_instance(inst.container_name)
-    try:
-        custom_env = parse_custom_env_json(inst.custom_env_json)
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    result = provisioner.provision_instance(
-        inst.subdomain,
-        owner_email=user.email,
-        custom_env=custom_env,
-        data_path=inst.data_path,
-    )
-
-    inst.status = "provisioning"
-    inst.last_health_at = None
-    inst.container_name = result.container_name
-    inst.data_path = result.data_path
-    if result.password_hash:
-        inst.password_hash = result.password_hash
-    # Track image version
-    if result.image:
-        inst.current_image = result.image
+    result = _recreate_instance(inst, user, provisioner)
     db.commit()
     db.refresh(inst)
 

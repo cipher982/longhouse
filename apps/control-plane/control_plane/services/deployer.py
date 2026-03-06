@@ -32,6 +32,28 @@ def _chunked(items: list, size: int):
         yield items[i : i + size]
 
 
+def _provision_deploy_instance(
+    inst: Instance,
+    user: User,
+    provisioner: Provisioner,
+    *,
+    image: str,
+    skip_pull: bool = False,
+) -> None:
+    provisioner.deprovision_instance(inst.container_name)
+    custom_env = parse_custom_env_json(inst.custom_env_json)
+    result = provisioner.provision_instance(
+        inst.subdomain,
+        owner_email=user.email,
+        custom_env=custom_env,
+        data_path=inst.data_path,
+        image=image,
+        skip_pull=skip_pull,
+    )
+    inst.container_name = result.container_name
+    inst.data_path = result.data_path
+
+
 def _deploy_single_instance(
     inst: Instance,
     user: User,
@@ -46,19 +68,8 @@ def _deploy_single_instance(
     db.commit()
 
     try:
-        provisioner.deprovision_instance(inst.container_name)
-        custom_env = parse_custom_env_json(inst.custom_env_json)
         # skip_pull=True: batch deploy pre-pulls once to avoid tag drift between instances
-        result = provisioner.provision_instance(
-            inst.subdomain,
-            owner_email=user.email,
-            custom_env=custom_env,
-            data_path=inst.data_path,
-            image=deploy.image,
-            skip_pull=True,
-        )
-        inst.container_name = result.container_name
-        inst.data_path = result.data_path
+        _provision_deploy_instance(inst, user, provisioner, image=deploy.image, skip_pull=True)
 
         # wait_for_health raises RuntimeError on timeout (never returns False)
         provisioner.wait_for_health(inst.subdomain, timeout=120)
@@ -81,17 +92,7 @@ def _deploy_single_instance(
         # Attempt rollback to last known good image
         if inst.last_healthy_image and inst.last_healthy_image != deploy.image:
             try:
-                provisioner.deprovision_instance(inst.container_name)
-                custom_env = parse_custom_env_json(inst.custom_env_json)
-                result = provisioner.provision_instance(
-                    inst.subdomain,
-                    owner_email=user.email,
-                    custom_env=custom_env,
-                    data_path=inst.data_path,
-                    image=inst.last_healthy_image,
-                )
-                inst.container_name = result.container_name
-                inst.data_path = result.data_path
+                _provision_deploy_instance(inst, user, provisioner, image=inst.last_healthy_image)
                 provisioner.wait_for_health(inst.subdomain, timeout=120)
                 inst.deploy_state = "rolled_back"
                 inst.current_image = inst.last_healthy_image
