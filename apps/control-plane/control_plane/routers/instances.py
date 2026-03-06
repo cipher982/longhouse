@@ -71,8 +71,12 @@ def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
     return (signing_input + b"." + sig_b64).decode()
 
 
+def _instance_url(subdomain: str) -> str:
+    return f"https://{subdomain}.{settings.root_domain}"
+
+
 def _instance_health_url(inst: Instance) -> str:
-    return f"https://{inst.subdomain}.{settings.root_domain}/api/health"
+    return f"{_instance_url(inst.subdomain)}/api/health"
 
 
 def _probe_instance_health(inst: Instance, timeout_seconds: float = 5.0) -> tuple[bool, str | None]:
@@ -236,6 +240,7 @@ def my_instance(request: Request, db: Session = Depends(get_db)):
         id=inst.id,
         email=user.email,
         subdomain=inst.subdomain,
+        url=_instance_url(inst.subdomain),
         container_name=inst.container_name,
         status=inst.status,
         created_at=inst.created_at,
@@ -293,6 +298,7 @@ def list_instances(db: Session = Depends(get_db)):
                 id=inst.id,
                 email=user.email,
                 subdomain=inst.subdomain,
+                url=_instance_url(inst.subdomain),
                 container_name=inst.container_name,
                 status=inst.status,
                 created_at=inst.created_at,
@@ -326,6 +332,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
             id=existing.id,
             email=email,
             subdomain=existing.subdomain,
+            url=_instance_url(existing.subdomain),
             container_name=existing.container_name,
             status=existing.status,
             created_at=existing.created_at,
@@ -352,6 +359,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
         id=instance.id,
         email=email,
         subdomain=instance.subdomain,
+        url=_instance_url(instance.subdomain),
         container_name=instance.container_name,
         status=instance.status,
         password=result.password,  # Shown once at creation
@@ -375,6 +383,7 @@ def get_instance(instance_id: int, db: Session = Depends(get_db)):
         id=inst.id,
         email=user.email,
         subdomain=inst.subdomain,
+        url=_instance_url(inst.subdomain),
         container_name=inst.container_name,
         status=inst.status,
         created_at=inst.created_at,
@@ -467,6 +476,7 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
         id=inst.id,
         email=user.email,
         subdomain=inst.subdomain,
+        url=_instance_url(inst.subdomain),
         container_name=inst.container_name,
         status=inst.status,
         password=password,  # Shown once
@@ -522,6 +532,7 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         id=inst.id,
         email=user.email,
         subdomain=inst.subdomain,
+        url=_instance_url(inst.subdomain),
         container_name=inst.container_name,
         status=inst.status,
         password=result.password,  # New password on reprovision

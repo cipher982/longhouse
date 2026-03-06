@@ -132,6 +132,10 @@ def _login_cookie(user: User) -> dict[str, str]:
     return {"cp_session": token}
 
 
+def _expected_instance_url(subdomain: str) -> str:
+    return f"https://{subdomain}.{settings.root_domain}"
+
+
 def _mock_provisioner():
     """Create a mock Provisioner that simulates successful provisioning."""
     prov = MagicMock(spec=Provisioner)
@@ -339,6 +343,7 @@ class TestInstancesAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["subdomain"] == "newuser"
+        assert data["url"] == _expected_instance_url("newuser")
         assert data["status"] == "provisioning"
         assert data["password"] == "generated-pass-123"
         assert data["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
@@ -356,6 +361,7 @@ class TestInstancesAPI:
         )
         assert resp.status_code == 200
         assert resp.json()["subdomain"] == "existing"
+        assert resp.json()["url"] == _expected_instance_url("existing")
         assert resp.json()["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
         MockProv.assert_not_called()
 
@@ -375,6 +381,7 @@ class TestInstancesAPI:
         data = resp.json()
         assert len(data["instances"]) == 1
         assert data["instances"][0]["email"] == "owner@test.com"
+        assert data["instances"][0]["url"] == _expected_instance_url("inst1")
         assert data["instances"][0]["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
 
     @patch("control_plane.routers.instances.httpx")
@@ -420,6 +427,7 @@ class TestInstancesAPI:
         resp = client.get(f"/api/instances/{inst.id}", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         assert resp.json()["subdomain"] == "inst1"
+        assert resp.json()["url"] == _expected_instance_url("inst1")
         assert "migration" in resp.json()
 
     def test_get_instance_not_found(self, client, db_session):
@@ -637,6 +645,17 @@ class TestInstancesAPI:
 
         _, call_kwargs = prov.provision_instance.call_args
         assert call_kwargs["custom_env"] == {"TELEGRAM_BOT_TOKEN": "tg-secret"}
+
+
+    def test_my_instance(self, client, db_session):
+        user = _make_user(db_session)
+        _make_instance(db_session, user, subdomain="inst1")
+        client.cookies.update(_login_cookie(user))
+
+        resp = client.get("/api/instances/me")
+        assert resp.status_code == 200
+        assert resp.json()["subdomain"] == "inst1"
+        assert resp.json()["url"] == _expected_instance_url("inst1")
 
 
 class TestInstanceHealthCheck:

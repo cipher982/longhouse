@@ -23,6 +23,7 @@ class InstanceOut(BaseModel):
     id: int
     email: str
     subdomain: str
+    url: str
     container_name: str
     status: str
     password: str | None = None  # Only set on create/regenerate (shown once)
