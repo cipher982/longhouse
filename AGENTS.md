@@ -231,7 +231,7 @@ Bun-compiled binary for command execution on user infrastructure. Connects via W
 Source of truth for product surface and priorities: `VISION.md` section **"Product Surface (2026-02 Decision)"**.
 
 Do not maintain a second feature catalog in this file. Keep AGENTS focused on execution rules and link to canonical docs:
-- Oikos tool contract: `apps/zerg/backend/docs/supervisor_tools.md`
+- Oikos tool contract lives in code under `apps/zerg/backend/zerg/tools/builtin/oikos_tools.py` and `apps/zerg/backend/zerg/services/`
 - Harness/runtime contracts live in code under `apps/zerg/backend/zerg/services/` and `apps/zerg/backend/zerg/tools/`
 - Runner daemon docs: `apps/runner/README.md`
 - Control plane docs: `apps/control-plane/README.md`
@@ -261,7 +261,7 @@ Two separate things exist — don't conflate or rebuild:
 - if you are manually patching things for coolify you likely did something wrong. Remember infra-as-code.
 
 ## CI Test Runner
-- Run: `scripts/ci/run-on-ci.sh <suite> [ref] [--test <path>]` (details: `scripts/ci/README.md`).
+- Run: `scripts/ci/run-on-ci.sh <suite> [ref] [--test <path>]` and use `--help` for the allowlisted suites.
 
 ## Learnings (High-Signal Only)
 

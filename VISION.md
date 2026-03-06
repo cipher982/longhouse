@@ -367,7 +367,7 @@ When Timeline is empty, show a 3-step path:
 
 This is not a modal or tour - it's inline content that disappears once sessions exist.
 
-**Current State (as of 2026-02-11):** Auto-seed on first run and guided empty state with "Load demo sessions" CTA are implemented. `longhouse serve --demo` / `--demo-fresh` also supported. Multi-CLI detection (Claude Code, Codex CLI, Gemini CLI) in onboard wizard with guidance when no CLI is found. Install guide docs at `docs/install-guide.md`.
+**Current State (as of 2026-02-11):** Auto-seed on first run and guided empty state with "Load demo sessions" CTA are implemented. `longhouse serve --demo` / `--demo-fresh` also supported. Multi-CLI detection (Claude Code, Codex CLI, Gemini CLI) in onboard wizard with guidance when no CLI is found. README now carries the canonical install and onboarding guidance.
 
 **Docs-as-source validation (target, not implemented yet):**
 README will contain an `onboarding-contract` JSON block that CI executes:
@@ -389,7 +389,7 @@ If the README drifts from reality, CI should fail. No hidden env flags — every
   - Multi-CLI detection: discovers Claude Code, Codex CLI, and Gemini CLI; shows guidance with alternative CLI links when none found
   - No 200-line `.env` edits
   - Graceful degradation: UI works without API keys; chat unlocks later
-- **Install guide:** `docs/install-guide.md` — canonical install path, onboarding wizard steps, connect flow, troubleshooting, manual install
+- **README:** canonical install path, onboarding wizard flow, troubleshooting, and manual install entry points
 - **Goal:** time-to-value < 2 minutes and a visible session in the Timeline
 
 ---

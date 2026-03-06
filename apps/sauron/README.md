@@ -1,29 +1,5 @@
 # Sauron
 
-Minimal APScheduler service for running scheduled jobs via `zerg.jobs`.
-Deployed on clifford via Coolify.
+Legacy scheduler package placeholder.
 
-## Local run
-
-```bash
-cd apps/sauron
-uv sync
-export JOB_QUEUE_DB_URL=sqlite:///./sauron-queue.db
-export JOBS_GIT_REPO_URL=https://github.com/cipher982/sauron-jobs.git
-export JOBS_GIT_TOKEN=ghp_...
-uv run python -m sauron.main
-```
-
-## API
-
-- `GET /health`
-- `GET /status`
-- `GET /jobs`
-- `POST /jobs/{id}/trigger`
-- `POST /sync`
-
-## Build (from repo root)
-
-```bash
-docker build -f apps/sauron/Dockerfile -t sauron:latest ../..
-```
+This file stays minimal because `apps/sauron/pyproject.toml` and `apps/sauron/Dockerfile` require a README at build time. Current operational guidance lives in `AGENTS.md`; current behavior lives in the code under `apps/sauron/` and `zerg/jobs/`.
