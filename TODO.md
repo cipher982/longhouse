@@ -17,17 +17,19 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
-Status (2026-03-06): In progress.
+Status (2026-03-06): Done.
 
 **Goal:** Cut the repo doc surface by about 80% so only canonical docs remain in-tree.
 
-- [ ] Commit a retention policy spec with explicit keep/delete rules
-- [ ] Delete transient and historical docs (handoffs, plans, reports, completed specs)
-- [ ] Delete duplicated operator docs after folding any tiny must-keep guidance into canonical docs
-- [ ] Verify the final markdown set is roughly 8-10 files and references are updated
+- [x] Commit a retention policy spec with explicit keep/delete rules
+- [x] Delete transient and historical docs (handoffs, plans, reports, completed specs)
+- [x] Delete duplicated operator docs after folding any tiny must-keep guidance into canonical docs
+- [x] Verify the final markdown set is roughly 8-10 files and references are updated
 
 Notes:
-- 2026-03-06: Source of truth after this prune should be README/VISION/AGENTS/TODO plus a tiny set of app-contract docs. Git history is the archive.
+- 2026-03-06: Source of truth after this prune is `README.md`, `VISION.md`, `AGENTS.md`, `TODO.md`, `apps/control-plane/README.md`, `apps/control-plane/API.md`, `apps/runner/README.md`, `apps/zerg/backend/README.md`, plus the minimal build-required `apps/sauron/README.md`.
+- 2026-03-06: Bundled `SKILL.md` files under `apps/zerg/backend/zerg/skills/bundled/` were intentionally kept; they are runtime assets, not repository docs.
+- 2026-03-06: Git history is the archive. Completed specs, plans, handoffs, and reports were removed instead of archived.
 
 ## [Tech Debt] Provision live script helper dedupe (size: 1)
 
