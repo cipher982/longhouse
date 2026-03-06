@@ -175,7 +175,7 @@ IMPORTANT: Output ONLY valid JSON. No markdown, no explanation, just the JSON ob
         return None
     except FileNotFoundError:
         print(
-            "ERROR: hatch not found. Install with: uv tool install -e ~/git/zerg/packages/hatch-agent"
+            "ERROR: hatch not found. Install with: uv tool install -e ~/git/hatch"
         )
         return None
 

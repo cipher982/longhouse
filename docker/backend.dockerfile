@@ -14,14 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 # uv environment variables for optimization
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-# Set work directory - mirror repo structure for relative path deps
+# Set work directory for dependency caching
 WORKDIR /repo/apps/zerg/backend
 
 # Cache dependencies separately from app code for better cache hits
-# Copy pyproject.toml to correct path so relative deps resolve
 COPY apps/zerg/backend/uv.lock apps/zerg/backend/pyproject.toml ./
-# Copy hatch-agent local package (pyproject.toml references ../../../packages/hatch-agent)
-COPY packages/hatch-agent /repo/packages/hatch-agent
 RUN uv sync --frozen --no-install-project --no-dev
 
 # Builder stage - application with dependencies
@@ -40,9 +37,6 @@ WORKDIR /repo/apps/zerg/backend
 
 # Copy virtual environment from dependencies stage
 COPY --from=dependencies /repo/apps/zerg/backend/.venv ./.venv
-
-# Copy hatch-agent for uv sync
-COPY --from=dependencies /repo/packages /repo/packages
 
 # Copy application source (from repo root context)
 COPY apps/zerg/backend/ ./
