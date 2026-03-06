@@ -652,7 +652,7 @@ validate-makefile: ## Verify .PHONY targets match documented targets
 # ---------------------------------------------------------------------------
 # Production Verification
 # ---------------------------------------------------------------------------
-verify-prod: ## Full prod validation: API + browser tests (~80s, requires SMOKE_TEST_SECRET)
+verify-prod: ## Full prod validation: API + browser tests (~80s, requires hosted auth env)
 	@echo "🔍 Verifying production..."
 	@./scripts/smoke-prod.sh --wait --full
 	@echo ""

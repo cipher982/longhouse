@@ -1,22 +1,15 @@
 /**
- * Cross-Origin Authentication Tests - Live Suite
+ * Hosted session authentication smoke - Live suite.
  *
- * These tests verify cookie-based authentication works across different domains
- * (split deployment: longhouse.ai for frontend, api.longhouse.ai for backend).
+ * Verifies the hosted login-token -> accept-token flow sets a usable session cookie
+ * and that the browser carries that cookie to the hosted API.
  *
- * REQUIRES: SMOKE_TEST_SECRET environment variable set
- *
- * Cookie requirements for split deployment:
- * - SameSite=None: Required for cross-origin requests
- * - Secure: Required when SameSite=None
- * - Domain=.longhouse.ai: Optional, enables subdomain sharing
- *
- * Live suite: requires prod-like domains + SMOKE_TEST_SECRET
+ * REQUIRES: SMOKE_LOGIN_TOKEN environment variable set.
  */
 
 import { test, expect } from './fixtures';
 
-function normalizeSecret(value: string | undefined): string | undefined {
+function normalizeToken(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
   if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
@@ -25,134 +18,102 @@ function normalizeSecret(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-// These tests only run when SMOKE_TEST_SECRET is configured
-// Skip entire describe block if not in production smoke test mode
-const secret = normalizeSecret(process.env.SMOKE_TEST_SECRET);
-const shouldRun = !!secret;
+const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
+const shouldRun = !!loginToken;
 
-test.describe('Cross-Origin Authentication - Live', () => {
-  test.skip(!shouldRun, 'SMOKE_TEST_SECRET required for cross-origin tests');
+test.describe('Hosted Session Authentication - Live', () => {
+  test.skip(!shouldRun, 'SMOKE_LOGIN_TOKEN required for hosted auth tests');
 
-  test('service login sets cookie with correct attributes', async ({ request }) => {
-    const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_BACKEND_URL || '';
+  test('accept-token sets cookie with expected attributes', async ({ playwright }) => {
+    const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || '';
     test.skip(!apiUrl, 'API_URL required');
 
-    // 1. Login via service account
-    const loginRes = await request.post(`${apiUrl}/api/auth/service-login`, {
-      headers: {
-        'X-Service-Secret': secret!,
-      },
+    const authRequest = await playwright.request.newContext({
+      baseURL: apiUrl,
+      timeout: 30_000,
     });
-    expect(loginRes.status()).toBe(200);
 
-    // 2. Verify cookie attributes (per Codex review)
-    const setCookieHeader = loginRes.headers()['set-cookie'];
-    expect(setCookieHeader).toBeDefined();
+    try {
+      const loginRes = await authRequest.post('/api/auth/accept-token', {
+        data: { token: loginToken },
+      });
+      expect(loginRes.status()).toBe(200);
 
-    // Parse the Set-Cookie header
-    const cookieString = setCookieHeader?.toLowerCase() || '';
+      const setCookieHeader = loginRes.headers()['set-cookie'];
+      expect(setCookieHeader).toBeDefined();
 
-    // For cross-origin to work, cookie needs:
-    // - Session cookie present
-    expect(cookieString).toMatch(/longhouse_session=/);
+      const cookieString = setCookieHeader?.toLowerCase() || '';
+      expect(cookieString).toMatch(/longhouse_session=/);
+      expect(cookieString).toContain('httponly');
+      expect(cookieString).toContain('samesite=lax');
+      expect(cookieString).toContain('secure');
 
-    // - SameSite=None (allows cross-origin)
-    expect(cookieString).toContain('samesite=none');
-
-    // - Secure (required with SameSite=None)
-    expect(cookieString).toContain('secure');
-
-    // 3. Verify login response contains user info
-    const loginData = await loginRes.json();
-    expect(loginData).toHaveProperty('id');
-    expect(loginData).toHaveProperty('email');
+      const loginData = await loginRes.json();
+      expect(loginData).toHaveProperty('access_token');
+      expect(loginData).toHaveProperty('expires_in');
+    } finally {
+      await authRequest.dispose();
+    }
   });
 
-  test('authenticated request with cookie succeeds', async ({ request }) => {
-    const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_BACKEND_URL || '';
+  test('accepted session cookie authenticates API requests', async ({ playwright }) => {
+    const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || '';
     test.skip(!apiUrl, 'API_URL required');
 
-    // 1. Login first
-    const loginRes = await request.post(`${apiUrl}/api/auth/service-login`, {
-      headers: {
-        'X-Service-Secret': secret!,
-      },
+    const authRequest = await playwright.request.newContext({
+      baseURL: apiUrl,
+      timeout: 30_000,
     });
-    expect(loginRes.status()).toBe(200);
 
-    // 2. Make authenticated request (cookie should be sent automatically)
-    const verifyRes = await request.get(`${apiUrl}/api/auth/verify`);
-    expect(verifyRes.status()).toBe(204);
+    try {
+      const loginRes = await authRequest.post('/api/auth/accept-token', {
+        data: { token: loginToken },
+      });
+      expect(loginRes.status()).toBe(200);
+
+      const verifyRes = await authRequest.get('/api/auth/verify');
+      expect(verifyRes.status()).toBe(204);
+    } finally {
+      await authRequest.dispose();
+    }
   });
 
-  test('unauthenticated request returns 401', async ({ request }) => {
-    const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_BACKEND_URL || '';
+  test('unauthenticated request returns 401', async ({ playwright }) => {
+    const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || '';
     test.skip(!apiUrl, 'API_URL required');
 
-    // Create new request context without cookies
-    const response = await request.get(`${apiUrl}/api/auth/verify`, {
-      headers: {
-        // Explicitly exclude auth headers
-        'Authorization': '',
-      },
+    const anonymous = await playwright.request.newContext({
+      baseURL: apiUrl,
+      timeout: 30_000,
     });
 
-    // In production (AUTH_DISABLED=false), should return 401
-    // In dev (AUTH_DISABLED=true), returns 204
-    const isDevMode = process.env.AUTH_DISABLED === '1' || process.env.AUTH_DISABLED === 'true';
-    if (isDevMode) {
-      expect(response.status()).toBe(204);
-    } else {
+    try {
+      const response = await anonymous.get('/api/auth/verify');
       expect(response.status()).toBe(401);
+    } finally {
+      await anonymous.dispose();
     }
   });
 
-  test('browser credential flow works for API requests', async ({ page, context }) => {
-    const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_BACKEND_URL || '';
-    const frontendUrl = process.env.FRONTEND_URL || process.env.PLAYWRIGHT_FRONTEND_BASE || '';
-    test.skip(!apiUrl || !frontendUrl, 'API_URL and FRONTEND_URL required');
+  test('browser credential flow sends session cookie to hosted API', async ({ page, context }) => {
+    const frontendUrl = process.env.FRONTEND_URL || process.env.PLAYWRIGHT_BASE_URL || '';
+    const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || frontendUrl;
+    test.skip(!frontendUrl || !apiUrl, 'FRONTEND_URL and API_URL required');
 
-    // 1. Login via API to get session cookie
-    const loginRes = await page.request.post(`${apiUrl}/api/auth/service-login`, {
-      headers: {
-        'X-Service-Secret': process.env.SMOKE_TEST_SECRET!,
-      },
-    });
-    expect(loginRes.status()).toBe(200);
-
-    // 2. Get cookies and verify they're set for the right domain
     const cookies = await context.cookies();
-    const sessionCookie = cookies.find((c) => c.name === 'longhouse_session');
+    const sessionCookie = cookies.find((cookie) => cookie.name === 'longhouse_session');
+    expect(sessionCookie).toBeDefined();
 
-    // Note: In local E2E tests (same origin), cookie may not have cross-origin attributes
-    // This test is primarily for production smoke testing
-    if (process.env.FRONTEND_URL && process.env.API_URL) {
-      expect(sessionCookie).toBeDefined();
-    }
-
-    // 3. Navigate to frontend
     await page.goto(frontendUrl);
-
-    // 4. Wait for app to load
     await page.waitForLoadState('domcontentloaded');
 
-    // 5. Check that the auth state is detected
-    // In the UI, authenticated users should see the dashboard or chat
-    const isAuthenticated = await page.evaluate(() => {
-      // Check for signs of authenticated state
-      // This could be a user menu, dashboard content, etc.
-      return (
-        document.querySelector('[data-testid="user-menu"]') !== null ||
-        document.querySelector('[data-testid="create-fiche-btn"]') !== null ||
-        window.location.pathname.includes('/dashboard') ||
-        window.location.pathname.includes('/chat')
-      );
-    });
+    const verifyStatus = await page.evaluate(async ({ targetApiUrl }) => {
+      const response = await fetch(`${targetApiUrl}/api/auth/verify`, {
+        credentials: 'include',
+      });
+      return response.status;
+    }, { targetApiUrl: apiUrl });
 
-    // In dev mode, auth is bypassed anyway
-    const isDevMode = process.env.AUTH_DISABLED === '1' || process.env.AUTH_DISABLED === 'true';
-    if (!isDevMode) {
-      expect(isAuthenticated).toBe(true);
-    }
+    expect(verifyStatus).toBe(204);
   });
 });
