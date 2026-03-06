@@ -24,31 +24,45 @@ jobs:
     timeout-minutes: 10
     if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
     env:
-      # Default to the primary instance domain (single-domain app + API)
-      FRONTEND_URL: ${{ vars.SMOKE_FRONTEND_URL || 'https://david.longhouse.ai' }}
-      API_URL: ${{ vars.SMOKE_API_URL || 'https://david.longhouse.ai' }}
+      MARKETING_URL: https://longhouse.ai
+      CONTROL_PLANE_URL: https://control.longhouse.ai
+      CP_URL: https://control.longhouse.ai
+      INSTANCE_SUBDOMAIN: david010
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve hosted instance
+        env:
+          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+        run: |
+          chmod +x scripts/ci/export-hosted-instance-env.sh
+          ./scripts/ci/export-hosted-instance-env.sh
+
       - name: Health check (quick)
         run: |
-          echo "Checking API health..."
-          for i in {1..10}; do
-            if curl -sf "$API_URL/api/health" > /dev/null; then
-              echo "✓ API is healthy"
-              break
-            fi
-            echo "Attempt $i: API not ready, waiting 10s..."
-            sleep 10
-          done
+          check_health() {
+            local url="$1"
+            local name="$2"
+            local max=10
+            for i in $(seq 1 "$max"); do
+              if curl -sf "$url" > /dev/null; then
+                echo "✓ $name is healthy (attempt $i)"
+                return 0
+              fi
+              echo "Attempt $i/$max: $name not ready, waiting 10s..."
+              sleep 10
+            done
+            echo "✗ $name did not become healthy"
+            return 1
+          }
 
-          echo "Checking frontend..."
-          curl -sf "$FRONTEND_URL" > /dev/null && echo "✓ Frontend is up"
+          check_health "$API_URL/api/health" "API"
+          check_health "$FRONTEND_URL" "Frontend"
 
       - name: Run smoke tests
         env:
-          SMOKE_TEST_SECRET: ${{ secrets.SMOKE_TEST_SECRET }}
+          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
           chmod +x scripts/smoke-prod.sh
           ./scripts/smoke-prod.sh
@@ -75,6 +89,7 @@ jobs:
         run: |
           echo "## Smoke Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instance:** $INSTANCE_SUBDOMAIN" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend:** $FRONTEND_URL" >> $GITHUB_STEP_SUMMARY
           echo "- **API:** $API_URL" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
