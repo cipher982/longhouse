@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Infra] Hosted runtime simplification (control plane + auth + smoke) (size: 4)
+
+Status (2026-03-05): In progress (spec landed; implementation pending).
+
+**Goal:** Collapse hosted deploy/auth/smoke onto one control-plane-driven path for paid, dev, and CI instances while keeping OSS local simple and separate.
+
+- [ ] Finalize canonical hosted target model (`subdomain` + computed control-plane URL)
+- [ ] Switch hosted smoke auth to `login-token -> /api/auth/accept-token`
+- [ ] Replace hardcoded hosted URLs with control-plane target resolution
+- [ ] Unify deploy/verify helpers around reprovision + shared smoke entrypoint
+- [x] Define rollout, cleanup, and acceptance criteria in a spec
+
+Notes:
+- Current drift points: `.github/workflows/smoke-after-deploy.yml`, `.github/workflows/deploy-and-verify.yml`, `scripts/smoke-prod.sh`, and `scripts/run-prod-e2e.sh` still encode stale hostnames and/or `SMOKE_TEST_SECRET` assumptions.
+- Primary dev instance is `david010.longhouse.ai`; user instances are provisioner-managed, not Coolify-managed.
+- 2026-03-05: Draft redesign spec landed in `docs/specs/hosted-runtime-simplification.md` with scope, non-goals, phased rollout, and acceptance criteria.
+
 ## [Product] Oikos multi-surface messaging architecture (web + Telegram + future channels) (size: 5)
 
 Status (2026-03-04): In progress (spec + rollout plan in progress).
