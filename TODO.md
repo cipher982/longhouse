@@ -23,17 +23,19 @@ Status (2026-03-05): In progress (spec landed; implementation pending).
 
 - [x] Finalize canonical hosted target model (`subdomain` + computed control-plane URL)
 - [x] Switch hosted smoke auth to `login-token -> /api/auth/accept-token`
-- [ ] Replace hardcoded hosted URLs with control-plane target resolution
-- [ ] Unify deploy/verify helpers around reprovision + shared smoke entrypoint
+- [x] Replace hardcoded hosted URLs with control-plane target resolution
+- [x] Unify deploy/verify helpers around reprovision + shared smoke entrypoint
 - [x] Define rollout, cleanup, and acceptance criteria in a spec
 
 Notes:
-- Current drift points: `.github/workflows/smoke-after-deploy.yml` and `.github/workflows/deploy-and-verify.yml` still encode stale hosted-target assumptions; `scripts/qa-live.sh` and `scripts/migrate_from_lifehub.py` still carry hardcoded instance defaults.
+- Remaining cleanup: `scripts/qa-live.sh` and `scripts/migrate_from_lifehub.py` still carry hardcoded instance defaults; obsolete repo vars (`SMOKE_FRONTEND_URL`, `SMOKE_API_URL`) and the legacy `SMOKE_TEST_SECRET` secret should be removed after the new workflow path is deployed and verified.
 - Primary dev instance is `david010.longhouse.ai`; user instances are provisioner-managed, not Coolify-managed.
 - 2026-03-05: Draft redesign spec landed in `docs/specs/hosted-runtime-simplification.md` with scope, non-goals, phased rollout, and acceptance criteria.
 - 2026-03-05: Phase 1 landed: control-plane `InstanceOut` now includes canonical `url`, instance endpoints return it consistently, and `scripts/lib/hosted-instance.sh` centralizes hosted instance resolve/login-token/reprovision helpers.
 - 2026-03-05: Phase 2 landed: `scripts/smoke-prod.sh` now resolves hosted targets via control-plane metadata when `INSTANCE_SUBDOMAIN` is set and authenticates via `login-token -> /api/auth/accept-token`; live login-token validation passed against `david010`, but the new control-plane `url` field still needs deployment before helper-based resolution works against prod.
 - 2026-03-05: Phase 3 landed: `scripts/run-prod-e2e.sh` now mints/accepts hosted login tokens instead of requiring `SMOKE_TEST_SECRET`, the live Playwright fixtures exchange `SMOKE_LOGIN_TOKEN` through `/api/auth/accept-token`, and the hosted auth smoke spec passed live against `david010` (4/4).
+- 2026-03-05: Phase 4 landed: CI now resolves hosted targets through `scripts/ci/export-hosted-instance-env.sh`, `smoke-after-deploy.yml` no longer depends on repo URL vars or `SMOKE_TEST_SECRET`, and `deploy-and-verify.yml` deploys marketing/control-plane via the real Coolify API token path before reprovisioning the hosted instance through the control plane.
+
 
 
 

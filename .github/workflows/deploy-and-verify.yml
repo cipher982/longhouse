@@ -20,18 +20,15 @@ jobs:
 
     env:
       MARKETING_URL: https://longhouse.ai
+      CONTROL_PLANE_URL: https://control.longhouse.ai
       CP_URL: https://control.longhouse.ai
-      # Deploy and test the compose-managed instance (has SMOKE_TEST_SECRET)
-      FRONTEND_URL: https://david.longhouse.ai
-      API_URL: https://david.longhouse.ai
-      CONTAINER_NAME: longhouse-david
+      INSTANCE_SUBDOMAIN: david010
       ZERG_HOST: 100.120.197.80
       ZERG_USER: zerg
 
     steps:
       - uses: actions/checkout@v4
 
-      # ── SSH Setup ──────────────────────────────────────────────
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -52,19 +49,14 @@ jobs:
             StrictHostKeyChecking accept-new
           SSHEOF
 
-      # ── Record current state for rollback ──────────────────────
       - name: Record previous image SHA
         id: prev
         run: |
+          CONTAINER_NAME="longhouse-${INSTANCE_SUBDOMAIN}"
           FULL_SHA=$(ssh zerg "docker inspect $CONTAINER_NAME --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}'" 2>/dev/null || echo "")
           SHORT_SHA="${FULL_SHA:0:7}"
           echo "sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "Previous image revision: ${SHORT_SHA:-unknown} (full: ${FULL_SHA:-unknown})"
-
-      # ── Deploy ────────────────────────────────────────────────
-      - name: Deploy user instance (zerg)
-        run: |
-          ssh zerg 'cd /opt/longhouse/david && docker compose pull && docker compose up -d'
 
       - name: Deploy Coolify apps (marketing + control plane)
         env:
@@ -76,7 +68,7 @@ jobs:
             exit 0
           fi
           ssh clifford "
-            TOKEN=\$(sudo cat /data/coolify/source/.env | grep '^API_TOKEN=' | cut -d= -f2-) && \
+            TOKEN=\$(sudo cat /var/lib/docker/data/coolify-api/token.env | cut -d= -f2) && \
             curl -sf -X POST \
               -H \"Authorization: Bearer \$TOKEN\" \
               -H 'Content-Type: application/json' \
@@ -89,14 +81,48 @@ jobs:
               'http://localhost:8000/api/v1/deploy'
           "
 
-      # ── Wait for all services to be healthy ────────────────────
+      - name: Wait for control plane and marketing
+        run: |
+          check_health() {
+            local url="$1"
+            local name="$2"
+            local max=30
+            for i in $(seq 1 "$max"); do
+              if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
+                echo "✓ $name is up (attempt $i)"
+                return 0
+              fi
+              echo "  $name not ready (attempt $i/$max)..."
+              sleep 5
+            done
+            echo "✗ $name did not become healthy"
+            return 1
+          }
+
+          check_health "$CONTROL_PLANE_URL/health" "Control plane"
+          check_health "$MARKETING_URL" "Marketing site"
+
+      - name: Resolve hosted instance
+        env:
+          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+        run: |
+          chmod +x scripts/ci/export-hosted-instance-env.sh
+          ./scripts/ci/export-hosted-instance-env.sh
+
+      - name: Reprovision user instance
+        env:
+          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+        run: |
+          . scripts/lib/hosted-instance.sh
+          lh_hosted_reprovision "$INSTANCE_ID"
+
       - name: Wait for services
         run: |
           check_health() {
             local url="$1"
             local name="$2"
             local max=30
-            for i in $(seq 1 $max); do
+            for i in $(seq 1 "$max"); do
               if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
                 echo "✓ $name is up (attempt $i)"
                 return 0
@@ -109,34 +135,28 @@ jobs:
           }
 
           check_health "$API_URL/api/health" "User instance"
-          check_health "$CP_URL/health" "Control plane"
+          check_health "$CONTROL_PLANE_URL/health" "Control plane"
           check_health "$MARKETING_URL" "Marketing site"
 
-      # ── Smoke tests ────────────────────────────────────────────
       - name: Run smoke tests
         env:
-          SMOKE_TEST_SECRET: ${{ secrets.SMOKE_TEST_SECRET }}
+          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
           chmod +x scripts/smoke-prod.sh
-          MARKETING_URL="${{ env.MARKETING_URL }}" \
-          CP_URL="${{ env.CP_URL }}" \
-          FRONTEND_URL="${{ env.FRONTEND_URL }}" \
-          API_URL="${{ env.API_URL }}" \
           ./scripts/smoke-prod.sh --no-llm
 
-      # ── Summary (always) ───────────────────────────────────────
       - name: Summary
         if: always()
         run: |
           echo "## Deploy + Verify Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Instance:** $FRONTEND_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Instance:** $INSTANCE_SUBDOMAIN" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Instance URL:** $INSTANCE_URL" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Marketing:** $MARKETING_URL" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Control Plane:** $CP_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Control Plane:** $CONTROL_PLANE_URL" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Previous SHA:** ${{ steps.prev.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Rollback on failure ────────────────────────────────────
       # Disabled: auto-rollback can fight rapid iteration. Re-enable when stable.
       # - name: Rollback user instance
       #   if: failure()
@@ -144,9 +164,7 @@ jobs:
       #     PREV_SHA="${{ steps.prev.outputs.sha }}"
       #     if [[ -n "$PREV_SHA" ]]; then
       #       echo "Rolling back to image revision: $PREV_SHA"
-      #       ssh zerg "cd /opt/longhouse/david && \
-      #         docker pull ghcr.io/cipher982/longhouse-runtime:${PREV_SHA} && \
-      #         LONGHOUSE_IMAGE=ghcr.io/cipher982/longhouse-runtime:${PREV_SHA} docker compose up -d"
+      #       ssh zerg "docker pull ghcr.io/cipher982/longhouse-runtime:${PREV_SHA} && docker stop longhouse-${INSTANCE_SUBDOMAIN} && docker rm longhouse-${INSTANCE_SUBDOMAIN}"
       #     else
       #       echo "No previous SHA recorded — cannot rollback"
       #     fi
@@ -159,13 +177,14 @@ jobs:
           PREV_SHA="${{ steps.prev.outputs.sha }}"
           gh issue create \
             --title "Deploy smoke failed for ${GITHUB_SHA:0:7}" \
-            --body "$(cat <<EOF
+            --body "$(cat <<EOF_BODY
           Smoke tests failed after deploying commit ${{ github.sha }}.
 
-          **Previous image SHA:** \`${PREV_SHA:-unknown}\`
-          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - Instance: $INSTANCE_URL
+          - Previous image SHA: \`${PREV_SHA:-unknown}\`
+          - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           Auto-rollback is disabled. Check the workflow logs for which checks failed.
-          EOF
+          EOF_BODY
           )" \
             --label "deploy-failure"
