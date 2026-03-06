@@ -192,6 +192,21 @@ def _build_migration_status(inst: Instance) -> MigrationStatusOut:
     )
 
 
+def _instance_out(inst: Instance, email: str, *, password: str | None = None) -> InstanceOut:
+    return InstanceOut(
+        id=inst.id,
+        email=email,
+        subdomain=inst.subdomain,
+        url=_instance_url(inst.subdomain),
+        container_name=inst.container_name,
+        status=inst.status,
+        password=password,
+        created_at=inst.created_at,
+        last_health_at=inst.last_health_at,
+        migration=_build_migration_status(inst),
+    )
+
+
 def _recreate_instance(
     inst: Instance,
     user: User,
@@ -267,17 +282,7 @@ def my_instance(request: Request, db: Session = Depends(get_db)):
     if not inst:
         raise HTTPException(status_code=404, detail="No instance found")
 
-    return InstanceOut(
-        id=inst.id,
-        email=user.email,
-        subdomain=inst.subdomain,
-        url=_instance_url(inst.subdomain),
-        container_name=inst.container_name,
-        status=inst.status,
-        created_at=inst.created_at,
-        last_health_at=inst.last_health_at,
-        migration=_build_migration_status(inst),
-    )
+    return _instance_out(inst, user.email)
 
 
 @router.get("/me/health")
@@ -322,22 +327,7 @@ def list_instances(db: Session = Depends(get_db)):
     if changed:
         db.commit()
 
-    items: list[InstanceOut] = []
-    for inst, user in rows:
-        items.append(
-            InstanceOut(
-                id=inst.id,
-                email=user.email,
-                subdomain=inst.subdomain,
-                url=_instance_url(inst.subdomain),
-                container_name=inst.container_name,
-                status=inst.status,
-                created_at=inst.created_at,
-                last_health_at=inst.last_health_at,
-                migration=_build_migration_status(inst),
-            )
-        )
-    return InstanceList(instances=items)
+    return InstanceList(instances=[_instance_out(inst, user.email) for inst, user in rows])
 
 
 @router.post("", response_model=InstanceOut, dependencies=[Depends(require_admin)])
@@ -359,17 +349,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
     # Idempotent: if user already has instance, return it
     existing = db.query(Instance).filter(Instance.user_id == user.id).first()
     if existing:
-        return InstanceOut(
-            id=existing.id,
-            email=email,
-            subdomain=existing.subdomain,
-            url=_instance_url(existing.subdomain),
-            container_name=existing.container_name,
-            status=existing.status,
-            created_at=existing.created_at,
-            last_health_at=existing.last_health_at,
-            migration=_build_migration_status(existing),
-        )
+        return _instance_out(existing, email)
 
     provisioner = Provisioner()
     result = provisioner.provision_instance(subdomain, owner_email=email)
@@ -386,18 +366,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(instance)
 
-    return InstanceOut(
-        id=instance.id,
-        email=email,
-        subdomain=instance.subdomain,
-        url=_instance_url(instance.subdomain),
-        container_name=instance.container_name,
-        status=instance.status,
-        password=result.password,  # Shown once at creation
-        created_at=instance.created_at,
-        last_health_at=instance.last_health_at,
-        migration=_build_migration_status(instance),
-    )
+    return _instance_out(instance, email, password=result.password)
 
 
 @router.get("/{instance_id}", response_model=InstanceOut, dependencies=[Depends(require_admin)])
@@ -410,17 +379,7 @@ def get_instance(instance_id: int, db: Session = Depends(get_db)):
     if _refresh_instance_health_if_ready(db, inst, timeout_seconds=2.0):
         db.commit()
 
-    return InstanceOut(
-        id=inst.id,
-        email=user.email,
-        subdomain=inst.subdomain,
-        url=_instance_url(inst.subdomain),
-        container_name=inst.container_name,
-        status=inst.status,
-        created_at=inst.created_at,
-        last_health_at=inst.last_health_at,
-        migration=_build_migration_status(inst),
-    )
+    return _instance_out(inst, user.email)
 
 
 @router.get("/{instance_id}/custom-env", dependencies=[Depends(require_admin)])
@@ -489,18 +448,7 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(inst)
 
-    return InstanceOut(
-        id=inst.id,
-        email=user.email,
-        subdomain=inst.subdomain,
-        url=_instance_url(inst.subdomain),
-        container_name=inst.container_name,
-        status=inst.status,
-        password=password,  # Shown once
-        created_at=inst.created_at,
-        last_health_at=inst.last_health_at,
-        migration=_build_migration_status(inst),
-    )
+    return _instance_out(inst, user.email, password=password)
 
 
 @router.post("/{instance_id}/reprovision", response_model=InstanceOut, dependencies=[Depends(require_admin)])
@@ -527,18 +475,7 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(inst)
 
-    return InstanceOut(
-        id=inst.id,
-        email=user.email,
-        subdomain=inst.subdomain,
-        url=_instance_url(inst.subdomain),
-        container_name=inst.container_name,
-        status=inst.status,
-        password=result.password,  # New password on reprovision
-        created_at=inst.created_at,
-        last_health_at=inst.last_health_at,
-        migration=_build_migration_status(inst),
-    )
+    return _instance_out(inst, user.email, password=result.password)
 
 
 @router.post("/backfill-images", dependencies=[Depends(require_admin)])
