@@ -111,9 +111,12 @@ async def perform_startup_run_recovery() -> List[int]:
 
     with session_factory() as db:
         try:
-            # Find runs stuck in active states
+            # Only select the fields recovery actually needs.
+            # Some legacy rows contain malformed GUID strings in unrelated columns
+            # (for example assistant_message_id), and ORM-loading the full Run row
+            # would crash before we can mark the run failed.
             stuck_runs = (
-                db.query(Run)
+                db.query(Run.id, Run.fiche_id, Run.status, Run.started_at)
                 .filter(
                     Run.status.in_(
                         [

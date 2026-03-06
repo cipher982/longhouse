@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from uuid import uuid4
 
 import asyncio
 import pytest
@@ -281,14 +282,14 @@ async def test_run_oikos_serializes_concurrent_runs_per_owner(monkeypatch, tmp_p
             service.run_oikos(
                 owner_id=user.id,
                 task="task a",
-                message_id="msg-a",
+                message_id=str(uuid4()),
                 source_surface_id="web",
                 source_conversation_id="web:main",
             ),
             service.run_oikos(
                 owner_id=user.id,
                 task="task b",
-                message_id="msg-b",
+                message_id=str(uuid4()),
                 source_surface_id="telegram",
                 source_conversation_id="telegram:6311583060",
             ),

@@ -33,7 +33,7 @@ class OikosChatRequest(BaseModel):
     """Request for text chat with Oikos."""
 
     message: str = Field(..., description="User message text")
-    message_id: str = Field(..., description="Client-generated message ID (UUID)")
+    message_id: uuid.UUID = Field(..., description="Client-generated message ID (UUID)")
     model: Optional[str] = Field(None, description="Model to use for this request (e.g., gpt-5.2)")
     reasoning_effort: Optional[str] = Field(None, description="Reasoning effort: none, low, medium, high")
     replay_scenario: Optional[str] = Field(
@@ -288,6 +288,8 @@ async def oikos_chat(
     from zerg.models.enums import RunStatus
     from zerg.models.enums import RunTrigger
 
+    message_id = str(request.message_id)
+
     with db_session() as db:
         # Enforce shared-pool limits before we start a new run
         assert_can_start_run(db, user=current_user)
@@ -306,7 +308,6 @@ async def oikos_chat(
             thread_id=thread.id,
             status=RunStatus.RUNNING,
             trigger=RunTrigger.API,
-            assistant_message_id=request.message_id,  # Client-generated message ID
             model=model_to_use,  # Store resolved model for continuation inheritance
             reasoning_effort=reasoning_effort,  # Store for continuation inheritance
             trace_id=trace_id,  # End-to-end tracing
@@ -368,7 +369,7 @@ async def oikos_chat(
                 current_user.id,
                 thread_id,
                 request.message,
-                request.message_id,
+                message_id,
                 trace_id_str,
                 request.replay_scenario,
             )
@@ -381,7 +382,7 @@ async def oikos_chat(
             run_id,
             current_user.id,
             request.message,
-            request.message_id,
+            message_id,
             trace_id_str,
             model=model_to_use,
             reasoning_effort=reasoning_effort,

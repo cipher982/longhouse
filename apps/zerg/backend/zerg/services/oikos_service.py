@@ -68,6 +68,21 @@ async def _get_owner_run_lock(owner_id: int) -> asyncio.Lock:
         return lock
 
 
+def _normalize_assistant_message_id(message_id: str | None) -> str:
+    """Return a canonical UUID string for persisted assistant message IDs."""
+    if message_id is None:
+        return str(uuid.uuid4())
+
+    raw = str(message_id).strip()
+    if not raw:
+        raise ValueError("message_id must be a UUID")
+
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError as exc:
+        raise ValueError("message_id must be a UUID") from exc
+
+
 @dataclass
 class OikosRunResult:
     """Result from a oikos run.
@@ -446,6 +461,7 @@ class OikosService:
         """
         start_time = datetime.now(timezone.utc)
         started_at_naive = start_time.replace(tzinfo=None)
+        message_id = _normalize_assistant_message_id(message_id)
         surface_metadata = self._build_surface_metadata(
             source_surface_id=source_surface_id,
             source_conversation_id=source_conversation_id,
@@ -499,17 +515,14 @@ class OikosService:
 
         logger.info(f"Starting oikos run {run.id} for user {owner_id}, task: {task[:50]}...", extra={"tag": "OIKOS"})
 
-        # Use client-provided message_id or generate one (for direct API calls / tests)
-        # This ID is stable across oikos_started -> oikos_token -> oikos_complete
-        if message_id is None:
-            message_id = str(uuid.uuid4())
-
-        # Persist message_id to the run if not already set (oikos_chat.py sets it on Run creation)
-        if run.assistant_message_id != message_id:
+        # Persist the normalized assistant message UUID for downstream events.
+        persisted_message_id = str(run.assistant_message_id) if run.assistant_message_id else None
+        if persisted_message_id != message_id:
             run.assistant_message_id = message_id
             self.db.commit()
+            persisted_message_id = message_id
         # Always use the persisted message_id for downstream events.
-        message_id = run.assistant_message_id or message_id
+        message_id = persisted_message_id or message_id
 
         # Check if this is a continuation run (processing commis result from a deferred run)
         # If so, include continuation_of_message_id so frontend creates a NEW message bubble
@@ -520,7 +533,7 @@ class OikosService:
             # Look up the original run's assistant_message_id for proper UUID compliance
             original_run = self.db.query(Run).filter(Run.id == run.continuation_of_run_id).first()
             if original_run and original_run.assistant_message_id:
-                continuation_of_message_id = original_run.assistant_message_id
+                continuation_of_message_id = str(original_run.assistant_message_id)
             else:
                 # Fallback: generate a new UUID if original run's message_id is not available
                 # This maintains schema compliance (UUID format) while still signaling continuation

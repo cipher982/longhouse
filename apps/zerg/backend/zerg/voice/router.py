@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -26,6 +27,10 @@ from zerg.voice.turn_based import run_voice_turn
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/voice", tags=["oikos-voice"])
+
+
+def _message_id_str(message_id: UUID | str | None) -> str | None:
+    return str(message_id) if message_id else None
 
 
 def _voice_turn_error(
@@ -112,7 +117,7 @@ class VoiceTtsRequest(BaseModel):
     text: str
     provider: str | None = None
     voice_id: str | None = None
-    message_id: str | None = None
+    message_id: UUID | None = None
 
 
 class VoiceTtsResponse(BaseModel):
@@ -134,7 +139,7 @@ async def voice_turn(
     tts_provider: str | None = Form(None, description="Override TTS provider (edge, elevenlabs)"),
     tts_voice_id: str | None = Form(None, description="Override TTS voice ID/name"),
     model: str | None = Form(None, description="Override oikos model"),
-    message_id: str | None = Form(None, description="Client-generated message ID for correlation"),
+    message_id: UUID | None = Form(None, description="Client-generated message ID for correlation"),
     current_user=Depends(get_current_oikos_user),
 ) -> VoiceTurnResponse:
     """Turn-based voice: audio -> transcript -> oikos response.
@@ -144,19 +149,21 @@ async def voice_turn(
     - System transcribes
     - Oikos responds with text
     """
+    message_id_str = _message_id_str(message_id)
+
     if not audio:
-        return _voice_turn_error(400, "Audio file is required", message_id)
+        return _voice_turn_error(400, "Audio file is required", message_id_str)
 
     normalized_content_type = normalize_content_type(audio.content_type)
     if normalized_content_type and normalized_content_type not in ALLOWED_AUDIO_TYPES:
-        return _voice_turn_error(400, f"Unsupported audio type: {audio.content_type}", message_id)
+        return _voice_turn_error(400, f"Unsupported audio type: {audio.content_type}", message_id_str)
 
     audio_bytes = await audio.read()
     if len(audio_bytes) > MAX_AUDIO_BYTES:
-        return _voice_turn_error(413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id)
+        return _voice_turn_error(413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id_str)
 
     if not message_id:
-        return _voice_turn_error(400, "message_id is required for voice turns", message_id)
+        return _voice_turn_error(400, "message_id is required for voice turns", message_id_str)
 
     result = await run_voice_turn(
         owner_id=current_user.id,
@@ -167,7 +174,7 @@ async def voice_turn(
         stt_language=stt_language,
         stt_model=stt_model,
         model_override=model,
-        message_id=message_id,
+        message_id=message_id_str,
     )
 
     if result.status == "error":
@@ -180,7 +187,7 @@ async def voice_turn(
         return _voice_turn_error(
             status_code,
             error_msg,
-            message_id,
+            message_id_str,
             transcript=result.transcript or "",
             stt_model=result.stt_model,
         )
@@ -213,7 +220,7 @@ async def voice_turn(
                         return _voice_turn_error(
                             400,
                             f"Invalid TTS provider: {tts_provider}",
-                            message_id,
+                            message_id_str,
                             transcript=result.transcript,
                             stt_model=result.stt_model,
                         )
@@ -263,20 +270,22 @@ async def voice_transcribe(
     stt_prompt: str | None = Form(None, description="Optional transcription prompt"),
     stt_language: str | None = Form(None, description="Optional ISO-639-1 language hint"),
     stt_model: str | None = Form(None, description="Override STT model"),
-    message_id: str | None = Form(None, description="Client-generated message ID for correlation"),
+    message_id: UUID | None = Form(None, description="Client-generated message ID for correlation"),
     current_user=Depends(get_current_oikos_user),
 ) -> VoiceTranscribeResponse:
     """Transcribe audio to text (no oikos execution)."""
+    message_id_str = _message_id_str(message_id)
+
     if not audio:
-        return _transcribe_error(400, "Audio file is required", message_id)
+        return _transcribe_error(400, "Audio file is required", message_id_str)
 
     normalized_content_type = normalize_content_type(audio.content_type)
     if normalized_content_type and normalized_content_type not in ALLOWED_AUDIO_TYPES:
-        return _transcribe_error(400, f"Unsupported audio type: {audio.content_type}", message_id)
+        return _transcribe_error(400, f"Unsupported audio type: {audio.content_type}", message_id_str)
 
     audio_bytes = await audio.read()
     if len(audio_bytes) > MAX_AUDIO_BYTES:
-        return _transcribe_error(413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id)
+        return _transcribe_error(413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id_str)
 
     stt_service = get_stt_service()
     result = await stt_service.transcribe_bytes(
@@ -294,14 +303,14 @@ async def voice_transcribe(
             status="error",
             error=result.error or "STT failed",
             stt_model=result.model,
-            message_id=message_id,
+            message_id=message_id_str,
         )
 
     return VoiceTranscribeResponse(
         transcript=result.text,
         status="success",
         stt_model=result.model,
-        message_id=message_id,
+        message_id=message_id_str,
     )
 
 
@@ -316,7 +325,7 @@ async def voice_tts(
         return VoiceTtsResponse(
             status="error",
             error="Text is required",
-            message_id=request.message_id,
+            message_id=_message_id_str(request.message_id),
         )
 
     settings = get_settings()
@@ -330,7 +339,7 @@ async def voice_tts(
                 provider="test",
                 latency_ms=0,
             ),
-            message_id=request.message_id,
+            message_id=_message_id_str(request.message_id),
         )
 
     provider = None
@@ -341,7 +350,7 @@ async def voice_tts(
             return VoiceTtsResponse(
                 status="error",
                 error=f"Invalid TTS provider: {request.provider}",
-                message_id=request.message_id,
+                message_id=_message_id_str(request.message_id),
             )
 
     tts_service = get_tts_service()
@@ -363,7 +372,7 @@ async def voice_tts(
         return VoiceTtsResponse(
             status="success",
             tts=tts_payload,
-            message_id=request.message_id,
+            message_id=_message_id_str(request.message_id),
         )
 
     tts_payload = VoiceAudioResponse(
@@ -378,5 +387,5 @@ async def voice_tts(
         status="error",
         tts=tts_payload,
         error=tts_payload.error,
-        message_id=request.message_id,
+        message_id=_message_id_str(request.message_id),
     )
