@@ -2,7 +2,8 @@
 """Migrate insights and sessions from Life Hub to Longhouse.
 
 Requires:
-- LONGHOUSE_URL: Longhouse API URL (default: https://david.longhouse.ai)
+- LONGHOUSE_URL: Longhouse API URL (default: derived from LONGHOUSE_SUBDOMAIN)
+- LONGHOUSE_SUBDOMAIN: Hosted instance subdomain (default: david010)
 - LONGHOUSE_TOKEN: Device token (default: reads from ~/.claude/longhouse-device-token)
 - LIFE_HUB_DB_URL: Life Hub PostgreSQL connection string
 
@@ -23,7 +24,8 @@ import psycopg2
 import psycopg2.extras
 import requests
 
-LONGHOUSE_URL = os.environ.get("LONGHOUSE_URL", "https://david.longhouse.ai")
+LONGHOUSE_SUBDOMAIN = os.environ.get("LONGHOUSE_SUBDOMAIN", "david010").strip() or "david010"
+LONGHOUSE_URL = os.environ.get("LONGHOUSE_URL") or f"https://{LONGHOUSE_SUBDOMAIN}.longhouse.ai"
 LONGHOUSE_TOKEN = os.environ.get("LONGHOUSE_TOKEN", "")
 if not LONGHOUSE_TOKEN:
     token_file = Path.home() / ".claude" / "longhouse-device-token"

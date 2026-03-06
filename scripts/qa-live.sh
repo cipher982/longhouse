@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Run live QA against a Longhouse instance (default: david010.longhouse.ai)
+# Run live QA against a Longhouse instance (default subdomain: david010)
 #
 # Usage:
 #   ./scripts/qa-live.sh
+#   ./scripts/qa-live.sh --subdomain other
 #   ./scripts/qa-live.sh --url https://other.longhouse.ai
-#   QA_INSTANCE_URL=https://other.longhouse.ai ./scripts/qa-live.sh
+#   QA_INSTANCE_SUBDOMAIN=other ./scripts/qa-live.sh
 #
 # Environment:
-#   LONGHOUSE_PASSWORD  - Instance password (auto-fetched from container if not set)
-#   QA_INSTANCE_URL     - Override instance URL (default: https://david010.longhouse.ai)
-#   QA_CONTAINER        - Docker container name for password lookup (default: longhouse-david010)
+#   LONGHOUSE_PASSWORD     - Instance password (auto-fetched from container if not set)
+#   QA_INSTANCE_URL        - Direct instance URL override
+#   QA_INSTANCE_SUBDOMAIN  - Hosted instance subdomain (default: david010)
+#   QA_CONTAINER           - Docker container name for password lookup (default: longhouse-$QA_INSTANCE_SUBDOMAIN)
 
 set -euo pipefail
 
@@ -23,8 +25,9 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
-INSTANCE_URL="${QA_INSTANCE_URL:-https://david010.longhouse.ai}"
-CONTAINER="${QA_CONTAINER:-longhouse-david010}"
+INSTANCE_SUBDOMAIN="${QA_INSTANCE_SUBDOMAIN:-david010}"
+INSTANCE_URL="${QA_INSTANCE_URL:-}"
+CONTAINER="${QA_CONTAINER:-}"
 
 # Parse CLI args
 while [[ $# -gt 0 ]]; do
@@ -37,17 +40,26 @@ while [[ $# -gt 0 ]]; do
       INSTANCE_URL="${1#*=}"
       shift
       ;;
+    --subdomain)
+      INSTANCE_SUBDOMAIN="$2"
+      shift 2
+      ;;
+    --subdomain=*)
+      INSTANCE_SUBDOMAIN="${1#*=}"
+      shift
+      ;;
     --container)
       CONTAINER="$2"
       shift 2
       ;;
     -h|--help)
-      echo "Usage: $0 [--url https://instance.longhouse.ai] [--container <name>]"
+      echo "Usage: $0 [--subdomain name] [--url https://instance.longhouse.ai] [--container <name>]"
       echo ""
       echo "Environment variables:"
-      echo "  LONGHOUSE_PASSWORD  Password for the instance (auto-fetched if not set)"
-      echo "  QA_INSTANCE_URL     Instance URL override"
-      echo "  QA_CONTAINER        Docker container name for password lookup"
+      echo "  LONGHOUSE_PASSWORD     Password for the instance (auto-fetched if not set)"
+      echo "  QA_INSTANCE_URL        Direct instance URL override"
+      echo "  QA_INSTANCE_SUBDOMAIN  Hosted instance subdomain (default: david010)"
+      echo "  QA_CONTAINER           Docker container name for password lookup"
       exit 0
       ;;
     *)
@@ -57,6 +69,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "$INSTANCE_URL" ]]; then
+  INSTANCE_URL="https://${INSTANCE_SUBDOMAIN}.longhouse.ai"
+fi
+
+if [[ -z "$CONTAINER" ]]; then
+  CONTAINER="longhouse-${INSTANCE_SUBDOMAIN}"
+fi
+
 # Strip trailing slash
 INSTANCE_URL="${INSTANCE_URL%/}"
 
@@ -64,6 +84,7 @@ echo ""
 echo "================================================"
 echo "  Longhouse Live QA"
 echo "  Instance: $INSTANCE_URL"
+echo "  Container: $CONTAINER"
 echo "================================================"
 echo ""
 
