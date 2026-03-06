@@ -18,12 +18,13 @@ set -euo pipefail
 # Config
 # ---------------------------------------------------------------------------
 
-CP_URL="${CP_URL:-https://control.longhouse.ai}"
-ROOT_DOMAIN="${ROOT_DOMAIN:-longhouse.ai}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOSTED_INSTANCE_HELPER="$ROOT_DIR/scripts/lib/hosted-instance.sh"
 TEST_SUBDOMAIN="e2e-$(date +%s)-${RANDOM}"
 TEST_EMAIL="${TEST_SUBDOMAIN}@test.longhouse.ai"
 HEALTH_TIMEOUT=120  # seconds
 INSTANCE_ID=""
+INSTANCE_URL=""
 KEEP_INSTANCE=0
 
 for arg in "$@"; do
@@ -36,9 +37,20 @@ done
 # Preflight
 # ---------------------------------------------------------------------------
 
-if [[ -z "${ADMIN_TOKEN:-}" ]]; then
-  echo "ADMIN_TOKEN is required. Set it via environment or Keychain:" >&2
-  echo "  ADMIN_TOKEN=\$(security find-generic-password -s longhouse-admin-token -w) $0" >&2
+if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
+  echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+. "$HOSTED_INSTANCE_HELPER"
+lh_hosted_default_control_plane_url
+CONTROL_PLANE_ADMIN_TOKEN="${CONTROL_PLANE_ADMIN_TOKEN:-${ADMIN_TOKEN:-}}"
+export CONTROL_PLANE_ADMIN_TOKEN
+
+if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]]; then
+  echo "CONTROL_PLANE_ADMIN_TOKEN or ADMIN_TOKEN is required. Set it via environment or Keychain:" >&2
+  echo "  CONTROL_PLANE_ADMIN_TOKEN=\$(security find-generic-password -s longhouse-admin-token -w) $0" >&2
   exit 1
 fi
 
@@ -99,18 +111,14 @@ cleanup() {
   set +e
   if [[ -n "$INSTANCE_ID" ]]; then
     if [[ "$KEEP_INSTANCE" -eq 1 ]]; then
-      printf "\n--keep: Leaving instance %s running (%s.%s)\n" "$INSTANCE_ID" "$TEST_SUBDOMAIN" "$ROOT_DOMAIN"
+      printf "\n--keep: Leaving instance %s running (%s)\n" "$INSTANCE_ID" "$INSTANCE_URL"
       return
     fi
     step "Cleaning up: deprovisioning instance ${INSTANCE_ID}"
-    deprov_code=$(curl -s -o /dev/null -w "%{http_code}" \
-      --connect-timeout 10 --max-time 30 \
-      -X POST "${CP_URL}/api/instances/${INSTANCE_ID}/deprovision" \
-      -H "X-Admin-Token: ${ADMIN_TOKEN}" 2>/dev/null)
-    if [[ "$deprov_code" == "200" ]]; then
-      ok "Deprovisioned (${deprov_code})"
+    if lh_hosted_deprovision "$INSTANCE_ID" >/dev/null 2>&1; then
+      ok "Deprovisioned"
     else
-      echo "  Warning: Deprovision returned ${deprov_code} — instance may need manual cleanup" >&2
+      echo "  Warning: Deprovision failed — instance may need manual cleanup" >&2
     fi
   fi
 }
@@ -120,10 +128,10 @@ trap cleanup EXIT
 # Step 1: Verify control plane is healthy
 # ---------------------------------------------------------------------------
 
-step "Checking control plane health at ${CP_URL}"
-cp_health=$(curl -sf --connect-timeout 10 --max-time 15 "${CP_URL}/health" 2>/dev/null || echo "")
+step "Checking control plane health at ${CONTROL_PLANE_URL}"
+cp_health=$(curl -sf --connect-timeout 10 --max-time 15 "${CONTROL_PLANE_URL}/health" 2>/dev/null || echo "")
 if [[ -z "$cp_health" ]]; then
-  fail "Control plane not reachable at ${CP_URL}/health"
+  fail "Control plane not reachable at ${CONTROL_PLANE_URL}/health"
 fi
 ok "Control plane healthy"
 
@@ -135,9 +143,9 @@ step "Provisioning test instance: ${TEST_SUBDOMAIN} (${TEST_EMAIL})"
 provision_file=$(mktemp)
 provision_code=$(curl -s -o "$provision_file" -w "%{http_code}" \
   --connect-timeout 10 --max-time 60 \
-  -X POST "${CP_URL}/api/instances" \
+  -X POST "${CONTROL_PLANE_URL}/api/instances" \
   -H "Content-Type: application/json" \
-  -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+  -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
   -d "{\"email\":\"${TEST_EMAIL}\",\"subdomain\":\"${TEST_SUBDOMAIN}\"}" 2>/dev/null)
 
 if [[ "$provision_code" != "200" && "$provision_code" != "201" ]]; then
@@ -148,18 +156,18 @@ INSTANCE_ID=$(json_field_file "id" "$provision_file")
 CONTAINER_NAME=$(json_field_file "container_name" "$provision_file")
 PASSWORD=$(json_field_file "password" "$provision_file")
 INSTANCE_STATUS=$(json_field_file "status" "$provision_file")
+INSTANCE_URL=$(json_field_file "url" "$provision_file")
 rm -f "$provision_file"
 
-if [[ -z "$INSTANCE_ID" || -z "$CONTAINER_NAME" ]]; then
-  fail "Invalid provision response — missing id or container_name"
+if [[ -z "$INSTANCE_ID" || -z "$INSTANCE_URL" ]]; then
+  fail "Invalid provision response — missing id or url"
 fi
-ok "Instance created: id=${INSTANCE_ID} container=${CONTAINER_NAME} status=${INSTANCE_STATUS}"
+ok "Instance created: id=${INSTANCE_ID} url=${INSTANCE_URL} status=${INSTANCE_STATUS}"
 
 # ---------------------------------------------------------------------------
 # Step 3: Wait for instance health via HTTPS
 # ---------------------------------------------------------------------------
 
-INSTANCE_URL="https://${TEST_SUBDOMAIN}.${ROOT_DOMAIN}"
 step "Waiting for instance health at ${INSTANCE_URL}/api/health (timeout ${HEALTH_TIMEOUT}s)"
 
 elapsed=0
@@ -231,24 +239,16 @@ fi
 step "Testing SSO flow: admin issues login token -> instance accepts it"
 
 COOKIE_JAR=$(mktemp)
-token_resp=$(curl -sf --connect-timeout 10 --max-time 15 \
-  -X POST "${CP_URL}/api/instances/${INSTANCE_ID}/login-token" \
-  -H "X-Admin-Token: ${ADMIN_TOKEN}" 2>/dev/null || echo "")
-sso_token=$(echo "$token_resp" | json_field "token")
+LH_INSTANCE_ID="$INSTANCE_ID"
+LH_INSTANCE_URL="$INSTANCE_URL"
+export LH_INSTANCE_ID LH_INSTANCE_URL
+sso_token="$(lh_hosted_issue_login_token "$INSTANCE_ID" 2>/dev/null || true)"
 
 if [[ -z "$sso_token" ]]; then
   echo "  Warning: Could not get SSO token (may not be configured). Skipping SSO test."
 else
-  # Use the SSO token to authenticate — save session cookie
-  sso_code=$(curl -s -o /dev/null -w "%{http_code}" \
-    -c "$COOKIE_JAR" \
-    --connect-timeout 10 --max-time 15 \
-    "${INSTANCE_URL}/api/auth/accept-token" \
-    -H "Content-Type: application/json" \
-    -d "{\"token\":\"${sso_token}\"}" 2>/dev/null)
-
-  if [[ "$sso_code" == "200" || "$sso_code" == "302" ]]; then
-    ok "SSO token accepted (${sso_code})"
+  if lh_hosted_accept_login_token "$sso_token" "$COOKIE_JAR" "$INSTANCE_URL" >/dev/null 2>&1; then
+    ok "SSO token accepted"
 
     # Verify authenticated access using the session cookie
     auth_code=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -261,7 +261,7 @@ else
       echo "  Warning: Authenticated /api/agents/sessions -> ${auth_code} (cookie may not work). Non-fatal."
     fi
   else
-    echo "  Warning: SSO accept-token returned ${sso_code} (may need config). Non-fatal."
+    echo "  Warning: SSO accept-token failed (may need config). Non-fatal."
   fi
 fi
 rm -f "$COOKIE_JAR"
@@ -273,8 +273,8 @@ rm -f "$COOKIE_JAR"
 step "Verifying instance status in control plane"
 
 inst_resp=$(curl -sf --connect-timeout 10 --max-time 15 \
-  "${CP_URL}/api/instances/${INSTANCE_ID}" \
-  -H "X-Admin-Token: ${ADMIN_TOKEN}" 2>/dev/null || echo "")
+  "${CONTROL_PLANE_URL}/api/instances/${INSTANCE_ID}" \
+  -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" 2>/dev/null || echo "")
 inst_status=$(echo "$inst_resp" | json_field "status")
 
 if [[ "$inst_status" == "active" || "$inst_status" == "running" || "$inst_status" == "provisioned" || "$inst_status" == "provisioning" ]]; then
@@ -288,7 +288,7 @@ fi
 # ---------------------------------------------------------------------------
 
 printf "\n Live E2E provisioning test PASSED\n"
-printf "   Instance: %s.%s\n" "$TEST_SUBDOMAIN" "$ROOT_DOMAIN"
+printf "   Instance: %s\n" "$INSTANCE_URL"
 printf "   Container: %s\n" "$CONTAINER_NAME"
 if [[ "$KEEP_INSTANCE" -eq 1 ]]; then
   printf "   --keep: Instance left running for debugging.\n\n"
