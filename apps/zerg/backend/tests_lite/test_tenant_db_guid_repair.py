@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+from datetime import datetime
+from datetime import timezone
+from uuid import uuid4
+
+from sqlalchemy import text
+
+from zerg.database import Base
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models import User
+from zerg.models.enums import UserRole
+from zerg.models.models import Fiche
+from zerg.models.models import Memory
+from zerg.models.run import Run
+from zerg.models.thread import Thread
+from zerg.models.enums import ThreadType
+from zerg.services.tenant_db_guid_repair import find_db_paths
+from zerg.services.tenant_db_guid_repair import repair_db
+from zerg.services.tenant_db_guid_repair import scan_db
+
+
+def _make_db(tmp_path, name: str = "tenant.db"):
+    db_path = tmp_path / name
+    engine = make_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(bind=engine)
+    return db_path, make_sessionmaker(engine)
+
+
+def _seed_run_graph(db):
+    user = User(email="repair@test.local", role=UserRole.USER.value)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    fiche = Fiche(
+        name="Repair Test",
+        status="idle",
+        system_instructions="sys",
+        task_instructions="task",
+        model="gpt-scripted",
+        owner_id=user.id,
+    )
+    db.add(fiche)
+    db.commit()
+    db.refresh(fiche)
+
+    thread = Thread(fiche_id=fiche.id, title="Repair Thread", thread_type=ThreadType.CHAT.value)
+    db.add(thread)
+    db.commit()
+    db.refresh(thread)
+    return user, fiche, thread
+
+
+def test_scan_and_repair_safe_guid_columns(tmp_path):
+    instance_dir = tmp_path / "david010"
+    instance_dir.mkdir()
+    db_path, SessionLocal = _make_db(instance_dir, "longhouse.db")
+
+    with SessionLocal() as db:
+        _user, fiche, thread = _seed_run_graph(db)
+        started_at = datetime(2026, 3, 6, 4, 0, 0, tzinfo=timezone.utc).replace(tzinfo=None)
+        result = db.execute(
+            text(
+                """
+                INSERT INTO runs (
+                    fiche_id, thread_id, status, trigger, started_at, assistant_message_id, trace_id, model
+                ) VALUES (
+                    :fiche_id, :thread_id, :status, :trigger, :started_at, :assistant_message_id, :trace_id, :model
+                )
+                """
+            ),
+            {
+                "fiche_id": fiche.id,
+                "thread_id": thread.id,
+                "status": "RUNNING",
+                "trigger": "API",
+                "started_at": started_at,
+                "assistant_message_id": "live-voice-1772742439",
+                "trace_id": "not-a-uuid",
+                "model": "gpt-scripted",
+            },
+        )
+        db.commit()
+        run_id = result.lastrowid
+
+    findings = scan_db(db_path)
+    assert {(finding.table, finding.column, finding.action) for finding in findings} == {
+        ("runs", "assistant_message_id", "set_null"),
+        ("runs", "trace_id", "set_null"),
+    }
+
+    summary = repair_db(db_path)
+    assert summary.repaired_count == 2
+    assert summary.unsupported_count == 0
+
+    with SessionLocal() as db:
+        row = db.execute(
+            text("SELECT assistant_message_id, trace_id FROM runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().one()
+    assert row["assistant_message_id"] is None
+    assert row["trace_id"] is None
+
+
+def test_scan_reports_unsupported_guid_columns_without_mutating(tmp_path):
+    db_path, SessionLocal = _make_db(tmp_path, "unsupported.db")
+
+    with SessionLocal() as db:
+        user = User(email="memory@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        db.execute(
+            text(
+                """
+                INSERT INTO memories (id, user_id, fiche_id, content, type)
+                VALUES (:id, :user_id, NULL, :content, :type)
+                """
+            ),
+            {
+                "id": "not-a-real-uuid",
+                "user_id": user.id,
+                "content": "hello",
+                "type": "note",
+            },
+        )
+        db.commit()
+
+    findings = scan_db(db_path)
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.table == "memories"
+    assert finding.column == "id"
+    assert finding.action == "report_only"
+
+    summary = repair_db(db_path)
+    assert summary.repaired_count == 0
+    assert summary.unsupported_count == 1
+
+
+def test_find_db_paths_discovers_instance_dbs(tmp_path):
+    alpha = tmp_path / "alpha"
+    beta = tmp_path / "beta"
+    alpha.mkdir()
+    beta.mkdir()
+    (alpha / "longhouse.db").write_text("")
+    (beta / "longhouse.db").write_text("")
+
+    found = find_db_paths(root=tmp_path)
+    assert found == [alpha / "longhouse.db", beta / "longhouse.db"]

@@ -21,8 +21,8 @@ Status (2026-03-06): In progress.
 
 **Goal:** Make `/var/app-data/longhouse` the canonical hosted data root, ship an automated tenant GUID repair tool, remove the host compatibility bind mount, then use the cleanup to delete more drift.
 
-- [ ] Commit persistent spec for the cleanup sprint
-- [ ] Add one-shot tenant DB GUID scan/repair tooling
+- [x] Commit persistent spec for the cleanup sprint
+- [x] Add one-shot tenant DB GUID scan/repair tooling
 - [ ] Canonicalize control-plane/runtime data root to `/var/app-data/longhouse`
 - [ ] Migrate persisted instance `data_path` rows and remove the host compatibility bind mount on `zerg`
 - [ ] Run full verification (`make test`, `make test-e2e`, deploy/reprovision, `make qa-live`)
