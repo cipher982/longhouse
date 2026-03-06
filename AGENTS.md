@@ -232,8 +232,7 @@ Source of truth for product surface and priorities: `VISION.md` section **"Produ
 
 Do not maintain a second feature catalog in this file. Keep AGENTS focused on execution rules and link to canonical docs:
 - Oikos tool contract: `apps/zerg/backend/docs/supervisor_tools.md`
-- Harness simplification plan: `apps/zerg/backend/docs/specs/unified-memory-bridge.md`
-- Agent infra consolidation spec: `docs/specs/agent-infrastructure-consolidation.md`
+- Harness/runtime contracts live in code under `apps/zerg/backend/zerg/services/` and `apps/zerg/backend/zerg/tools/`
 - Runner daemon docs: `apps/runner/README.md`
 - Control plane docs: `apps/control-plane/README.md`
 - Shipper internals: `apps/zerg/backend/zerg/services/shipper/` (Python — hooks, install, auth)
