@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Infra] Tenant data root cleanup + repair tooling (size: 3)
+
+Status (2026-03-06): In progress.
+
+**Goal:** Make `/var/app-data/longhouse` the canonical hosted data root, ship an automated tenant GUID repair tool, remove the host compatibility bind mount, then use the cleanup to delete more drift.
+
+- [ ] Commit persistent spec for the cleanup sprint
+- [ ] Add one-shot tenant DB GUID scan/repair tooling
+- [ ] Canonicalize control-plane/runtime data root to `/var/app-data/longhouse`
+- [ ] Migrate persisted instance `data_path` rows and remove the host compatibility bind mount on `zerg`
+- [ ] Run full verification (`make test`, `make test-e2e`, deploy/reprovision, `make qa-live`)
+- [ ] Land three more simplifications focused on deleting drift/duplicate code
+
+Notes:
+- 2026-03-06: Current live state on `zerg` still uses a host compatibility bind mount from `/var/app-data/longhouse` to `/var/lib/docker/data/longhouse`; root pressure is fixed, but the old path is still part of the contract.
+- Spec: `docs/specs/tenant-data-root-cleanup.md`.
+
 ## [Tech Debt] Startup recovery should survive malformed legacy run UUIDs (size: 1)
 
 Status (2026-03-06): Done.
