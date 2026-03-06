@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { test as base, expect, type APIRequestContext, type BrowserContext } from '@playwright/test';
 
 type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: number }) => Promise<APIRequestContext> };
@@ -56,7 +58,7 @@ export async function waitForHealthy(
   }
 }
 
-function normalizeToken(value: string | undefined): string | undefined {
+export function normalizeToken(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
   if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
@@ -65,7 +67,19 @@ function normalizeToken(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-async function exchangeLoginToken(
+export function readDeviceToken(): string {
+  if (process.env.LONGHOUSE_DEVICE_TOKEN) {
+    return process.env.LONGHOUSE_DEVICE_TOKEN.trim();
+  }
+
+  try {
+    return readFileSync(`${homedir()}/.claude/longhouse-device-token`, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+export async function exchangeLoginToken(
   requestFactory: RequestFactory,
   apiBaseUrl: string,
   loginToken: string
@@ -98,8 +112,11 @@ async function exchangeLoginToken(
 
 type LiveFixtures = {
   apiBaseUrl: string;
+  frontendBaseUrl: string;
   authToken: string;
+  deviceToken: string;
   request: APIRequestContext;
+  agentsRequest: APIRequestContext;
   context: BrowserContext;
 };
 
@@ -107,6 +124,11 @@ export const test = base.extend<LiveFixtures>({
   apiBaseUrl: async ({}, use) => {
     const apiBaseUrl = process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || process.env.E2E_API_URL || '';
     await use(apiBaseUrl);
+  },
+
+  frontendBaseUrl: async ({ apiBaseUrl }, use) => {
+    const frontendBaseUrl = process.env.FRONTEND_URL || process.env.PLAYWRIGHT_BASE_URL || process.env.E2E_FRONTEND_URL || apiBaseUrl;
+    await use(frontendBaseUrl);
   },
 
   authToken: async ({ apiBaseUrl, playwright }, use) => {
@@ -128,6 +150,10 @@ export const test = base.extend<LiveFixtures>({
     await use(accessToken);
   },
 
+  deviceToken: async ({}, use) => {
+    await use(readDeviceToken());
+  },
+
   request: async ({ playwright, apiBaseUrl, authToken }, use) => {
     const request = await playwright.request.newContext({
       baseURL: apiBaseUrl,
@@ -140,8 +166,25 @@ export const test = base.extend<LiveFixtures>({
     await request.dispose();
   },
 
-  context: async ({ browser, apiBaseUrl, authToken }, use) => {
-    const context = await browser.newContext();
+  agentsRequest: async ({ playwright, apiBaseUrl, deviceToken }, use) => {
+    const extraHTTPHeaders: Record<string, string> = {};
+    if (deviceToken) {
+      extraHTTPHeaders['X-Agents-Token'] = deviceToken;
+    }
+
+    const request = await playwright.request.newContext({
+      baseURL: apiBaseUrl,
+      extraHTTPHeaders,
+      timeout: 45_000,
+    });
+    await use(request);
+    await request.dispose();
+  },
+
+  context: async ({ browser, apiBaseUrl, frontendBaseUrl, authToken }, use) => {
+    const context = await browser.newContext({
+      baseURL: frontendBaseUrl,
+    });
     const apiHost = new URL(apiBaseUrl).hostname;
     const secure = apiBaseUrl.startsWith('https://');
 

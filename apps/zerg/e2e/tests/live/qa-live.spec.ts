@@ -2,131 +2,14 @@
  * Live QA harness for the Longhouse production instance.
  *
  * Designed to run after every deploy — headless, ~60s, exit 0=pass exit 1=fail.
- * Uses password auth (LONGHOUSE_PASSWORD env var), NOT the service-secret path.
+ * Uses the hosted login-token -> accept-token flow shared by the other live suites.
  *
  * Run via: ./scripts/qa-live.sh
  * Or:      make qa-live
  */
 
-import { readFileSync } from 'fs';
-import { homedir } from 'os';
-import { test as base, expect, type BrowserContext, type APIRequestContext, type Page } from '@playwright/test';
-
-// ---------------------------------------------------------------------------
-// Auth helpers
-// ---------------------------------------------------------------------------
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-}
-
-/** POST /api/auth/password — returns the access_token JWT */
-async function passwordLogin(
-  request: APIRequestContext,
-  baseUrl: string,
-  password: string,
-): Promise<string> {
-  const res = await request.post(`${baseUrl}/api/auth/password`, {
-    data: { password },
-    timeout: 15_000,
-  });
-  if (!res.ok()) {
-    const body = await res.text().catch(() => '(unreadable)');
-    throw new Error(`password-login failed: ${res.status()} ${body}`);
-  }
-  const payload = await res.json();
-  if (!payload?.access_token) {
-    throw new Error(`password-login missing access_token: ${JSON.stringify(payload)}`);
-  }
-  return payload.access_token as string;
-}
-
-// ---------------------------------------------------------------------------
-// Custom fixture type
-// ---------------------------------------------------------------------------
-
-type QaFixtures = {
-  instanceUrl: string;
-  password: string;
-  authToken: string;       // browser JWT from password-login
-  deviceToken: string;     // device token for X-Agents-Token API calls
-  authedRequest: APIRequestContext;
-  authedContext: BrowserContext;
-};
-
-const test = base.extend<QaFixtures>({
-  instanceUrl: async ({}, use) => {
-    const url = process.env.QA_BASE_URL || 'https://david010.longhouse.ai';
-    await use(url.replace(/\/$/, ''));
-  },
-
-  password: async ({}, use) => {
-    const pw = requireEnv('LONGHOUSE_PASSWORD');
-    await use(pw.trim().replace(/^['"]|['"]$/g, ''));
-  },
-
-  authToken: async ({ instanceUrl, password, playwright }, use) => {
-    const req = await playwright.request.newContext({ timeout: 20_000 });
-    try {
-      const token = await passwordLogin(req, instanceUrl, password);
-      await use(token);
-    } finally {
-      await req.dispose();
-    }
-  },
-
-  deviceToken: async ({}, use) => {
-    // Device token for X-Agents-Token on /api/agents/* endpoints.
-    // CI: set LONGHOUSE_DEVICE_TOKEN env var.
-    // Dev: read from ~/.claude/longhouse-device-token (same file the engine uses).
-    const token =
-      process.env.LONGHOUSE_DEVICE_TOKEN ||
-      (() => {
-        try {
-          return readFileSync(homedir() + '/.claude/longhouse-device-token', 'utf8').trim();
-        } catch {
-          return '';
-        }
-      })();
-    await use(token);
-  },
-
-  authedRequest: async ({ playwright, instanceUrl, deviceToken }, use) => {
-    // /api/agents/* uses X-Agents-Token (device token), not the browser JWT
-    const headers: Record<string, string> = {};
-    if (deviceToken) headers['X-Agents-Token'] = deviceToken;
-    const ctx = await playwright.request.newContext({
-      baseURL: instanceUrl,
-      extraHTTPHeaders: headers,
-      timeout: 30_000,
-    });
-    await use(ctx);
-    await ctx.dispose();
-  },
-
-  authedContext: async ({ browser, instanceUrl, authToken }, use) => {
-    const host = new URL(instanceUrl).hostname;
-    const secure = instanceUrl.startsWith('https://');
-    const ctx = await browser.newContext({ baseURL: instanceUrl });
-    await ctx.addCookies([
-      {
-        name: 'longhouse_session',
-        value: authToken,
-        domain: host,
-        path: '/',
-        httpOnly: true,
-        secure,
-        sameSite: 'Lax',
-      },
-    ]);
-    await use(ctx);
-    await ctx.close();
-  },
-});
+import { test, expect } from './fixtures';
+import type { Page } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
 // Shared error collectors
@@ -180,10 +63,10 @@ async function failWithScreenshot(page: Page, testName: string, message: string)
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
 
-test('auth + timeline loads with session rows', async ({ authedContext, instanceUrl }) => {
+test('auth + timeline loads with session rows', async ({ context }) => {
   test.setTimeout(20_000);
 
-  const page = await authedContext.newPage();
+  const page = await context.newPage();
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
 
   let authFailed = false;
@@ -209,7 +92,7 @@ test('auth + timeline loads with session rows', async ({ authedContext, instance
     });
 
   if (authFailed) {
-    await failWithScreenshot(page, 'timeline-auth', 'Auth failure: /api/agents/sessions returned 401. Check LONGHOUSE_PASSWORD.');
+    await failWithScreenshot(page, 'timeline-auth', 'Auth failure: /api/agents/sessions returned 401. Check SMOKE_LOGIN_TOKEN.');
   }
 
   if (serverErrors.length > 0) {
@@ -234,11 +117,11 @@ test('auth + timeline loads with session rows', async ({ authedContext, instance
 // Test 2: Legacy forum route redirects to timeline
 // ---------------------------------------------------------------------------
 
-test('forum route redirects to timeline without auth errors', async ({ authedContext }) => {
+test('forum route redirects to timeline without auth errors', async ({ context }) => {
   // Budget includes auth checks + redirect + timeline render.
   test.setTimeout(45_000);
 
-  const page = await authedContext.newPage();
+  const page = await context.newPage();
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
 
   const authErrors: string[] = [];
@@ -291,11 +174,11 @@ test('forum route redirects to timeline without auth errors', async ({ authedCon
 // Test 3: Session detail loads events
 // ---------------------------------------------------------------------------
 
-test('session detail renders event timeline', async ({ authedRequest, authedContext }) => {
+test('session detail renders event timeline', async ({ agentsRequest, context }) => {
   test.setTimeout(20_000);
 
   // Pull the most recent session id via API (avoids UI scraping)
-  const sessionsRes = await authedRequest.get('/api/agents/sessions?limit=1');
+  const sessionsRes = await agentsRequest.get('/api/agents/sessions?limit=1');
   expect(sessionsRes.ok(), `GET /api/agents/sessions failed: ${sessionsRes.status()}`).toBe(true);
 
   const sessionsData = await sessionsRes.json();
@@ -308,7 +191,7 @@ test('session detail renders event timeline', async ({ authedRequest, authedCont
 
   const sessionId: string = sessions[0].id;
 
-  const page = await authedContext.newPage();
+  const page = await context.newPage();
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
 
   await page.goto(`/timeline/${sessionId}`, { waitUntil: 'domcontentloaded' });
@@ -352,10 +235,10 @@ test('session detail renders event timeline', async ({ authedRequest, authedCont
 // Test 4: Health + API sanity
 // ---------------------------------------------------------------------------
 
-test('health endpoint returns healthy', async ({ authedRequest }) => {
+test('health endpoint returns healthy', async ({ agentsRequest }) => {
   test.setTimeout(10_000);
 
-  const res = await authedRequest.get('/api/health');
+  const res = await agentsRequest.get('/api/health');
   expect(res.ok(), `GET /api/health returned ${res.status()}`).toBe(true);
 
   const body = await res.json();
@@ -365,10 +248,10 @@ test('health endpoint returns healthy', async ({ authedRequest }) => {
   ).toMatch(/^(healthy|ok)$/);
 });
 
-test('agents sessions API returns list', async ({ authedRequest }) => {
+test('agents sessions API returns list', async ({ agentsRequest }) => {
   test.setTimeout(10_000);
 
-  const res = await authedRequest.get('/api/agents/sessions?limit=5');
+  const res = await agentsRequest.get('/api/agents/sessions?limit=5');
   expect(
     res.ok(),
     `GET /api/agents/sessions returned ${res.status()} — auth may be broken`,
@@ -386,10 +269,10 @@ test('agents sessions API returns list', async ({ authedRequest }) => {
 // Test 6: AI search toggle — off by default, toggles on
 // ---------------------------------------------------------------------------
 
-test('timeline has AI search toggle', async ({ authedContext }) => {
+test('timeline has AI search toggle', async ({ context }) => {
   test.setTimeout(20_000);
 
-  const page = await authedContext.newPage();
+  const page = await context.newPage();
   await page.goto('/timeline', { waitUntil: 'domcontentloaded' });
 
   // Wait for the search toolbar to render
@@ -417,10 +300,10 @@ test('timeline has AI search toggle', async ({ authedContext }) => {
 // Test 7: Recall panel opens and renders search input
 // ---------------------------------------------------------------------------
 
-test('recall panel opens and shows search input', async ({ authedContext }) => {
+test('recall panel opens and shows search input', async ({ context }) => {
   test.setTimeout(20_000);
 
-  const page = await authedContext.newPage();
+  const page = await context.newPage();
   await page.goto('/timeline', { waitUntil: 'domcontentloaded' });
 
   // Wait for toolbar
@@ -450,10 +333,10 @@ test('recall panel opens and shows search input', async ({ authedContext }) => {
 // Test 8: Briefings page loads with project selector
 // ---------------------------------------------------------------------------
 
-test('briefings page loads with project selector', async ({ authedContext }) => {
+test('briefings page loads with project selector', async ({ context }) => {
   test.setTimeout(20_000);
 
-  const page = await authedContext.newPage();
+  const page = await context.newPage();
   await page.goto('/briefings', { waitUntil: 'domcontentloaded' });
 
   // Should not 404 or throw
