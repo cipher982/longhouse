@@ -7,7 +7,7 @@ then pipes them into the container's sqlite3 CLI.
 Usage:
     LIFE_HUB_DB_URL=... python3 scripts/migrate_sessions_direct.py > /tmp/migration.sql
     scp /tmp/migration.sql zerg:/tmp/
-    ssh zerg 'sudo cp /tmp/migration.sql /var/lib/docker/data/longhouse/david/migration.sql'
+    ssh zerg 'sudo cp /tmp/migration.sql /var/app-data/longhouse/david/migration.sql'
     ssh zerg 'docker exec longhouse-david sqlite3 /data/longhouse.db < /data/migration.sql'
 """
 

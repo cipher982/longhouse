@@ -94,7 +94,7 @@ Define the complete hosted architecture: control plane, instance provisioning, j
      --name longhouse-{subdomain} \
      --label caddy={subdomain}.longhouse.ai \
      --label "caddy.reverse_proxy={{upstreams 8000}}" \
-     -v /var/lib/docker/data/longhouse/{subdomain}:/data \
+     -v /var/app-data/longhouse/{subdomain}:/data \
      -e INSTANCE_ID={subdomain} \
      -e OWNER_EMAIL={email} \
      -e SINGLE_TENANT=1 \
@@ -108,7 +108,7 @@ Define the complete hosted architecture: control plane, instance provisioning, j
 
 **Volume structure:**
 ```
-/var/lib/docker/data/longhouse/{subdomain}/
+/var/app-data/longhouse/{subdomain}/
   longhouse.db       # SQLite database
   jobs/              # Jobs repo (auto-created)
     manifest.py

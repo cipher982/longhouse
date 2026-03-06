@@ -39,11 +39,11 @@ API calls use `~/.claude/longhouse-device-token` (`X-Agents-Token` header). Brow
 ```bash
 # Find control plane container by service label (hash changes on every deploy)
 CONTAINER=$(ssh zerg "docker ps --filter label=coolify.serviceName=longhouse-control-plane --format '{{.Names}}' | head -1")
-ADMIN_TOKEN=$(ssh zerg "docker exec $CONTAINER env | grep ADMIN_TOKEN | cut -d= -f2")
+ADMIN_TOKEN=$(ssh zerg "docker exec $CONTAINER python -c 'from control_plane.config import settings; print(settings.admin_token)'")
 
 # List instances to get the right ID (don't hardcode — use subdomain to find it)
 curl -s -H "X-Admin-Token: $ADMIN_TOKEN" https://control.longhouse.ai/api/instances \
-  | python3 -c "import sys,json; [print(i['id'], i['subdomain']) for i in json.load(sys.stdin)]"
+  | python3 -c "import sys,json; [print(i['id'], i['subdomain']) for i in json.load(sys.stdin)['instances']]"
 
 # Reprovision (stops+removes+recreates with latest image — data is safe, SQLite bind-mounted)
 curl -s -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://control.longhouse.ai/api/instances/<id>/reprovision
@@ -52,7 +52,7 @@ curl -s -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://control.longhouse.ai/ap
 sleep 15 && curl -s https://david010.longhouse.ai/api/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"  # healthy
 ```
 
-Data survives reprovision — SQLite at `/var/lib/docker/data/longhouse/<subdomain>/longhouse.db` (host bind mount).
+Data survives reprovision — SQLite at `/var/app-data/longhouse/<subdomain>/longhouse.db` (host bind mount).
 
 ## Wait for GHCR Build
 

@@ -110,7 +110,7 @@ Single container serving frontend + backend:
 ### Per-Instance Volume Structure
 
 ```
-/var/lib/docker/data/longhouse/{subdomain}/
+/var/app-data/longhouse/{subdomain}/
   longhouse.db       # SQLite database
   jobs/              # Jobs repo (auto-created)
     manifest.py      # Job definitions
@@ -201,7 +201,7 @@ job_registry.register(JobConfig(
 - No `zerg-api`, `zerg-web`, or `sauron-scheduler`
 
 ### David's Migration
-1. Pre-populate `/var/lib/docker/data/longhouse/david/jobs/` with `sauron-jobs` clone
+1. Pre-populate `/var/app-data/longhouse/david/jobs/` with `sauron-jobs` clone
 2. Provision `david` instance via control plane
 3. Verify jobs run on schedule
 4. Shut down old Coolify apps + Sauron
@@ -261,7 +261,7 @@ Make scheduler always-on, implement jobs repo bootstrap.
 ### Phase 4: Migrate David's Instance
 Provision david.longhouse.ai via control plane.
 
-- [ ] Pre-populate `/var/lib/docker/data/longhouse/david/jobs/` with `sauron-jobs` clone
+- [ ] Pre-populate `/var/app-data/longhouse/david/jobs/` with `sauron-jobs` clone
 - [ ] Provision `david` instance via control plane
 - [ ] Verify jobs load from pre-populated repo
 - [ ] Verify jobs run on schedule
