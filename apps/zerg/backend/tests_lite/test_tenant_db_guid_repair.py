@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+import subprocess
+from pathlib import Path
+
 from datetime import datetime
 from datetime import timezone
-from uuid import uuid4
 
 from sqlalchemy import text
 
@@ -12,8 +15,6 @@ from zerg.database import make_sessionmaker
 from zerg.models import User
 from zerg.models.enums import UserRole
 from zerg.models.models import Fiche
-from zerg.models.models import Memory
-from zerg.models.run import Run
 from zerg.models.thread import Thread
 from zerg.models.enums import ThreadType
 from zerg.services.tenant_db_guid_repair import find_db_paths
@@ -150,3 +151,22 @@ def test_find_db_paths_discovers_instance_dbs(tmp_path):
 
     found = find_db_paths(root=tmp_path)
     assert found == [alpha / "longhouse.db", beta / "longhouse.db"]
+
+
+def test_cli_runs_without_app_env(tmp_path):
+    instance_dir = tmp_path / "delta"
+    instance_dir.mkdir()
+    db_path, _SessionLocal = _make_db(instance_dir, "longhouse.db")
+
+    script_path = Path(__file__).resolve().parents[4] / "scripts" / "repair-tenant-db-guids.py"
+    result = subprocess.run(
+        ["python3", str(script_path), "--db-path", str(db_path)],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ.get("PATH", "")},
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "No malformed GUID values found." in result.stdout
+    assert "Missing required environment variables" not in f"{result.stdout}\n{result.stderr}"
