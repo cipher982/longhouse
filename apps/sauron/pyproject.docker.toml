@@ -2,7 +2,6 @@
 name = "sauron"
 version = "2.0.0"
 description = "Centralized ops scheduler - deployed as standalone service on clifford"
-readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # Core scheduling

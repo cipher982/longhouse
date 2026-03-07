@@ -27,9 +27,23 @@ Status (2026-03-06): Done.
 - [x] Verify the final markdown set is roughly 8-10 files and references are updated
 
 Notes:
-- 2026-03-06: Source of truth after this prune is `README.md`, `VISION.md`, `AGENTS.md`, `TODO.md`, `apps/control-plane/README.md`, `apps/control-plane/API.md`, `apps/runner/README.md`, `apps/zerg/backend/README.md`, plus the minimal build-required `apps/sauron/README.md`.
+- 2026-03-06: Source of truth after this prune is `README.md`, `VISION.md`, `AGENTS.md`, `TODO.md`, `apps/control-plane/README.md`, `apps/control-plane/API.md`, `apps/runner/README.md`, and `apps/zerg/backend/README.md`.
 - 2026-03-06: Bundled `SKILL.md` files under `apps/zerg/backend/zerg/skills/bundled/` were intentionally kept; they are runtime assets, not repository docs.
 - 2026-03-06: Git history is the archive. Completed specs, plans, handoffs, and reports were removed instead of archived.
+
+## [Docs/Drift] Remove Sauron README build dependency (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Delete `apps/sauron/README.md` by removing the last packaging and Docker build-time references to it.
+
+- [x] Remove `readme = "README.md"` from both Sauron pyproject files
+- [x] Stop copying `apps/sauron/README.md` in the Dockerfile
+- [x] Delete the file and verify local package + Docker builds still work
+
+Notes:
+- 2026-03-07: This was the last non-canonical repo doc kept only because the build expected it.
+- 2026-03-07: Validation passed with `cd apps/sauron && uv build` and `docker build -f apps/sauron/Dockerfile -t sauron-readme-prune:test .`.
 
 ## [Tech Debt] Provision live script helper dedupe (size: 1)
 

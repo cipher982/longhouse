@@ -64,7 +64,6 @@ EOF
 
 # Copy sauron package
 COPY apps/sauron/pyproject.docker.toml ./pyproject.toml
-COPY apps/sauron/README.md ./
 COPY apps/sauron/sauron ./sauron/
 
 # Install zerg package first (provides zerg.jobs, zerg.config), then sauron
