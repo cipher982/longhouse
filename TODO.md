@@ -272,6 +272,20 @@ Notes:
 - 2026-03-07: Research result: do **not** wire the global empty-schema check into the active validator yet. `bun run validate:all` immediately found 45 empty-schema endpoints, which proves this was not a real enforced standard.
 - 2026-03-07: Lead-dev call: keep the active validator focused on critical frontend contracts, delete the dead side path, and only add repo-wide OpenAPI linting later if we want to pay down those 45 endpoints with a real standards pass.
 
+## [Tech Debt] Prune broken/redundant root package scripts (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Keep the root `package.json` scripts limited to real, maintained entrypoints instead of stale aliases.
+
+- [x] Remove the broken `zerg` script
+- [x] Remove the redundant `verify:react` script
+- [x] Verify no live repo refs remain
+
+Notes:
+- 2026-03-07: `zerg` points at a nonexistent `make zerg` target, and `verify-single-react.mjs` is invoked directly by the frontend vitest runner, not via the root package script.
+- 2026-03-07: Verified there are no remaining repo refs to `bun run zerg`, `bun run verify:react`, or those root package-script keys after the cleanup.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
