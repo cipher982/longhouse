@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HOSTED_INSTANCE_HELPER="$ROOT_DIR/scripts/lib/hosted-instance.sh"
 CONTROL_PLANE_DIR="$ROOT_DIR/apps/control-plane"
 API_URL="http://127.0.0.1:48080"
 INSTANCE_PORT=8000
@@ -33,6 +34,14 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
+  echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+. "$HOSTED_INSTANCE_HELPER"
+
 IMAGE_TAG="longhouse-runtime:ci-${GITHUB_SHA:-local}"
 
 printf "\n==> Building runtime image: %s\n" "$IMAGE_TAG"
@@ -59,6 +68,10 @@ INSTANCE_INTERNAL_SECRET="$(make_token)"
 FERNET_SECRET="$(make_secret)"
 TRIGGER_SECRET="$(make_secret)"
 
+CONTROL_PLANE_URL="$API_URL"
+CONTROL_PLANE_ADMIN_TOKEN="$ADMIN_TOKEN"
+export CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN
+
 CONTROL_PLANE_DB="/tmp/longhouse-control-plane.db"
 if [[ -d "/home/runner/_work" ]]; then
   INSTANCE_DATA_ROOT="/home/runner/_work/longhouse-instance-data"
@@ -70,8 +83,7 @@ mkdir -p "$INSTANCE_DATA_ROOT"
 cleanup() {
   set +e
   if [[ -n "${INSTANCE_ID:-}" ]]; then
-    curl -sf -X POST "${API_URL}/api/instances/${INSTANCE_ID}/deprovision" \
-      -H "X-Admin-Token: ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
+    lh_hosted_deprovision "$INSTANCE_ID" >/dev/null 2>&1 || true
   fi
   docker rm -f "${CI_CONTAINER_NAME}" >/dev/null 2>&1 || true
   if [[ -n "${CONTROL_PLANE_PID:-}" ]]; then
@@ -121,30 +133,13 @@ fi
 
 printf "\n==> Provisioning test instance\n"
 docker rm -f "${CI_CONTAINER_NAME}" >/dev/null 2>&1 || true
-response_file=$(mktemp)
-curl -sf -X POST "${API_URL}/api/instances" \
-  -H "Content-Type: application/json" \
-  -H "X-Admin-Token: ${ADMIN_TOKEN}" \
-  -d "{\"email\":\"ci@example.com\",\"subdomain\":\"${CI_SUBDOMAIN}\"}" \
-  -o "$response_file"
+if ! lh_hosted_create_instance "ci@example.com" "$CI_SUBDOMAIN"; then
+  echo "Failed to create CI instance." >&2
+  exit 1
+fi
 
-INSTANCE_ID=$("$PYTHON_BIN" - <<'PY' "$response_file"
-import json, sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as handle:
-    data = json.load(handle)
-print(data["id"])
-PY
-) || { echo "Failed to parse instance response:"; cat "$response_file"; exit 1; }
-
-CONTAINER_NAME=$("$PYTHON_BIN" - <<'PY' "$response_file"
-import json, sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as handle:
-    data = json.load(handle)
-print(data["container_name"])
-PY
-) || { echo "Failed to parse instance response:"; cat "$response_file"; exit 1; }
+INSTANCE_ID="$LH_INSTANCE_ID"
+CONTAINER_NAME="${LH_INSTANCE_CONTAINER_NAME:-$CI_CONTAINER_NAME}"
 
 printf "\n==> Waiting for instance health (%s)\n" "$CONTAINER_NAME"
 for _ in {1..40}; do
