@@ -54,16 +54,6 @@ if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]]; then
   exit 1
 fi
 
-# Find python
-if command -v python3 >/dev/null 2>&1; then
-  PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-  PYTHON_BIN="python"
-else
-  echo "Missing required command: python3 or python" >&2
-  exit 1
-fi
-
 for cmd in curl; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Missing required command: $cmd" >&2
@@ -78,30 +68,6 @@ done
 fail() { printf "\n FAIL: %s\n" "$1" >&2; exit 1; }
 step() { printf "\n==> %s\n" "$1"; }
 ok()   { printf "  ok %s\n" "$1"; }
-
-# Safe JSON field extraction from a file (not stdin — avoids mixing stderr)
-json_field_file() {
-  "$PYTHON_BIN" -c "
-import json, sys
-try:
-    with open(sys.argv[2], 'r') as f:
-        data = json.load(f)
-    print(data.get(sys.argv[1], ''))
-except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
-    print('')
-" "$1" "$2"
-}
-
-# JSON field from string (for small inline uses)
-json_field() {
-  "$PYTHON_BIN" -c "
-import json, sys
-try:
-    print(json.loads(sys.stdin.read()).get('$1', ''))
-except (json.JSONDecodeError, ValueError):
-    print('')
-"
-}
 
 # ---------------------------------------------------------------------------
 # Cleanup (always runs unless --keep)
@@ -140,28 +106,15 @@ ok "Control plane healthy"
 # ---------------------------------------------------------------------------
 
 step "Provisioning test instance: ${TEST_SUBDOMAIN} (${TEST_EMAIL})"
-provision_file=$(mktemp)
-provision_code=$(curl -s -o "$provision_file" -w "%{http_code}" \
-  --connect-timeout 10 --max-time 60 \
-  -X POST "${CONTROL_PLANE_URL}/api/instances" \
-  -H "Content-Type: application/json" \
-  -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
-  -d "{\"email\":\"${TEST_EMAIL}\",\"subdomain\":\"${TEST_SUBDOMAIN}\"}" 2>/dev/null)
-
-if [[ "$provision_code" != "200" && "$provision_code" != "201" ]]; then
-  fail "Provision API returned ${provision_code}: $(cat "$provision_file" 2>/dev/null)"
+if ! lh_hosted_create_instance "$TEST_EMAIL" "$TEST_SUBDOMAIN"; then
+  fail "Provision API failed for ${TEST_SUBDOMAIN}"
 fi
 
-INSTANCE_ID=$(json_field_file "id" "$provision_file")
-CONTAINER_NAME=$(json_field_file "container_name" "$provision_file")
-PASSWORD=$(json_field_file "password" "$provision_file")
-INSTANCE_STATUS=$(json_field_file "status" "$provision_file")
-INSTANCE_URL=$(json_field_file "url" "$provision_file")
-rm -f "$provision_file"
+INSTANCE_ID="$LH_INSTANCE_ID"
+INSTANCE_URL="$LH_INSTANCE_URL"
+INSTANCE_STATUS="$LH_INSTANCE_STATUS"
+CONTAINER_NAME="$LH_INSTANCE_CONTAINER_NAME"
 
-if [[ -z "$INSTANCE_ID" || -z "$INSTANCE_URL" ]]; then
-  fail "Invalid provision response — missing id or url"
-fi
 ok "Instance created: id=${INSTANCE_ID} url=${INSTANCE_URL} status=${INSTANCE_STATUS}"
 
 # ---------------------------------------------------------------------------
@@ -174,12 +127,9 @@ elapsed=0
 while [[ $elapsed -lt $HEALTH_TIMEOUT ]]; do
   health_resp=$(curl -sf --connect-timeout 5 --max-time 10 \
     "${INSTANCE_URL}/api/health" 2>/dev/null || echo "")
-  if [[ -n "$health_resp" ]]; then
-    health_status=$(echo "$health_resp" | json_field "status")
-    if [[ "$health_status" == "ok" || "$health_status" == "healthy" ]]; then
-      ok "Instance healthy after ${elapsed}s"
-      break
-    fi
+  if printf '%s' "$health_resp" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"(ok|healthy)"'; then
+    ok "Instance healthy after ${elapsed}s"
+    break
   fi
   sleep 3
   elapsed=$((elapsed + 3))
@@ -272,10 +222,10 @@ rm -f "$COOKIE_JAR"
 
 step "Verifying instance status in control plane"
 
-inst_resp=$(curl -sf --connect-timeout 10 --max-time 15 \
-  "${CONTROL_PLANE_URL}/api/instances/${INSTANCE_ID}" \
-  -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" 2>/dev/null || echo "")
-inst_status=$(echo "$inst_resp" | json_field "status")
+if ! lh_hosted_get_instance "$INSTANCE_ID"; then
+  fail "Failed to fetch control-plane status for instance ${INSTANCE_ID}"
+fi
+inst_status="$LH_INSTANCE_STATUS"
 
 if [[ "$inst_status" == "active" || "$inst_status" == "running" || "$inst_status" == "provisioned" || "$inst_status" == "provisioning" ]]; then
   ok "Instance status: ${inst_status}"

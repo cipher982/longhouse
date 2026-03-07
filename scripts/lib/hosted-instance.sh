@@ -29,6 +29,51 @@ lh_hosted_require_env() {
   done
 }
 
+_lh_hosted_parse_instance_payload() {
+  local response_file="$1"
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+
+  "$python_bin" - "$response_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+instance_id = payload.get("id")
+url = payload.get("url")
+if not instance_id or not url:
+    sys.exit(3)
+
+
+def clean(value):
+    return str("" if value is None else value).replace("\t", " ").replace("\n", " ")
+
+print("\t".join(
+    [
+        clean(instance_id),
+        clean(url),
+        clean(payload.get("subdomain")),
+        clean(payload.get("status")),
+        clean(payload.get("container_name")),
+        clean(payload.get("password")),
+    ]
+))
+PY
+}
+
+_lh_hosted_export_instance_payload() {
+  local parsed="$1"
+  local fallback_subdomain="${2:-}"
+
+  IFS=$'\t' read -r LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN LH_INSTANCE_STATUS LH_INSTANCE_CONTAINER_NAME LH_INSTANCE_PASSWORD <<< "$parsed"
+  if [[ -z "$LH_INSTANCE_SUBDOMAIN" && -n "$fallback_subdomain" ]]; then
+    LH_INSTANCE_SUBDOMAIN="$fallback_subdomain"
+  fi
+  export LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN LH_INSTANCE_STATUS LH_INSTANCE_CONTAINER_NAME LH_INSTANCE_PASSWORD
+}
+
 _lh_hosted_parse_instance_row() {
   local response_file="$1"
   local subdomain="$2"
@@ -107,6 +152,92 @@ lh_hosted_default_control_plane_url() {
   CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-${CP_URL:-https://control.longhouse.ai}}"
   CP_URL="$CONTROL_PLANE_URL"
   export CONTROL_PLANE_URL CP_URL
+}
+
+lh_hosted_create_instance() {
+  local email="$1"
+  local subdomain="$2"
+  local response_file=""
+  local http_code=""
+  local parsed=""
+  local parse_status=0
+
+  if [[ -z "$email" || -z "$subdomain" ]]; then
+    echo "Usage: lh_hosted_create_instance <email> <subdomain>" >&2
+    return 1
+  fi
+
+  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN || return 1
+
+  response_file="$(mktemp)"
+  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+    --connect-timeout 10 --max-time 60 \
+    -X POST "${CONTROL_PLANE_URL%/}/api/instances" \
+    -H "Content-Type: application/json" \
+    -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
+    -d "{\"email\":\"${email}\",\"subdomain\":\"${subdomain}\"}")"
+
+  if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
+    echo "Failed to create instance ${subdomain} (HTTP ${http_code})" >&2
+    cat "$response_file" >&2
+    rm -f "$response_file"
+    return 1
+  fi
+
+  if parsed="$(_lh_hosted_parse_instance_payload "$response_file")"; then
+    :
+  else
+    parse_status=$?
+    if [[ "$parse_status" -eq 3 ]]; then
+      echo "Create-instance response missing id/url for subdomain: ${subdomain}" >&2
+    fi
+    rm -f "$response_file"
+    return 1
+  fi
+
+  rm -f "$response_file"
+  _lh_hosted_export_instance_payload "$parsed" "$subdomain"
+}
+
+lh_hosted_get_instance() {
+  local instance_id="${1:-${LH_INSTANCE_ID:-}}"
+  local response_file=""
+  local http_code=""
+  local parsed=""
+  local parse_status=0
+
+  if [[ -z "$instance_id" ]]; then
+    echo "Missing instance id for get-instance request" >&2
+    return 1
+  fi
+
+  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN || return 1
+
+  response_file="$(mktemp)"
+  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+    -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
+    "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}")"
+
+  if [[ "$http_code" != "200" ]]; then
+    echo "Failed to get instance ${instance_id} (HTTP ${http_code})" >&2
+    cat "$response_file" >&2
+    rm -f "$response_file"
+    return 1
+  fi
+
+  if parsed="$(_lh_hosted_parse_instance_payload "$response_file")"; then
+    :
+  else
+    parse_status=$?
+    if [[ "$parse_status" -eq 3 ]]; then
+      echo "Get-instance response missing id/url for instance: ${instance_id}" >&2
+    fi
+    rm -f "$response_file"
+    return 1
+  fi
+
+  rm -f "$response_file"
+  _lh_hosted_export_instance_payload "$parsed"
 }
 
 lh_hosted_prepare_target() {
