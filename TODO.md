@@ -88,16 +88,30 @@ Notes:
 
 ## [Tech Debt] Delete dead frontend contract wrapper (size: 1)
 
-Status (2026-03-07): In progress.
+Status (2026-03-07): Done.
 
 **Goal:** Remove `scripts/validate-frontend-contracts.sh` and keep `scripts/fast-contract-check.sh` as the single repo-level frontend contract entrypoint.
 
-- [ ] Confirm all live refs already use `fast-contract-check.sh` or `bun run validate:contracts`
-- [ ] Delete the dead wrapper script
-- [ ] Keep any tiny durable guidance in canonical files only if needed
+- [x] Confirm all live refs already use `fast-contract-check.sh` or `bun run validate:contracts`
+- [x] Delete the dead wrapper script
+- [x] Keep any tiny durable guidance in canonical files only if needed
 
 Notes:
-- 2026-03-07: `validate-frontend-contracts.sh` appears to be an old verbose wrapper with no live references in hooks, make, package scripts, or CI.
+- 2026-03-07: `validate-frontend-contracts.sh` had no live references in hooks, make, package scripts, or CI.
+- 2026-03-07: Validation passed with `./scripts/fast-contract-check.sh` after deleting the wrapper.
+
+## [Tech Debt] Delete dead Sauron compose file (size: 1)
+
+Status (2026-03-07): In progress.
+
+**Goal:** Remove `apps/sauron/docker-compose.yml`, which appears to be a stale standalone deployment path.
+
+- [ ] Confirm there are no repo references to `apps/sauron/docker-compose.yml`
+- [ ] Confirm there is no live `sauron` container still using this repo deployment path
+- [ ] Delete the file
+
+Notes:
+- 2026-03-07: `AGENTS.md` already says Sauron is folded into Longhouse, local repo refs are empty, and `ssh clifford 'docker ps -a'` showed no `sauron` container.
 
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
