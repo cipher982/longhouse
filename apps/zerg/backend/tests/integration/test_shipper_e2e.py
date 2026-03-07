@@ -162,6 +162,10 @@ def server(tmp_path_factory):
             "FERNET_SECRET",
             base64.urlsafe_b64encode(os.urandom(32)).decode(),
         ),
+        "TRIGGER_SIGNING_SECRET": os.environ.get(
+            "TRIGGER_SIGNING_SECRET",
+            base64.urlsafe_b64encode(os.urandom(32)).decode(),
+        ),
     }
 
     proc = subprocess.Popen(
