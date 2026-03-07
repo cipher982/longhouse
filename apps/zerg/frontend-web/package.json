@@ -12,7 +12,8 @@
     "generate:api": "bunx openapi-typescript ../openapi.json --output src/generated/openapi-types.ts",
     "validate:contracts": "bun ./scripts/contract-validator.ts",
     "validate:types": "tsc --noEmit --skipLibCheck",
-    "precommit": "bun run validate:types && bun run validate:contracts && bun run test -- --run"
+    "precommit": "bun run validate:types && bun run validate:contracts && bun run test -- --run",
+    "validate:bundle-size": "node ./scripts/check-bundle-size.mjs"
   },
   "dependencies": {
     "@openai/agents": "^0.1.1",

@@ -65,7 +65,7 @@ jobs:
         run: cd apps/zerg/frontend-web && bun run build
 
       - name: Check bundle size
-        run: cd apps/zerg/frontend-web && bunx size-limit
+        run: cd apps/zerg/frontend-web && bun run validate:bundle-size
 
   image-size:
     runs-on: ubuntu-latest
