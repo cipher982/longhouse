@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # validate-asyncapi.sh – sanity-check schemas/ws-protocol-asyncapi.yml.
 # ---------------------------------------------------------------------------
-# Mirrors the schema path used by scripts/regen-ws-code.sh. Uses `uv run`
+# Uses the same schema path and backend uv environment as `make regen-ws`.
 # so the backend Python environment (PyYAML) is available.
 
 set -euo pipefail
