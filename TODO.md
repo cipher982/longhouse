@@ -201,6 +201,20 @@ Notes:
 - 2026-03-07: The script is only referenced by `Makefile:test-ci`; it is a wrapper, not a shared primitive.
 - 2026-03-07: While inlining it, `test-ci` was corrected to run the real backend lite suite (`run_backend_tests_lite.sh`) instead of swallowing a call to the nonexistent `run_backend_tests.sh`.
 
+## [Tech Debt] Hosted provision helper cleanup (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Finish collapsing `scripts/provision-e2e-live.sh` onto `scripts/lib/hosted-instance.sh` so the live provision smoke does not carry its own JSON parsing and control-plane fetch logic.
+
+- [x] Add helper support for create/get instance payloads
+- [x] Remove local JSON parsing/helpers from `scripts/provision-e2e-live.sh`
+- [x] Verify the live provision smoke still passes end to end
+
+Notes:
+- 2026-03-07: The script already uses the shared helper for login-token and deprovision, but it still open-codes create/get parsing with ad-hoc Python snippets.
+- 2026-03-07: Added `lh_hosted_create_instance` and `lh_hosted_get_instance`, removed the local JSON/python helpers from `provision-e2e-live.sh`, and re-ran the live provision smoke successfully against `control.longhouse.ai`.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
