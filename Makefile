@@ -670,7 +670,33 @@ qa-live: ## Run live QA against hosted instance (~60s, default subdomain david01
 	@./scripts/qa-live.sh
 
 test-ci: ## @internal CI-ready tests (unit + build + contracts)
-	@./scripts/run-ci-tests.sh
+	@echo "🤖 CI Test Suite Starting..."
+	@echo "═══════════════════════════════════════════════════════════════════════════════"
+	@echo "🧪 Running React Unit Tests..."
+	@cd apps/zerg/frontend-web && bun run test -- --run --reporter=basic
+	@echo "  ✅ React unit tests passed"
+	@echo ""
+	@echo "🏗️  Testing React Build..."
+	@cd apps/zerg/frontend-web && bun run build >/dev/null 2>&1
+	@echo "  ✅ React build successful"
+	@echo ""
+	@echo "🧪 Running Backend Lite Tests..."
+	@cd apps/zerg/backend && ./run_backend_tests_lite.sh >/dev/null
+	@echo "  ✅ Backend lite tests passed"
+	@echo ""
+	@echo "🔍 Running Contract Validation..."
+	@cd apps/zerg/frontend-web && bun run validate:contracts >/dev/null
+	@echo "  ✅ API contracts valid"
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════════════════════════"
+	@echo "🎯 CI Test Summary:"
+	@echo "  ✓ React unit tests"
+	@echo "  ✓ React build process"
+	@echo "  ✓ Backend lite tests"
+	@echo "  ✓ API contract validation"
+	@echo ""
+	@echo "✨ All CI checks passed! Ready for deployment."
+	@echo "═══════════════════════════════════════════════════════════════════════════════"
 
 # ---------------------------------------------------------------------------
 # Performance Profiling
