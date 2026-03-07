@@ -32,5 +32,8 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y make
+
       - name: Run readme-test blocks
         run: make test-readmes MODE=${{ github.event.inputs.mode || 'smoke' }}

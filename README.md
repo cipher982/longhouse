@@ -84,8 +84,8 @@ cd longhouse && make dev
     "uv pip install -e apps/zerg/backend -q",
     "DATABASE_URL=sqlite:///$(mktemp -d)/test.db longhouse serve --port 47398 &",
     "SERVER_PID=$!",
-    "sleep 4",
-    "curl -sf http://localhost:47398/api/health",
+    "for _ in $(seq 1 20); do curl -sf http://127.0.0.1:47398/api/health && break; sleep 1; done",
+    "curl -sf http://127.0.0.1:47398/api/health",
     "kill $SERVER_PID 2>/dev/null || true"
   ],
   "cleanup": [

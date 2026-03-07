@@ -189,6 +189,7 @@ Instead, the product should express intent in user language:
 - 2026-03-07: Researched a solo-dev validation strategy and added a layered plan: Playwright browser projects, hosted CI OS matrix, self-hosted canary hardware, and tiny real-device spot checks.
 - 2026-03-07: Implemented the browser ring locally: onboarding config now covers Chromium, Firefox, WebKit, and mobile emulation, and a new runner setup smoke asserts desktop/server command generation on `/runners`.
 - 2026-03-07: Added `make test-e2e-onboarding`, a dedicated GitHub Actions workflow for hosted + self-hosted onboarding validation, and a release-candidate checklist for real-device spot checks.
+- 2026-03-07: The first live GitHub Actions run exposed a real workflow-shaping constraint: `jobs.<job_id>.if` is evaluated before `strategy.matrix`, so hosted baseline and extended coverage must be separate jobs rather than one matrix with `matrix.run_on_push` gating.
 - 2026-03-07: Fixed `make onboarding-funnel` so the README contract now exercises the onboarding Playwright smoke instead of stopping at `/api/health`.
 
 ## Discoveries / Quirks
@@ -202,3 +203,6 @@ Instead, the product should express intent in user language:
 - Cross-browser onboarding validation still depends on Playwright browser binaries being installed on the host; CI/workflows need to provision them explicitly.
 - The current GitHub API token available in this shell did not expose repo-level self-hosted runner metadata, so optional Linux x64/macOS hardware jobs are wired with explicit labels rather than auto-discovery.
 - `make onboarding-funnel` was previously only a server/health smoke; the browser step had to be added back into the README contract to make the synthetic first-user ring meaningful.
+- GitHub Actions evaluates `jobs.<job_id>.if` before matrix expansion, so event gating that depends on `matrix.*` has to be expressed as separate jobs instead of a single conditional matrix job.
+- Self-hosted `cube` workflows cannot assume `make` is already present; CI jobs that shell out through `make` need to install build tools explicitly.
+- README/service smoke checks should poll health instead of sleeping a fixed number of seconds; cold-start variance already exceeds 4 seconds on a fresh local boot.

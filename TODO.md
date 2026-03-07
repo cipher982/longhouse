@@ -52,7 +52,7 @@ Notes:
 
 ## [QA/Test] Solo-dev runner onboarding validation ring (size: 4)
 
-Status (2026-03-07): Implemented locally; workflow not yet exercised in GitHub Actions.
+Status (2026-03-07): Implemented locally and now exercised in GitHub Actions; workflow fixes in progress.
 
 **Goal:** Catch onboarding regressions across browser, OS, and hardware before beta users ever see them.
 
@@ -67,6 +67,8 @@ Notes:
 - 2026-03-07: Keep macOS hosted coverage selective because GitHub-hosted macOS minutes cost much more than Linux in private repos.
 - 2026-03-07: Implemented `make test-e2e-onboarding`, expanded the Playwright onboarding config, added `/runners` install-mode coverage, and added the workflow/checklist scaffolding for hosted + self-hosted validation.
 - 2026-03-07: Fixed `make onboarding-funnel` so the README contract now runs the onboarding Playwright smoke instead of only checking `/api/health`.
+- 2026-03-07: First live GitHub Actions run surfaced two concrete issues: job-level `if` cannot use `matrix.*`, and `README Tests` on `cube` needs an explicit `make` install step.
+- 2026-03-07: The README smoke block also used a fixed 4-second sleep; a fresh `longhouse serve` cold start currently takes about 7 seconds locally, so the contract now polls `/api/health` instead of racing startup.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 

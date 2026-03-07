@@ -69,8 +69,7 @@ env:
   PIP_EXTRA_INDEX_URL: ""
 
 jobs:
-  hosted-onboarding:
-    if: ${{ github.event_name == 'schedule' || matrix.run_on_push || (github.event_name == 'workflow_dispatch' && (inputs.run_extended_hosted_matrix || matrix.run_on_push)) }}
+  hosted-onboarding-core:
     strategy:
       fail-fast: false
       matrix:
@@ -78,15 +77,6 @@ jobs:
           - os: ubuntu-latest
             project: all
             browsers: 'chromium firefox webkit'
-            run_on_push: true
-          - os: ubuntu-24.04-arm
-            project: onboarding-chromium
-            browsers: 'chromium'
-            run_on_push: false
-          - os: macos-latest
-            project: onboarding-webkit
-            browsers: 'chromium firefox webkit'
-            run_on_push: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     name: "hosted-onboarding--${{ matrix.os }}--${{ matrix.project }}"
@@ -136,6 +126,74 @@ jobs:
           else
             make test-e2e-onboarding PROJECT=${{ matrix.project }}
           fi
+
+      - name: Upload onboarding artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
+          if-no-files-found: ignore
+          path: |
+            apps/zerg/e2e/test-results
+            apps/zerg/e2e/playwright-report
+            qa-oss-server.log
+
+  hosted-onboarding-extended:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_extended_hosted_matrix) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04-arm
+            project: onboarding-chromium
+            browsers: 'chromium'
+          - os: macos-latest
+            project: onboarding-webkit
+            browsers: 'chromium firefox webkit'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    name: "hosted-onboarding--${{ matrix.os }}--${{ matrix.project }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Install Playwright browsers
+        run: |
+          cd apps/zerg/e2e
+          bun install --silent
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            bunx playwright install --with-deps ${{ matrix.browsers }}
+          else
+            bunx playwright install ${{ matrix.browsers }}
+          fi
+
+      - name: Run runner install contract tests
+        run: make test-install-runner
+
+      - name: Run onboarding browser ring
+        run: make test-e2e-onboarding PROJECT=${{ matrix.project }}
 
       - name: Upload onboarding artifacts
         if: failure()
