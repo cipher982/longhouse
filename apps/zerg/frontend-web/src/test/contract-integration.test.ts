@@ -145,42 +145,6 @@ describeContract('Backend API Contract Integration', () => {
     });
   });
 
-  describe('Schema Drift Detection', () => {
-    it('should detect when OpenAPI schema has empty response schemas', async () => {
-      const fs = await import('fs');
-      const schema = JSON.parse(fs.readFileSync('../openapi.json', 'utf-8'));
-
-      const emptySchemaEndpoints: string[] = [];
-
-      // Check all endpoints for empty response schemas
-      for (const [path, pathItem] of Object.entries<any>(schema.paths)) {
-        for (const [method, methodItem] of Object.entries<any>(pathItem)) {
-          if (method === 'get' || method === 'post') {
-            const response200 = methodItem.responses?.['200'];
-            const jsonSchema = response200?.content?.['application/json']?.schema;
-
-            if (jsonSchema && Object.keys(jsonSchema).length === 0) {
-              emptySchemaEndpoints.push(`${method.toUpperCase()} ${path}`);
-            }
-          }
-        }
-      }
-
-      if (emptySchemaEndpoints.length > 0) {
-        console.error('❌ CRITICAL: Endpoints with empty response schemas:');
-        emptySchemaEndpoints.forEach(endpoint => {
-          console.error(`   ${endpoint}`);
-        });
-
-        throw new Error(
-          `Found ${emptySchemaEndpoints.length} endpoints with empty schemas. ` +
-          `This prevents TypeScript type generation and contract validation.`
-        );
-      }
-
-      console.log('✅ No empty response schemas found');
-    });
-  });
 });
 
 // Export for use in other test files

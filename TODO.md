@@ -257,6 +257,21 @@ Notes:
 - 2026-03-07: `make validate-ws` already owns the real drift check; these two scripts are now dead side paths.
 - 2026-03-07: Verified with a repo-wide ref search and a passing `make validate-ws` after deletion.
 
+## [Tech Debt] Delete dead empty-schema checker (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Remove `scripts/check-empty-schemas.sh`, which is dead and misleading, without pretending it is an active CI gate.
+
+- [x] Delete `scripts/check-empty-schemas.sh`
+- [x] Remove the redundant skipped empty-schema test block
+- [x] Validate the real active contract path still passes
+
+Notes:
+- 2026-03-07: The shell script was unreferenced, threshold-based, and stale; the maintained path is `bun run validate:contracts`.
+- 2026-03-07: Research result: do **not** wire the global empty-schema check into the active validator yet. `bun run validate:all` immediately found 45 empty-schema endpoints, which proves this was not a real enforced standard.
+- 2026-03-07: Lead-dev call: keep the active validator focused on critical frontend contracts, delete the dead side path, and only add repo-wide OpenAPI linting later if we want to pay down those 45 endpoints with a real standards pass.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
