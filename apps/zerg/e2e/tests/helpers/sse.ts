@@ -116,6 +116,14 @@ export async function postSseAndCollect(options: PostSseOptions): Promise<SseEve
         idx = buffer.indexOf('\n\n');
       }
     }
+
+    // Some runtimes close the stream immediately after the final SSE frame
+    // without a trailing blank line. Flush any remaining event-sized chunk so
+    // CI does not drop terminal events like oikos_complete on EOF.
+    const trailingEvent = parseSseChunk(buffer.trim());
+    if (trailingEvent) {
+      events.push(trailingEvent);
+    }
   } catch (error) {
     if ((error as Error).name === 'AbortError') {
       return events;
