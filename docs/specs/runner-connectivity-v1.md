@@ -140,6 +140,7 @@ Instead, the product should express intent in user language:
 - 2026-03-07: Linux `server` mode now installs a systemd system service with `EnvironmentFile=/etc/longhouse/runner.env`, while `desktop` keeps the existing `systemd --user` path.
 - 2026-03-07: Added backend tests for the served install script contract and validated the generated shell with `bash -n`.
 - 2026-03-07: Updated the current UX (`AddRunnerModal`, `RunnerSetupCard`) so users can choose **Desktop / Laptop** vs **Always-on Linux Server** without needing to know `loginctl`.
+- 2026-03-07: Removed the stale `apps/runner/scripts/install-linux.sh` helper because it was unreferenced and still encoded the old linger-dependent Linux install path.
 
 ## Discoveries / Quirks
 
@@ -147,4 +148,4 @@ Instead, the product should express intent in user language:
 - The Linux installer currently uses a `systemd --user` service and explicitly warns that it only runs while the user is logged in.
 - The runner binary can read environment variables directly; `server` mode can rely on a systemd `EnvironmentFile=` instead of forcing `--envfile`.
 - The UI can synthesize a `server` install command client-side from `enroll_token` + `longhouse_url`, so we do not need an API schema change just to expose the new mode.
-- `apps/runner/scripts/install-linux.sh` is still an older direct helper and is not the live served path; it should be aligned or removed in a follow-up to reduce drift.
+- `apps/runner/scripts/install-linux.sh` was unreferenced dead weight, so removing it is safer than pretending it is a maintained install path.

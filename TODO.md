@@ -48,6 +48,7 @@ Notes:
 - 2026-03-07: The live install script is `apps/zerg/backend/zerg/routers/templates/install.sh`; `apps/runner/scripts/install.sh` is a sibling copy and should stay aligned.
 - 2026-03-07: Shipped `RUNNER_INSTALL_MODE=desktop|server`, added install-script tests, and updated Add Runner / chat runner setup UI to expose the machine type choice directly.
 - 2026-03-07: Validation passed with `make test`, `uv run pytest tests_lite/test_runner_install_script.py -q`, `bash -n` on both installer scripts, and `bun run validate:types`. Frontend lint still reports unrelated pre-existing warnings elsewhere in the app.
+- 2026-03-07: Removed the stale `apps/runner/scripts/install-linux.sh` helper because it was unused and still advertised the old linger-based Linux flow.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
