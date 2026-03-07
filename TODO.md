@@ -229,6 +229,20 @@ Notes:
 - 2026-03-07: These scripts are only thin wrappers around `uv run python ...` in the backend env and are only called from `Makefile` plus one workflow path filter.
 - 2026-03-07: Deleted both wrappers, updated `ws-code-drift.yml` to watch the real generator inputs, and re-ran `make regen-ws`, `make validate-ws`, `make regen-sse`, and `make validate-sse` successfully.
 
+## [Tech Debt] Delete legacy marketing screenshot entrypoint (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Remove the old TypeScript marketing screenshot script and keep the Python/Makefile capture flow as the only supported path.
+
+- [x] Delete `apps/zerg/e2e/scripts/capture-marketing-screenshots.ts`
+- [x] Remove the root `capture:screenshots` package script
+- [x] Verify `make marketing-list` and `make marketing-validate` still work
+
+Notes:
+- 2026-03-07: The TS script is only referenced by the root package script; the maintained flow is `scripts/capture_marketing.py` plus the `marketing-*` Make targets.
+- 2026-03-07: Deleted the TS entrypoint, removed the package script, and re-ran `make marketing-list` + `make marketing-validate` successfully.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
