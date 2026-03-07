@@ -1,20 +1,14 @@
 """Mock LLM implementation for testing purposes.
 
-NOTE: This mock still inherits from LangChain's BaseChatModel for interface
-compatibility, but uses duck-typing for message checks to work with both
-langchain_core.messages and zerg.types.messages.
+This is a tiny adapter that matches the subset of the chat-model interface the
+runtime actually uses: ``bind_tools()`` plus async ``ainvoke()``. Keeping it
+plain avoids a runtime dependency on LangChain for test-only models.
 """
 
 import asyncio
 from typing import Any
-from typing import Dict
 from typing import List
-from typing import Optional
 
-from langchain_core.callbacks import CallbackManagerForLLMRun
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.outputs import ChatGeneration
-from langchain_core.outputs import ChatResult
 
 # Use native types for return values
 from zerg.types.messages import AIMessage
@@ -30,17 +24,12 @@ def _is_human_message(msg: Any) -> bool:
     return getattr(msg, "type", None) in ("human", "user")
 
 
-class MockChatLLM(BaseChatModel):
-    """A mock chat LLM that returns predefined responses for testing.
-
-    Uses duck-typing for message checks to work with both langchain_core
-    and native zerg.types messages.
-    """
+class MockChatLLM:
+    """A mock chat LLM that returns predefined responses for testing."""
 
     model_name: str = "gpt-mock"
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
         self._tools = []
 
     def bind_tools(self, tools, **kwargs):
@@ -91,32 +80,3 @@ class MockChatLLM(BaseChatModel):
         # Simple mock response
         return AIMessage(content="Hello! I'm a mock assistant. I received your message and I'm responding appropriately.")
 
-    def _generate(self, messages: List[Any], stop: Optional[List[str]] = None, **kwargs: Any) -> ChatResult:
-        """LangChain interface - wraps native method.
-
-        Returns native AIMessage in ChatGeneration - LangChain uses duck-typing
-        so this works as long as AIMessage has the expected attributes.
-        """
-        ai_message = self._generate_native(messages)
-        return ChatResult(generations=[ChatGeneration(message=ai_message)])
-
-    async def _agenerate(
-        self,
-        messages: List[Any],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        """LangChain async interface - wraps native method."""
-        await asyncio.sleep(0.1)
-        return self._generate(messages, stop, **kwargs)
-
-    @property
-    def _llm_type(self) -> str:
-        """Return identifier of llm type."""
-        return "mock-chat"
-
-    @property
-    def _identifying_params(self) -> Dict[str, Any]:
-        """Get the identifying parameters."""
-        return {"model_name": self.model_name}

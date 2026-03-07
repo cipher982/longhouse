@@ -3,12 +3,9 @@
 This module provides a lightweight, scenario-driven chat model used by tests to
 exercise oikos/commis plumbing without calling real LLM APIs.
 
-It is intentionally minimal: only the behaviors required by the unit tests are
-implemented.
-
-NOTE: This still inherits from LangChain's BaseChatModel for interface compatibility,
-but uses duck-typing for message checks to work with both langchain_core.messages
-and zerg.types.messages.
+It is intentionally minimal: only the behaviors required by the runtime test
+paths are implemented. The adapter stays plain on purpose so test-only models do
+not pull LangChain into the runtime environment.
 """
 
 from __future__ import annotations
@@ -22,10 +19,6 @@ from typing import Dict
 from typing import List
 from typing import Optional
 
-from langchain_core.callbacks import CallbackManagerForLLMRun
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.outputs import ChatGeneration
-from langchain_core.outputs import ChatResult
 
 # Use native types for return values
 from zerg.types.messages import AIMessage
@@ -249,7 +242,7 @@ def _extract_callbacks(kwargs: Dict[str, Any]) -> List[Any]:
     return callbacks
 
 
-class ScriptedChatLLM(BaseChatModel):
+class ScriptedChatLLM:
     """A deterministic chat model driven by simple prompt scenarios.
 
     Supports both static scenarios (default behavior) and sequenced responses
@@ -273,13 +266,12 @@ class ScriptedChatLLM(BaseChatModel):
 
     model_name: str = "gpt-scripted"
 
-    def __init__(self, sequences: List[Dict[str, Any]] | None = None, **kwargs: Any):
-        super().__init__(**kwargs)
+    def __init__(self, sequences: List[Dict[str, Any]] | None = None):
         self._tools: list[Any] = []
         self._sequences: List[Dict[str, Any]] = sequences or []
         self._call_counts: Dict[str, int] = {}
 
-    def bind_tools(self, tools):  # noqa: ANN001 - signature mirrors LangChain
+    def bind_tools(self, tools, **_kwargs):  # noqa: ANN001 - signature mirrors runtime adapters
         bound = ScriptedChatLLM(sequences=self._sequences)
         bound._tools = list(tools)
         bound._call_counts = self._call_counts  # Share call counts across bindings
@@ -519,30 +511,3 @@ class ScriptedChatLLM(BaseChatModel):
 
         return AIMessage(content="ok", tool_calls=[])
 
-    def _generate(
-        self,
-        messages: List[Any],
-        stop: Optional[List[str]] = None,  # noqa: ARG002 - unused (deterministic)
-        run_manager: Optional[CallbackManagerForLLMRun] = None,  # noqa: ARG002 - unused
-        **kwargs: Any,  # noqa: ARG002 - unused
-    ) -> ChatResult:
-        ai_message = self._generate_native(messages)
-        return ChatResult(generations=[ChatGeneration(message=ai_message)])
-
-    async def _agenerate(
-        self,
-        messages: List[Any],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        await asyncio.sleep(0)  # allow scheduling; keep deterministic
-        return self._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
-
-    @property
-    def _llm_type(self) -> str:
-        return "scripted-chat"
-
-    @property
-    def _identifying_params(self) -> Dict[str, Any]:
-        return {"model_name": self.model_name}
