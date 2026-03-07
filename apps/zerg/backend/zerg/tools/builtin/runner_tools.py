@@ -15,6 +15,7 @@ from typing import Dict
 from typing import List
 
 from zerg.config import get_settings
+from zerg.connectors.context import get_credential_resolver
 from zerg.context import get_commis_context
 from zerg.crud import runner_crud
 from zerg.database import get_db
@@ -81,6 +82,28 @@ def _resolve_target(owner_id: int, target: str) -> tuple[int, str] | None:
         db.close()
 
 
+def _resolve_execution_context() -> tuple[int | None, str | None, int | None]:
+    """Resolve owner/run context for runner execution.
+
+    runner_exec needs an authenticated owner for security filtering, but it can
+    be called from two execution paths:
+    - commis jobs, which provide CommisContext
+    - Oikos runs, which provide CredentialResolver context only
+
+    Returns:
+        Tuple of (owner_id, commis_id, run_id). For Oikos runs, commis_id and
+        run_id are None because direct runner execution does not flow through a
+        commis job.
+    """
+    ctx = get_commis_context()
+    if ctx and ctx.owner_id is not None:
+        return ctx.owner_id, ctx.commis_id, ctx.run_id
+
+    resolver = get_credential_resolver()
+    owner_id = resolver.owner_id if resolver and resolver.owner_id is not None else None
+    return owner_id, None, None
+
+
 def runner_exec(
     target: str,
     command: str,
@@ -88,9 +111,9 @@ def runner_exec(
 ) -> Dict[str, Any]:
     """Execute a command on a user-owned runner.
 
-    This tool enables commis fiches to execute commands on user-managed compute
-    infrastructure (laptops, servers, containers) without the backend needing
-    SSH keys or direct access.
+    This tool enables Oikos or commis fiches to execute commands on
+    user-managed compute infrastructure (laptops, servers, containers)
+    without the backend needing SSH keys or direct access.
 
     Target resolution:
     - "laptop", "home-server", etc: Resolved by name (user-specific)
@@ -141,17 +164,12 @@ def runner_exec(
     Note: Non-zero exit codes are NOT errors - they indicate the command ran
     but returned a failure code. Only connection/timeout failures are errors.
     """
-    # Get commis context for owner_id
-    ctx = get_commis_context()
-    if not ctx or ctx.owner_id is None:
+    owner_id, commis_id, run_id = _resolve_execution_context()
+    if owner_id is None:
         return tool_error(
             ErrorType.VALIDATION_ERROR,
-            "runner_exec requires commis context with owner_id",
+            "runner_exec requires authenticated execution context with owner_id",
         )
-
-    owner_id = ctx.owner_id
-    commis_id = ctx.commis_id
-    run_id = ctx.run_id
 
     # Validate parameters
     if not target:
@@ -280,7 +298,7 @@ TOOLS: List[StructuredTool] = [
         name="runner_exec",
         description=(
             "Execute a shell command on a user-owned runner (laptop, server, container). "
-            "Runners are user-managed compute infrastructure. Use target name (e.g., 'laptop') "
+            "Available to Oikos and commiss. Use target name (e.g., 'laptop') "
             "or explicit ID (e.g., 'runner:123'). Returns exit code, stdout, stderr, and duration. "
             "Non-zero exit codes are not errors - they indicate the command ran but returned a failure code."
         ),

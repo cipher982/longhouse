@@ -165,6 +165,7 @@ _OIKOS_UTILITY_TOOL_LIST = [
     # Infrastructure
     "runner_list",
     "runner_create_enroll_token",
+    "runner_exec",
     # Communication
     "send_email",
     "send_telegram",
