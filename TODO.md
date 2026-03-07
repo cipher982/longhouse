@@ -30,6 +30,7 @@ Notes:
 - 2026-03-07: `cube`, `clifford`, and `cinder` each currently have duplicate runner daemon instances, causing repeated websocket replacement churn.
 - 2026-03-07: Shipped `Restore Oikos runner terminal access` to `main`, passed `make test` + `make qa-live`, redeployed runtime image, and reprovisioned `david010`.
 - 2026-03-07: Live Oikos smoke checks succeeded with `runner_exec` on `clifford`, `cube`, and `cinder` using `bash -lc hostname`.
+- 2026-03-07: Follow-up smoke still showed Oikos sometimes *claiming* `cube` was offline without calling tools; live DB showed it online, so prompt guidance now explicitly requires `runner_list` verification before any offline claim.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
@@ -185,6 +186,19 @@ Status (2026-03-07): Done.
 Notes:
 - 2026-03-07: The old validator invented garbage class names like `.`, `===`, `&&`, and template fragments. `make validate` never used it; it only broke the root package script.
 - 2026-03-07: While switching to the real validation path, `make validate` surfaced two legitimate issues: missing `.PHONY` entries in `Makefile` and `networkidle` waits in `apps/zerg/e2e/tests/live/frontend_api_contract.spec.ts`. Both are fixed now.
+
+## [Tech Debt] Inline test-ci wrapper (size: 1)
+
+Status (2026-03-07): In progress.
+
+**Goal:** Delete `scripts/run-ci-tests.sh` and keep `test-ci` in `Makefile` as the single supported entrypoint.
+
+- [ ] Inline the wrapper commands into `Makefile:test-ci`
+- [ ] Delete `scripts/run-ci-tests.sh`
+- [ ] Verify `make test-ci` still works
+
+Notes:
+- 2026-03-07: The script is only referenced by `Makefile:test-ci`; it is a wrapper, not a shared primitive.
 
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
