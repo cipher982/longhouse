@@ -189,16 +189,17 @@ Notes:
 
 ## [Tech Debt] Inline test-ci wrapper (size: 1)
 
-Status (2026-03-07): In progress.
+Status (2026-03-07): Done.
 
 **Goal:** Delete `scripts/run-ci-tests.sh` and keep `test-ci` in `Makefile` as the single supported entrypoint.
 
-- [ ] Inline the wrapper commands into `Makefile:test-ci`
-- [ ] Delete `scripts/run-ci-tests.sh`
-- [ ] Verify `make test-ci` still works
+- [x] Inline the wrapper commands into `Makefile:test-ci`
+- [x] Delete `scripts/run-ci-tests.sh`
+- [x] Verify `make test-ci` still works
 
 Notes:
 - 2026-03-07: The script is only referenced by `Makefile:test-ci`; it is a wrapper, not a shared primitive.
+- 2026-03-07: While inlining it, `test-ci` was corrected to run the real backend lite suite (`run_backend_tests_lite.sh`) instead of swallowing a call to the nonexistent `run_backend_tests.sh`.
 
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
