@@ -34,7 +34,7 @@ cd ../../..
 
 echo ""
 echo "🔍 Running Contract Validation..."
-if ./scripts/fast-contract-check.sh > /dev/null 2>&1; then
+if (cd apps/zerg/frontend-web && bun run validate:contracts) > /dev/null 2>&1; then
     echo "  ✅ API contracts valid"
 else
     echo "  ❌ Contract validation failed"

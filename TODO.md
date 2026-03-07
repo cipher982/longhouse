@@ -141,6 +141,21 @@ Notes:
 - 2026-03-07: Deleted `scripts/generate-complete-contracts.py`, `scripts/generate-api-client.py`, `apps/zerg/backend/zerg/generated/api_models.py`, and `schemas/api-schema.yml`.
 - 2026-03-07: Verification was a repo-wide ref search; the only remaining mentions after deletion were the TODO notes for this cleanup itself.
 
+## [Tech Debt] Inline fast contract validation (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Delete `scripts/fast-contract-check.sh` and call the real frontend contract validator directly from the remaining entrypoints.
+
+- [x] Update `package.json` and `scripts/run-ci-tests.sh` to invoke the canonical validator directly
+- [x] Delete `scripts/fast-contract-check.sh`
+- [x] Verify both entrypoints still work
+
+Notes:
+- 2026-03-07: The wrapper only `cd`'d into `apps/zerg/frontend-web` and ran `bun run validate:contracts`.
+- 2026-03-07: Validation passed with `cd apps/zerg/frontend-web && bun run validate:contracts` and `./scripts/run-ci-tests.sh`.
+- 2026-03-07: `bun run validate:all` still fails earlier in the existing CSS-class audit (`validate:css`), which is unrelated to this wrapper removal.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
