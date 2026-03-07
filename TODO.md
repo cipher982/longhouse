@@ -243,6 +243,20 @@ Notes:
 - 2026-03-07: The TS script is only referenced by the root package script; the maintained flow is `scripts/capture_marketing.py` plus the `marketing-*` Make targets.
 - 2026-03-07: Deleted the TS entrypoint, removed the package script, and re-ran `make marketing-list` + `make marketing-validate` successfully.
 
+## [Tech Debt] Delete dead WS validation scripts (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Remove the old WebSocket/AsyncAPI validation helper scripts that are no longer wired into `Makefile`, CI, or package scripts.
+
+- [x] Delete `scripts/validate-asyncapi.sh`
+- [x] Delete `scripts/check_ws_drift.sh`
+- [x] Verify no live repo refs remain
+
+Notes:
+- 2026-03-07: `make validate-ws` already owns the real drift check; these two scripts are now dead side paths.
+- 2026-03-07: Verified with a repo-wide ref search and a passing `make validate-ws` after deletion.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
