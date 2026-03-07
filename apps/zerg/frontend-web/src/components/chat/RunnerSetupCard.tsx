@@ -4,6 +4,7 @@ import { fetchRunners, type Runner } from "../../services/api";
 import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
 import { CheckCircleIcon, MonitorIcon, ClipboardIcon, AlertTriangleIcon, ChevronRightIcon, ChevronDownIcon } from "../icons";
 import { parseUTC } from "../../lib/dateUtils";
+import { buildRunnerNativeInstallCommand, describeRunnerNativeInstallMode, type RunnerNativeInstallMode } from "../../lib/runnerInstallCommands";
 
 interface RunnerSetupData {
   enroll_token: string;
@@ -23,6 +24,7 @@ type ConnectionStatus = "waiting" | "connected" | "expired";
 export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
+  const [nativeMode, setNativeMode] = useState<RunnerNativeInstallMode>("desktop");
   const [status, setStatus] = useState<ConnectionStatus>("waiting");
   const [connectedRunner, setConnectedRunner] = useState<Runner | null>(null);
   const [timeRemaining, setTimeRemaining] = useState("");
@@ -142,9 +144,15 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
     return () => clearInterval(interval);
   }, [status, baselineRunnerIds, queryClient]);
 
+  const nativeInstallCommand = buildRunnerNativeInstallCommand({
+    enrollToken: data.enroll_token,
+    longhouseUrl: data.longhouse_url,
+    oneLinerInstallCommand: data.one_liner_install_command,
+  }, nativeMode);
+
   const handleCopyOneLiner = async () => {
     setCopyError(null);
-    const ok = await copyToClipboard(data.one_liner_install_command);
+    const ok = await copyToClipboard(nativeInstallCommand);
     if (!ok) {
       setCopyError("Copy failed. Select the command and copy it manually.");
       return;
@@ -212,9 +220,30 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
           <strong>One-liner install (recommended):</strong>
         </p>
 
+        <p className="runner-setup-mode-label">Machine type:</p>
+        <div className="runner-setup-mode-tabs">
+          <button
+            type="button"
+            className={`runner-setup-mode-tab${nativeMode === "desktop" ? " runner-setup-mode-tab--active" : ""}`}
+            onClick={() => { setNativeMode("desktop"); setCopied(false); setCopyError(null); }}
+            disabled={status === "expired"}
+          >
+            Desktop / Laptop
+          </button>
+          <button
+            type="button"
+            className={`runner-setup-mode-tab${nativeMode === "server" ? " runner-setup-mode-tab--active" : ""}`}
+            onClick={() => { setNativeMode("server"); setCopied(false); setCopyError(null); }}
+            disabled={status === "expired"}
+          >
+            Always-on Linux Server
+          </button>
+        </div>
+        <p className="runner-setup-mode-note">{describeRunnerNativeInstallMode(nativeMode)}</p>
+
         <div className="runner-setup-code-container">
           <pre className="runner-setup-code">
-            <code>{data.one_liner_install_command}</code>
+            <code>{nativeInstallCommand}</code>
           </pre>
           <button
             type="button"

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useCreateEnrollToken } from "../hooks/useRunners";
+import { buildRunnerNativeInstallCommand, describeRunnerNativeInstallMode, type RunnerNativeInstallMode } from "../lib/runnerInstallCommands";
 import { parseUTC } from "../lib/dateUtils";
 import { Button, Spinner } from "./ui";
 
@@ -14,6 +15,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
   const createTokenMutation = useCreateEnrollToken();
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<InstallTab>("native");
+  const [nativeMode, setNativeMode] = useState<RunnerNativeInstallMode>("desktop");
   const codeRef = useRef<HTMLPreElement>(null);
 
   // Generate token when modal opens
@@ -27,7 +29,11 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
   const getCommand = () => {
     if (!createTokenMutation.data) return "";
     return activeTab === "native"
-      ? createTokenMutation.data.one_liner_install_command
+      ? buildRunnerNativeInstallCommand({
+          enrollToken: createTokenMutation.data.enroll_token,
+          longhouseUrl: createTokenMutation.data.longhouse_url,
+          oneLinerInstallCommand: createTokenMutation.data.one_liner_install_command,
+        }, nativeMode)
       : createTokenMutation.data.docker_command;
   };
 
@@ -86,8 +92,9 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
           {createTokenMutation.data && (
             <>
               <p className="enrollment-description">
-                Run this on the machine you want to connect. It installs a native daemon that
-                persists across reboots.
+                Run this on the machine you want to connect. Choose <strong>Desktop / Laptop</strong> for
+                personal machines, or <strong>Always-on Linux Server</strong> when the runner should stay
+                up after logout and reboot.
               </p>
 
               <div className="install-tabs">
@@ -106,6 +113,34 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
                   Docker
                 </button>
               </div>
+
+
+              {activeTab === "native" && (
+                <>
+                  <p className="enrollment-description">
+                    Machine type:
+                  </p>
+                  <div className="install-tabs">
+                    <button
+                      type="button"
+                      className={`install-tab${nativeMode === "desktop" ? " install-tab--active" : ""}`}
+                      onClick={() => { setNativeMode("desktop"); setCopied(false); }}
+                    >
+                      Desktop / Laptop
+                    </button>
+                    <button
+                      type="button"
+                      className={`install-tab${nativeMode === "server" ? " install-tab--active" : ""}`}
+                      onClick={() => { setNativeMode("server"); setCopied(false); }}
+                    >
+                      Always-on Linux Server
+                    </button>
+                  </div>
+                  <p className="enrollment-description">
+                    {describeRunnerNativeInstallMode(nativeMode)}
+                  </p>
+                </>
+              )}
 
               <div className="code-block-container">
                 <pre ref={codeRef} className="code-block">
@@ -126,7 +161,9 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
                 {formatExpiry(createTokenMutation.data.expires_at)}
                 {" · "}
                 {activeTab === "native"
-                  ? "Installs as launchd (macOS) or systemd user service (Linux)"
+                  ? nativeMode === "server"
+                    ? "Installs as a Linux system service"
+                    : "Installs as launchd (macOS) or a Linux user service"
                   : "Runs as a Docker container"}
               </p>
 
