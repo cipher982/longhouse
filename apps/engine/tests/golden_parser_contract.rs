@@ -37,7 +37,6 @@ struct SnapshotEvent {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct Snapshot {
-    session_id: String,
     event_count: usize,
     events: Vec<SnapshotEvent>,
 }
@@ -85,9 +84,7 @@ fn parse_to_snapshot(input_path: &Path) -> Snapshot {
     // stderr has human-readable summary; stdout has one JSON event per line
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Extract session_id from first event (all events share it)
     let mut events: Vec<SnapshotEvent> = Vec::new();
-    let mut session_id = String::new();
 
     for line in stdout.lines() {
         let line = line.trim();
@@ -96,10 +93,6 @@ fn parse_to_snapshot(input_path: &Path) -> Snapshot {
         }
         let v: Value = serde_json::from_str(line)
             .unwrap_or_else(|e| panic!("Invalid event JSON: {}\nLine: {}", e, line));
-
-        if session_id.is_empty() {
-            session_id = v["session_id"].as_str().unwrap_or("").to_string();
-        }
 
         events.push(SnapshotEvent {
             role: v["role"].as_str().unwrap_or("").to_string(),
@@ -115,7 +108,6 @@ fn parse_to_snapshot(input_path: &Path) -> Snapshot {
     }
 
     Snapshot {
-        session_id,
         event_count: events.len(),
         events,
     }
