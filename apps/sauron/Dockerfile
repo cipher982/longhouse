@@ -63,7 +63,15 @@ packages = ["zerg"]
 EOF
 
 # Copy sauron package
-COPY apps/sauron/pyproject.docker.toml ./pyproject.toml
+COPY apps/sauron/pyproject.toml ./pyproject.toml
+RUN python - <<'PY'
+from pathlib import Path
+path = Path("/app/pyproject.toml")
+text = path.read_text()
+text = text.replace('    "longhouse",\n', '    "zerg",\n')
+text = text.replace('\n[tool.uv.sources]\nlonghouse = { path = "../zerg/backend", editable = true }\n', '\n')
+path.write_text(text)
+PY
 COPY apps/sauron/sauron ./sauron/
 
 # Install zerg package first (provides zerg.jobs, zerg.config), then sauron

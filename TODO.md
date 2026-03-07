@@ -72,6 +72,33 @@ Notes:
 - 2026-03-06: This surfaced while regenerating OpenAPI types for the hosted alias cleanup. It is a real UI type hole, not fallout from the docstring-only changes.
 - 2026-03-06: Added a local `normalizeRunnerMetadata()` helper in `RunnerDetailPage` so the UI stops indexing `Record<string, unknown>` as if it were a typed object. `bun run validate:types` then passed.
 
+## [Tech Debt] Remove Sauron Docker pyproject duplication (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Delete `apps/sauron/pyproject.docker.toml` and derive the Docker build manifest from the real `apps/sauron/pyproject.toml`.
+
+- [x] Make the Docker build transform `apps/sauron/pyproject.toml` instead of copying a second manifest
+- [x] Delete `apps/sauron/pyproject.docker.toml`
+- [x] Verify the Docker build still succeeds
+
+Notes:
+- 2026-03-07: The only semantic difference was the dependency name swap from `longhouse` to the locally-built `zerg` package. The Dockerfile now rewrites that one dependency and drops the unused `tool.uv.sources` block at build time.
+- 2026-03-07: Validation passed with `docker build -f apps/sauron/Dockerfile -t sauron-pyproject-dedupe:test .`.
+
+## [Tech Debt] Delete dead frontend contract wrapper (size: 1)
+
+Status (2026-03-07): In progress.
+
+**Goal:** Remove `scripts/validate-frontend-contracts.sh` and keep `scripts/fast-contract-check.sh` as the single repo-level frontend contract entrypoint.
+
+- [ ] Confirm all live refs already use `fast-contract-check.sh` or `bun run validate:contracts`
+- [ ] Delete the dead wrapper script
+- [ ] Keep any tiny durable guidance in canonical files only if needed
+
+Notes:
+- 2026-03-07: `validate-frontend-contracts.sh` appears to be an old verbose wrapper with no live references in hooks, make, package scripts, or CI.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
