@@ -127,11 +127,56 @@ Instead, the product should express intent in user language:
 - One trusted runner can execute against downstream SSH hosts
 - Treat SSH as advanced / power-user setup
 
+## Solo-Dev Validation Plan
+
+### Principles
+- Keep the matrix intentionally small and risk-based; cover one representative machine per failure class instead of chasing every distro/browser combination.
+- Prefer deterministic automation plus rich failure artifacts over ad-hoc manual poking.
+- Use your own machines as the first canary ring; use cloud real-device services only where emulation or hosted CI cannot answer the question.
+- Keep hosted macOS coverage selective because private-repo macOS GitHub Actions minutes are materially more expensive than Linux.
+
+### Validation Rings
+
+1. **Contract ring**
+   - Keep fast tests around install-script generation, runner tool contracts, and Oikos runner availability behavior.
+   - Every installer change must still prove the served shell parses and that mode-specific output stays correct.
+2. **Browser onboarding ring**
+   - Use Playwright projects for Chromium, Firefox, WebKit, plus one mobile Safari and one mobile Chrome emulation profile.
+   - Reuse dedicated test accounts/auth state where it is safe, but keep at least one fresh-account onboarding path for the real first-run experience.
+   - Capture traces on retry plus HTML report/log artifacts for CI debugging.
+3. **Hosted CI OS ring**
+   - Run a narrow GitHub Actions matrix on `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-latest`.
+   - Use this ring for installer fetch/parse, non-interactive setup, and API/UI smoke checks.
+4. **Self-hosted hardware ring**
+   - Attach a tiny labeled fleet of real machines to GitHub Actions for cases emulation cannot prove: real `systemd`, real `launchd`, reboot survival, home-LAN quirks, and long-lived service behavior.
+   - Current pre-launch canaries can simply be David-owned hardware: local macOS arm64, `clifford` (Linux x64), and `cube` (Linux arm64).
+5. **Real-device spot-check ring**
+   - Before shipping onboarding UI changes, do short manual sessions on a real iPhone Safari device and a real Android Chrome device via BrowserStack Live or AWS Device Farm remote access.
+   - Use BrowserStack Local or an equivalent secure tunnel when validating localhost/staging builds that are not publicly reachable.
+6. **Nightly synthetic first-user ring**
+   - Scheduled workflow provisions or resets a fresh dev instance, walks the Add Runner flow, installs a runner on a disposable target, waits for heartbeat, runs `runner_exec hostname`, then tears down or repairs.
+   - `workflow_dispatch` should trigger the same suite on demand before releases.
+
+### Recommended Pre-Launch Matrix
+
+- **Browsers (automated):** Chromium, Firefox, WebKit, Mobile Safari emulation, Mobile Chrome emulation
+- **Real machines (automated/self-hosted):** macOS arm64 laptop/desktop, Linux x64 always-on server, Linux arm64 always-on server
+- **Real devices (manual/cloud):** one current iPhone Safari session, one recent Android Chrome session
+- **Deferred:** Windows, exhaustive distro coverage, broad browser/version cartesian products
+
+### Exit Criteria
+
+- Every onboarding change: browser onboarding ring green.
+- Every runner install change: contract ring plus hosted CI OS ring green.
+- Every release-candidate onboarding change: self-hosted hardware smoke plus real-device spot checks complete.
+- Before inviting outside testers: nightly synthetic first-user ring green for at least several consecutive days.
+
 ## Open Questions
 
 - Should Linux `auto` mode exist, or should the UI always force an explicit machine type choice?
 - Should `server` mode eventually create a dedicated `longhouse-runner` OS user instead of using the installing user?
 - Should chat/Oikos runner setup cards expose `desktop` vs `server` immediately, or after the install path is stable?
+- Which real-device vendor should we standardize on for pre-launch spot checks: BrowserStack, AWS Device Farm, or whatever is already cheapest/easiest to wire into the current stack?
 
 ## Progress Log
 
@@ -141,6 +186,7 @@ Instead, the product should express intent in user language:
 - 2026-03-07: Added backend tests for the served install script contract and validated the generated shell with `bash -n`.
 - 2026-03-07: Updated the current UX (`AddRunnerModal`, `RunnerSetupCard`) so users can choose **Desktop / Laptop** vs **Always-on Linux Server** without needing to know `loginctl`.
 - 2026-03-07: Removed the stale `apps/runner/scripts/install-linux.sh` helper because it was unreferenced and still encoded the old linger-dependent Linux install path.
+- 2026-03-07: Researched a solo-dev validation strategy and added a layered plan: Playwright browser projects, hosted CI OS matrix, self-hosted canary hardware, and tiny real-device spot checks.
 
 ## Discoveries / Quirks
 
