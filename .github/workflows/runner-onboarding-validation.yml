@@ -1,0 +1,354 @@
+name: Runner Onboarding Validation Ring
+
+on:
+  push:
+    paths:
+      - '.github/workflows/runner-onboarding-validation.yml'
+      - 'apps/zerg/e2e/**'
+      - 'apps/zerg/frontend-web/src/components/AddRunnerModal.tsx'
+      - 'apps/zerg/frontend-web/src/components/chat/RunnerSetupCard.tsx'
+      - 'apps/zerg/frontend-web/src/lib/runnerInstallCommands.ts'
+      - 'apps/zerg/frontend-web/src/pages/RunnersPage.tsx'
+      - 'apps/zerg/backend/zerg/routers/runners.py'
+      - 'apps/zerg/backend/zerg/routers/templates/install.sh'
+      - 'scripts/qa-oss.sh'
+      - 'scripts/run-onboarding-funnel.sh'
+      - 'Makefile'
+      - 'README.md'
+  pull_request:
+    paths:
+      - '.github/workflows/runner-onboarding-validation.yml'
+      - 'apps/zerg/e2e/**'
+      - 'apps/zerg/frontend-web/src/components/AddRunnerModal.tsx'
+      - 'apps/zerg/frontend-web/src/components/chat/RunnerSetupCard.tsx'
+      - 'apps/zerg/frontend-web/src/lib/runnerInstallCommands.ts'
+      - 'apps/zerg/frontend-web/src/pages/RunnersPage.tsx'
+      - 'apps/zerg/backend/zerg/routers/runners.py'
+      - 'apps/zerg/backend/zerg/routers/templates/install.sh'
+      - 'scripts/qa-oss.sh'
+      - 'scripts/run-onboarding-funnel.sh'
+      - 'Makefile'
+      - 'README.md'
+  schedule:
+    - cron: '17 8 * * *'
+  workflow_dispatch:
+    inputs:
+      run_extended_hosted_matrix:
+        description: 'Run the extra hosted ARM/macOS jobs'
+        required: false
+        default: true
+        type: boolean
+      run_linux_arm64:
+        description: 'Run Linux ARM64 self-hosted smoke on cube'
+        required: false
+        default: true
+        type: boolean
+      run_linux_x64:
+        description: 'Run Linux x64 self-hosted smoke'
+        required: false
+        default: false
+        type: boolean
+      linux_x64_runner_label:
+        description: 'Label for the Linux x64 self-hosted runner'
+        required: false
+        default: 'clifford'
+        type: string
+      run_macos_self_hosted:
+        description: 'Run macOS arm64 self-hosted smoke'
+        required: false
+        default: false
+        type: boolean
+      macos_runner_label:
+        description: 'Label for the macOS arm64 self-hosted runner'
+        required: false
+        default: ''
+        type: string
+
+env:
+  PIP_INDEX_URL: https://pypi.org/simple
+  PIP_EXTRA_INDEX_URL: ""
+
+jobs:
+  hosted-onboarding:
+    if: ${{ github.event_name == 'schedule' || matrix.run_on_push || (github.event_name == 'workflow_dispatch' && (inputs.run_extended_hosted_matrix || matrix.run_on_push)) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            project: all
+            browsers: 'chromium firefox webkit'
+            run_on_push: true
+          - os: ubuntu-24.04-arm
+            project: onboarding-chromium
+            browsers: 'chromium'
+            run_on_push: false
+          - os: macos-latest
+            project: onboarding-webkit
+            browsers: 'chromium firefox webkit'
+            run_on_push: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    name: "hosted-onboarding--${{ matrix.os }}--${{ matrix.project }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Install Playwright browsers
+        run: |
+          cd apps/zerg/e2e
+          bun install --silent
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            bunx playwright install --with-deps ${{ matrix.browsers }}
+          else
+            bunx playwright install ${{ matrix.browsers }}
+          fi
+
+      - name: Run runner install contract tests
+        run: make test-install-runner
+
+      - name: Run onboarding browser ring
+        run: |
+          if [[ "${{ matrix.project }}" == "all" ]]; then
+            make test-e2e-onboarding
+          else
+            make test-e2e-onboarding PROJECT=${{ matrix.project }}
+          fi
+
+      - name: Upload onboarding artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
+          if-no-files-found: ignore
+          path: |
+            apps/zerg/e2e/test-results
+            apps/zerg/e2e/playwright-report
+            qa-oss-server.log
+
+  synthetic-first-user:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: "synthetic-first-user--fresh-clone"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Install Playwright browsers
+        run: |
+          cd apps/zerg/e2e
+          bun install --silent
+          bunx playwright install --with-deps chromium firefox webkit
+
+      - name: Run fresh-clone onboarding funnel
+        run: make onboarding-funnel
+
+      - name: Upload fresh-clone onboarding artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-funnel-artifacts
+          if-no-files-found: ignore
+          path: |
+            /tmp/longhouse-onboarding/apps/zerg/e2e/test-results
+            /tmp/longhouse-onboarding/apps/zerg/e2e/playwright-report
+
+  self-hosted-linux-arm64:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_linux_arm64) }}
+    runs-on: cube
+    timeout-minutes: 30
+    name: "self-hosted-onboarding--linux-arm64--cube"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Install Playwright Chromium
+        run: |
+          cd apps/zerg/e2e
+          bun install --silent
+          bunx playwright install --with-deps chromium
+
+      - name: Run runner install contract tests
+        run: make test-install-runner
+
+      - name: Run onboarding smoke on Linux ARM64
+        run: make test-e2e-onboarding PROJECT=onboarding-chromium
+
+      - name: Upload self-hosted Linux ARM64 artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-self-hosted-linux-arm64
+          if-no-files-found: ignore
+          path: |
+            apps/zerg/e2e/test-results
+            apps/zerg/e2e/playwright-report
+            qa-oss-server.log
+
+  self-hosted-linux-x64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_linux_x64 }}
+    runs-on: ${{ inputs.linux_x64_runner_label }}
+    timeout-minutes: 30
+    name: "self-hosted-onboarding--linux-x64--${{ inputs.linux_x64_runner_label }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Install Playwright Chromium
+        run: |
+          cd apps/zerg/e2e
+          bun install --silent
+          bunx playwright install --with-deps chromium
+
+      - name: Run runner install contract tests
+        run: make test-install-runner
+
+      - name: Run onboarding smoke on Linux x64
+        run: make test-e2e-onboarding PROJECT=onboarding-chromium
+
+      - name: Upload self-hosted Linux x64 artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-self-hosted-linux-x64
+          if-no-files-found: ignore
+          path: |
+            apps/zerg/e2e/test-results
+            apps/zerg/e2e/playwright-report
+            qa-oss-server.log
+
+  self-hosted-macos-arm64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_macos_self_hosted && inputs.macos_runner_label != '' }}
+    runs-on: ${{ inputs.macos_runner_label }}
+    timeout-minutes: 30
+    name: "self-hosted-onboarding--macos-arm64--${{ inputs.macos_runner_label }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install Playwright browsers
+        run: |
+          cd apps/zerg/e2e
+          bun install --silent
+          bunx playwright install chromium firefox webkit
+
+      - name: Run runner install contract tests
+        run: make test-install-runner
+
+      - name: Run onboarding smoke on macOS arm64
+        run: make test-e2e-onboarding PROJECT=onboarding-webkit
+
+      - name: Upload self-hosted macOS ARM64 artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-self-hosted-macos-arm64
+          if-no-files-found: ignore
+          path: |
+            apps/zerg/e2e/test-results
+            apps/zerg/e2e/playwright-report
+            qa-oss-server.log
