@@ -172,6 +172,20 @@ Notes:
 - 2026-03-07: Validation passed with `cd apps/zerg/frontend-web && bun run validate:contracts` and `./scripts/run-ci-tests.sh`.
 - 2026-03-07: `bun run validate:all` still fails earlier in the existing CSS-class audit (`validate:css`), which is unrelated to this wrapper removal.
 
+## [Tech Debt] Delete broken CSS class validator (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Remove `scripts/validate-css-classes.js`, which is a regex-based JSX parser producing hundreds of false positives, and point `validate:all` at the real validation path.
+
+- [x] Delete the CSS class validator and the `validate:css` package script
+- [x] Make `validate:all` call the canonical validation path instead
+- [x] Verify `make validate` and `bun run validate:all` pass
+
+Notes:
+- 2026-03-07: The old validator invented garbage class names like `.`, `===`, `&&`, and template fragments. `make validate` never used it; it only broke the root package script.
+- 2026-03-07: While switching to the real validation path, `make validate` surfaced two legitimate issues: missing `.PHONY` entries in `Makefile` and `networkidle` waits in `apps/zerg/e2e/tests/live/frontend_api_contract.spec.ts`. Both are fixed now.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
