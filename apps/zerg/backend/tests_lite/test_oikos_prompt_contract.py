@@ -1,5 +1,6 @@
 """Guardrails for Oikos prompt/tool contract drift."""
 
+from zerg.prompts.templates import BASE_OIKOS_ASSISTANT_PROMPT
 from zerg.prompts.templates import BASE_OIKOS_PROMPT
 from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import TOOLS
@@ -37,6 +38,17 @@ def test_prompt_documents_direct_runner_exec_for_lightweight_commands():
     assert "runner_exec" in BASE_OIKOS_PROMPT
     assert "single lightweight runner command" in BASE_OIKOS_PROMPT
     assert "already-connected runners" in BASE_OIKOS_PROMPT
+
+
+def test_prompt_requires_runner_verification_before_claiming_offline():
+    assert "Never guess whether a runner is online/offline from memory" in BASE_OIKOS_PROMPT
+    assert "verify with `runner_list`" in BASE_OIKOS_PROMPT
+    assert "Before saying a runner is unavailable or offline" in BASE_OIKOS_PROMPT
+
+
+def test_assistant_prompt_mentions_runner_verification_rule():
+    assert "verify with `runner_list` before calling it offline" in BASE_OIKOS_ASSISTANT_PROMPT
+    assert "use `runner_exec` for lightweight commands" in BASE_OIKOS_ASSISTANT_PROMPT
 
 
 def test_tool_descriptions_match_prompt_semantics():
