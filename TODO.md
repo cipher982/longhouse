@@ -286,6 +286,21 @@ Notes:
 - 2026-03-07: `zerg` points at a nonexistent `make zerg` target, and `verify-single-react.mjs` is invoked directly by the frontend vitest runner, not via the root package script.
 - 2026-03-07: Verified there are no remaining repo refs to `bun run zerg`, `bun run verify:react`, or those root package-script keys after the cleanup.
 
+## [Tech Debt] Route CI provision E2E through hosted helper (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Stop open-coding control-plane instance create/deprovision parsing in `scripts/ci/provision-e2e.sh`; use `scripts/lib/hosted-instance.sh` for the instance lifecycle there too.
+
+- [x] Source `hosted-instance.sh` in the CI provision E2E script
+- [x] Replace manual instance create/deprovision API handling with helper calls
+- [x] Re-run the provision E2E gate
+
+Notes:
+- 2026-03-07: This is the main remaining control-plane instance lifecycle path in `scripts/` that still hand-rolls JSON parsing instead of using the shared helper.
+- 2026-03-07: The local CI gate intentionally keeps its fixed `http://127.0.0.1:8000` instance URL; the helper is used for lifecycle actions, but the control plane still returns the canonical hosted URL (`https://ci.longhouse.ai`) even in local publish-port mode.
+- 2026-03-07: Validation passed with `make test-provision-e2e` after the helper integration.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
