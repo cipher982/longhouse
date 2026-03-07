@@ -94,7 +94,7 @@ export default function RunnersPage() {
           title="Runners"
           description="Infrastructure nodes that execute commands for your fiches."
           actions={
-            <Button variant="primary" onClick={() => setShowAddModal(true)}>
+            <Button variant="primary" data-testid="runners-add-button" onClick={() => setShowAddModal(true)}>
               <PlusIcon />
               Add Runner
             </Button>
@@ -106,7 +106,7 @@ export default function RunnersPage() {
             title="No runners yet"
             description="Runners let you execute commands on your own infrastructure securely."
             action={
-              <Button variant="primary" size="lg" onClick={() => setShowAddModal(true)}>
+              <Button variant="primary" size="lg" data-testid="runners-add-first-button" onClick={() => setShowAddModal(true)}>
                 Add your first runner
               </Button>
             }

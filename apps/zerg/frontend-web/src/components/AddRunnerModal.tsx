@@ -59,7 +59,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container add-runner-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container add-runner-modal" data-testid="add-runner-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Add Runner</h2>
           <button
@@ -101,6 +101,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
                 <button
                   type="button"
                   className={`install-tab${activeTab === "native" ? " install-tab--active" : ""}`}
+                  data-testid="runner-install-tab-native"
                   onClick={() => { setActiveTab("native"); setCopied(false); }}
                 >
                   Native (macOS / Linux)
@@ -108,6 +109,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
                 <button
                   type="button"
                   className={`install-tab${activeTab === "docker" ? " install-tab--active" : ""}`}
+                  data-testid="runner-install-tab-docker"
                   onClick={() => { setActiveTab("docker"); setCopied(false); }}
                 >
                   Docker
@@ -124,6 +126,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
                     <button
                       type="button"
                       className={`install-tab${nativeMode === "desktop" ? " install-tab--active" : ""}`}
+                      data-testid="runner-install-mode-desktop"
                       onClick={() => { setNativeMode("desktop"); setCopied(false); }}
                     >
                       Desktop / Laptop
@@ -131,6 +134,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
                     <button
                       type="button"
                       className={`install-tab${nativeMode === "server" ? " install-tab--active" : ""}`}
+                      data-testid="runner-install-mode-server"
                       onClick={() => { setNativeMode("server"); setCopied(false); }}
                     >
                       Always-on Linux Server
@@ -143,13 +147,14 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
               )}
 
               <div className="code-block-container">
-                <pre ref={codeRef} className="code-block">
+                <pre ref={codeRef} className="code-block" data-testid="add-runner-command">
                   <code>{getCommand()}</code>
                 </pre>
                 <Button
                   variant="secondary"
                   size="sm"
                   className="modal-copy-button"
+                  data-testid="add-runner-copy-button"
                   onClick={handleCopy}
                   title="Copy to clipboard"
                 >
