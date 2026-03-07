@@ -52,19 +52,21 @@ Notes:
 
 ## [QA/Test] Solo-dev runner onboarding validation ring (size: 4)
 
-Status (2026-03-07): Planned.
+Status (2026-03-07): Implemented locally; workflow not yet exercised in GitHub Actions.
 
 **Goal:** Catch onboarding regressions across browser, OS, and hardware before beta users ever see them.
 
-- [ ] Add Playwright onboarding projects for Chromium, Firefox, WebKit, and mobile emulation with trace capture
-- [ ] Add GitHub Actions matrix jobs for hosted OS coverage and scheduled/manual synthetic onboarding runs
-- [ ] Add labeled self-hosted hardware smoke jobs for macOS arm64, Linux x64, and Linux arm64
-- [ ] Add a tiny release-candidate real-device checklist for iPhone Safari and Android Chrome via a cloud device lab
+- [x] Add Playwright onboarding projects for Chromium, Firefox, WebKit, and mobile emulation with trace capture
+- [x] Add GitHub Actions matrix jobs for hosted OS coverage and scheduled/manual synthetic onboarding runs
+- [x] Add labeled self-hosted hardware smoke jobs for macOS arm64, Linux x64, and Linux arm64
+- [x] Add a tiny release-candidate real-device checklist for iPhone Safari and Android Chrome via a cloud device lab
 
 Notes:
 - 2026-03-07: Keep the matrix intentionally small and risk-based; cover one representative machine per failure class.
 - 2026-03-07: Use cloud real-device sessions sparingly for pre-launch spot checks; rely on automation and David-owned canary hardware day-to-day.
 - 2026-03-07: Keep macOS hosted coverage selective because GitHub-hosted macOS minutes cost much more than Linux in private repos.
+- 2026-03-07: Implemented `make test-e2e-onboarding`, expanded the Playwright onboarding config, added `/runners` install-mode coverage, and added the workflow/checklist scaffolding for hosted + self-hosted validation.
+- 2026-03-07: Fixed `make onboarding-funnel` so the README contract now runs the onboarding Playwright smoke instead of only checking `/api/health`.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
