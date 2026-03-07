@@ -174,7 +174,7 @@ def get_install_script(
     enroll_token: str,
     runner_name: str | None = None,
     longhouse_url: str | None = None,
-    mode: str | None = None,  # Reserved for future: user|system
+    mode: str | None = None,
 ) -> Response:
     """Return shell script for one-liner runner installation.
 
@@ -188,7 +188,7 @@ def get_install_script(
     1. Detects OS (macOS/Linux)
     2. Registers the runner using the enroll token
     3. Downloads the native binary from GitHub Releases
-    4. Installs as a launchd (macOS) or systemd (Linux) service
+    4. Installs as a launchd (macOS), systemd user service (`desktop`), or Linux system service (`server`)
     5. Starts the runner automatically
 
     No authentication required - this is for bootstrapping new runners.
@@ -213,6 +213,13 @@ def get_install_script(
     if runner_name and not re.match(r"^[A-Za-z0-9_.-]+$", runner_name):
         return Response(
             content="Error: Invalid runner_name format (use alphanumeric, dash, underscore, dot)",
+            media_type="text/plain",
+            status_code=400,
+        )
+
+    if mode and mode not in {"desktop", "server"}:
+        return Response(
+            content="Error: Invalid mode (use desktop or server)",
             media_type="text/plain",
             status_code=400,
         )
@@ -248,6 +255,8 @@ def get_install_script(
     safe_api_url = shlex.quote(api_url)
     safe_binary_url = shlex.quote(binary_url)
 
+    safe_install_mode = mode or "desktop"
+
     template_path = Path(__file__).parent / "templates" / "install.sh"
     script = template_path.read_text()
     # Single-pass replacement via regex to prevent placeholder-collision: if a
@@ -260,6 +269,7 @@ def get_install_script(
         "__RUNNER_NAME_EXPR__": safe_runner_name_expr,
         "__API_URL__": safe_api_url,
         "__BINARY_URL__": safe_binary_url,
+        "__INSTALL_MODE__": safe_install_mode,
     }
     _pattern = _re.compile("|".join(_re.escape(k) for k in _substitutions))
     script = _pattern.sub(lambda m: _substitutions[m.group()], script)

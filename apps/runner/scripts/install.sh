@@ -18,6 +18,7 @@ ENROLL_TOKEN="${ENROLL_TOKEN:-__ENROLL_TOKEN__}"
 RUNNER_NAME="${RUNNER_NAME:-__RUNNER_NAME__}"
 LONGHOUSE_URL="${LONGHOUSE_URL:-__LONGHOUSE_URL__}"
 BINARY_URL="${BINARY_URL:-__BINARY_URL__}"
+RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-desktop}"
 
 # Validate required vars
 if [ -z "$ENROLL_TOKEN" ] || [ "$ENROLL_TOKEN" = "__ENROLL_TOKEN__" ]; then
@@ -129,6 +130,10 @@ case "$OS_TYPE" in
     LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
     mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$STATE_DIR" "$LAUNCH_AGENTS_DIR"
+    if [ "$RUNNER_INSTALL_MODE" != "desktop" ]; then
+      echo "Note: RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE currently only changes Linux installs; using launchd on macOS."
+      echo ""
+    fi
 
     BINARY_PATH="$BIN_DIR/longhouse-runner"
     DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
@@ -205,7 +210,6 @@ EOF
     ;;
 
   linux)
-    # Inline Linux installer
     ARCH=$(uname -m)
     case "$ARCH" in
       aarch64|arm64) PLATFORM="linux-arm64" ;;
@@ -213,33 +217,43 @@ EOF
       *) echo "Error: Unsupported architecture: $ARCH" >&2; exit 1 ;;
     esac
 
-    BIN_DIR="$HOME/.local/bin"
-    CONFIG_DIR="$HOME/.config/longhouse"
-    SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-
-    mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$SYSTEMD_USER_DIR"
-
-    BINARY_PATH="$BIN_DIR/longhouse-runner"
-    DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
-
-    echo "Downloading runner binary ($PLATFORM)..."
-    if ! curl -fsSL "$DOWNLOAD_URL" -o "$BINARY_PATH"; then
-      echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
+    if ! command -v systemctl >/dev/null 2>&1; then
+      echo "Error: systemctl is required for Linux runner installation" >&2
       exit 1
     fi
-    chmod +x "$BINARY_PATH"
 
-    ENV_FILE="$CONFIG_DIR/runner.env"
-    cat > "$ENV_FILE" <<EOF
+    echo "Install mode: $RUNNER_INSTALL_MODE"
+    echo ""
+
+    if [ "$RUNNER_INSTALL_MODE" = "desktop" ]; then
+      BIN_DIR="$HOME/.local/bin"
+      CONFIG_DIR="$HOME/.config/longhouse"
+      SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+
+      mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$SYSTEMD_USER_DIR"
+      chmod 700 "$CONFIG_DIR"
+
+      BINARY_PATH="$BIN_DIR/longhouse-runner"
+      DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
+
+      echo "Downloading runner binary ($PLATFORM)..."
+      if ! curl -fsSL "$DOWNLOAD_URL" -o "$BINARY_PATH"; then
+        echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
+        exit 1
+      fi
+      chmod +x "$BINARY_PATH"
+
+      ENV_FILE="$CONFIG_DIR/runner.env"
+      cat > "$ENV_FILE" <<EOF
 LONGHOUSE_URL=$LONGHOUSE_URL
 RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
 EOF
-    chmod 600 "$ENV_FILE"
-    echo "Credentials saved to $ENV_FILE"
+      chmod 600 "$ENV_FILE"
+      echo "Credentials saved to $ENV_FILE"
 
-    SERVICE_FILE="$SYSTEMD_USER_DIR/longhouse-runner.service"
-    cat > "$SERVICE_FILE" <<'EOF'
+      SERVICE_FILE="$SYSTEMD_USER_DIR/longhouse-runner.service"
+      cat > "$SERVICE_FILE" <<'SERVICEEOF'
 [Unit]
 Description=Longhouse Runner
 After=network-online.target
@@ -255,29 +269,127 @@ StartLimitBurst=3
 
 [Install]
 WantedBy=default.target
+SERVICEEOF
+
+      systemctl --user daemon-reload
+
+      if systemctl --user is-active --quiet longhouse-runner 2>/dev/null; then
+        echo "Stopping existing runner..."
+        systemctl --user stop longhouse-runner
+      fi
+
+      echo "Starting runner service..."
+      systemctl --user enable longhouse-runner
+      systemctl --user start longhouse-runner
+
+      echo ""
+      echo "Runner installed and started successfully!"
+      echo ""
+      echo "Management commands:"
+      echo "  systemctl --user stop longhouse-runner   # Stop"
+      echo "  systemctl --user start longhouse-runner  # Start"
+      echo "  journalctl --user -u longhouse-runner -f # View logs"
+      echo ""
+      echo "Note: User services only run while you are logged in."
+      echo "For always-on servers, use RUNNER_INSTALL_MODE=server instead."
+    else
+      if [ "$(id -u)" -eq 0 ]; then
+        SUDO=""
+      else
+        if ! command -v sudo >/dev/null 2>&1; then
+          echo "Error: RUNNER_INSTALL_MODE=server requires sudo or root privileges" >&2
+          exit 1
+        fi
+        SUDO="sudo"
+      fi
+
+      INSTALL_USER="${RUNNER_SERVICE_USER:-${SUDO_USER:-${USER:-$(id -un)}}}"
+      if ! id "$INSTALL_USER" >/dev/null 2>&1; then
+        echo "Error: Could not resolve install user '$INSTALL_USER'" >&2
+        exit 1
+      fi
+      INSTALL_GROUP="$(id -gn "$INSTALL_USER")"
+      INSTALL_HOME="$(getent passwd "$INSTALL_USER" 2>/dev/null | cut -d: -f6)"
+      if [ -z "$INSTALL_HOME" ] && command -v python3 >/dev/null 2>&1; then
+        INSTALL_HOME="$(python3 -c 'import pwd, sys; print(pwd.getpwnam(sys.argv[1]).pw_dir)' "$INSTALL_USER" 2>/dev/null || true)"
+      fi
+      if [ -z "$INSTALL_HOME" ]; then
+        INSTALL_HOME="$HOME"
+      fi
+
+      TMP_DIR="$(mktemp -d)"
+      trap 'rm -rf "$TMP_DIR"' EXIT
+      TMP_BINARY="$TMP_DIR/longhouse-runner"
+      TMP_ENV="$TMP_DIR/runner.env"
+      TMP_SERVICE="$TMP_DIR/longhouse-runner.service"
+      DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
+
+      echo "Downloading runner binary ($PLATFORM)..."
+      if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BINARY"; then
+        echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
+        exit 1
+      fi
+      chmod +x "$TMP_BINARY"
+
+      cat > "$TMP_ENV" <<EOF
+LONGHOUSE_URL=$LONGHOUSE_URL
+RUNNER_NAME=$RUNNER_NAME
+RUNNER_SECRET=$RUNNER_SECRET
+EOF
+      chmod 600 "$TMP_ENV"
+
+      cat > "$TMP_SERVICE" <<EOF
+[Unit]
+Description=Longhouse Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$INSTALL_USER
+Group=$INSTALL_GROUP
+WorkingDirectory=$INSTALL_HOME
+Environment=HOME=$INSTALL_HOME
+EnvironmentFile=/etc/longhouse/runner.env
+ExecStart=/usr/local/bin/longhouse-runner
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-    systemctl --user daemon-reload
+      echo "Installing system service for user $INSTALL_USER..."
+      $SUDO install -d -m 755 /usr/local/bin /etc/longhouse /etc/systemd/system
+      $SUDO install -m 755 "$TMP_BINARY" /usr/local/bin/longhouse-runner
+      $SUDO install -m 600 "$TMP_ENV" /etc/longhouse/runner.env
+      $SUDO install -m 644 "$TMP_SERVICE" /etc/systemd/system/longhouse-runner.service
 
-    if systemctl --user is-active --quiet longhouse-runner 2>/dev/null; then
-      echo "Stopping existing runner..."
-      systemctl --user stop longhouse-runner
+      $SUDO systemctl daemon-reload
+      if $SUDO systemctl is-active --quiet longhouse-runner 2>/dev/null; then
+        echo "Stopping existing runner..."
+        $SUDO systemctl stop longhouse-runner
+      fi
+
+      echo "Starting runner service..."
+      $SUDO systemctl enable longhouse-runner
+      $SUDO systemctl start longhouse-runner
+
+      trap - EXIT
+      rm -rf "$TMP_DIR"
+
+      echo ""
+      echo "Runner installed and started successfully!"
+      echo ""
+      echo "Service account: $INSTALL_USER"
+      echo "Management commands:"
+      echo "  sudo systemctl status longhouse-runner   # Status"
+      echo "  sudo systemctl stop longhouse-runner     # Stop"
+      echo "  sudo systemctl start longhouse-runner    # Start"
+      echo "  sudo journalctl -u longhouse-runner -f   # View logs"
     fi
-
-    echo "Starting runner service..."
-    systemctl --user enable longhouse-runner
-    systemctl --user start longhouse-runner
-
-    echo ""
-    echo "Runner installed and started successfully!"
-    echo ""
-    echo "Management commands:"
-    echo "  systemctl --user stop longhouse-runner   # Stop"
-    echo "  systemctl --user start longhouse-runner  # Start"
-    echo "  journalctl --user -u longhouse-runner -f # View logs"
-    echo ""
-    echo "Note: User services only run while you're logged in."
-    echo "For always-on servers: loginctl enable-linger \$USER"
     ;;
 esac
 

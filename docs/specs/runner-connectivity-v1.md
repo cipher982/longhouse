@@ -136,10 +136,15 @@ Instead, the product should express intent in user language:
 ## Progress Log
 
 - 2026-03-07: Created initial spec. Decision is runner-first, SSH-optional.
-- 2026-03-07: Starting implementation with Linux install modes because this directly addresses the `cube` login-session failure mode.
+- 2026-03-07: Implemented `RUNNER_INSTALL_MODE=desktop|server` in the live install script and activated the `mode` query param on `GET /api/runners/install.sh`.
+- 2026-03-07: Linux `server` mode now installs a systemd system service with `EnvironmentFile=/etc/longhouse/runner.env`, while `desktop` keeps the existing `systemd --user` path.
+- 2026-03-07: Added backend tests for the served install script contract and validated the generated shell with `bash -n`.
+- 2026-03-07: Updated the current UX (`AddRunnerModal`, `RunnerSetupCard`) so users can choose **Desktop / Laptop** vs **Always-on Linux Server** without needing to know `loginctl`.
 
 ## Discoveries / Quirks
 
 - The live install script is served from `apps/zerg/backend/zerg/routers/templates/install.sh`, not from `apps/runner/scripts/install.sh`.
 - The Linux installer currently uses a `systemd --user` service and explicitly warns that it only runs while the user is logged in.
 - The runner binary can read environment variables directly; `server` mode can rely on a systemd `EnvironmentFile=` instead of forcing `--envfile`.
+- The UI can synthesize a `server` install command client-side from `enroll_token` + `longhouse_url`, so we do not need an API schema change just to expose the new mode.
+- `apps/runner/scripts/install-linux.sh` is still an older direct helper and is not the live served path; it should be aligned or removed in a follow-up to reduce drift.

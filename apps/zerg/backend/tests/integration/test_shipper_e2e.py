@@ -26,6 +26,7 @@ Marks / skip conditions
 
 from __future__ import annotations
 
+import base64
 import os
 import socket
 import subprocess
@@ -74,7 +75,7 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_ready(url: str, timeout: float = 20.0) -> None:
+def _wait_ready(url: str, proc: subprocess.Popen[str], timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -82,9 +83,19 @@ def _wait_ready(url: str, timeout: float = 20.0) -> None:
             if r.status_code == 200:
                 return
         except requests.exceptions.ConnectionError:
-            pass
+            if proc.poll() is not None:
+                break
         time.sleep(0.25)
-    raise TimeoutError(f"Server at {url} did not become ready within {timeout}s")
+
+    stderr_tail = ""
+    if proc.stderr is not None:
+        try:
+            stderr_tail = proc.stderr.read().strip()
+        except Exception:
+            stderr_tail = ""
+
+    detail = f"\nServer stderr:\n{stderr_tail}" if stderr_tail else ""
+    raise TimeoutError(f"Server at {url} did not become ready within {timeout}s.{detail}")
 
 
 def _ship(fixture: str, url: str, provider: str, engine_db: Path) -> None:
@@ -147,6 +158,10 @@ def server(tmp_path_factory):
         **os.environ,
         "AUTH_DISABLED": "1",
         "DATABASE_URL": f"sqlite:///{db_path}",
+        "FERNET_SECRET": os.environ.get(
+            "FERNET_SECRET",
+            base64.urlsafe_b64encode(os.urandom(32)).decode(),
+        ),
     }
 
     proc = subprocess.Popen(
@@ -164,7 +179,7 @@ def server(tmp_path_factory):
     )
 
     try:
-        _wait_ready(base_url)
+        _wait_ready(base_url, proc)
         yield base_url
     finally:
         proc.terminate()
