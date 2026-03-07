@@ -9,6 +9,7 @@ const config = {
   fullyParallel: false,
   workers: 1,
   retries: 0,
+  forbidOnly: !!process.env.CI,
 
   use: {
     baseURL: frontendBaseUrl,
@@ -24,17 +25,35 @@ const config = {
   reporter: process.env.VERBOSE ? [
     ['list'],
     ['html', { open: 'never' }],
-    ['junit', { outputFile: 'test-results/junit.onboarding.xml' }]
+    ['junit', { outputFile: 'test-results/junit.onboarding.xml' }],
   ] : [
     ['./reporters/minimal-reporter.ts', { outputDir: 'test-results' }],
     ['html', { open: 'never' }],
-    ['junit', { outputFile: 'test-results/junit.onboarding.xml' }]
+    ['junit', { outputFile: 'test-results/junit.onboarding.xml' }],
   ],
 
   projects: [
     {
       name: 'onboarding-chromium',
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'onboarding-firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'onboarding-webkit',
+      use: { ...devices['Desktop Safari'] },
+    },
+    {
+      name: 'onboarding-mobile-safari',
+      testIgnore: ['**/onboarding_funnel.spec.ts'],
+      use: { ...devices['iPhone 13'] },
+    },
+    {
+      name: 'onboarding-mobile-chrome',
+      testIgnore: ['**/onboarding_funnel.spec.ts'],
+      use: { ...devices['Pixel 5'] },
     },
   ],
 };

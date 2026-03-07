@@ -8,6 +8,7 @@ RUN_UNIT=1
 RUN_CORE_E2E=1
 RUN_UI=1
 PORT=""
+ONBOARDING_PLAYWRIGHT_PROJECT="${ONBOARDING_PLAYWRIGHT_PROJECT:-}"
 
 usage() {
   cat <<'USAGE'
@@ -164,7 +165,11 @@ if [[ "$RUN_UI" -eq 1 ]]; then
   (
     cd "$WORKDIR/apps/zerg/e2e"
     bun install --silent
-    PLAYWRIGHT_BASE_URL="$BASE_URL" bunx playwright test --config playwright.onboarding.config.js
+    if [[ -n "$ONBOARDING_PLAYWRIGHT_PROJECT" ]]; then
+      PLAYWRIGHT_BASE_URL="$BASE_URL" bunx playwright test --config playwright.onboarding.config.js --project "$ONBOARDING_PLAYWRIGHT_PROJECT"
+    else
+      PLAYWRIGHT_BASE_URL="$BASE_URL" bunx playwright test --config playwright.onboarding.config.js
+    fi
   )
 fi
 
