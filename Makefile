@@ -574,7 +574,10 @@ validate: ## Run all validation checks
 	@printf '\n✅ All validations passed\n'
 
 validate-ws: ## Check WebSocket code is in sync (for CI)
-	@bash scripts/regen-ws-code.sh >/dev/null 2>&1
+	@cd apps/zerg/backend && \
+		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
+		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
+		uv run python ../../../scripts/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml >/dev/null 2>&1
 	@# Only check for drift in generated files to avoid false positives from unrelated changes
 	@if ! git diff --quiet \
 		apps/zerg/backend/zerg/generated/ws_messages.py \
@@ -594,11 +597,17 @@ validate-ws: ## Check WebSocket code is in sync (for CI)
 
 regen-ws: ## Regenerate WebSocket contract code
 	@echo "🔄 Regenerating WebSocket code..."
-	@bash scripts/regen-ws-code.sh
+	@cd apps/zerg/backend && \
+		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
+		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
+		uv run python ../../../scripts/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml
 	@echo "✅ WebSocket code regenerated"
 
 validate-sse: ## Check SSE code is in sync (for CI)
-	@bash scripts/regen-sse-code.sh >/dev/null 2>&1
+	@cd apps/zerg/backend && \
+		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
+		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
+		uv run python ../../../scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml >/dev/null 2>&1
 	@# Only check for drift in generated files to avoid false positives from unrelated changes
 	@if ! git diff --quiet \
 		apps/zerg/backend/zerg/generated/sse_events.py \
@@ -616,7 +625,10 @@ validate-sse: ## Check SSE code is in sync (for CI)
 
 regen-sse: ## Regenerate SSE event contract code
 	@echo "🔄 Regenerating SSE code..."
-	@bash scripts/regen-sse-code.sh
+	@cd apps/zerg/backend && \
+		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
+		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
+		uv run python ../../../scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml
 	@echo "✅ SSE code regenerated"
 
 lint-test-patterns: ## Check for test anti-patterns (window.confirm, alert, waitForTimeout)

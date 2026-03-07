@@ -215,6 +215,20 @@ Notes:
 - 2026-03-07: The script already uses the shared helper for login-token and deprovision, but it still open-codes create/get parsing with ad-hoc Python snippets.
 - 2026-03-07: Added `lh_hosted_create_instance` and `lh_hosted_get_instance`, removed the local JSON/python helpers from `provision-e2e-live.sh`, and re-ran the live provision smoke successfully against `control.longhouse.ai`.
 
+## [Tech Debt] Inline AsyncAPI regen wrappers (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Delete `scripts/regen-ws-code.sh` and `scripts/regen-sse-code.sh`; keep the real generator invocation in `Makefile` so there is one less shell layer to maintain.
+
+- [x] Inline the WebSocket regen command into `Makefile`
+- [x] Inline the SSE regen command into `Makefile`
+- [x] Update workflow path filters and verify the regen/validate targets still work
+
+Notes:
+- 2026-03-07: These scripts are only thin wrappers around `uv run python ...` in the backend env and are only called from `Makefile` plus one workflow path filter.
+- 2026-03-07: Deleted both wrappers, updated `ws-code-drift.yml` to watch the real generator inputs, and re-ran `make regen-ws`, `make validate-ws`, `make regen-sse`, and `make validate-sse` successfully.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.

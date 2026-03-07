@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - "schemas/**"
-      - "scripts/regen-ws-code.sh"
       - "scripts/generate-ws-types-modern.py"
       - "Makefile"
       - ".github/workflows/ws-code-drift.yml"
