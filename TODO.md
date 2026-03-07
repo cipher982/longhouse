@@ -113,6 +113,20 @@ Status (2026-03-07): Done.
 Notes:
 - 2026-03-07: `AGENTS.md` already says Sauron is folded into Longhouse, local repo refs were empty, `coolify app list` showed no `sauron` app in the active context, and `ssh clifford 'docker ps -a'` showed no `sauron` container.
 
+## [Tech Debt] Delete stale helper wrappers (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Remove old helper scripts that just wrap `make` or encode retired setup/test flows.
+
+- [x] Delete clearly stale wrapper scripts with no repo references
+- [x] Keep only the canonical `make` or maintained script entrypoints
+- [x] Verify the remaining canonical path still works
+
+Notes:
+- 2026-03-07: Deleted `scripts/run_all_tests.sh`, `scripts/run-smoke-tests.sh`, `scripts/validate-setup.sh`, and `scripts/design-verify.sh`. They were unreferenced and pointed at old flows or retired architecture.
+- 2026-03-07: Validation passed with `make test`, which exercised the supported test entrypoint directly.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
