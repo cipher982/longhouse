@@ -102,16 +102,16 @@ Notes:
 
 ## [Tech Debt] Delete dead Sauron compose file (size: 1)
 
-Status (2026-03-07): In progress.
+Status (2026-03-07): Done.
 
 **Goal:** Remove `apps/sauron/docker-compose.yml`, which appears to be a stale standalone deployment path.
 
-- [ ] Confirm there are no repo references to `apps/sauron/docker-compose.yml`
-- [ ] Confirm there is no live `sauron` container still using this repo deployment path
-- [ ] Delete the file
+- [x] Confirm there are no repo references to `apps/sauron/docker-compose.yml`
+- [x] Confirm there is no live `sauron` container still using this repo deployment path
+- [x] Delete the file
 
 Notes:
-- 2026-03-07: `AGENTS.md` already says Sauron is folded into Longhouse, local repo refs are empty, and `ssh clifford 'docker ps -a'` showed no `sauron` container.
+- 2026-03-07: `AGENTS.md` already says Sauron is folded into Longhouse, local repo refs were empty, `coolify app list` showed no `sauron` app in the active context, and `ssh clifford 'docker ps -a'` showed no `sauron` container.
 
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
