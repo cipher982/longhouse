@@ -32,6 +32,21 @@ Notes:
 - 2026-03-07: Live Oikos smoke checks succeeded with `runner_exec` on `clifford`, `cube`, and `cinder` using `bash -lc hostname`.
 - 2026-03-07: Follow-up smoke still showed Oikos sometimes *claiming* `cube` was offline without calling tools; live DB showed it online, so prompt guidance now explicitly requires `runner_list` verification before any offline claim.
 
+## [Infra] Runner connectivity v1 (size: 4)
+
+Status (2026-03-07): In progress.
+
+**Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
+
+- [ ] Write the connectivity/design spec and keep it updated with implementation progress
+- [ ] Add Linux install modes (`desktop`, `server`) to the live install script
+- [ ] Add backend tests for the served install script contract
+- [ ] Surface the right install commands in the UX without requiring users to understand `loginctl`
+
+Notes:
+- 2026-03-07: Research decision is runner-first, SSH-optional. The immediate reliability gap is Linux always-on installs using `systemd --user`.
+- 2026-03-07: The live install script is `apps/zerg/backend/zerg/routers/templates/install.sh`; `apps/runner/scripts/install.sh` is a sibling copy and should stay aligned.
+
 ## [Docs/Drift] Docs retention prune (size: 3)
 
 Status (2026-03-06): Done.
