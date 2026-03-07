@@ -253,6 +253,7 @@ install-engine: ## Build + sign the Rust engine binary (run after any engine sou
 
 test-engine-fast: ## Rust parser golden + adversarial tests (uses repo-local binary, included in make test)
 	@echo "🦀 Running engine golden + adversarial tests..."
+	cd apps/engine && cargo build --release
 	cd apps/engine && cargo test --test golden_parser_contract --test adversarial_parser
 
 test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg-ops.sh
