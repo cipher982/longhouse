@@ -127,6 +127,20 @@ Notes:
 - 2026-03-07: Deleted `scripts/run_all_tests.sh`, `scripts/run-smoke-tests.sh`, `scripts/validate-setup.sh`, and `scripts/design-verify.sh`. They were unreferenced and pointed at old flows or retired architecture.
 - 2026-03-07: Validation passed with `make test`, which exercised the supported test entrypoint directly.
 
+## [Tech Debt] Delete old schema-first API leftovers (size: 1)
+
+Status (2026-03-07): Done.
+
+**Goal:** Remove the unused schema-first API generation path that no longer feeds the current OpenAPI-based frontend/backend contracts.
+
+- [x] Delete the unused generators and generated file
+- [x] Delete the now-unreferenced `schemas/api-schema.yml`
+- [x] Verify no live repo refs remain
+
+Notes:
+- 2026-03-07: Deleted `scripts/generate-complete-contracts.py`, `scripts/generate-api-client.py`, `apps/zerg/backend/zerg/generated/api_models.py`, and `schemas/api-schema.yml`.
+- 2026-03-07: Verification was a repo-wide ref search; the only remaining mentions after deletion were the TODO notes for this cleanup itself.
+
 ## [Docs/Drift] Hosted alias example cleanup (size: 1)
 
 Status (2026-03-06): Done.
