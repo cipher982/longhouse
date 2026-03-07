@@ -33,6 +33,12 @@ def test_prompt_uses_wait_for_commis_not_removed_wait_parameter():
     assert "wait=False" not in BASE_OIKOS_PROMPT
 
 
+def test_prompt_documents_direct_runner_exec_for_lightweight_commands():
+    assert "runner_exec" in BASE_OIKOS_PROMPT
+    assert "single lightweight runner command" in BASE_OIKOS_PROMPT
+    assert "already-connected runners" in BASE_OIKOS_PROMPT
+
+
 def test_tool_descriptions_match_prompt_semantics():
     workspace_description = _tool_description("spawn_workspace_commis")
     assert "PRIMARY" in workspace_description

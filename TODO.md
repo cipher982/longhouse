@@ -15,6 +15,20 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Infra] Restore Oikos direct runner terminal access (size: 2)
+
+Status (2026-03-07): In progress.
+
+**Goal:** Let the `david010` instance use connected runners directly from Oikos/Telegram for bash terminal access, while keeping commis delegation for heavier work.
+
+- [ ] Let Oikos call `runner_exec` with normal authenticated user context (not only commis context)
+- [ ] Update the Oikos prompt/allowlist so it knows direct runner commands are available for lightweight shell work
+- [ ] Verify the live `david010` runners (`cube`, `clifford`, `cinder`) are configured for `exec.full` and only one daemon instance each
+
+Notes:
+- 2026-03-07: Live inspection found all three runners online, but every runner is still `exec.readonly`, which blocks bash access.
+- 2026-03-07: `cube`, `clifford`, and `cinder` each currently have duplicate runner daemon instances, causing repeated websocket replacement churn.
+
 ## [Docs/Drift] Docs retention prune (size: 3)
 
 Status (2026-03-06): Done.

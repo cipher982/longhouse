@@ -98,8 +98,12 @@ def semantic_search(
 
     # Generate query embedding (sync wrapper for use in sync context)
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
             # We're in an async context; use thread pool to avoid nested event loops
             import concurrent.futures
 
@@ -107,7 +111,7 @@ def semantic_search(
                 future = pool.submit(asyncio.run, generate_embedding(q, config))
                 query_vec = future.result(timeout=30)
         else:
-            query_vec = loop.run_until_complete(generate_embedding(q, config))
+            query_vec = asyncio.run(generate_embedding(q, config))
     except Exception:
         logger.exception("Failed to generate query embedding for semantic search")
         return []
