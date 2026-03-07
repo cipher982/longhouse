@@ -34,18 +34,20 @@ Notes:
 
 ## [Infra] Runner connectivity v1 (size: 4)
 
-Status (2026-03-07): In progress.
+Status (2026-03-07): Phase 1 implemented locally.
 
 **Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
 
-- [ ] Write the connectivity/design spec and keep it updated with implementation progress
-- [ ] Add Linux install modes (`desktop`, `server`) to the live install script
-- [ ] Add backend tests for the served install script contract
-- [ ] Surface the right install commands in the UX without requiring users to understand `loginctl`
+- [x] Write the connectivity/design spec and keep it updated with implementation progress
+- [x] Add Linux install modes (`desktop`, `server`) to the live install script
+- [x] Add backend tests for the served install script contract
+- [x] Surface the right install commands in the UX without requiring users to understand `loginctl`
 
 Notes:
 - 2026-03-07: Research decision is runner-first, SSH-optional. The immediate reliability gap is Linux always-on installs using `systemd --user`.
 - 2026-03-07: The live install script is `apps/zerg/backend/zerg/routers/templates/install.sh`; `apps/runner/scripts/install.sh` is a sibling copy and should stay aligned.
+- 2026-03-07: Shipped `RUNNER_INSTALL_MODE=desktop|server`, added install-script tests, and updated Add Runner / chat runner setup UI to expose the machine type choice directly.
+- 2026-03-07: Validation passed with `make test`, `uv run pytest tests_lite/test_runner_install_script.py -q`, `bash -n` on both installer scripts, and `bun run validate:types`. Frontend lint still reports unrelated pre-existing warnings elsewhere in the app.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
