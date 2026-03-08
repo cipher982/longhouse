@@ -194,6 +194,7 @@ Instead, the product should express intent in user language:
 - 2026-03-08: Hosted onboarding/browser failures traced back to `POST /api/runners/enroll-token` returning 500 when `APP_PUBLIC_URL` was unset. Local/demo enrollment now derives `longhouse_url` from `request.base_url`, and the route has regression coverage.
 - 2026-03-08: The remaining `contract-first-ci` fresh-clone smoke failure was a workflow mismatch, not another product bug: the job installed only Chromium but still ran the full onboarding Playwright project set. It now pins `ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium` to match the lightweight smoke contract.
 - 2026-03-08: Real hardware validation uncovered a capability-preservation bug: the installer wrote `LONGHOUSE_URL`, `RUNNER_NAME`, and `RUNNER_SECRET`, but not `RUNNER_CAPABILITIES`. Re-enrolling an existing `exec.full` runner would therefore reconnect as the client default `exec.readonly`. The register response now returns a capabilities CSV and the installers persist it into every env file path.
+- 2026-03-08: Live migration validation completed on owned hardware: `cinder` moved from a source-based LaunchAgent to the shipped binary LaunchAgent, and `clifford` moved from the old linger-dependent user service to the new Linux system service. Hosted Oikos successfully ran `hostname -s` against both immediately after install and again after service restarts.
 
 ## Discoveries / Quirks
 
@@ -213,4 +214,5 @@ Instead, the product should express intent in user language:
 - Runner README smoke exposed a real packaging dependency gap: `apps/runner` needs `bun-types` in `devDependencies` because its `tsconfig.json` includes that type library.
 - Once the README smoke became a true fresh-clone flow, its timeout needed to account for frontend asset build time on slower self-hosted machines like `cube`.
 - The Add Runner modal is only as healthy as `POST /api/runners/enroll-token`; backend URL-resolution bugs there can masquerade as multi-browser UI failures even when selectors and rendering are fine.
+- Existing self-hosted runners may already have higher capabilities than the backend default. The installer must persist server-provided capabilities on re-enroll or it will silently downgrade a working runner during migration.
 - README/service smoke checks should poll health instead of sleeping a fixed number of seconds; cold-start variance already exceeds 4 seconds on a fresh local boot.

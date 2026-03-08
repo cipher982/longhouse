@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch] Runner onboarding hardening to 100 (size: 4)
 
-Status (2026-03-08): CI/browser blockers cleared; real hardware install validation is now the active work.
+Status (2026-03-08): Real installs completed on `cinder` + `clifford`; only true logout/reboot proof remains.
 
 **Goal:** Turn the runner onboarding slice from "credible pre-launch" into something David can trust on launch day across fresh clones, hosted CI, and real machines.
 
@@ -34,6 +34,9 @@ Notes:
 - 2026-03-08: Remaining red surfaces are `Runner Onboarding Validation Ring` and the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job.
 - 2026-03-08: Current evidence points at hosted-browser failures concentrated in `tests/onboarding/runner_install_modes.spec.ts`, not the core install-script contract.
 - 2026-03-08: While starting the real install pass on `cinder` + `clifford`, live inspection found a new blocker: the installer does not write `RUNNER_CAPABILITIES`, so a re-enroll would silently downgrade existing `exec.full` runners to the client default `exec.readonly`. Fix that before migrating live machines.
+- 2026-03-08: `cinder` was migrated from a source-based LaunchAgent (`bun run src/index.ts`) to the shipped binary LaunchAgent with `~/.config/longhouse/runner.env`, and `clifford` was migrated from the old `systemd --user` + linger setup to the new `/etc/systemd/system/longhouse-runner.service` path. Both retained `RUNNER_CAPABILITIES=exec.full`.
+- 2026-03-08: Hosted Oikos successfully ran `hostname -s` on both newly migrated runners before and after service restarts, returning `cinder` and `clifford` respectively.
+- 2026-03-08: I did not run a literal logout/reboot on `cinder` or `clifford` yet; `cinder` would require an interactive local logout/restart, and rebooting `clifford` would be a production-impacting action that should be explicit.
 
 ## [QA/Test] Full verification sweep and CI follow-through (size: 2)
 
@@ -89,7 +92,7 @@ Notes:
 
 ## [QA/Test] Solo-dev runner onboarding validation ring (size: 4)
 
-Status (2026-03-08): Core hosted + fresh-clone coverage is green; remaining work is extended/manual hardware validation.
+Status (2026-03-08): Core hosted + fresh-clone coverage is green; cinder/clifford installs are validated, extended/manual coverage remains.
 
 **Goal:** Catch onboarding regressions across browser, OS, and hardware before beta users ever see them.
 
@@ -119,6 +122,7 @@ Notes:
 - 2026-03-08: Root cause was not selector drift — `Add Runner` depends on `POST /api/runners/enroll-token`, and that route still 500ed when `APP_PUBLIC_URL` was unset. The route now derives `longhouse_url` from `request.base_url` in local/demo flows, with backend regression coverage.
 - 2026-03-08: After the backend fix, the dedicated `Runner Onboarding Validation Ring` went green on GitHub for `97cdd55a`; the remaining fresh-clone CI failure came from `contract-first-ci` installing only Chromium while `qa-oss.sh` still ran the full five-project onboarding matrix.
 - 2026-03-08: `contract-first-ci` now pins `ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium` so its lightweight fresh-clone smoke matches the browsers it installs; local validation should use the same env when mimicking that job.
+- 2026-03-08: Real-device install validation on owned hardware is now partly done: `cinder` desktop and `clifford` server installs both succeeded with post-restart Oikos hostname checks. The remaining manual proof is literal logout/reboot behavior, plus extended hosted/self-hosted matrix runs.
 - 2026-03-08: Local validation after the fix passed with `make test`, `make test-e2e-onboarding`, and `make onboarding-funnel`.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
