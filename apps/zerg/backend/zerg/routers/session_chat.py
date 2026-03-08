@@ -20,20 +20,20 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import AsyncIterator
+from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
-from fastapi import Request
 from fastapi import status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pydantic import Field
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.services.agents_store import AgentsStore
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_continuity import ship_session_to_zerg
@@ -72,6 +72,17 @@ class SessionChatError(BaseModel):
     lock_info: SessionLockInfo | None = None
 
 
+def _lock_scope_id_for_session(db: Session, session_id: str) -> str:
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError:
+        return session_id
+    session = AgentsStore(db).get_session(session_uuid)
+    if session is None:
+        return session_id
+    return str(session.thread_root_session_id or session.id)
+
+
 # ---------------------------------------------------------------------------
 # SSE Event Types
 # ---------------------------------------------------------------------------
@@ -90,7 +101,13 @@ class SSEEvent:
 
 
 async def stream_claude_output(
-    session_id: str,
+    *,
+    source_session_id: str,
+    target_session_id: str,
+    thread_root_session_id: str,
+    continued_from_session_id: str | None,
+    created_continuation: bool,
+    branched_from_event_id: int | None,
     provider_session_id: str,
     workspace_path: Path,
     message: str,
@@ -104,26 +121,19 @@ async def stream_claude_output(
     - tool_use: Tool calls
     - error: Error messages
     - done: Completion signal
-
-    Args:
-        session_id: Longhouse session UUID
-        provider_session_id: Claude Code session ID for --resume
-        workspace_path: Working directory for Claude
-        message: User's message
-        request_id: Unique request ID for logging
-
-    Yields:
-        SSE-formatted event strings
     """
     proc = None
     try:
-        # Send initial system event
         yield SSEEvent(
             event="system",
             data=json.dumps(
                 {
                     "type": "session_started",
-                    "session_id": session_id,
+                    "session_id": target_session_id,
+                    "source_session_id": source_session_id,
+                    "thread_root_session_id": thread_root_session_id,
+                    "continued_from_session_id": continued_from_session_id,
+                    "created_continuation": created_continuation,
                     "provider_session_id": provider_session_id,
                     "workspace": str(workspace_path),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -131,7 +141,6 @@ async def stream_claude_output(
             ),
         ).encode()
 
-        # Build Claude command
         cmd = [
             "claude",
             "--resume",
@@ -146,8 +155,6 @@ async def stream_claude_output(
 
         logger.info(f"[{request_id}] Starting Claude: cwd={workspace_path}")
 
-        # Use DEVNULL for stderr to avoid deadlock risk if Claude writes too much
-        # verbose output to stderr. We only need stdout (stream-json events).
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -155,7 +162,6 @@ async def stream_claude_output(
             cwd=workspace_path,
         )
 
-        # Stream stdout as SSE events
         assistant_text = ""
         async for line in proc.stdout:
             line = line.decode().strip()
@@ -167,7 +173,6 @@ async def stream_claude_output(
                 event_type = event.get("type", "unknown")
 
                 if event_type == "assistant":
-                    # Extract text content from assistant message
                     msg = event.get("message", {})
                     content = msg.get("content", [])
                     for block in content:
@@ -196,7 +201,6 @@ async def stream_claude_output(
                                 ).encode()
 
                 elif event_type == "result":
-                    # Tool result
                     yield SSEEvent(
                         event="tool_result",
                         data=json.dumps(
@@ -207,7 +211,6 @@ async def stream_claude_output(
                     ).encode()
 
                 elif event_type == "system":
-                    # System events (session info)
                     yield SSEEvent(
                         event="system",
                         data=json.dumps(
@@ -219,15 +222,12 @@ async def stream_claude_output(
                     ).encode()
 
             except json.JSONDecodeError:
-                # Non-JSON output (rare)
                 logger.debug(f"[{request_id}] Non-JSON output: {line[:100]}")
 
-        # Wait for process completion
         await proc.wait()
 
-        # Check for errors
+        shipped_id: str | None = None
         if proc.returncode != 0:
-            # stderr is DEVNULL so we can't read it, just log the exit code
             logger.error(f"[{request_id}] Claude exited with code {proc.returncode}")
             yield SSEEvent(
                 event="error",
@@ -239,22 +239,31 @@ async def stream_claude_output(
                 ),
             ).encode()
         else:
-            # Ship updated session back to Longhouse
             try:
                 shipped_id = await ship_session_to_zerg(
                     workspace_path=workspace_path,
                     commis_id=request_id,
+                    session_id=target_session_id,
+                    thread_root_session_id=thread_root_session_id,
+                    continued_from_session_id=continued_from_session_id,
+                    continuation_kind="cloud",
+                    origin_label="Cloud",
+                    branched_from_event_id=branched_from_event_id,
                 )
                 if shipped_id:
                     logger.info(f"[{request_id}] Shipped session to Longhouse: {shipped_id}")
             except Exception as e:
                 logger.warning(f"[{request_id}] Failed to ship session to Longhouse: {e}")
 
-        # Send completion
         yield SSEEvent(
             event="done",
             data=json.dumps(
                 {
+                    "session_id": target_session_id,
+                    "source_session_id": source_session_id,
+                    "shipped_session_id": shipped_id or target_session_id,
+                    "created_continuation": created_continuation,
+                    "branched_from_event_id": branched_from_event_id,
                     "exit_code": proc.returncode,
                     "total_text_length": len(assistant_text),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -284,95 +293,60 @@ async def stream_claude_output(
         ).encode()
 
     finally:
-        # Ensure process is terminated
         if proc and proc.returncode is None:
             proc.terminate()
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
 
 
 @router.post("/{session_id}/chat")
 async def chat_with_session(
     session_id: str,
     body: SessionChatRequest,
-    request: Request,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_oikos_user),
+    _current_user=Depends(get_current_oikos_user),
 ):
     """Chat with a Claude Code session.
 
     Resumes an existing session and streams the response via SSE.
-
-    Flow:
-    1. Validate session ownership
-    2. Acquire per-session lock (409 if locked)
-    3. Resolve workspace (use local or clone git repo)
-    4. Prepare session file for --resume
-    5. Stream Claude output as SSE
-    6. On disconnect: kill process, release lock
-    7. On complete: ship session to Longhouse, release lock
-
-    Returns:
-        StreamingResponse with SSE events
-
-    Raises:
-        404: Session not found
-        409: Session is locked by another request
-        500: Internal error
     """
     request_id = str(uuid.uuid4())[:8]
     logger.info(f"[{request_id}] Chat request for session {session_id}")
 
-    # Validate session exists and get metadata
-    session_sql = text("""
-        SELECT
-            id::text,
-            provider,
-            cwd,
-            git_repo,
-            git_branch
-        FROM agents.sessions
-        WHERE id::text = :session_id
-    """)
-    result = db.execute(session_sql, {"session_id": session_id})
-    row = result.fetchone()
+    try:
+        source_session_uuid = UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid session id: {session_id}",
+        ) from exc
 
-    if not row:
+    store = AgentsStore(db)
+    source_session = store.get_session(source_session_uuid)
+    if not source_session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",
         )
 
-    provider = row[1]
-    original_cwd = row[2]
-    git_repo = row[3]
-    git_branch = row[4]
-
-    # Only Claude sessions can be resumed
-    if provider != "claude":
+    if source_session.provider != "claude":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Only Claude sessions can be resumed (got {provider})",
+            detail=f"Only Claude sessions can be resumed (got {source_session.provider})",
         )
 
-    # Try to acquire session lock
+    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
     lock = await session_lock_manager.acquire(
-        session_id=session_id,
+        session_id=lock_scope_id,
         holder=request_id,
         ttl_seconds=300,
     )
 
     if not lock:
-        # Session is locked
-        existing_lock = await session_lock_manager.get_lock_info(session_id)
+        existing_lock = await session_lock_manager.get_lock_info(lock_scope_id)
         lock_info = SessionLockInfo(
             locked=True,
             holder=existing_lock.holder if existing_lock else None,
             time_remaining_seconds=existing_lock.time_remaining if existing_lock else None,
-            fork_available=True,  # Future: support forking
+            fork_available=True,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -386,12 +360,14 @@ async def chat_with_session(
     resolved_workspace = None
 
     try:
-        # Resolve workspace
+        target_session, created_continuation = store.ensure_cloud_continuation_target(source_session.id)
+        db.commit()
+
         resolved_workspace = await workspace_resolver.resolve(
-            original_cwd=original_cwd,
-            git_repo=git_repo,
-            git_branch=git_branch,
-            session_id=session_id,
+            original_cwd=source_session.cwd,
+            git_repo=source_session.git_repo,
+            git_branch=source_session.git_branch,
+            session_id=str(target_session.id),
         )
 
         if resolved_workspace.error:
@@ -400,22 +376,27 @@ async def chat_with_session(
                 detail=f"Cannot resolve workspace: {resolved_workspace.error}",
             )
 
-        # Prepare session file for --resume
         provider_session_id = await prepare_session_for_resume(
-            session_id=session_id,
+            session_id=str(source_session.id),
             workspace_path=resolved_workspace.path,
         )
 
         logger.info(
-            f"[{request_id}] Prepared session {session_id} -> {provider_session_id[:20]}... "
-            f"workspace={resolved_workspace.path} is_temp={resolved_workspace.is_temp}"
+            f"[{request_id}] Prepared source session {source_session.id} -> {provider_session_id[:20]}... "
+            f"target={target_session.id} workspace={resolved_workspace.path} is_temp={resolved_workspace.is_temp}"
         )
 
-        # Create streaming response
         async def generate():
             try:
                 async for event in stream_claude_output(
-                    session_id=session_id,
+                    source_session_id=str(source_session.id),
+                    target_session_id=str(target_session.id),
+                    thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
+                    continued_from_session_id=(
+                        str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
+                    ),
+                    created_continuation=created_continuation,
+                    branched_from_event_id=target_session.branched_from_event_id,
                     provider_session_id=provider_session_id,
                     workspace_path=resolved_workspace.path,
                     message=body.message,
@@ -423,8 +404,7 @@ async def chat_with_session(
                 ):
                     yield event
             finally:
-                # Cleanup
-                await session_lock_manager.release(session_id, request_id)
+                await session_lock_manager.release(lock_scope_id, request_id)
                 if resolved_workspace and resolved_workspace.is_temp:
                     resolved_workspace.cleanup()
                 logger.info(f"[{request_id}] Session chat complete, lock released")
@@ -440,15 +420,13 @@ async def chat_with_session(
         )
 
     except HTTPException:
-        # Re-raise HTTP exceptions
-        await session_lock_manager.release(session_id, request_id)
+        await session_lock_manager.release(lock_scope_id, request_id)
         if resolved_workspace and resolved_workspace.is_temp:
             resolved_workspace.cleanup()
         raise
 
     except Exception as e:
-        # Cleanup on error
-        await session_lock_manager.release(session_id, request_id)
+        await session_lock_manager.release(lock_scope_id, request_id)
         if resolved_workspace and resolved_workspace.is_temp:
             resolved_workspace.cleanup()
         logger.exception(f"[{request_id}] Error in chat_with_session")
@@ -461,13 +439,15 @@ async def chat_with_session(
 @router.get("/{session_id}/lock")
 async def get_session_lock_status(
     session_id: str,
-    current_user=Depends(get_current_oikos_user),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_oikos_user),
 ) -> SessionLockInfo:
     """Check if a session is currently locked.
 
     Used by UI to show lock status before attempting to chat.
     """
-    lock = await session_lock_manager.get_lock_info(session_id)
+    lock_scope_id = _lock_scope_id_for_session(db, session_id)
+    lock = await session_lock_manager.get_lock_info(lock_scope_id)
 
     if lock:
         return SessionLockInfo(
@@ -486,14 +466,17 @@ async def get_session_lock_status(
 @router.delete("/{session_id}/lock")
 async def force_release_lock(
     session_id: str,
-    current_user=Depends(get_current_oikos_user),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_oikos_user),
 ) -> dict:
     """Force release a session lock (admin operation).
 
     Use with caution - may cause issues if a chat is in progress.
     """
-    released = await session_lock_manager.release(session_id)
+    lock_scope_id = _lock_scope_id_for_session(db, session_id)
+    released = await session_lock_manager.release(lock_scope_id)
     return {
         "released": released,
         "session_id": session_id,
+        "lock_session_id": lock_scope_id,
     }

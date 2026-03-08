@@ -190,6 +190,13 @@ async def ship_session_to_zerg(
     workspace_path: Path,
     commis_id: str,
     claude_config_dir: Path | None = None,
+    *,
+    session_id: str | None = None,
+    thread_root_session_id: str | None = None,
+    continued_from_session_id: str | None = None,
+    continuation_kind: str | None = None,
+    origin_label: str | None = None,
+    branched_from_event_id: int | None = None,
 ) -> str | None:
     """Ship a Claude Code session from workspace to Zerg.
 
@@ -278,14 +285,15 @@ async def ship_session_to_zerg(
         started_at = (metadata.started_at or datetime.now(timezone.utc)).isoformat()
         ended_at = metadata.ended_at.isoformat() if metadata.ended_at else None
 
-    # Build ingest payload
-    # Note: Don't send 'id' - let API generate UUID. Store provider_session_id in device_id for tracking.
+    # Build ingest payload.
+    # Explicit lineage/session ids let cloud continuation update a known child row
+    # instead of silently inventing a sibling session on every resume.
     device_id = f"zerg-commis-{platform.node()}:{provider_session_id}"
     payload = {
         "provider": "claude",
         "environment": get_machine_name_label(),
-        "provider_session_id": provider_session_id,  # Claude Code session UUID from filename
-        "project": metadata.project or workspace_path.name,  # Use parsed project when available
+        "provider_session_id": provider_session_id,
+        "project": metadata.project or workspace_path.name,
         "device_id": device_id,
         "cwd": metadata.cwd or str(workspace_path.absolute()),
         "git_branch": metadata.git_branch,
@@ -293,7 +301,17 @@ async def ship_session_to_zerg(
         "ended_at": ended_at,
         "events": events,
         "source_lines": source_lines,
+        "continuation_kind": continuation_kind or "cloud",
+        "origin_label": origin_label or "Cloud",
     }
+    if session_id:
+        payload["id"] = session_id
+    if thread_root_session_id:
+        payload["thread_root_session_id"] = thread_root_session_id
+    if continued_from_session_id:
+        payload["continued_from_session_id"] = continued_from_session_id
+    if branched_from_event_id is not None:
+        payload["branched_from_event_id"] = branched_from_event_id
 
     # Ship to Zerg ingest endpoint
     url = f"{LONGHOUSE_API_URL}/api/agents/ingest"

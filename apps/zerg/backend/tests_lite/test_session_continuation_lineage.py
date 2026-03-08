@@ -115,6 +115,61 @@ def test_create_continuation_session_marks_new_head(tmp_path):
         assert store.get_thread_head(root_id).id == child.id
 
 
+def test_ensure_cloud_continuation_target_branches_from_local_session(tmp_path):
+    Session = _make_db(tmp_path)
+    root_id = uuid4()
+    started_at = datetime(2026, 3, 8, 20, 0, tzinfo=timezone.utc)
+
+    with Session() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            _local_ingest(
+                session_id=root_id,
+                started_at=started_at,
+                event_timestamp=started_at,
+                source_offset=0,
+                content_text="root",
+                raw_line='{"line":"root"}',
+            )
+        )
+
+        target, created = store.ensure_cloud_continuation_target(root_id)
+
+        assert created is True
+        assert target.continued_from_session_id == root_id
+        assert target.continuation_kind == "cloud"
+        assert target.origin_label == "Cloud"
+        assert store.get_thread_head(root_id).id == target.id
+
+
+def test_ensure_cloud_continuation_target_reuses_current_cloud_head(tmp_path):
+    Session = _make_db(tmp_path)
+    root_id = uuid4()
+    started_at = datetime(2026, 3, 8, 20, 0, tzinfo=timezone.utc)
+
+    with Session() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            _local_ingest(
+                session_id=root_id,
+                started_at=started_at,
+                event_timestamp=started_at,
+                source_offset=0,
+                content_text="root",
+                raw_line='{"line":"root"}',
+            )
+        )
+        first_target, created = store.ensure_cloud_continuation_target(root_id)
+        assert created is True
+
+        second_target, created_again = store.ensure_cloud_continuation_target(first_target.id)
+
+        assert created_again is False
+        assert second_target.id == first_target.id
+        sessions = db.query(AgentSession).filter(AgentSession.thread_root_session_id == root_id).all()
+        assert len(sessions) == 2
+
+
 def test_stale_local_ingest_creates_local_child_and_reuses_it(tmp_path):
     Session = _make_db(tmp_path)
     root_id = uuid4()
