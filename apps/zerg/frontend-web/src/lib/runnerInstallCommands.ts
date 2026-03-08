@@ -15,7 +15,7 @@ export function buildRunnerNativeInstallCommand(
   input: RunnerInstallCommandInput,
   mode: RunnerNativeInstallMode,
 ): string {
-  if (mode === "desktop" && input.oneLinerInstallCommand) {
+  if (mode === "desktop" && input.oneLinerInstallCommand && !input.runnerName) {
     return input.oneLinerInstallCommand;
   }
 
