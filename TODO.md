@@ -206,7 +206,7 @@ Notes:
 - 2026-03-08: Fresh `cube` VM validation confirmed `longhouse-runner doctor --json` is healthy on runner `v0.1.3` with `installMode=server` after install.
 - 2026-03-08: Shipped `runner-v0.1.3` with an explicit websocket connect watchdog in the runner client so boot-time/re-enroll handshakes cannot hang forever before `hello`.
 - 2026-03-08: Re-ran the disposable `cube` exec.full canary after the `runner-v0.1.3` deploy; it passed end-to-end (install -> reboot -> re-enroll -> reboot -> Oikos `bash -lc`).
-- 2026-03-08: Follow-up cleanup: simplify the runner websocket handler so early close/abort paths stop emitting noisy double-close errors after reconnect success.
+- 2026-03-08: Simplified the runner websocket close path with a best-effort close helper; early disconnects before `hello` now log cleanly without noisy double-close errors.
 - 2026-03-08: One canary rerun failed earlier due to `uvt-simplestreams-libvirt sync` timing out on `cube`; rerunning succeeded, so that was infra flake, not a product regression.
 
 **Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
