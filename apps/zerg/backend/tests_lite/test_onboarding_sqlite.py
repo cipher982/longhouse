@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 
 
 def test_sqlite_onboarding_complete():
@@ -99,7 +100,7 @@ print("SUCCESS: All SQLite onboarding tests passed")
         env["TESTING"] = "1"
         env["AUTH_DISABLED"] = "1"
         env["SINGLE_TENANT"] = "1"
-        env["FERNET_SECRET"] = "Mj7MFJspDPjiFBGHZJ5hnx70XAFJ_En6ofIEhn3BoXw="
+        env["FERNET_SECRET"] = Fernet.generate_key().decode()
 
         result = subprocess.run(
             [sys.executable, "-c", script],

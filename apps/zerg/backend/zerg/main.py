@@ -55,6 +55,8 @@ from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
 from zerg.database import initialize_database
 from zerg.middleware.test_commis_context import TestCommisContextMiddleware
+from zerg.openapi_schema import build_api_openapi_schema
+from zerg.openapi_schema import export_openapi_schema
 from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
@@ -908,41 +910,10 @@ def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
 
-    import json
+    openapi_schema = build_api_openapi_schema(api_app)
 
-    from fastapi.openapi.utils import get_openapi
-
-    # Generate schema from the API sub-app routes (which live without /api prefix),
-    # then prepend /api to every path so the schema reflects the real public URLs.
-    openapi_schema = get_openapi(
-        title="Longhouse API",
-        version="1.0.0",
-        description="Complete REST API specification for Longhouse. "
-        "This schema is the single source of truth for frontend-backend contracts.",
-        routes=api_app.routes,
-    )
-
-    # Prepend /api to all paths so the schema matches the mounted prefix
-    prefixed_paths = {}
-    for path, ops in openapi_schema.get("paths", {}).items():
-        prefixed_paths[f"/api{path}"] = ops
-    openapi_schema["paths"] = prefixed_paths
-
-    # Add server information
-    openapi_schema["servers"] = [
-        {"url": "http://localhost:8001", "description": "Development server"},
-        {"url": "https://api.longhouse.ai", "description": "Production server"},
-    ]
-
-    # Export schema to file for CI consumption
     try:
-        # Single source of truth: apps/zerg/openapi.json (used by frontend typegen + CI checks)
-        schema_path = Path(__file__).parent.parent.parent / "openapi.json"
-
-        with open(schema_path, "w") as f:
-            json.dump(openapi_schema, f, indent=2)
-            f.write("\n")
-
+        schema_path = export_openapi_schema(openapi_schema)
         print(f"✅ OpenAPI schema exported to {schema_path}")
     except Exception as e:
         print(f"⚠️  Could not export OpenAPI schema: {e}")

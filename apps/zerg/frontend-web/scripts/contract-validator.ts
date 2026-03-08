@@ -53,29 +53,11 @@ function loadOpenApiSchema(schemaPath: string): any {
   const backendDir = join(__dirname, '../../backend');
   const schemaJson = execFileSync(
     'uv',
-    [
-      'run',
-      'python',
-      '-c',
-      [
-        'import json',
-        'from fastapi.openapi.utils import get_openapi',
-        'from zerg.main import api_app',
-        'schema = get_openapi(title="Longhouse API", version="1.0.0", description="Contract validation schema", routes=api_app.routes)',
-        'schema["paths"] = {f"/api{k}": v for k, v in schema.get("paths", {}).items()}',
-        'print(json.dumps(schema))',
-      ].join('; '),
-    ],
+    ['run', 'python', 'scripts/export_openapi.py', '--stdout'],
     {
       cwd: backendDir,
       encoding: 'utf-8',
-      env: {
-        ...process.env,
-        TESTING: process.env.TESTING ?? '1',
-        JWT_SECRET: process.env.JWT_SECRET ?? 'contract-validator-jwt-secret-123456',
-        INTERNAL_API_SECRET: process.env.INTERNAL_API_SECRET ?? 'contract-validator-internal-secret-123456',
-        FERNET_SECRET: process.env.FERNET_SECRET ?? 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
-      },
+      env: process.env,
     },
   );
 
