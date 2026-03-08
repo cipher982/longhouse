@@ -15,6 +15,42 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch] Runner onboarding hardening to 100 (size: 4)
+
+Status (2026-03-08): New top priority.
+
+**Goal:** Turn the runner onboarding slice from "credible pre-launch" into something David can trust on launch day across fresh clones, hosted CI, and real machines.
+
+- [ ] Fix `tests/onboarding/runner_install_modes.spec.ts` in hosted CI across Chromium, Firefox, WebKit, and mobile emulation
+- [ ] Make the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job green again
+- [ ] Run `workflow_dispatch` coverage for hosted extended (`ubuntu-24.04-arm`, `macos-latest`) and self-hosted (`cube`, `clifford`, macOS) jobs
+- [ ] Do one real desktop install and one real always-on Linux server install, including logout/reboot persistence
+- [ ] Verify Oikos/Telegram can run `hostname` on each newly installed runner
+- [ ] Do final iPhone Safari + Android Chrome spot checks (or BrowserStack/AWS Device Farm equivalent)
+- [ ] Triage clean-clone polish warnings: frontend CSS syntax warning, oversized bundle warning, and the non-fatal startup `pip install failed` log
+
+Notes:
+- 2026-03-08: Latest push `3c4de41a` has `README Tests`, `Test Installer`, `Web Quality`, and `Provisioning E2E` green.
+- 2026-03-08: Remaining red surfaces are `Runner Onboarding Validation Ring` and the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job.
+- 2026-03-08: Current evidence points at hosted-browser failures concentrated in `tests/onboarding/runner_install_modes.spec.ts`, not the core install-script contract.
+
+## [QA/Test] Full verification sweep and CI follow-through (size: 2)
+
+Status (2026-03-08): In progress — GitHub workflows have been exercised; remaining failures are now narrowed to hosted onboarding browser coverage.
+
+**Goal:** Run the full local verification surface plus the matching GitHub Actions workflows, then fix any real failures instead of carrying speculative cleanup debt.
+
+- [ ] Run the main local verification gates (`make test`, `make test-e2e`, `bun run validate:all`)
+- [x] Kick off the matching GitHub Actions CI workflows and watch them to completion
+- [ ] Fix any concrete failures found and re-run only the affected surfaces until clean
+
+Notes:
+- 2026-03-07: This sweep is intentionally using the real local gates and the live GitHub workflows rather than reasoning from repo structure alone.
+- 2026-03-08: Latest green runs on `3c4de41a`: `README Tests`, `Test Installer`, `Web Quality`, and `Provisioning E2E`.
+- 2026-03-08: Remaining red runs on `3c4de41a`: `Runner Onboarding Validation Ring` and main CI `oss-qa--fresh-clone--sqlite--demo-serve`.
+- 2026-03-08: Local targeted gates already passed: `make test`, `make onboarding-funnel`, `make test-install-runner`, and clean-clone `make test-readmes MODE=smoke`.
+
+
 ## [Infra] Restore Oikos direct runner terminal access (size: 2)
 
 Status (2026-03-07): Done.
@@ -34,7 +70,7 @@ Notes:
 
 ## [Infra] Runner connectivity v1 (size: 4)
 
-Status (2026-03-07): Phase 1 implemented locally.
+Status (2026-03-08): Phase 1 shipped to main; launch-hardening follow-through remains.
 
 **Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
 
@@ -52,7 +88,7 @@ Notes:
 
 ## [QA/Test] Solo-dev runner onboarding validation ring (size: 4)
 
-Status (2026-03-07): Implemented locally and now exercised in GitHub Actions; workflow fixes in progress.
+Status (2026-03-08): Implemented and partially green; hosted onboarding browser coverage is still failing.
 
 **Goal:** Catch onboarding regressions across browser, OS, and hardware before beta users ever see them.
 
@@ -60,6 +96,10 @@ Status (2026-03-07): Implemented locally and now exercised in GitHub Actions; wo
 - [x] Add GitHub Actions matrix jobs for hosted OS coverage and scheduled/manual synthetic onboarding runs
 - [x] Add labeled self-hosted hardware smoke jobs for macOS arm64, Linux x64, and Linux arm64
 - [x] Add a tiny release-candidate real-device checklist for iPhone Safari and Android Chrome via a cloud device lab
+- [ ] Make hosted `onboarding--ubuntu-latest--all` green in GitHub Actions
+- [ ] Make the shared fresh-clone `oss-qa` onboarding UI path green in main CI
+- [ ] Record first green `workflow_dispatch` runs for extended hosted + self-hosted coverage
+- [ ] Finish the real install reality check on desktop + server hardware
 
 Notes:
 - 2026-03-07: Keep the matrix intentionally small and risk-based; cover one representative machine per failure class.
@@ -73,6 +113,8 @@ Notes:
 - 2026-03-07: A true fresh-clone README smoke also needs Node/Bun plus a frontend build, because the editable backend package force-includes `apps/zerg/frontend-web/dist`.
 - 2026-03-07: The runner README smoke also exposed a real package issue: `apps/runner/tsconfig.json` referenced `bun-types`, but `apps/runner/package.json` did not declare it.
 - 2026-03-07: After making the root README smoke build frontend assets for a fresh clone, the old 90-second timeout was no longer realistic on `cube`; the block now uses a 240-second budget.
+- 2026-03-08: `README Tests` is now green; the remaining onboarding failure is the hosted browser ring repeatedly failing `tests/onboarding/runner_install_modes.spec.ts` across multiple projects.
+- 2026-03-08: Main CI is now failing in `oss-qa--fresh-clone--sqlite--demo-serve`, which shares the same onboarding UI surface and should be treated as the same blocker until proven otherwise.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
