@@ -161,6 +161,28 @@ class RunnerStatusResponse(BaseModel):
     runners: list[RunnerStatusItem] = Field(..., description="Status of each runner")
 
 
+class RunnerDoctorCheck(BaseModel):
+    """Named diagnostic check for runner doctor output."""
+
+    key: str
+    label: str
+    status: str  # ok|warn|fail
+    message: str
+
+
+class RunnerDoctorResponse(BaseModel):
+    """Reason-coded doctor response for a single runner."""
+
+    severity: str  # healthy|warning|error
+    reason_code: str
+    summary: str
+    recommended_action: str
+    install_mode: Optional[str] = None
+    repair_install_mode: Optional[str] = None
+    repair_supported: bool = False
+    checks: list[RunnerDoctorCheck] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Generic Success Response
 # ---------------------------------------------------------------------------

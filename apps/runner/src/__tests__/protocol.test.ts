@@ -7,11 +7,19 @@ import { getRunnerMetadata } from '../protocol';
 
 const originalDockerHost = process.env.DOCKER_HOST;
 
+const originalInstallMode = process.env.RUNNER_INSTALL_MODE;
+
 afterEach(() => {
   if (originalDockerHost === undefined) {
     delete process.env.DOCKER_HOST;
   } else {
     process.env.DOCKER_HOST = originalDockerHost;
+  }
+
+  if (originalInstallMode === undefined) {
+    delete process.env.RUNNER_INSTALL_MODE;
+  } else {
+    process.env.RUNNER_INSTALL_MODE = originalInstallMode;
   }
 });
 
@@ -46,5 +54,12 @@ describe('getRunnerMetadata', () => {
       const metadata = getRunnerMetadata();
       expect(metadata.docker_available).toBe(false);
     });
+  });
+
+  it('includes install mode when configured', () => {
+    process.env.RUNNER_INSTALL_MODE = 'server';
+
+    const metadata = getRunnerMetadata();
+    expect(metadata.install_mode).toBe('server');
   });
 });
