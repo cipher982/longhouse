@@ -16,20 +16,21 @@ Usage:
   scripts/runner-vm-canary.sh
 
 Environment:
-  INSTANCE_SUBDOMAIN        Hosted instance subdomain (default: david010)
-  RUNNER_VM_HOST            SSH host that provisions disposable VMs (default: cube)
-  RUNNER_VM_PREFIX          Runner/VM name prefix (default: lh-vm-canary)
-  RUNNER_VM_RELEASE         Ubuntu release alias (default: noble)
-  RUNNER_VM_MEMORY_MB       Guest memory in MB (default: 2048)
-  RUNNER_VM_CPU             vCPU count (default: 2)
-  RUNNER_VM_DISK_GB         Disk size in GB (default: 10)
-  RUNNER_VM_WAIT_TIMEOUT    Guest SSH wait timeout in seconds (default: 300)
-  RUNNER_ONLINE_TIMEOUT     Wait timeout for hosted runner online state (default: 120)
-  RUNNER_VM_GUEST_ARCH      Override amd64|arm64 guest arch
-  RUNNER_VM_TMPDIR          Disk-backed temp dir on VM host
-  KEEP_VM                   Keep VM after script exits (default: 0)
-  KEEP_RUNNER               Skip runner revoke on cleanup (default: 0)
-  RUNNER_COMMAND            Oikos command to execute (default: hostname -s)
+  INSTANCE_SUBDOMAIN          Hosted instance subdomain (default: david010)
+  RUNNER_VM_HOST              SSH host that provisions disposable VMs (default: cube)
+  RUNNER_VM_PREFIX            Runner/VM name prefix (default: lh-vm-canary)
+  RUNNER_VM_RELEASE           Ubuntu release alias (default: noble)
+  RUNNER_VM_MEMORY_MB         Guest memory in MB (default: 2048)
+  RUNNER_VM_CPU               vCPU count (default: 2)
+  RUNNER_VM_DISK_GB           Disk size in GB (default: 10)
+  RUNNER_VM_WAIT_TIMEOUT      Guest SSH wait timeout in seconds (default: 300)
+  RUNNER_ONLINE_TIMEOUT       Wait timeout for hosted runner online state (default: 120)
+  RUNNER_VM_GUEST_ARCH        Override amd64|arm64 guest arch
+  RUNNER_VM_TMPDIR            Disk-backed temp dir on VM host
+  KEEP_VM                     Keep VM after script exits (default: 0)
+  KEEP_RUNNER                 Skip runner revoke on cleanup (default: 0)
+  RUNNER_READONLY_COMMAND     Initial connectivity command (default: hostname -s)
+  RUNNER_FULL_COMMAND         Full-access bash command (default: bash -lc 'hostname -s')
 USAGE
 }
 
@@ -132,7 +133,7 @@ run_host_action() {
     if [[ -n "${RUNNER_VM_TMPDIR:-}" ]]; then
       local_env+=("RUNNER_VM_TMPDIR=$RUNNER_VM_TMPDIR")
     fi
-    if [[ "$action" == "provision" ]]; then
+    if [[ "$action" != "destroy" ]]; then
       local_env+=("ENROLL_TOKEN=$ENROLL_TOKEN")
     fi
     env "${local_env[@]}" bash "$HOST_SCRIPT" "$action"
@@ -154,7 +155,7 @@ run_host_action() {
     if [[ -n "${RUNNER_VM_TMPDIR:-}" ]]; then
       env_parts+=("RUNNER_VM_TMPDIR=$(printf '%q' "$RUNNER_VM_TMPDIR")")
     fi
-    if [[ "$action" == "provision" ]]; then
+    if [[ "$action" != "destroy" ]]; then
       env_parts+=("ENROLL_TOKEN=$(printf '%q' "$ENROLL_TOKEN")")
     fi
     local remote_cmd="${env_parts[*]} bash -s -- $(printf '%q' "$action")"
@@ -162,7 +163,18 @@ run_host_action() {
   fi
 }
 
+request_enroll_token() {
+  local response
+  response="$(curl -fsSL -X POST "${LONGHOUSE_URL%/}/api/runners/enroll-token" -b "$COOKIE_JAR" -H 'Content-Type: application/json' -d '{}')"
+  ENROLL_TOKEN="$(parse_json_field "$response" enroll_token)"
+  if [[ -z "$ENROLL_TOKEN" ]]; then
+    printf 'Failed to parse enroll token response\n' >&2
+    exit 1
+  fi
+}
+
 wait_for_runner_online() {
+  local expected_capability="${1:-}"
   local deadline=$((SECONDS + RUNNER_ONLINE_TIMEOUT))
   while (( SECONDS < deadline )); do
     local runners_json
@@ -171,18 +183,36 @@ wait_for_runner_online() {
     if parsed="$(parse_runner_match "$runners_json" "$VM_NAME" 2>/dev/null)"; then
       IFS=$'\t' read -r RUNNER_ID RUNNER_STATUS RUNNER_CAPABILITIES <<< "$parsed"
       if [[ "$RUNNER_STATUS" == "online" ]]; then
-        log "Runner $VM_NAME is online (${RUNNER_CAPABILITIES:-unknown capabilities})"
-        return 0
+        if [[ -z "$expected_capability" || ",$RUNNER_CAPABILITIES," == *",$expected_capability,"* ]]; then
+          log "Runner $VM_NAME is online (${RUNNER_CAPABILITIES:-unknown capabilities})"
+          return 0
+        fi
       fi
     fi
     sleep 2
   done
-  printf 'Runner %s did not reach online state within %ss\n' "$VM_NAME" "$RUNNER_ONLINE_TIMEOUT" >&2
+  printf 'Runner %s did not reach online state with capability %s within %ss\n' "$VM_NAME" "${expected_capability:-<any>}" "$RUNNER_ONLINE_TIMEOUT" >&2
   return 1
 }
 
+promote_runner_exec_full() {
+  local payload='{"capabilities":["exec.full"]}'
+  local response
+  response="$(curl -fsSL -X PATCH "${LONGHOUSE_URL%/}/api/runners/${RUNNER_ID}" -b "$COOKIE_JAR" -H 'Content-Type: application/json' -d "$payload")"
+  local capabilities_json
+  capabilities_json="$(parse_json_field "$response" capabilities)"
+  if [[ "$capabilities_json" != *'exec.full'* ]]; then
+    printf 'Runner capability promotion failed: %s\n' "$capabilities_json" >&2
+    exit 1
+  fi
+  RUNNER_CAPABILITIES='exec.full'
+  log "Promoted runner $VM_NAME to exec.full in hosted config"
+}
+
 verify_oikos_exec() {
-  local prompt="Use runner_exec on ${VM_NAME} to run ${RUNNER_COMMAND} and reply with only the raw output."
+  local command="$1"
+  local expected_output="$2"
+  local prompt="Use runner_exec on ${VM_NAME} to run exactly this command: ${command}. Reply with only the raw output."
   local message_id
   message_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
   local payload
@@ -205,11 +235,11 @@ verify_oikos_exec() {
     printf 'Oikos runner_exec failed for %s: status=%s result=%s\n' "$VM_NAME" "$OIKOS_STATUS" "$OIKOS_RESULT" >&2
     return 1
   fi
-  if [[ "$OIKOS_RESULT" != "$VM_NAME" ]]; then
-    printf 'Unexpected runner_exec output for %s: expected %s, got %s\n' "$VM_NAME" "$VM_NAME" "$OIKOS_RESULT" >&2
+  if [[ "$OIKOS_RESULT" != "$expected_output" ]]; then
+    printf 'Unexpected runner_exec output for %s: expected %s, got %s\n' "$VM_NAME" "$expected_output" "$OIKOS_RESULT" >&2
     return 1
   fi
-  log "Oikos verified runner_exec hostname on $VM_NAME"
+  log "Oikos verified command on $VM_NAME: $command"
 }
 
 revoke_runner_if_present() {
@@ -256,9 +286,11 @@ RUNNER_VM_GUEST_ARCH="${RUNNER_VM_GUEST_ARCH:-}"
 RUNNER_VM_TMPDIR="${RUNNER_VM_TMPDIR:-}"
 KEEP_VM="${KEEP_VM:-0}"
 KEEP_RUNNER="${KEEP_RUNNER:-0}"
-RUNNER_COMMAND="${RUNNER_COMMAND:-hostname -s}"
+RUNNER_READONLY_COMMAND="${RUNNER_READONLY_COMMAND:-hostname -s}"
+RUNNER_FULL_COMMAND="${RUNNER_FULL_COMMAND:-bash -lc 'hostname -s'}"
 VM_NAME="${RUNNER_VM_NAME:-${RUNNER_VM_PREFIX}-$(date +%Y%m%d%H%M%S)}"
 COOKIE_JAR="$(mktemp)"
+ENROLL_TOKEN=""
 RUNNER_ID=""
 RUNNER_STATUS=""
 RUNNER_CAPABILITIES=""
@@ -270,25 +302,28 @@ lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" || exit 1
 LONGHOUSE_URL="$LH_TARGET_API_URL"
 lh_hosted_authenticate_cookie_jar "$INSTANCE_SUBDOMAIN" "$COOKIE_JAR" || exit 1
 
-log "Requesting enroll token from ${LONGHOUSE_URL}"
-ENROLL_RESPONSE="$(curl -fsSL -X POST "${LONGHOUSE_URL%/}/api/runners/enroll-token" -b "$COOKIE_JAR" -H 'Content-Type: application/json' -d '{}')"
-ENROLL_TOKEN="$(parse_json_field "$ENROLL_RESPONSE" enroll_token)"
-if [[ -z "$ENROLL_TOKEN" ]]; then
-  printf 'Failed to parse enroll token response\n' >&2
-  exit 1
-fi
+log "Requesting initial enroll token from ${LONGHOUSE_URL}"
+request_enroll_token
 
 log "Provisioning disposable VM $VM_NAME on $RUNNER_VM_HOST"
 PROVISION_OUTPUT="$(run_host_action provision)"
 printf '%s\n' "$PROVISION_OUTPUT"
 
-log "Waiting for runner registration to reach online"
-wait_for_runner_online
+log "Waiting for initial readonly runner registration"
+wait_for_runner_online exec.readonly
+verify_oikos_exec "$RUNNER_READONLY_COMMAND" "$VM_NAME"
 
-log "Running Oikos runner_exec verification"
-verify_oikos_exec
+log "Promoting runner to exec.full"
+promote_runner_exec_full
+request_enroll_token
+REINSTALL_OUTPUT="$(run_host_action reinstall)"
+printf '%s\n' "$REINSTALL_OUTPUT"
 
-log "Disposable VM runner canary passed"
+log "Waiting for promoted exec.full runner registration"
+wait_for_runner_online exec.full
+verify_oikos_exec "$RUNNER_FULL_COMMAND" "$VM_NAME"
+
+log "Disposable VM runner exec.full canary passed"
 printf 'RESULT=success\n'
 printf 'INSTANCE_SUBDOMAIN=%s\n' "$INSTANCE_SUBDOMAIN"
 printf 'RUNNER_VM_HOST=%s\n' "$RUNNER_VM_HOST"

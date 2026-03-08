@@ -11,9 +11,10 @@ usage() {
   cat <<'USAGE'
 Usage:
   scripts/runner-vm-canary-host.sh provision
+  scripts/runner-vm-canary-host.sh reinstall
   scripts/runner-vm-canary-host.sh destroy
 
-Environment (provision):
+Environment (provision/reinstall):
   VM_NAME                  Required guest/runner name
   ENROLL_TOKEN             Required one-time enroll token
   LONGHOUSE_URL            Required Longhouse instance URL
@@ -106,11 +107,14 @@ ensure_libvirt_network() {
   sudo virsh net-start default >/dev/null 2>&1 || true
 }
 
+ensure_disk_backed_tmpdir() {
+  sudo install -d -m 1777 "$RUNNER_VM_TMPDIR"
+}
+
 sync_cloud_image() {
   local guest_arch="$1"
-  local tmpdir="$2"
   log "Syncing Ubuntu ${VM_RELEASE} cloud image (${guest_arch})"
-  sudo env TMPDIR="$tmpdir" uvt-simplestreams-libvirt sync release="$VM_RELEASE" arch="$guest_arch"
+  sudo env TMPDIR="$RUNNER_VM_TMPDIR" uvt-simplestreams-libvirt sync release="$VM_RELEASE" arch="$guest_arch"
 }
 
 vm_exists() {
@@ -119,6 +123,13 @@ vm_exists() {
 
 vm_ip() {
   sudo uvt-kvm ip "$VM_NAME"
+}
+
+ensure_vm_exists() {
+  if ! vm_exists; then
+    printf 'VM does not exist: %s\n' "$VM_NAME" >&2
+    exit 1
+  fi
 }
 
 guest_ssh() {
@@ -138,10 +149,6 @@ wait_for_guest() {
     --insecure \
     --timeout "$VM_WAIT_TIMEOUT" \
     --ssh-private-key-file "$RUNNER_VM_SSH_PRIV"
-}
-
-ensure_disk_backed_tmpdir() {
-  sudo install -d -m 1777 "$RUNNER_VM_TMPDIR"
 }
 
 destroy_vm() {
@@ -181,8 +188,6 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 curl -fsSL '$install_url' | sudo bash
 sudo systemctl is-active --quiet longhouse-runner
-hostname -s
-uname -m
 "
 }
 
@@ -197,6 +202,25 @@ sudo systemctl is-active --quiet longhouse-runner
 test \"\$(hostname -s)\" = '$VM_NAME'
 " >/dev/null
   printf '%s\n' "$ip"
+}
+
+emit_summary() {
+  local ip="$1"
+  printf 'VM_NAME=%s\n' "$VM_NAME"
+  printf 'VM_IP=%s\n' "$ip"
+  printf 'GUEST_ARCH=%s\n' "$GUEST_ARCH"
+  printf 'RUNNER_INSTALL_MODE=%s\n' "$RUNNER_INSTALL_MODE"
+}
+
+run_install_cycle() {
+  ensure_vm_exists
+  wait_for_guest
+  local ip
+  ip="$(vm_ip)"
+  log "Guest reachable at $ip"
+  install_runner_in_guest "$ip"
+  ip="$(reboot_and_verify_guest "$ip")"
+  emit_summary "$ip"
 }
 
 VM_RELEASE="${VM_RELEASE:-noble}"
@@ -226,24 +250,23 @@ trap cleanup EXIT
 
 case "$ACTION" in
   provision)
-    require_env VM_NAME ENROLL_TOKEN LONGHOUSE_URL
-    require_env RUNNER_VM_SSH_PUB RUNNER_VM_SSH_PRIV
+    require_env VM_NAME ENROLL_TOKEN LONGHOUSE_URL RUNNER_VM_SSH_PUB RUNNER_VM_SSH_PRIV
     ensure_host_packages "$GUEST_ARCH"
     ensure_disk_backed_tmpdir
     ensure_libvirt_network
-    sync_cloud_image "$GUEST_ARCH" "$RUNNER_VM_TMPDIR"
+    sync_cloud_image "$GUEST_ARCH"
     provision_vm "$GUEST_ARCH"
     created=1
-    wait_for_guest
-    guest_ip_value="$(vm_ip)"
-    log "Guest reachable at $guest_ip_value"
-    install_runner_in_guest "$guest_ip_value" >/dev/null
-    guest_ip_value="$(reboot_and_verify_guest "$guest_ip_value")"
+    run_install_cycle
     success=1
-    printf 'VM_NAME=%s\n' "$VM_NAME"
-    printf 'VM_IP=%s\n' "$guest_ip_value"
-    printf 'GUEST_ARCH=%s\n' "$GUEST_ARCH"
-    printf 'RUNNER_INSTALL_MODE=%s\n' "$RUNNER_INSTALL_MODE"
+    ;;
+  reinstall)
+    require_env VM_NAME ENROLL_TOKEN LONGHOUSE_URL RUNNER_VM_SSH_PRIV
+    ensure_host_packages "$GUEST_ARCH"
+    ensure_disk_backed_tmpdir
+    ensure_libvirt_network
+    run_install_cycle
+    success=1
     ;;
   destroy)
     require_env VM_NAME

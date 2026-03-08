@@ -27,7 +27,7 @@ Status (2026-03-08): Real installs completed on `cinder` + `clifford`; disposabl
 - [x] Add a disposable Linux VM canary on `cube` that proves `server` install -> reboot -> Oikos reconnect without touching shared hosts
 - [ ] Do one real desktop install and one real always-on Linux server install, including logout/reboot persistence
 - [ ] Verify Oikos/Telegram can run `hostname` on each newly installed runner
-- [ ] Make the disposable `cube` VM canary prove `exec.full` by promoting capabilities and running a real bash command through Oikos
+- [x] Make the disposable `cube` VM canary prove `exec.full` by promoting capabilities and running a real bash command through Oikos
 - [ ] Do final iPhone Safari + Android Chrome spot checks (or BrowserStack/AWS Device Farm equivalent)
 - [ ] Triage clean-clone polish warnings: frontend CSS syntax warning, oversized bundle warning, and the non-fatal startup `pip install failed` log
 
@@ -42,6 +42,7 @@ Notes:
 - 2026-03-08: Added `scripts/runner-vm-canary.sh` + `scripts/runner-vm-canary-host.sh` and live-validated the flow on `cube`: Ubuntu `noble` cloud VM -> `RUNNER_INSTALL_MODE=server` install -> guest reboot -> hosted runner online -> Oikos `runner_exec hostname -s` -> revoke runner -> destroy VM.
 - 2026-03-08: Live probing showed `cube` is `x86_64`, not ARM, so the disposable canary uses Ubuntu `amd64` cloud images there.
 - 2026-03-08: `cube` mounts both `/tmp` and `/var/tmp` as 2 GiB tmpfs, so `uvtool` image sync must use a disk-backed temp dir; the host harness now uses `/var/lib/longhouse-vm/tmp`.
+- 2026-03-08: Strengthened the disposable VM canary to prove full bash access, not just connectivity: it now patches the hosted runner to `exec.full`, re-enrolls the same VM runner, reboots again, and verifies Oikos can execute `bash -lc 'hostname -s'` successfully.
 
 ## [Infra] Honest degraded job status for scheduled jobs (size: 2)
 
@@ -174,7 +175,7 @@ Notes:
 - 2026-03-08: `contract-first-ci` now pins `ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium` so its lightweight fresh-clone smoke matches the browsers it installs; local validation should use the same env when mimicking that job.
 - 2026-03-08: Real-device install validation on owned hardware is now partly done: `cinder` desktop and `clifford` server installs both succeeded with post-restart Oikos hostname checks. The remaining manual proof is literal logout/reboot behavior, plus extended hosted/self-hosted matrix runs.
 - 2026-03-08: Local validation after the fix passed with `make test`, `make test-e2e-onboarding`, and `make onboarding-funnel`.
-- 2026-03-08: Added `make test-runner-vm-canary` and passed a live disposable-VM proof on `cube` without touching `clifford`: install -> reboot -> hosted online -> Oikos hostname -> revoke -> destroy.
+- 2026-03-08: Added `make test-runner-vm-canary` and passed a live disposable-VM proof on `cube` without touching `clifford`: install -> reboot -> hosted online -> Oikos hostname -> promote to `exec.full` -> re-enroll -> reboot -> Oikos `bash -lc` -> revoke -> destroy.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
