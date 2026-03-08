@@ -36,6 +36,37 @@ _legacy_env_lock = asyncio.Lock()
 _last_registration_warnings: list[str] = []
 
 
+def should_load_manifest_jobs() -> bool:
+    """Return True when external manifest jobs are actually configured.
+
+    Builtin-only Longhouse instances should not try to execute whatever happens to
+    be sitting in ``/data/jobs/manifest.py``. External jobs are enabled only when a
+    git sync service is active, a repo URL is configured via env, or a DB-backed
+    JobRepoConfig row exists.
+    """
+    from zerg.jobs.git_sync import get_git_sync_service
+
+    if get_git_sync_service() is not None:
+        return True
+
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    if settings.jobs_git_repo_url:
+        return True
+
+    try:
+        from zerg.database import db_session
+        from zerg.models.models import JobRepoConfig
+
+        with db_session() as db:
+            return db.query(JobRepoConfig.id).first() is not None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Unable to resolve external jobs repo config: %s", exc)
+
+    return False
+
+
 async def _run_legacy_job_with_env(func: Callable[[], Awaitable[dict[str, Any]]], secrets: dict[str, str]):
     """Run legacy job with secrets injected into os.environ (safely)."""
     if not secrets:
@@ -632,16 +663,19 @@ async def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue
             warnings.append(message)
             logger.exception(message)
 
-    # Load external jobs from git manifest (if configured)
-    # Wrapped in try/except so manifest failures don't block builtin jobs
-    try:
-        from zerg.jobs.loader import load_jobs_manifest
+    # Load external jobs from git manifest only when configured.
+    # Wrapped in try/except so manifest failures don't block builtin jobs.
+    if should_load_manifest_jobs():
+        try:
+            from zerg.jobs.loader import load_jobs_manifest
 
-        await load_jobs_manifest()
-    except Exception as e:
-        message = f"Manifest load failed (builtin jobs remain active): {e}"
-        warnings.append(message)
-        logger.exception(message)
+            await load_jobs_manifest()
+        except Exception as e:
+            message = f"Manifest load failed (builtin jobs remain active): {e}"
+            warnings.append(message)
+            logger.exception(message)
+    else:
+        logger.info("Skipping external jobs manifest load — builtin-only mode")
 
     _last_registration_warnings = warnings
 
