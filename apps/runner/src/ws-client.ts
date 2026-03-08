@@ -23,6 +23,7 @@ export class RunnerWebSocketClient {
   private executor: CommandExecutor;
   private heartbeatInterval: Timer | null = null;
   private reconnectTimeout: Timer | null = null;
+  private connectTimeout: Timer | null = null;
   private currentReconnectDelay: number;
   private shouldReconnect: boolean = true;
   private isConnecting: boolean = false;
@@ -61,6 +62,8 @@ export class RunnerWebSocketClient {
       this.reconnectTimeout = null;
     }
 
+    this.clearConnectTimeout();
+
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -91,7 +94,31 @@ export class RunnerWebSocketClient {
     console.log(`[ws-client] Connecting to ${fullUrl}...`);
 
     try {
-      this.ws = new WebSocket(fullUrl);
+      this.ws = new WebSocket(fullUrl, {
+        handshakeTimeout: this.config.connectTimeoutMs,
+      });
+
+      const pendingSocket = this.ws;
+      this.connectTimeout = setTimeout(() => {
+        if (this.ws !== pendingSocket || !this.ws || this.ws.readyState === WebSocket.OPEN) {
+          return;
+        }
+
+        console.error(`[ws-client] Connection timed out after ${this.config.connectTimeoutMs}ms`);
+        this.clearConnectTimeout();
+        this.isConnecting = false;
+        this.ws = null;
+
+        try {
+          pendingSocket.terminate();
+        } catch {
+          // Best-effort cleanup; reconnect scheduling happens below.
+        }
+
+        if (this.shouldReconnect) {
+          this.scheduleReconnect();
+        }
+      }, this.config.connectTimeoutMs);
 
       this.ws.on('open', () => this.onOpen());
       this.ws.on('message', (data) => this.onMessage(data));
@@ -109,6 +136,7 @@ export class RunnerWebSocketClient {
    */
   private onOpen(): void {
     console.log('[ws-client] Connected to server');
+    this.clearConnectTimeout();
     this.isConnecting = false;
     this.currentReconnectDelay = this.config.reconnectDelayMs; // Reset backoff
 
@@ -231,6 +259,7 @@ export class RunnerWebSocketClient {
    */
   private onClose(): void {
     console.log('[ws-client] Connection closed');
+    this.clearConnectTimeout();
     this.isConnecting = false;
 
     if (this.heartbeatInterval) {
@@ -242,6 +271,13 @@ export class RunnerWebSocketClient {
 
     if (this.shouldReconnect) {
       this.scheduleReconnect();
+    }
+  }
+
+  private clearConnectTimeout(): void {
+    if (this.connectTimeout) {
+      clearTimeout(this.connectTimeout);
+      this.connectTimeout = null;
     }
   }
 
