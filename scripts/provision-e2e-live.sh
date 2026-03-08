@@ -5,8 +5,8 @@
 # health check passes → SSO into instance → verify API works → cleanup.
 #
 # Usage:
-#   ADMIN_TOKEN=xxx ./scripts/provision-e2e-live.sh
-#   ADMIN_TOKEN=$(security find-generic-password -s longhouse-admin-token -w) ./scripts/provision-e2e-live.sh
+#   ./scripts/provision-e2e-live.sh                                 # default: fetch CONTROL_PLANE_ADMIN_TOKEN from Infisical ops-infra/prod
+#   CONTROL_PLANE_ADMIN_TOKEN=xxx ./scripts/provision-e2e-live.sh   # explicit override
 #
 # Options:
 #   --keep    Skip cleanup (leave instance running for debugging)
@@ -44,13 +44,8 @@ fi
 
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
-lh_hosted_default_control_plane_url
-CONTROL_PLANE_ADMIN_TOKEN="${CONTROL_PLANE_ADMIN_TOKEN:-${ADMIN_TOKEN:-}}"
-export CONTROL_PLANE_ADMIN_TOKEN
-
-if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]]; then
-  echo "CONTROL_PLANE_ADMIN_TOKEN or ADMIN_TOKEN is required. Set it via environment or Keychain:" >&2
-  echo "  CONTROL_PLANE_ADMIN_TOKEN=\$(security find-generic-password -s longhouse-admin-token -w) $0" >&2
+if ! lh_hosted_prepare_control_plane_auth; then
+  echo "Unable to resolve hosted control-plane auth. Set CONTROL_PLANE_ADMIN_TOKEN/ADMIN_TOKEN explicitly or log into Infisical and populate CONTROL_PLANE_ADMIN_TOKEN in ops-infra/prod." >&2
   exit 1
 fi
 

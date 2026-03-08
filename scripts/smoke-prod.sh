@@ -12,7 +12,7 @@
 # Environment:
 #   INSTANCE_SUBDOMAIN        - Hosted instance subdomain (defaults to david010 when control-plane auth is configured)
 #   CONTROL_PLANE_URL         - Control-plane base URL for hosted instance resolution
-#   CONTROL_PLANE_ADMIN_TOKEN - Control-plane admin token for hosted instance resolution/login-token
+#   CONTROL_PLANE_ADMIN_TOKEN - Optional explicit override; otherwise helper loads it from Infisical ops-infra/prod
 #   FRONTEND_URL / API_URL    - Optional direct URL overrides when not resolving via control plane
 #   SMOKE_TEST_EMAIL          - Email target for email tool test (default: david010@gmail.com)
 

@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+LH_HOSTED_HELPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LH_HOSTED_INFISICAL_HELPER="${LH_HOSTED_INFISICAL_HELPER:-$LH_HOSTED_HELPER_DIR/infisical.sh}"
+if [[ -f "$LH_HOSTED_INFISICAL_HELPER" ]]; then
+  # shellcheck disable=SC1090
+  . "$LH_HOSTED_INFISICAL_HELPER"
+fi
+
 _lh_hosted_python_bin() {
   if [[ -n "${LH_HOSTED_PYTHON_BIN:-}" ]]; then
     printf '%s\n' "$LH_HOSTED_PYTHON_BIN"
@@ -109,7 +116,7 @@ lh_hosted_resolve_instance() {
   local parsed=""
   local parse_status=0
 
-  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN || return 1
+  lh_hosted_prepare_control_plane_auth || return 1
 
   response_file="$(mktemp)"
   http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
@@ -154,6 +161,21 @@ lh_hosted_default_control_plane_url() {
   export CONTROL_PLANE_URL CP_URL
 }
 
+lh_hosted_prepare_control_plane_auth() {
+  lh_hosted_default_control_plane_url
+  CONTROL_PLANE_ADMIN_TOKEN="${CONTROL_PLANE_ADMIN_TOKEN:-${ADMIN_TOKEN:-}}"
+
+  if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]] && declare -F lh_infisical_export_secret_if_missing >/dev/null 2>&1; then
+    if ! lh_infisical_export_secret_if_missing CONTROL_PLANE_ADMIN_TOKEN CONTROL_PLANE_ADMIN_TOKEN; then
+      echo "Set CONTROL_PLANE_ADMIN_TOKEN/ADMIN_TOKEN or populate CONTROL_PLANE_ADMIN_TOKEN in Infisical ops-infra/prod and ensure infisical login works." >&2
+      return 1
+    fi
+  fi
+
+  export CONTROL_PLANE_ADMIN_TOKEN
+  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN
+}
+
 lh_hosted_create_instance() {
   local email="$1"
   local subdomain="$2"
@@ -167,7 +189,7 @@ lh_hosted_create_instance() {
     return 1
   fi
 
-  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN || return 1
+  lh_hosted_prepare_control_plane_auth || return 1
 
   response_file="$(mktemp)"
   http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
@@ -211,7 +233,7 @@ lh_hosted_get_instance() {
     return 1
   fi
 
-  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN || return 1
+  lh_hosted_prepare_control_plane_auth || return 1
 
   response_file="$(mktemp)"
   http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
@@ -248,7 +270,7 @@ lh_hosted_prepare_target() {
 
   lh_hosted_default_control_plane_url
 
-  if [[ -z "$subdomain" && -z "$frontend_url" && -n "${CONTROL_PLANE_ADMIN_TOKEN:-}" && -n "$default_subdomain" ]]; then
+  if [[ -z "$subdomain" && -z "$frontend_url" && -n "$default_subdomain" ]]; then
     subdomain="$default_subdomain"
   fi
 
@@ -262,7 +284,7 @@ lh_hosted_prepare_target() {
   fi
 
   if [[ -z "$frontend_url" || -z "$api_url" ]]; then
-    echo "Set INSTANCE_SUBDOMAIN + CONTROL_PLANE_* or FRONTEND_URL/API_URL before preparing hosted target." >&2
+    echo "Set INSTANCE_SUBDOMAIN, CONTROL_PLANE_* (or Infisical ops-infra access), or FRONTEND_URL/API_URL before preparing hosted target." >&2
     return 1
   fi
 
@@ -322,7 +344,7 @@ lh_hosted_issue_login_token() {
     return 1
   fi
 
-  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN || return 1
+  lh_hosted_prepare_control_plane_auth || return 1
 
   response_file="$(mktemp)"
   http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
@@ -390,7 +412,7 @@ _lh_hosted_post_instance_action() {
     return 1
   fi
 
-  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN || return 1
+  lh_hosted_prepare_control_plane_auth || return 1
 
   response_file="$(mktemp)"
   http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
