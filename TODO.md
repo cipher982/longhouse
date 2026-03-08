@@ -348,7 +348,8 @@ Status (2026-03-07): Done.
 - [x] Delete the file
 
 Notes:
-- 2026-03-07: `AGENTS.md` already says Sauron is folded into Longhouse, local repo refs were empty, `coolify app list` showed no `sauron` app in the active context, and `ssh clifford 'docker ps -a'` showed no `sauron` container.
+- 2026-03-07: Confirmed `apps/sauron/docker-compose.yml` was a dead path and safe to delete at the time.
+- 2026-03-08: Architecture changed again during extraction: the active standalone runtime now lives in `~/git/sauron` on `clifford`, and Longhouse is back to builtin jobs only.
 
 ## [Tech Debt] Delete stale helper wrappers (size: 1)
 

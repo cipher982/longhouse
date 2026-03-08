@@ -213,15 +213,16 @@ coolify app logs longhouse-control-plane               # Control plane
 7. `make qa-live` again to verify post-deploy
 8. Brief summary only at end (what shipped, what to manually verify if needed)
 
-## apps/sauron - Scheduler (Folded In)
+## Sauron / External Jobs
 
-Sauron is not a separate service; scheduled jobs run inside the standard Longhouse instance service (per-user). The `sauron-jobs` repo pattern remains a power-user path (optional jobs pack), but OSS onboarding should not depend on it.
+Sauron is separate again. Longhouse core only runs builtin product jobs; David's private cron/workload pack now runs via the standalone `~/git/sauron` service on `clifford`.
 
 **If asked about jobs, sauron, or job failures: read `~/git/sauron-jobs/AGENTS.md` first.** Key facts:
-- Jobs run in `longhouse-david010` on zerg (single authoritative instance, control-plane provisioned)
-- Job-specific secrets live in `/data/secrets.env` on the host (loaded by `manifest.py` at startup)
-- The provisioner already injects `extra_hosts: host.docker.internal:host-gateway` — if a container is missing it, it's a zombie from before the provisioner was built; kill it
-- There must only ever be ONE instance running sauron-jobs; duplicate instances = duplicate scheduled jobs
+- Longhouse user instances on `zerg` should stay builtin-only unless an explicit external jobs repo is configured
+- The standalone `sauron` container on `clifford` is the authoritative runtime for `~/git/sauron-jobs`
+- Job-specific secrets for the standalone runtime live in `/var/lib/docker/data/sauron/data/secrets.env` on `clifford`
+- `host.docker.internal` still matters for the standalone scheduler because jobs ProxyJump through the host into other servers
+- There must only ever be ONE active standalone Sauron scheduler for the private jobs pack; duplicate runtimes = duplicate scheduled jobs
 
 ## apps/runner - Native Runner Daemon
 
