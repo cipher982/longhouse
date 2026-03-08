@@ -179,6 +179,7 @@ Notes:
 - 2026-03-08: Shipped `GET /api/runners/{id}/doctor`, `Run Doctor` on the runner detail page, and `longhouse-runner doctor --json` in the runner binary.
 - 2026-03-08: Repair command generation reuses `POST /api/runners/enroll-token` plus the existing runner name; no bespoke repair mutation API was added in v1.
 - 2026-03-08: Local validation passed via backend tests, runner Bun tests, frontend typecheck, frontend vitest, and a real CLI smoke with `longhouse-runner doctor --json`.
+- 2026-03-08: Important shipping quirk: `bun run src/index.ts doctor` works now, but already-installed compiled runner binaries will not expose `doctor` until the next runner release is built and users reinstall/update the binary.
 
 **Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
 

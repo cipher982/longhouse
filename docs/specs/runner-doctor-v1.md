@@ -154,3 +154,4 @@ That gives the server enough signal to recommend the right repair path.
 - 2026-03-08: Added `GET /api/runners/{id}/doctor` with stable reason codes, named checks, and a repair-mode hint for the UI.
 - 2026-03-08: Added `Run Doctor` on `RunnerDetailPage` with repair command generation that reuses the existing enroll-token + install flow for the same runner name.
 - 2026-03-08: Added local `longhouse-runner doctor` and `--json` output with machine-side checks for config, install mode, service status, and Longhouse reachability.
+- 2026-03-08: Important rollout quirk: source/Bun entrypoints support `doctor` immediately, but already-installed compiled runner binaries need the next runner release plus reinstall/update before the command exists on end-user machines.
