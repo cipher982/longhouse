@@ -156,5 +156,6 @@ That gives the server enough signal to recommend the right repair path.
 - 2026-03-08: Added local `longhouse-runner doctor` and `--json` output with machine-side checks for config, install mode, service status, and Longhouse reachability.
 - 2026-03-08: Important rollout quirk: source/Bun entrypoints support `doctor` immediately, but already-installed compiled runner binaries need the next runner release plus reinstall/update before the command exists on end-user machines.
 - 2026-03-08: Live `david010` validation passed on the runner detail UI: `clifford` generates a `server` repair command and `cinder` generates a `desktop` repair command, both preserving `RUNNER_NAME`.
-- 2026-03-08: A fresh disposable `cube` VM validated local `longhouse-runner doctor --json` on released runner `v0.1.2`; the report was healthy and detected `installMode=server`.
-- 2026-03-08: Separate follow-up from the same VM run: the older exec.full canary still times out after the re-enroll + reboot hop because the second websocket drops before `hello`. Keep that tracked as a runner reconnect issue, not a doctor UX regression.
+- 2026-03-08: A fresh disposable `cube` VM validated local `longhouse-runner doctor --json` on released runner `v0.1.3`; the report was healthy and detected `installMode=server`.
+- 2026-03-08: Shipped `runner-v0.1.3` with a runner-side websocket connect watchdog so boot-time or re-enroll handshakes cannot hang forever before `hello`.
+- 2026-03-08: Re-ran the disposable `cube` exec.full canary after deploying `runner-v0.1.3`; it passed end-to-end, so the reconnect follow-up is resolved and was not a doctor UX regression after all.
