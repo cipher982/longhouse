@@ -1264,6 +1264,26 @@ export interface paths {
         patch: operations["update_runner_runners__runner_id__patch"];
         trace?: never;
     };
+    "/api/runners/{runner_id}/doctor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Runner Doctor
+         * @description Run server-side doctor diagnostics for a specific runner.
+         */
+        get: operations["get_runner_doctor_runners__runner_id__doctor_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runners/{runner_id}/revoke": {
         parameters: {
             query?: never;
@@ -8310,6 +8330,45 @@ export interface components {
          */
         RunTrigger: "manual" | "schedule" | "chat" | "webhook" | "api" | "continuation";
         /**
+         * RunnerDoctorCheck
+         * @description Named diagnostic check for runner doctor output.
+         */
+        RunnerDoctorCheck: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Status */
+            status: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * RunnerDoctorResponse
+         * @description Reason-coded doctor response for a single runner.
+         */
+        RunnerDoctorResponse: {
+            /** Severity */
+            severity: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Summary */
+            summary: string;
+            /** Recommended Action */
+            recommended_action: string;
+            /** Install Mode */
+            install_mode?: string | null;
+            /** Repair Install Mode */
+            repair_install_mode?: string | null;
+            /**
+             * Repair Supported
+             * @default false
+             */
+            repair_supported: boolean;
+            /** Checks */
+            checks?: components["schemas"]["RunnerDoctorCheck"][];
+        };
+        /**
          * RunnerListResponse
          * @description Response for listing runners.
          */
@@ -12365,6 +12424,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunnerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_runner_doctor_runners__runner_id__doctor_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                runner_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerDoctorResponse"];
                 };
             };
             /** @description Validation Error */

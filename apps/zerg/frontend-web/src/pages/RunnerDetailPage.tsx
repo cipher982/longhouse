@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useRunner, useUpdateRunner, useRevokeRunner, useRotateRunnerSecret } from "../hooks/useRunners";
+import {
+  useCreateEnrollToken,
+  useRunner,
+  useRunnerDoctor,
+  useRevokeRunner,
+  useRotateRunnerSecret,
+  useUpdateRunner,
+} from "../hooks/useRunners";
 import { useConfirm } from "../components/confirm";
 import {
   Badge,
@@ -11,6 +18,12 @@ import {
   Spinner
 } from "../components/ui";
 import { parseUTC } from "../lib/dateUtils";
+import {
+  buildRunnerNativeInstallCommand,
+  describeRunnerNativeInstallMode,
+  type RunnerNativeInstallMode,
+} from "../lib/runnerInstallCommands";
+import type { RunnerDoctorResponse } from "../services/api";
 import "../styles/runner-detail.css";
 
 type RunnerMetadataSummary = {
@@ -34,6 +47,13 @@ function normalizeRunnerMetadata(metadata: unknown): RunnerMetadataSummary | nul
   };
 }
 
+function defaultRepairMode(doctor: RunnerDoctorResponse | undefined, metadata: RunnerMetadataSummary | null): RunnerNativeInstallMode {
+  if (doctor?.repair_install_mode === "server" || doctor?.repair_install_mode === "desktop") {
+    return doctor.repair_install_mode;
+  }
+  return metadata?.platform === "darwin" ? "desktop" : "server";
+}
+
 export default function RunnerDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -45,11 +65,15 @@ export default function RunnerDetailPage() {
   const updateRunnerMutation = useUpdateRunner();
   const revokeRunnerMutation = useRevokeRunner();
   const rotateSecretMutation = useRotateRunnerSecret();
+  const doctorMutation = useRunnerDoctor();
+  const repairTokenMutation = useCreateEnrollToken();
 
   const [isEditingCapabilities, setIsEditingCapabilities] = useState(false);
   const [selectedCapabilities, setSelectedCapabilities] = useState<string[]>([]);
   const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
   const [secretCopied, setSecretCopied] = useState(false);
+  const [repairCopied, setRepairCopied] = useState(false);
+  const [repairMode, setRepairMode] = useState<RunnerNativeInstallMode>("desktop");
   const [actionError, setActionError] = useState<string | null>(null);
 
   const allCapabilities = [
@@ -74,6 +98,44 @@ export default function RunnerDetailPage() {
     } catch (err) {
       console.error("Failed to update capabilities:", err);
       setActionError("Failed to update capabilities. Please try again.");
+    }
+  };
+
+  const handleRunDoctor = async () => {
+    setActionError(null);
+    setRepairCopied(false);
+    try {
+      const result = await doctorMutation.mutateAsync(runnerId);
+      setRepairMode(defaultRepairMode(result, runnerMetadata));
+    } catch (err) {
+      console.error("Failed to run doctor:", err);
+      setActionError("Failed to run doctor. Please try again.");
+    }
+  };
+
+  const handleGenerateRepairCommand = async () => {
+    setActionError(null);
+    setRepairCopied(false);
+    try {
+      await repairTokenMutation.mutateAsync();
+    } catch (err) {
+      console.error("Failed to create repair command:", err);
+      setActionError("Failed to generate a repair command. Please try again.");
+    }
+  };
+
+  const handleCopyRepairCommand = async () => {
+    const repairCommand = getRepairCommand();
+    if (!repairCommand) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(repairCommand);
+      setRepairCopied(true);
+      setTimeout(() => setRepairCopied(false), 2000);
+    } catch (error) {
+      console.error("Failed to copy repair command:", error);
     }
   };
 
@@ -111,7 +173,6 @@ export default function RunnerDetailPage() {
       return;
     }
 
-    // Clear any previously displayed secret before starting rotation
     setRotatedSecret(null);
     setSecretCopied(false);
     setActionError(null);
@@ -156,11 +217,35 @@ export default function RunnerDetailPage() {
     }
   };
 
+  const getDoctorVariant = (severity: RunnerDoctorResponse["severity"]): "success" | "warning" | "error" => {
+    switch (severity) {
+      case "healthy":
+        return "success";
+      case "warning":
+        return "warning";
+      default:
+        return "error";
+    }
+  };
+
   const formatTimestamp = (timestamp: string | null | undefined) => {
     if (!timestamp) return "Never";
 
     const date = parseUTC(timestamp);
     return date.toLocaleString();
+  };
+
+  const getRepairCommand = () => {
+    if (!repairTokenMutation.data || !runner) {
+      return "";
+    }
+
+    return buildRunnerNativeInstallCommand({
+      enrollToken: repairTokenMutation.data.enroll_token,
+      longhouseUrl: repairTokenMutation.data.longhouse_url,
+      oneLinerInstallCommand: repairTokenMutation.data.one_liner_install_command,
+      runnerName: runner.name,
+    }, repairMode);
   };
 
   if (isLoading) {
@@ -260,6 +345,117 @@ export default function RunnerDetailPage() {
 
           <section className="detail-section">
             <div className="section-header">
+              <div>
+                <h2 className="ui-section-title">Doctor</h2>
+                <p className="detail-help-text">Diagnose runner health and generate the right repair command for this machine.</p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={handleRunDoctor} disabled={doctorMutation.isPending}>
+                {doctorMutation.isPending ? "Running..." : "Run Doctor"}
+              </Button>
+            </div>
+
+            {!doctorMutation.data && !doctorMutation.isPending && (
+              <p className="no-capabilities">Run Doctor to see the current diagnosis and recommended next step.</p>
+            )}
+
+            {doctorMutation.isPending && (
+              <div className="doctor-loading">
+                <Spinner size="md" />
+                <span>Inspecting runner health...</span>
+              </div>
+            )}
+
+            {doctorMutation.data && (
+              <div className="doctor-panel" data-testid="runner-doctor-panel">
+                <div className="doctor-summary-row">
+                  <Badge variant={getDoctorVariant(doctorMutation.data.severity)}>{doctorMutation.data.severity}</Badge>
+                  <div className="doctor-summary-copy">
+                    <strong>{doctorMutation.data.summary}</strong>
+                    <span>{doctorMutation.data.recommended_action}</span>
+                  </div>
+                </div>
+
+                <div className="detail-grid doctor-meta-grid">
+                  <div className="detail-item">
+                    <span className="detail-label">Reason Code</span>
+                    <span className="detail-value doctor-code">{doctorMutation.data.reason_code}</span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label">Install Mode</span>
+                    <span className="detail-value">{doctorMutation.data.install_mode ?? "Unknown"}</span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label">Repair Command</span>
+                    <span className="detail-value">{doctorMutation.data.repair_supported ? "Available" : "Not needed"}</span>
+                  </div>
+                </div>
+
+                <div className="doctor-check-list">
+                  {(doctorMutation.data.checks ?? []).map((check: NonNullable<RunnerDoctorResponse["checks"]>[number]) => (
+                    <div key={check.key} className={`doctor-check doctor-check--${check.status}`}>
+                      <div className="doctor-check-header">
+                        <strong>{check.label}</strong>
+                        <span className="doctor-check-status">{check.status}</span>
+                      </div>
+                      <p>{check.message}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {doctorMutation.data.repair_supported && (
+                  <div className="doctor-repair-panel">
+                    <div className="doctor-repair-header">
+                      <div>
+                        <h3>Repair Command</h3>
+                        <p className="detail-help-text">This re-enrolls the existing runner name and refreshes its local install.</p>
+                      </div>
+                    </div>
+
+                    {runnerMetadata?.platform !== "darwin" && (
+                      <>
+                        <span className="detail-label">Machine Type</span>
+                        <div className="doctor-mode-toggle">
+                          <button
+                            type="button"
+                            className={`doctor-mode-button${repairMode === "desktop" ? " doctor-mode-button--active" : ""}`}
+                            onClick={() => setRepairMode("desktop")}
+                          >
+                            Desktop / Laptop
+                          </button>
+                          <button
+                            type="button"
+                            className={`doctor-mode-button${repairMode === "server" ? " doctor-mode-button--active" : ""}`}
+                            onClick={() => setRepairMode("server")}
+                          >
+                            Always-on Linux Server
+                          </button>
+                        </div>
+                        <p className="detail-help-text">{describeRunnerNativeInstallMode(repairMode)}</p>
+                      </>
+                    )}
+
+                    <div className="doctor-repair-actions">
+                      <Button variant="primary" onClick={handleGenerateRepairCommand} disabled={repairTokenMutation.isPending}>
+                        {repairTokenMutation.isPending ? "Generating..." : "Generate Repair Command"}
+                      </Button>
+                      {repairTokenMutation.data && (
+                        <Button variant="secondary" onClick={handleCopyRepairCommand}>
+                          {repairCopied ? "Copied!" : "Copy Command"}
+                        </Button>
+                      )}
+                    </div>
+
+                    {repairTokenMutation.data && (
+                      <pre className="doctor-command-block"><code>{getRepairCommand()}</code></pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="detail-section">
+            <div className="section-header">
               <h2 className="ui-section-title">Capabilities</h2>
               {!isEditingCapabilities && runner.status !== "revoked" && (
                 <Button variant="secondary" size="sm" onClick={handleEditCapabilities}>
@@ -318,7 +514,6 @@ export default function RunnerDetailPage() {
             <section className="detail-section danger-section">
               <h2 className="ui-section-title">Danger Zone</h2>
 
-              {/* Rotate Secret */}
               <div className="danger-item">
                 <div className="danger-item-header">
                   <div className="danger-item-info">
@@ -356,7 +551,6 @@ export default function RunnerDetailPage() {
                 )}
               </div>
 
-              {/* Revoke Runner */}
               <div className="danger-item">
                 <div className="danger-item-header">
                   <div className="danger-item-info">

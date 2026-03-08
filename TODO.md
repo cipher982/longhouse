@@ -163,19 +163,22 @@ Status (2026-03-08): Phase 1 shipped to main; launch-hardening follow-through re
 
 ## [Launch] Runner doctor + repair UX (size: 3)
 
-**Status (2026-03-08): Research + spec in progress; target a small v1 with reason-coded diagnosis and repair-command generation.**
+**Status (2026-03-08): Core v1 shipped locally; real-machine validation still pending on live runners.**
 
 **Goal:** Make runner failures obvious and fixable without teaching users service-manager trivia.
 
-- [ ] Write first-principles spec for `doctor` + repair UX
-- [ ] Add per-runner doctor API with reason codes and recommended repair action
-- [ ] Add `Run Doctor` UI on runner detail with generated repair command
-- [ ] Add local `longhouse-runner doctor` command for machine-side checks
+- [x] Write first-principles spec for `doctor` + repair UX
+- [x] Add per-runner doctor API with reason codes and recommended repair action
+- [x] Add `Run Doctor` UI on runner detail with generated repair command
+- [x] Add local `longhouse-runner doctor` command for machine-side checks
 - [ ] Validate the v1 on `david010`, `cinder`, and the disposable `cube` VM canary
 
 Notes:
 - 2026-03-08: Keep v1 diagnose-first. Avoid hidden self-healing or a large fleet-management surface.
 - 2026-03-08: Prefer one repair path: regenerate the correct reinstall/re-enroll command for the existing runner name and install mode.
+- 2026-03-08: Shipped `GET /api/runners/{id}/doctor`, `Run Doctor` on the runner detail page, and `longhouse-runner doctor --json` in the runner binary.
+- 2026-03-08: Repair command generation reuses `POST /api/runners/enroll-token` plus the existing runner name; no bespoke repair mutation API was added in v1.
+- 2026-03-08: Local validation passed via backend tests, runner Bun tests, frontend typecheck, frontend vitest, and a real CLI smoke with `longhouse-runner doctor --json`.
 
 **Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
 

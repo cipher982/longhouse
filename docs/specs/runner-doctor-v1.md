@@ -138,15 +138,19 @@ That gives the server enough signal to recommend the right repair path.
 ## Rollout Order
 
 ### Slice A
-- add `RUNNER_INSTALL_MODE` persistence and metadata
-- add backend doctor endpoint + tests
+- [x] add `RUNNER_INSTALL_MODE` persistence and metadata
+- [x] add backend doctor endpoint + tests
 
 ### Slice B
-- add `Run Doctor` UI + repair command generation
+- [x] add `Run Doctor` UI + repair command generation
 
 ### Slice C
-- add local `longhouse-runner doctor` + Bun tests
+- [x] add local `longhouse-runner doctor` + Bun tests
 
 ## Progress Log
 
 - 2026-03-08: Initial spec written from first principles. Keep v1 diagnose-first and use reinstall / re-enroll command generation as the single repair path.
+- 2026-03-08: Added `RUNNER_INSTALL_MODE` to installer env files and runner metadata so the server-side doctor can recommend the right repair path.
+- 2026-03-08: Added `GET /api/runners/{id}/doctor` with stable reason codes, named checks, and a repair-mode hint for the UI.
+- 2026-03-08: Added `Run Doctor` on `RunnerDetailPage` with repair command generation that reuses the existing enroll-token + install flow for the same runner name.
+- 2026-03-08: Added local `longhouse-runner doctor` and `--json` output with machine-side checks for config, install mode, service status, and Longhouse reachability.
