@@ -13,16 +13,20 @@ Uses in-memory SQLite with inline setup (no shared conftest).
 import asyncio
 import json
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from unittest.mock import patch
 from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
-from zerg.models.models import JobRun, User
-
+from zerg.database import Base
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.models import JobRun
+from zerg.models.models import User
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -62,7 +66,8 @@ def _seed_runs(db, job_id, count, status="success", base_time=None):
 def _make_client(db_session):
     """Create TestClient with dependency overrides. Same pattern as test_job_preflight."""
     from zerg.dependencies.auth import require_admin
-    from zerg.main import api_app, app
+    from zerg.main import api_app
+    from zerg.main import app
 
     admin = db_session.query(User).filter(User.email == "dev@local").first()
     if not admin:
@@ -329,6 +334,23 @@ def test_recent_runs_empty(tmp_path):
             body = resp.json()
             assert body["total"] == 0
             assert body["runs"] == []
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_recent_runs_preserve_degraded_status(tmp_path):
+    """GET /runs/recent should surface degraded job runs without collapsing them."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        _seed_runs(db, "job-a", 1, status="degraded")
+        client, api_app_ref, _ = _make_client(db)
+        try:
+            with patch("zerg.routers.jobs._ensure_jobs_registered"):
+                resp = client.get("/api/jobs/runs/recent")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["total"] == 1
+            assert body["runs"][0]["status"] == "degraded"
         finally:
             api_app_ref.dependency_overrides = {}
 

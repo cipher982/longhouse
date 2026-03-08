@@ -30,6 +30,7 @@ function runStatusVariant(status: string): "success" | "error" | "warning" | "ne
     case "dead":
       return "error";
     case "timeout":
+    case "degraded":
       return "warning";
     default:
       return "neutral";

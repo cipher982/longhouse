@@ -33,6 +33,7 @@ from zerg.jobs.queue import extend_lease
 from zerg.jobs.queue import get_last_scheduled_for
 from zerg.jobs.queue import make_dedupe_key
 from zerg.jobs.queue import reschedule_job
+from zerg.jobs.registry import interpret_job_result
 from zerg.jobs.registry import job_registry
 
 logger = logging.getLogger(__name__)
@@ -322,24 +323,42 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
 
     hb_task = asyncio.create_task(heartbeat())
 
-    status = "success"
+    run_status = "success"
+    queue_status = "success"
     error_text = None
     error_type = None
 
     try:
         # Execute the job function with timeout, dispatching via signature
-        await asyncio.wait_for(
+        result = await asyncio.wait_for(
             _invoke_job(job_def),
             timeout=timeout_seconds,
         )
-        status = "success"
+        reported_status, reported_error, reported_error_type = interpret_job_result(result)
+        if reported_status in {"failure", "timeout"}:
+            run_status = reported_status
+            queue_status = "failure"
+            error_text = reported_error
+            error_type = reported_error_type
+            logger.error("Job %s reported %s without raising: %s", queue_job.job_id, reported_status, reported_error)
+        elif reported_status == "degraded":
+            run_status = "degraded"
+            queue_status = "success"
+            error_text = reported_error
+            error_type = reported_error_type
+            logger.warning("Job %s completed degraded: %s", queue_job.job_id, reported_error)
+        else:
+            run_status = "success"
+            queue_status = "success"
     except asyncio.TimeoutError:
-        status = "failure"
+        run_status = "timeout"
+        queue_status = "failure"
         error_text = f"Job timed out after {timeout_seconds}s"
         error_type = "TimeoutError"
         logger.error("Job %s timed out", queue_job.job_id)
     except Exception as e:
-        status = "failure"
+        run_status = "failure"
+        queue_status = "failure"
         error_text = str(e)
         error_type = type(e).__name__
         if isinstance(e, RuntimeError) and "not available for job" in str(e):
@@ -357,7 +376,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
         scheduler_name = get_scheduler_name()
         await emit_job_run(
             job_id=queue_job.job_id,
-            status=status,
+            status=run_status,
             started_at=started_at,
             ended_at=ended_at,
             duration_ms=duration_ms,
@@ -372,7 +391,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
         logger.error("Failed to emit job run: %s", e)
 
     # Update queue status
-    if status == "success":
+    if queue_status == "success":
         if not await complete_job(queue_job.id, "success", None, owner=owner):
             logger.error("Failed to mark job success (lease lost): %s", queue_job.id)
     else:
