@@ -18,6 +18,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Path
+from fastapi import Request
 from fastapi import Response
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
@@ -315,6 +316,7 @@ def get_uninstall_script() -> Response:
 
 @router.post("/enroll-token", response_model=EnrollTokenResponse)
 def create_enroll_token(
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -338,17 +340,12 @@ def create_enroll_token(
     from zerg.config import get_settings
 
     settings = get_settings()
-    # In test mode, use a placeholder URL
-    if not settings.app_public_url:
-        if settings.testing:
-            api_url = "http://localhost:30080"
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="APP_PUBLIC_URL not configured. Set this in your environment.",
-            )
+    if settings.app_public_url:
+        api_url = settings.app_public_url.rstrip("/")
     else:
-        api_url = settings.app_public_url
+        # In local/demo environments, derive the canonical URL from the current request
+        # so runner enrollment still works without APP_PUBLIC_URL.
+        api_url = str(request.base_url).rstrip("/")
 
     runner_image = settings.runner_docker_image
 
