@@ -446,6 +446,7 @@ async def register_runner(
             runner_id=existing.id,
             runner_secret=auth_secret,
             name=existing.name,
+            runner_capabilities_csv=",".join(existing.capabilities or ["exec.readonly"]),
         )
 
     # New runner — create it
@@ -470,6 +471,7 @@ async def register_runner(
         runner_id=runner.id,
         runner_secret=auth_secret,
         name=runner.name,
+        runner_capabilities_csv=",".join(runner.capabilities or ["exec.readonly"]),
     )
 
 

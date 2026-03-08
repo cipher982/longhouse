@@ -97,6 +97,10 @@ RESPONSE=$(curl -sf -X POST "$REGISTER_URL" \
 # Parse response
 RUNNER_SECRET=$(parse_json "$RESPONSE" "runner_secret")
 RUNNER_NAME=$(parse_json "$RESPONSE" "name")
+RUNNER_CAPABILITIES=$(parse_json "$RESPONSE" "runner_capabilities_csv")
+if [ -z "$RUNNER_CAPABILITIES" ]; then
+  RUNNER_CAPABILITIES="exec.readonly"
+fi
 
 if [ -z "$RUNNER_SECRET" ]; then
   if command -v python3 >/dev/null 2>&1 || command -v node >/dev/null 2>&1; then
@@ -150,6 +154,7 @@ case "$OS_TYPE" in
 LONGHOUSE_URL=$LONGHOUSE_URL
 RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
+RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES
 EOF
     chmod 600 "$ENV_FILE"
     echo "Credentials saved to $ENV_FILE"
@@ -248,6 +253,7 @@ EOF
 LONGHOUSE_URL=$LONGHOUSE_URL
 RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
+RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES
 EOF
       chmod 600 "$ENV_FILE"
       echo "Credentials saved to $ENV_FILE"
@@ -335,6 +341,7 @@ SERVICEEOF
 LONGHOUSE_URL=$LONGHOUSE_URL
 RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
+RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES
 EOF
       chmod 600 "$TMP_ENV"
 

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from zerg.crud import runner_crud
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import User
@@ -51,6 +52,7 @@ def test_install_script_defaults_to_desktop_mode_and_is_valid_bash(tmp_path):
 
     assert response.status_code == 200
     assert 'RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-desktop}"' in response.text
+    assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
     assert "systemctl --user enable longhouse-runner" in response.text
     assert "For always-on servers, use RUNNER_INSTALL_MODE=server instead." in response.text
 
@@ -64,6 +66,7 @@ def test_install_script_server_mode_exposes_system_service_contract(tmp_path):
 
     assert response.status_code == 200
     assert 'RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-server}"' in response.text
+    assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
     assert "EnvironmentFile=/etc/longhouse/runner.env" in response.text
     assert "ExecStart=/usr/local/bin/longhouse-runner" in response.text
     assert "WantedBy=multi-user.target" in response.text
@@ -127,3 +130,59 @@ def test_create_enroll_token_uses_request_base_url_when_public_url_missing(tmp_p
     assert payload["longhouse_url"] == "http://127.0.0.1:43955"
     assert "http://127.0.0.1:43955/api/runners/install.sh" in payload["one_liner_install_command"]
     assert "http://127.0.0.1:43955/api/runners/register" in payload["docker_command"]
+
+
+
+def test_register_runner_reenroll_returns_existing_capabilities(tmp_path):
+    db_path = tmp_path / "runner-register.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = make_sessionmaker(engine)
+
+    env = {
+        "DATABASE_URL": f"sqlite:///{db_path}",
+        "FERNET_SECRET": "test-fernet-secret",
+        "AUTH_DISABLED": "1",
+        "JWT_SECRET": "test-jwt-secret-1234",
+        "INTERNAL_API_SECRET": "test-internal-secret-1234",
+    }
+
+    with patch.dict(os.environ, env, clear=False):
+        from zerg.main import api_app, app
+
+        with SessionLocal() as db:
+            user = User(email="dev@local", role="ADMIN")
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+            runner_crud.create_runner(
+                db=db,
+                owner_id=user.id,
+                name="clifford",
+                auth_secret="old-secret",
+                capabilities=["exec.full"],
+            )
+            _, enroll_token = runner_crud.create_enroll_token(db=db, owner_id=user.id, ttl_minutes=10)
+
+            def override_get_db():
+                try:
+                    yield db
+                finally:
+                    pass
+
+            api_app.dependency_overrides[get_db] = override_get_db
+            try:
+                with patch("zerg.config.get_settings", return_value=_settings()):
+                    client = TestClient(app, backend="asyncio")
+                    response = client.post(
+                        "/api/runners/register",
+                        json={"enroll_token": enroll_token, "name": "clifford"},
+                    )
+            finally:
+                api_app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == "clifford"
+    assert payload["runner_capabilities_csv"] == "exec.full"

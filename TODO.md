@@ -17,12 +17,12 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch] Runner onboarding hardening to 100 (size: 4)
 
-Status (2026-03-08): New top priority.
+Status (2026-03-08): CI/browser blockers cleared; real hardware install validation is now the active work.
 
 **Goal:** Turn the runner onboarding slice from "credible pre-launch" into something David can trust on launch day across fresh clones, hosted CI, and real machines.
 
-- [ ] Fix `tests/onboarding/runner_install_modes.spec.ts` in hosted CI across Chromium, Firefox, WebKit, and mobile emulation
-- [ ] Make the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job green again
+- [x] Fix `tests/onboarding/runner_install_modes.spec.ts` in hosted CI across Chromium, Firefox, WebKit, and mobile emulation
+- [x] Make the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job green again
 - [ ] Run `workflow_dispatch` coverage for hosted extended (`ubuntu-24.04-arm`, `macos-latest`) and self-hosted (`cube`, `clifford`, macOS) jobs
 - [ ] Do one real desktop install and one real always-on Linux server install, including logout/reboot persistence
 - [ ] Verify Oikos/Telegram can run `hostname` on each newly installed runner
@@ -33,6 +33,7 @@ Notes:
 - 2026-03-08: Latest push `3c4de41a` has `README Tests`, `Test Installer`, `Web Quality`, and `Provisioning E2E` green.
 - 2026-03-08: Remaining red surfaces are `Runner Onboarding Validation Ring` and the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job.
 - 2026-03-08: Current evidence points at hosted-browser failures concentrated in `tests/onboarding/runner_install_modes.spec.ts`, not the core install-script contract.
+- 2026-03-08: While starting the real install pass on `cinder` + `clifford`, live inspection found a new blocker: the installer does not write `RUNNER_CAPABILITIES`, so a re-enroll would silently downgrade existing `exec.full` runners to the client default `exec.readonly`. Fix that before migrating live machines.
 
 ## [QA/Test] Full verification sweep and CI follow-through (size: 2)
 
@@ -88,7 +89,7 @@ Notes:
 
 ## [QA/Test] Solo-dev runner onboarding validation ring (size: 4)
 
-Status (2026-03-08): Local root-cause fix landed and passed targeted validation; awaiting CI rerun for hosted/browser confirmation.
+Status (2026-03-08): Core hosted + fresh-clone coverage is green; remaining work is extended/manual hardware validation.
 
 **Goal:** Catch onboarding regressions across browser, OS, and hardware before beta users ever see them.
 
@@ -96,8 +97,8 @@ Status (2026-03-08): Local root-cause fix landed and passed targeted validation;
 - [x] Add GitHub Actions matrix jobs for hosted OS coverage and scheduled/manual synthetic onboarding runs
 - [x] Add labeled self-hosted hardware smoke jobs for macOS arm64, Linux x64, and Linux arm64
 - [x] Add a tiny release-candidate real-device checklist for iPhone Safari and Android Chrome via a cloud device lab
-- [ ] Make hosted `onboarding--ubuntu-latest--all` green in GitHub Actions
-- [ ] Make the shared fresh-clone `oss-qa` onboarding UI path green in main CI
+- [x] Make hosted `onboarding--ubuntu-latest--all` green in GitHub Actions
+- [x] Make the shared fresh-clone `oss-qa` onboarding UI path green in main CI
 - [ ] Record first green `workflow_dispatch` runs for extended hosted + self-hosted coverage
 - [ ] Finish the real install reality check on desktop + server hardware
 
