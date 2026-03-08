@@ -206,4 +206,6 @@ Instead, the product should express intent in user language:
 - GitHub Actions evaluates `jobs.<job_id>.if` before matrix expansion, so event gating that depends on `matrix.*` has to be expressed as separate jobs instead of a single conditional matrix job.
 - Self-hosted `cube` workflows cannot assume `make` is already present; CI jobs that shell out through `make` need to install build tools explicitly.
 - README test workflows also need `uv` bootstrapped explicitly on self-hosted runners because the harness shells out through `uv venv` and `uv pip`.
+- Fresh-clone README smoke coverage also needs Node/Bun and a frontend build because the backend editable install force-includes `apps/zerg/frontend-web/dist`.
+- Runner README smoke exposed a real packaging dependency gap: `apps/runner` needs `bun-types` in `devDependencies` because its `tsconfig.json` includes that type library.
 - README/service smoke checks should poll health instead of sleeping a fixed number of seconds; cold-start variance already exceeds 4 seconds on a fresh local boot.

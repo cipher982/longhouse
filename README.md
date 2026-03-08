@@ -79,6 +79,8 @@ cd longhouse && make dev
     "SKIP_DEMO_SEED": "1"
   },
   "steps": [
+    "bun install --frozen-lockfile --silent",
+    "(cd apps/zerg/frontend-web && bun run build)",
     "uv venv .tmp-readme-serve-venv --python 3.12 -q",
     ". .tmp-readme-serve-venv/bin/activate",
     "uv pip install -e apps/zerg/backend -q",
