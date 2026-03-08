@@ -9,6 +9,7 @@ NOTE: Evals cost money. Not run in CI. Use for manual quality testing.
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -128,23 +129,38 @@ def test_user(db_session):
 # ---------------------------------------------------------------------------
 
 
+STATIC_EVAL_MARKERS = {
+    "critical": "Critical test that must pass for deployment",
+    "fast": "Fast test (< 5s execution time)",
+    "slow": "Slow test (> 30s execution time)",
+    "optional": "Optional test (informational, no block)",
+    "quick": "Quick sanity check test",
+    "conversational": "Conversational test category",
+    "infrastructure": "Infrastructure test category",
+    "multi_step": "Multi-step test category",
+    "tool_usage": "Tool usage test category",
+    "edge_case": "Edge case test category",
+    "performance": "Performance test category",
+    "commis": "Commis delegation test",
+    "multi_turn": "Multi-turn conversation test",
+    "llm_graded": "Test uses LLM-as-judge for evaluation",
+    "live_only": "Test requires live mode (real OpenAI API)",
+}
+
+
 def pytest_configure(config):
-    """Register custom markers for eval tags."""
-    config.addinivalue_line("markers", "critical: Critical test that must pass for deployment")
-    config.addinivalue_line("markers", "fast: Fast test (< 5s execution time)")
-    config.addinivalue_line("markers", "slow: Slow test (> 30s execution time)")
-    config.addinivalue_line("markers", "optional: Optional test (informational, no block)")
-    config.addinivalue_line("markers", "quick: Quick sanity check test")
-    config.addinivalue_line("markers", "conversational: Conversational test category")
-    config.addinivalue_line("markers", "infrastructure: Infrastructure test category")
-    config.addinivalue_line("markers", "multi_step: Multi-step test category")
-    config.addinivalue_line("markers", "tool_usage: Tool usage test category")
-    config.addinivalue_line("markers", "edge_case: Edge case test category")
-    config.addinivalue_line("markers", "performance: Performance test category")
-    config.addinivalue_line("markers", "commis: Commis delegation test")
-    config.addinivalue_line("markers", "multi_turn: Multi-turn conversation test")
-    config.addinivalue_line("markers", "llm_graded: Test uses LLM-as-judge for evaluation")
-    config.addinivalue_line("markers", "live_only: Test requires live mode (real OpenAI API)")
+    """Register static markers and dataset tags used by evals."""
+    registered_tags = set(STATIC_EVAL_MARKERS)
+    for marker, description in STATIC_EVAL_MARKERS.items():
+        config.addinivalue_line("markers", f"{marker}: {description}")
+
+    for dataset in load_eval_datasets().values():
+        for case in dataset.cases:
+            for tag in case.tags:
+                if tag in registered_tags:
+                    continue
+                config.addinivalue_line("markers", f"{tag}: Eval dataset tag")
+                registered_tags.add(tag)
 
 
 def pytest_addoption(parser):
@@ -193,6 +209,7 @@ def pytest_collection_modifyitems(config, items):
 # ---------------------------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
 def load_eval_datasets():
     """Load all YAML datasets from evals/datasets/ directory.
 
