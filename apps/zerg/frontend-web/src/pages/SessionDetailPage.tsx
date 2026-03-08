@@ -8,14 +8,13 @@
  * - Back navigation
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { useAgentSession, useAgentSessionEventsInfinite } from "../hooks/useAgentSessions";
 import type { AgentEvent } from "../services/api/agents";
 import {
   Button,
   Badge,
-  SectionHeader,
   EmptyState,
   PageShell,
   Spinner,
@@ -81,6 +80,15 @@ function truncatePath(path: string | null, maxLen: number = 50): string {
   const parts = path.split("/");
   if (parts.length <= 3) return "..." + path.slice(-maxLen);
   return "~/" + parts.slice(-3).join("/");
+}
+
+function supportsCloudContinuation(provider: string): boolean {
+  return provider === "claude";
+}
+
+function formatProviderLabel(provider: string): string {
+  if (!provider) return "Unknown";
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
 function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
@@ -709,17 +717,16 @@ export default function SessionDetailPage() {
     [events]
   );
 
-  // Resume chat state
-  const [showResume, setShowResume] = useState(false);
+  const continuationSectionRef = useRef<HTMLDivElement | null>(null);
+  const autoPositionedSessionRef = useRef<string | null>(null);
+  const autoFocusContinuationRef = useRef(false);
 
-  // Legacy forum redirects can pass ?resume=1 to drop directly into chat mode.
-  // Consume it once and strip it from URL so close/back behavior stays predictable.
+  // Legacy forum redirects can pass ?resume=1 to jump straight to the live continuation point.
+  // Consume it once and strip it from the URL so back/close behavior stays predictable.
   useEffect(() => {
     if (!shouldAutoResume || !session) return;
 
-    if (session.provider === "claude") {
-      setShowResume(true);
-    }
+    autoFocusContinuationRef.current = supportsCloudContinuation(session.provider);
 
     const next = new URLSearchParams(searchParams);
     next.delete("resume");
@@ -903,6 +910,35 @@ export default function SessionDetailPage() {
     setHighlightedAnchorId(domId);
   }, [highlightEventId, events, eventIdToAnchor, toolItems, expandedBatches, highlightedAnchorId]);
 
+  const scrollToContinuationSection = useCallback(
+    (behavior: ScrollBehavior = "smooth", focusComposer: boolean = false) => {
+      const section = continuationSectionRef.current;
+      if (!section) return;
+
+      section.scrollIntoView({ behavior, block: "start" });
+
+      if (!focusComposer) return;
+      window.setTimeout(() => {
+        const textarea = section.querySelector("textarea");
+        if (textarea instanceof HTMLTextAreaElement) {
+          textarea.focus();
+        }
+      }, behavior === "smooth" ? 250 : 0);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!session || events.length === 0 || highlightEventId != null) return;
+    if (autoPositionedSessionRef.current === session.id) return;
+
+    const canContinueInCloud = supportsCloudContinuation(session.provider);
+    const shouldFocusComposer = autoFocusContinuationRef.current && canContinueInCloud;
+    scrollToContinuationSection(shouldFocusComposer ? "smooth" : "auto", shouldFocusComposer);
+    autoPositionedSessionRef.current = session.id;
+    autoFocusContinuationRef.current = false;
+  }, [session, events.length, highlightEventId, scrollToContinuationSection]);
+
   // Back navigation
   const handleBack = () => {
     const from = (location.state as { from?: string })?.from;
@@ -948,9 +984,10 @@ export default function SessionDetailPage() {
       ? session.summary_title
       : session.project || session.git_branch || "Session";
 
-  const canResume = session.provider === "claude";
+  const canContinueInCloud = supportsCloudContinuation(session.provider);
+  const providerLabel = formatProviderLabel(session.provider);
 
-  const activeSessionForChat: ActiveSession | null = canResume
+  const activeSessionForChat: ActiveSession | null = canContinueInCloud
     ? {
         id: session.id,
         project: session.project,
@@ -975,21 +1012,6 @@ export default function SessionDetailPage() {
       }
     : null;
 
-  if (showResume && activeSessionForChat) {
-    return (
-      <PageShell size="wide" className="sessions-page-container">
-        <div className="session-detail-page">
-          <div className="session-resume-container">
-            <SessionChat
-              session={activeSessionForChat}
-              onClose={() => setShowResume(false)}
-            />
-          </div>
-        </div>
-      </PageShell>
-    );
-  }
-
   return (
     <PageShell size="wide" className="sessions-page-container">
       <div className="session-detail-page">
@@ -1004,11 +1026,13 @@ export default function SessionDetailPage() {
               <span className="breadcrumb-current">{title}</span>
             </span>
             <div className="session-detail-actions">
-              {canResume && (
-                <Button variant="primary" size="sm" onClick={() => setShowResume(true)}>
-                  Resume Session
-                </Button>
-              )}
+              <Button
+                variant={canContinueInCloud ? "primary" : "secondary"}
+                size="sm"
+                onClick={() => scrollToContinuationSection("smooth", canContinueInCloud)}
+              >
+                {canContinueInCloud ? "Continue in Cloud" : "Latest Context"}
+              </Button>
               {toolItems.length > 0 && (
                 <Button variant="ghost" size="sm" onClick={toggleAll}>
                   {allExpanded ? "Collapse All" : "Expand All"}
@@ -1266,6 +1290,41 @@ export default function SessionDetailPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+
+        <div
+          ref={continuationSectionRef}
+          className={`session-continuation-panel${canContinueInCloud ? "" : " session-continuation-panel--unavailable"}`}
+          data-testid="session-continuation-panel"
+        >
+          <div className="session-continuation-copy">
+            <div className="session-continuation-eyebrow">Cloud Continuation</div>
+            {canContinueInCloud ? (
+              <>
+                <h2 className="session-continuation-title">Keep going from the latest synced context</h2>
+                <p className="session-continuation-description">
+                  The transcript above stays auditable. Messages you send here resume the original {providerLabel} session in the cloud.
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 className="session-continuation-title">This transcript is synced, but not resumable from the web yet</h2>
+                <p className="session-continuation-description">
+                  Direct cloud continuation is currently wired for Claude sessions only. This {providerLabel} transcript is still searchable and auditable here while we close that provider gap.
+                </p>
+              </>
+            )}
+          </div>
+
+          {canContinueInCloud && activeSessionForChat ? (
+            <div className="session-resume-container session-resume-container--inline">
+              <SessionChat session={activeSessionForChat} />
+            </div>
+          ) : (
+            <div className="session-continuation-status" data-testid="session-continuation-unavailable">
+              Review the latest context here for now. Direct {providerLabel} cloud continuation is the next piece still missing.
             </div>
           )}
         </div>
