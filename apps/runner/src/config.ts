@@ -21,10 +21,10 @@ export interface RunnerConfig {
   capabilities: string[];
 }
 
-export function loadConfig(): RunnerConfig {
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): RunnerConfig {
   // Support both LONGHOUSE_URLS (comma-sep) and LONGHOUSE_URL
-  const urlsEnv = process.env.LONGHOUSE_URLS;
-  const urlEnv = process.env.LONGHOUSE_URL;
+  const urlsEnv = env.LONGHOUSE_URLS;
+  const urlEnv = env.LONGHOUSE_URL;
 
   let longhouseUrls: string[];
   if (urlsEnv) {
@@ -44,9 +44,9 @@ export function loadConfig(): RunnerConfig {
 
   // longhouseUrl is the first URL
   const longhouseUrl = longhouseUrls[0];
-  const runnerId = process.env.RUNNER_ID ? parseInt(process.env.RUNNER_ID, 10) : null;
-  const runnerName = process.env.RUNNER_NAME || null;
-  const runnerSecret = process.env.RUNNER_SECRET || '';
+  const runnerId = env.RUNNER_ID ? parseInt(env.RUNNER_ID, 10) : null;
+  const runnerName = env.RUNNER_NAME || null;
+  const runnerSecret = env.RUNNER_SECRET || '';
 
   if (!runnerId && !runnerName) {
     throw new Error('Either RUNNER_ID or RUNNER_NAME environment variable is required');
@@ -57,7 +57,7 @@ export function loadConfig(): RunnerConfig {
   }
 
   // Parse capabilities from comma-separated list (default: exec.readonly)
-  const capabilitiesStr = process.env.RUNNER_CAPABILITIES || 'exec.readonly';
+  const capabilitiesStr = env.RUNNER_CAPABILITIES || 'exec.readonly';
   const capabilities = capabilitiesStr.split(',').map((s) => s.trim()).filter((s) => s);
 
   return {
@@ -66,9 +66,9 @@ export function loadConfig(): RunnerConfig {
     runnerId,
     runnerName,
     runnerSecret,
-    heartbeatIntervalMs: parseInt(process.env.HEARTBEAT_INTERVAL_MS || '30000', 10),
-    reconnectDelayMs: parseInt(process.env.RECONNECT_DELAY_MS || '5000', 10),
-    maxReconnectDelayMs: parseInt(process.env.MAX_RECONNECT_DELAY_MS || '60000', 10),
+    heartbeatIntervalMs: parseInt(env.HEARTBEAT_INTERVAL_MS || '30000', 10),
+    reconnectDelayMs: parseInt(env.RECONNECT_DELAY_MS || '5000', 10),
+    maxReconnectDelayMs: parseInt(env.MAX_RECONNECT_DELAY_MS || '60000', 10),
     capabilities,
   };
 }

@@ -8,30 +8,37 @@
  */
 
 import { parseArgs } from 'util';
-import { readFileSync, statSync } from 'fs';
 import { loadConfig, type RunnerConfig } from './config';
-import { RunnerWebSocketClient } from './ws-client';
+import { loadEnvfile } from './envfile';
+import { runDoctorCommand } from './doctor';
 import { getRunnerMetadata } from './protocol';
+import { RunnerWebSocketClient } from './ws-client';
 
 const VERSION = '0.1.0';
 
-// Parse CLI args before anything else
-const { values } = parseArgs({
+const { values, positionals } = parseArgs({
   options: {
     version: { type: 'boolean', short: 'v' },
     envfile: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
     'allow-insecure-envfile': { type: 'boolean' },
+    json: { type: 'boolean' },
   },
-  allowPositionals: false,
+  allowPositionals: true,
 });
 
+const command = positionals[0] ?? 'run';
+
 if (values.help) {
-  console.log(`Usage: longhouse-runner [options]
+  console.log(`Usage: longhouse-runner [command] [options]
+Commands:
+  run                        Start the runner daemon (default)
+  doctor                     Diagnose local runner install health
 Options:
   -v, --version              Print version and exit
-  --envfile <path>           Load env vars from file (default: auto-load .env)
+  --envfile <path>           Load env vars from file
   --allow-insecure-envfile   Skip envfile permission check (not recommended)
+  --json                     Print JSON for doctor output
   -h, --help                 Show this help`);
   process.exit(0);
 }
@@ -41,46 +48,20 @@ if (values.version) {
   process.exit(0);
 }
 
-// Load envfile if specified (before loadConfig reads process.env)
-if (values.envfile) {
-  try {
-    // SSH-style permission check: envfile must not be readable/writable by group/others
-    // This prevents accidental credential exposure
-    const stats = statSync(values.envfile);
-    const mode = stats.mode;
-    // Check for group/other read/write permissions (bits 0o077)
-    const insecurePerms = mode & 0o077;
-    if (insecurePerms && !values['allow-insecure-envfile']) {
-      console.error(`Error: Envfile ${values.envfile} has insecure permissions (mode ${(mode & 0o777).toString(8)})`);
-      console.error('The file must not be readable or writable by group/others.');
-      console.error('Fix with: chmod 600 ' + values.envfile);
-      console.error('Or use --allow-insecure-envfile to skip this check (not recommended).');
+async function runDaemon() {
+  if (values.envfile) {
+    try {
+      loadEnvfile(values.envfile, { allowInsecure: values['allow-insecure-envfile'] });
+    } catch (err) {
+      console.error(`Error loading envfile ${values.envfile}:`, err);
       process.exit(1);
     }
-
-    const content = readFileSync(values.envfile, 'utf-8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIndex = trimmed.indexOf('=');
-      if (eqIndex > 0) {
-        const key = trimmed.slice(0, eqIndex).trim();
-        const value = trimmed.slice(eqIndex + 1).trim();
-        process.env[key] = value;
-      }
-    }
-  } catch (err) {
-    console.error(`Error loading envfile ${values.envfile}:`, err);
-    process.exit(1);
   }
-}
 
-async function main() {
   console.log('====================================');
   console.log(`Longhouse Runner v${VERSION}`);
   console.log('====================================');
 
-  // Load configuration
   let config: RunnerConfig;
   try {
     config = loadConfig();
@@ -97,7 +78,6 @@ async function main() {
   }
   console.log(`Heartbeat interval: ${config.heartbeatIntervalMs}ms`);
 
-  // Log all URLs we're connecting to
   if (config.longhouseUrls.length === 1) {
     console.log(`Longhouse URL: ${config.longhouseUrls[0]}`);
   } else {
@@ -106,29 +86,45 @@ async function main() {
   }
   console.log('====================================\n');
 
-  // Create one client per URL
   const clients = config.longhouseUrls.map((url) => {
     const clientConfig = { ...config, longhouseUrl: url };
     return new RunnerWebSocketClient(clientConfig, getRunnerMetadata);
   });
 
-  // Handle graceful shutdown for all clients
   const shutdown = () => {
     console.log('\n[main] Shutting down all connections...');
-    clients.forEach((c) => c.stop());
+    clients.forEach((client) => client.stop());
     process.exit(0);
   };
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  // Start all clients in parallel
   try {
-    await Promise.all(clients.map((c) => c.start()));
+    await Promise.all(clients.map((client) => client.start()));
   } catch (error) {
     console.error('[main] Failed to start runner:', error);
     process.exit(1);
   }
+}
+
+async function main() {
+  if (command === 'doctor') {
+    const exitCode = await runDoctorCommand({
+      envfile: values.envfile,
+      allowInsecureEnvfile: values['allow-insecure-envfile'],
+      json: values.json,
+    });
+    process.exit(exitCode);
+  }
+
+  if (command !== 'run') {
+    console.error(`Unknown command: ${command}`);
+    console.error('Run with --help for usage.');
+    process.exit(1);
+  }
+
+  await runDaemon();
 }
 
 main().catch((error) => {

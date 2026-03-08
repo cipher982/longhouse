@@ -1,0 +1,91 @@
+import { describe, expect, it } from 'bun:test';
+
+import { collectDoctorReport, detectInstallMode, expectedServicePath } from '../doctor';
+import type { DoctorDeps } from '../doctor';
+
+function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
+  return {
+    platform: 'linux',
+    env: {
+      LONGHOUSE_URL: 'https://david010.longhouse.ai',
+      RUNNER_NAME: 'clifford',
+      RUNNER_SECRET: 'secret',
+      RUNNER_INSTALL_MODE: 'server',
+    },
+    homeDir: '/home/test',
+    uid: 1000,
+    exists: (path: string) => path === '/etc/systemd/system/longhouse-runner.service',
+    loadConfig: () => ({
+      longhouseUrl: 'https://david010.longhouse.ai',
+      longhouseUrls: ['https://david010.longhouse.ai'],
+      runnerId: null,
+      runnerName: 'clifford',
+      runnerSecret: 'secret',
+      heartbeatIntervalMs: 30000,
+      reconnectDelayMs: 5000,
+      maxReconnectDelayMs: 60000,
+      capabilities: ['exec.full'],
+    }),
+    runCommand: () => ({ status: 0, stdout: '', stderr: '' }),
+    fetchHealth: async () => true,
+    ...overrides,
+  };
+}
+
+describe('detectInstallMode', () => {
+  it('prefers explicit install mode from env', () => {
+    expect(detectInstallMode({
+      platform: 'linux',
+      env: { RUNNER_INSTALL_MODE: 'desktop' },
+      configPath: '/etc/longhouse/runner.env',
+      exists: () => false,
+      homeDir: '/home/test',
+    })).toBe('desktop');
+  });
+
+  it('falls back to server for /etc env path', () => {
+    expect(detectInstallMode({
+      platform: 'linux',
+      env: {},
+      configPath: '/etc/longhouse/runner.env',
+      exists: () => false,
+      homeDir: '/home/test',
+    })).toBe('server');
+  });
+});
+
+describe('expectedServicePath', () => {
+  it('returns launch agent path on macOS', () => {
+    expect(expectedServicePath('darwin', 'desktop', '/Users/test')).toContain('Library/LaunchAgents/com.longhouse.runner.plist');
+  });
+});
+
+describe('collectDoctorReport', () => {
+  it('reports healthy runner when config, service, and connectivity are all good', async () => {
+    const report = await collectDoctorReport({}, deps());
+    expect(report.severity).toBe('healthy');
+    expect(report.recommendedCommand).toBeNull();
+  });
+
+  it('recommends restarting inactive service', async () => {
+    const report = await collectDoctorReport({}, deps({
+      runCommand: () => ({ status: 3, stdout: '', stderr: '' }),
+    }));
+    expect(report.severity).toBe('error');
+    expect(report.summary).toContain('not running');
+    expect(report.recommendedCommand).toBe('sudo systemctl restart longhouse-runner');
+  });
+
+  it('reports missing config cleanly', async () => {
+    const report = await collectDoctorReport({}, deps({
+      env: {},
+      exists: () => false,
+      loadConfig: () => {
+        throw new Error('missing config');
+      },
+    }));
+    expect(report.severity).toBe('error');
+    expect(report.summary).toContain('warnings');
+    expect(report.checks.some((check) => check.key === 'config' && check.status === 'fail')).toBe(true);
+  });
+});
