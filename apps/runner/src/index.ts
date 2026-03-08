@@ -14,7 +14,7 @@ import { runDoctorCommand } from './doctor';
 import { getRunnerMetadata } from './protocol';
 import { RunnerWebSocketClient } from './ws-client';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.2';
 
 const { values, positionals } = parseArgs({
   options: {

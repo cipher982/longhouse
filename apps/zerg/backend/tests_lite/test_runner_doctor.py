@@ -62,7 +62,7 @@ def test_runner_doctor_reports_healthy_online_runner(tmp_path: Path):
             runner_metadata={
                 "hostname": "clifford",
                 "platform": "linux",
-                "runner_version": "0.1.0",
+                "runner_version": "0.1.2",
                 "install_mode": "server",
                 "capabilities": ["exec.full"],
             },
