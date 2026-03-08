@@ -38,6 +38,36 @@ Notes:
 - 2026-03-08: Hosted Oikos successfully ran `hostname -s` on both newly migrated runners before and after service restarts, returning `cinder` and `clifford` respectively.
 - 2026-03-08: I did not run a literal logout/reboot on `cinder` or `clifford` yet; `cinder` would require an interactive local logout/restart, and rebooting `clifford` would be a production-impacting action that should be explicit.
 
+## [Infra] Honest degraded job status for scheduled jobs (size: 2)
+
+Status (2026-03-08): Done.
+
+**Goal:** Make scheduled jobs report `degraded` honestly when they complete with non-fatal partial failures, and show that clearly in downstream reporting.
+
+- [x] Derive `degraded` / reported `failure` from returned job payloads and pipeline summaries in direct + queued execution paths
+- [x] Keep queue semantics sane: degraded completes, reported failures still retry/reschedule
+- [x] Update downstream reporting so degraded runs are visible instead of silently counted as green
+
+Notes:
+- 2026-03-08: Current ai-tools editorial loop returns successful process exit with pipeline summary `status=error` for partial failures; scheduler ignores that and stores the top-level run as success.
+- 2026-03-08: Shipped scheduler + queue status promotion, Jobs UI degraded badges, and ai-tools digest degraded counts so partial-failure runs stop showing up as green.
+
+## [Infra] Infisical-first secret loading for hosted ops scripts (size: 3)
+
+Status (2026-03-08): Done.
+
+**Goal:** Make Infisical the real source of truth for local ops/admin secrets, provide a script-safe helper, and stop teaching new Keychain patterns.
+
+- [x] Add a script-safe Infisical secret helper with exact-key lookup and loud failure on missing/empty values
+- [x] Wire hosted-control-plane scripts to auto-load `CONTROL_PLANE_ADMIN_TOKEN` from Infisical instead of Keychain hints
+- [x] Migrate the live control-plane admin token into Infisical `ops-infra` and validate real hosted-instance resolution
+- [x] Update global agent/docs guidance so future agents treat Keychain as legacy-only and migrate old references when touched
+
+Notes:
+- 2026-03-08: `~/.zshrc` already uses `infisical export` for common shell keys, but `CONTROL_PLANE_ADMIN_TOKEN` is not globally exported and `scripts/provision-e2e-live.sh` still printed a Keychain recipe before this slice.
+- 2026-03-08: `infisical secrets get` can exit successfully with empty output for missing secrets, so scripts now use the stricter shared helper `~/git/me/scripts/infisical-get.py` or the repo-local wrapper in `scripts/lib/infisical.sh`.
+- 2026-03-08: Live validation succeeded with real `ops-infra/prod` secret reads, `lh_hosted_resolve_instance david010`, and `lh_hosted_issue_login_token` through the control plane.
+
 ## [QA/Test] Full verification sweep and CI follow-through (size: 2)
 
 Status (2026-03-08): In progress — GitHub workflows have been exercised; remaining failures are now narrowed to hosted onboarding browser coverage.
