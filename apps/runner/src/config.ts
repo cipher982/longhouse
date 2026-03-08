@@ -18,6 +18,7 @@ export interface RunnerConfig {
   heartbeatIntervalMs: number;
   reconnectDelayMs: number;
   maxReconnectDelayMs: number;
+  connectTimeoutMs: number;
   capabilities: string[];
 }
 
@@ -69,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RunnerConfig {
     heartbeatIntervalMs: parseInt(env.HEARTBEAT_INTERVAL_MS || '30000', 10),
     reconnectDelayMs: parseInt(env.RECONNECT_DELAY_MS || '5000', 10),
     maxReconnectDelayMs: parseInt(env.MAX_RECONNECT_DELAY_MS || '60000', 10),
+    connectTimeoutMs: parseInt(env.CONNECT_TIMEOUT_MS || '15000', 10),
     capabilities,
   };
 }
