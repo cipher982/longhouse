@@ -38,8 +38,8 @@ on:
         required: false
         default: true
         type: boolean
-      run_linux_arm64:
-        description: 'Run Linux ARM64 self-hosted smoke on cube'
+      run_cube_self_hosted:
+        description: 'Run cube self-hosted Linux x64 smoke'
         required: false
         default: true
         type: boolean
@@ -255,11 +255,11 @@ jobs:
             /tmp/longhouse-onboarding/apps/zerg/e2e/test-results
             /tmp/longhouse-onboarding/apps/zerg/e2e/playwright-report
 
-  self-hosted-linux-arm64:
-    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_linux_arm64) }}
+  self-hosted-cube-linux-x64:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted) }}
     runs-on: cube
     timeout-minutes: 30
-    name: "self-hosted-onboarding--linux-arm64--cube"
+    name: "self-hosted-onboarding--linux-x64--cube"
 
     steps:
       - uses: actions/checkout@v4
@@ -294,14 +294,14 @@ jobs:
       - name: Run runner install contract tests
         run: make test-install-runner
 
-      - name: Run onboarding smoke on Linux ARM64
+      - name: Run onboarding smoke on cube Linux x64
         run: make test-e2e-onboarding PROJECT=onboarding-chromium
 
-      - name: Upload self-hosted Linux ARM64 artifacts
+      - name: Upload self-hosted cube Linux x64 artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: onboarding-self-hosted-linux-arm64
+          name: onboarding-self-hosted-cube-linux-x64
           if-no-files-found: ignore
           path: |
             apps/zerg/e2e/test-results
