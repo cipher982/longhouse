@@ -11,6 +11,7 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -44,16 +45,49 @@ const CRITICAL_ENDPOINTS = [
   '/api/fiches',
 ];
 
+function loadOpenApiSchema(schemaPath: string): any {
+  if (existsSync(schemaPath)) {
+    return JSON.parse(readFileSync(schemaPath, 'utf-8'));
+  }
+
+  const backendDir = join(__dirname, '../../backend');
+  const schemaJson = execFileSync(
+    'uv',
+    [
+      'run',
+      'python',
+      '-c',
+      [
+        'import json',
+        'from fastapi.openapi.utils import get_openapi',
+        'from zerg.main import api_app',
+        'schema = get_openapi(title="Longhouse API", version="1.0.0", description="Contract validation schema", routes=api_app.routes)',
+        'schema["paths"] = {f"/api{k}": v for k, v in schema.get("paths", {}).items()}',
+        'print(json.dumps(schema))',
+      ].join('; '),
+    ],
+    {
+      cwd: backendDir,
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        TESTING: process.env.TESTING ?? '1',
+        JWT_SECRET: process.env.JWT_SECRET ?? 'contract-validator-jwt-secret-123456',
+        INTERNAL_API_SECRET: process.env.INTERNAL_API_SECRET ?? 'contract-validator-internal-secret-123456',
+        FERNET_SECRET: process.env.FERNET_SECRET ?? 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
+      },
+    },
+  );
+
+  return JSON.parse(schemaJson);
+}
+
 class ContractValidator {
   private openApiSchema: any;
   private apiBaseUrl: string;
 
   constructor(schemaPath: string, apiBaseUrl: string = 'http://localhost:47300') {
-    if (!existsSync(schemaPath)) {
-      throw new Error(`OpenAPI schema not found: ${schemaPath}`);
-    }
-
-    this.openApiSchema = JSON.parse(readFileSync(schemaPath, 'utf-8'));
+    this.openApiSchema = loadOpenApiSchema(schemaPath);
     this.apiBaseUrl = apiBaseUrl;
   }
 
