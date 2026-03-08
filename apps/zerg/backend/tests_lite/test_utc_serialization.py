@@ -68,6 +68,9 @@ def test_session_response_model():
         user_messages=5,
         assistant_messages=10,
         tool_calls=3,
+        thread_root_session_id="test-session-id",
+        thread_head_session_id="test-session-id",
+        thread_continuation_count=1,
     )
     encoded = jsonable_encoder(resp)
     assert encoded["started_at"].endswith("Z"), f"started_at missing Z: {encoded['started_at']}"
