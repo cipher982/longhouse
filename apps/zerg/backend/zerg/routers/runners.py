@@ -32,6 +32,7 @@ from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import User
 from zerg.schemas.runner_schemas import EnrollTokenResponse
+from zerg.schemas.runner_schemas import RunnerDoctorResponse
 from zerg.schemas.runner_schemas import RunnerListResponse
 from zerg.schemas.runner_schemas import RunnerRegisterRequest
 from zerg.schemas.runner_schemas import RunnerRegisterResponse
@@ -42,6 +43,7 @@ from zerg.schemas.runner_schemas import RunnerStatusResponse
 from zerg.schemas.runner_schemas import RunnerSuccessResponse
 from zerg.schemas.runner_schemas import RunnerUpdate
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.runner_doctor import diagnose_runner
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.utils.time import utc_now_naive
 
@@ -530,6 +532,24 @@ def get_runner(
         )
 
     return RunnerResponse.model_validate(runner)
+
+
+@router.get("/{runner_id}/doctor", response_model=RunnerDoctorResponse)
+def get_runner_doctor(
+    runner_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> RunnerDoctorResponse:
+    """Run server-side doctor diagnostics for a specific runner."""
+    runner = runner_crud.get_runner(db=db, runner_id=runner_id)
+
+    if not runner or runner.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Runner not found",
+        )
+
+    return diagnose_runner(runner)
 
 
 @router.patch("/{runner_id}", response_model=RunnerResponse)

@@ -72,6 +72,7 @@ export interface RunnerMetadata {
   runner_version: string;
   docker_available?: boolean;
   capabilities?: string[];
+  install_mode?: string;
 }
 
 function detectDockerAvailable(): boolean {
@@ -108,5 +109,6 @@ export function getRunnerMetadata(): RunnerMetadata {
     arch: process.arch,
     runner_version: '0.1.0',
     docker_available: detectDockerAvailable(),
+    install_mode: process.env.RUNNER_INSTALL_MODE || undefined,
   };
 }
