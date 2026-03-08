@@ -28,8 +28,12 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import httpx
+from sqlalchemy.orm import Session
+
+from zerg.services.agents_store import AgentsStore
 
 if TYPE_CHECKING:
     pass
@@ -102,11 +106,33 @@ def encode_cwd_for_claude(absolute_path: str) -> str:
     return re.sub(r"[^A-Za-z0-9-]", "-", absolute_path)
 
 
-async def fetch_session_from_zerg(session_id: str) -> tuple[bytes, str, str]:
-    """Fetch a session from Zerg for resumption.
+def _export_session_from_db(session_id: str, db: Session) -> tuple[bytes, str, str]:
+    """Export a session directly from the local DB for in-process resume prep."""
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError as exc:
+        raise ValueError(f"Invalid session id: {session_id}") from exc
+
+    result = AgentsStore(db).export_session_jsonl(session_uuid, branch_mode="head")
+    if not result:
+        raise ValueError(f"Session {session_id} not found")
+
+    jsonl_bytes, session = result
+    provider_session_id = session.provider_session_id or str(session.id)
+    if provider_session_id:
+        validate_session_id(provider_session_id)
+    return jsonl_bytes, session.cwd or "", provider_session_id
+
+
+async def fetch_session_from_zerg(session_id: str, db: Session | None = None) -> tuple[bytes, str, str]:
+    """Fetch a session for resumption.
+
+    Uses the local DB when available to avoid brittle self-HTTP from hosted
+    instance containers. Falls back to the export API for external contexts.
 
     Args:
         session_id: Session UUID
+        db: Optional local DB session for direct export
 
     Returns:
         Tuple of (jsonl_bytes, cwd, provider_session_id)
@@ -115,6 +141,9 @@ async def fetch_session_from_zerg(session_id: str) -> tuple[bytes, str, str]:
         ValueError: If session not found or API error
         httpx.HTTPError: On network errors
     """
+    if db is not None:
+        return _export_session_from_db(session_id, db)
+
     url = f"{LONGHOUSE_API_URL}/api/agents/sessions/{session_id}/export"
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -125,11 +154,9 @@ async def fetch_session_from_zerg(session_id: str) -> tuple[bytes, str, str]:
 
         response.raise_for_status()
 
-        # Extract metadata from headers
         cwd = response.headers.get("X-Session-CWD", "")
         provider_session_id = response.headers.get("X-Provider-Session-ID", "")
 
-        # Validate provider_session_id to prevent path traversal
         if provider_session_id:
             validate_session_id(provider_session_id)
 
@@ -140,6 +167,7 @@ async def prepare_session_for_resume(
     session_id: str,
     workspace_path: Path,
     claude_config_dir: Path | None = None,
+    db: Session | None = None,
 ) -> str:
     """Fetch session from Zerg and prepare it for Claude Code --resume.
 
@@ -158,7 +186,7 @@ async def prepare_session_for_resume(
         ValueError: If session not found or configuration error
     """
     # Fetch session from Zerg
-    jsonl_bytes, original_cwd, provider_session_id = await fetch_session_from_zerg(session_id)
+    jsonl_bytes, _original_cwd, provider_session_id = await fetch_session_from_zerg(session_id, db=db)
 
     if not provider_session_id:
         raise ValueError(f"Session {session_id} has no provider_session_id - cannot resume")

@@ -53,6 +53,7 @@ Notes:
 - 2026-03-08: Session ingest now turns later laptop shipping after a cloud branch into a local child continuation (and reuses the latest same-origin child) instead of mutating the pre-branch source session.
 - 2026-03-08: Timeline is now thread-centric: one card per logical task, latest head by default, stale-branch banner on older continuations, lineage rail in detail, and `Branch from Here` copy for historical branches.
 - 2026-03-08: Regression coverage exists at three levels: backend lineage tests, core browser E2E in `apps/zerg/e2e/tests/core/sessions.spec.ts`, and live hosted proof in `apps/zerg/e2e/tests/live/session-continuation-lineage.spec.ts`.
+- 2026-03-08: Fixed a hosted first-message regression in the continuation route: `prepare_session_for_resume()` had been self-fetching `/api/agents/sessions/{id}/export` over `LONGHOUSE_API_URL`, which failed inside the instance container. Resume prep now uses `AgentsStore.export_session_jsonl()` directly when a DB session is already in-process, and `tests_lite/test_session_resume_prep.py` covers both direct resume prep and the real `POST /api/sessions/{id}/chat` path so UI-only coverage cannot miss this again.
 - Spec: `docs/specs/session-continuation-lineage.md`.
 
 ---
