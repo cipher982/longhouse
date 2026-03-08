@@ -11,6 +11,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timezone
 from typing import Any
 from typing import Dict
 from typing import List
@@ -35,6 +36,26 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 
 logger = logging.getLogger(__name__)
+
+_GENERIC_ENVIRONMENT_LABELS = {"production", "development", "dev", "test", "e2e"}
+
+
+def _is_generic_environment_label(value: str | None) -> bool:
+    """Return True when the label is a broad environment class, not a machine name."""
+    if not value:
+        return True
+
+    normalized = value.strip().lower()
+    return normalized in _GENERIC_ENVIRONMENT_LABELS or normalized.startswith("test:")
+
+
+def _normalize_utc_naive(value: datetime | None) -> datetime | None:
+    """Normalize aware datetimes to naive UTC for SQLite-safe comparison."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -133,6 +154,42 @@ class AgentsStore:
             return row is not None
         except Exception:
             return False
+
+    def _refresh_existing_session_metadata(self, session: AgentSession, data: SessionIngest) -> None:
+        """Backfill richer session metadata when the same session is ingested again."""
+        incoming_started_at = _normalize_utc_naive(data.started_at)
+        existing_started_at = _normalize_utc_naive(session.started_at)
+        if incoming_started_at and (existing_started_at is None or incoming_started_at < existing_started_at):
+            session.started_at = data.started_at
+
+        incoming_ended_at = _normalize_utc_naive(data.ended_at)
+        existing_ended_at = _normalize_utc_naive(session.ended_at)
+        if incoming_ended_at and (existing_ended_at is None or incoming_ended_at > existing_ended_at):
+            session.ended_at = data.ended_at
+
+        if data.is_sidechain:
+            session.is_sidechain = 1
+
+        if data.project and not session.project:
+            session.project = data.project
+        if data.device_id and not session.device_id:
+            session.device_id = data.device_id
+        if data.cwd and not session.cwd:
+            session.cwd = data.cwd
+        if data.git_repo and not session.git_repo:
+            session.git_repo = data.git_repo
+        if data.git_branch and not session.git_branch:
+            session.git_branch = data.git_branch
+        if data.provider_session_id and not session.provider_session_id:
+            session.provider_session_id = data.provider_session_id
+
+        incoming_environment = data.environment.strip()
+        existing_environment = (session.environment or "").strip()
+        if incoming_environment and (
+            not existing_environment
+            or (_is_generic_environment_label(existing_environment) and not _is_generic_environment_label(incoming_environment))
+        ):
+            session.environment = incoming_environment
 
     def rebuild_fts(self) -> None:
         """Rebuild the FTS5 index when available (SQLite only)."""
@@ -810,9 +867,7 @@ class AgentsStore:
         existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
 
         if existing:
-            existing.ended_at = data.ended_at or existing.ended_at
-            if data.is_sidechain:
-                existing.is_sidechain = 1
+            self._refresh_existing_session_metadata(existing, data)
             session_created = False
         else:
             session = AgentSession(

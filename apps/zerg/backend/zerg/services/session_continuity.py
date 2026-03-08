@@ -58,6 +58,18 @@ def get_claude_config_dir() -> Path:
     return Path.home() / ".claude"
 
 
+def get_machine_name_label() -> str:
+    """Return the configured Longhouse machine label, falling back to hostname."""
+    machine_name_path = get_claude_config_dir() / "longhouse-machine-name"
+    try:
+        machine_name = machine_name_path.read_text().strip()
+        if machine_name:
+            return machine_name
+    except OSError:
+        pass
+    return platform.node() or "unknown"
+
+
 def validate_session_id(session_id: str) -> None:
     """Validate session ID to prevent path traversal attacks.
 
@@ -271,6 +283,7 @@ async def ship_session_to_zerg(
     device_id = f"zerg-commis-{platform.node()}:{provider_session_id}"
     payload = {
         "provider": "claude",
+        "environment": get_machine_name_label(),
         "provider_session_id": provider_session_id,  # Claude Code session UUID from filename
         "project": metadata.project or workspace_path.name,  # Use parsed project when available
         "device_id": device_id,

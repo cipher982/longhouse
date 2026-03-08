@@ -138,6 +138,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 16. **DB provider config overrides env vars** — `get_llm_client_with_db_fallback()` checks `LlmProviderConfig` table first. Stale rows with wrong keys cause silent 401s. Check DB before debugging API auth failures.
 17. **Zerg host backups/cleanup are unified under `zerg-ops`** — source of truth is `scripts/zerg-ops.sh`, deployed to `/usr/local/bin/zerg-ops`. It is intentionally code-configured (no `/etc/zerg-ops.env` contract). For scoped checks use CLI `--instance`, and offsite uses SSH alias `longhouse-offsite` configured on the host.
 18. **Demo seed/reset identity + repair path** — demo rows are identified by `provider_session_id LIKE 'demo-%'` (not `device_id`). In dev (`AUTH_DISABLED=1`), run `POST /api/agents/demo?replace=true` to wipe/reseed stale rows. Response includes `sessions_failed` and `sessions_deleted`.
+19. **`~/.claude/longhouse-machine-name` is read at engine startup** — changing the file does nothing for the already-running `com.longhouse.shipper` daemon. Restart/reinstall the LaunchAgent (and re-sign via `make install-engine` first if launchd reports a codesigning exit) or new sessions may keep the stale label.
 
 ## Pushing Changes
 
