@@ -1,22 +1,12 @@
 import { test, expect, type Page } from '../fixtures';
+import { APP_PAGES, type PageDef } from '../helpers/page-list';
 import { waitForPageReady } from '../helpers/ready-signals';
 import { resetDatabase } from '../test-utils';
 
-const BASE_QUERY = 'clock=frozen&effects=off&seed=ui-baseline';
-
-const MOBILE_PAGES = [
-  { name: 'dashboard', path: `/dashboard?${BASE_QUERY}`, ready: 'page', navOpen: true },
-  { name: 'chat', path: `/chat?${BASE_QUERY}`, ready: 'page' },
-  { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
-  { name: 'profile', path: `/profile?${BASE_QUERY}`, ready: 'page' },
-  { name: 'runners', path: `/runners?${BASE_QUERY}`, ready: 'page' },
-  { name: 'integrations', path: `/settings/integrations?${BASE_QUERY}`, ready: 'page' },
-  { name: 'knowledge', path: `/settings/knowledge?${BASE_QUERY}`, ready: 'page' },
-  { name: 'contacts', path: `/settings/contacts?${BASE_QUERY}`, ready: 'page' },
-  { name: 'admin', path: `/admin?${BASE_QUERY}`, ready: 'page' },
-  { name: 'traces', path: `/traces?${BASE_QUERY}`, ready: 'page' },
-  { name: 'reliability', path: `/reliability?${BASE_QUERY}`, ready: 'page' },
-];
+const MOBILE_PAGES: Array<PageDef & { navOpen?: boolean }> = APP_PAGES.map((pageDef) => ({
+  ...pageDef,
+  navOpen: pageDef.name === 'dashboard',
+}));
 
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
@@ -47,7 +37,7 @@ async function captureBaseline(
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
     animations: 'disabled',
-    maxDiffPixelRatio: 0.02, // Allow 2% pixel variance for font rendering differences
+    maxDiffPixelRatio: 0.02,
   });
 
   if (navOpen) {
@@ -59,7 +49,7 @@ async function captureBaseline(
       await expect(page).toHaveScreenshot(`${name}-nav.png`, {
         fullPage: true,
         animations: 'disabled',
-        maxDiffPixelRatio: 0.02, // Allow 2% pixel variance for font rendering differences
+        maxDiffPixelRatio: 0.02,
       });
     } catch {
       // If the toggle isn't visible (responsive layout drift), skip nav snapshot.

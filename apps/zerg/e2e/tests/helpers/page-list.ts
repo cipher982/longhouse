@@ -22,8 +22,6 @@ export const APP_PAGES: PageDef[] = [
   { name: "knowledge", path: `/settings/knowledge?${BASE_QUERY}`, ready: "page" },
   { name: "contacts", path: `/settings/contacts?${BASE_QUERY}`, ready: "page" },
   { name: "admin", path: `/admin?${BASE_QUERY}`, ready: "page" },
-  { name: "traces", path: `/traces?${BASE_QUERY}`, ready: "page" },
-  { name: "reliability", path: `/reliability?${BASE_QUERY}`, ready: "page" },
 ];
 
 export const PUBLIC_PAGES: PageDef[] = [
