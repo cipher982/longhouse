@@ -53,6 +53,7 @@ Notes:
 - 2026-03-08: We should not try to patch cloud changes back into laptop provider transcript files. Longhouse should model divergence honestly, not fake two-way sync.
 - 2026-03-08: Good UX split: the latest writable head gets an immediate active composer; historical/stale branches should say `Start new continuation from here`, not pretend they are live in-place edits.
 - 2026-03-08: Use user-facing labels like `Cloud` and machine names (`Cinder`, `Cube`, etc.), never internal terms like `commis`.
+- Spec: `docs/specs/session-continuation-lineage.md`.
 
 ---
 
