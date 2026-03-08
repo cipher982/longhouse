@@ -7,7 +7,7 @@ import { RunnerWebSocketClient } from '../ws-client';
 const metadata = () => ({
   platform: 'linux',
   arch: 'x64',
-  runner_version: '0.1.2',
+  runner_version: '0.1.3',
   docker_available: false,
 });
 

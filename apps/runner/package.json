@@ -1,6 +1,6 @@
 {
   "name": "@longhouse/runner",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Longhouse runner daemon for executing commands on user infrastructure",
   "scripts": {
     "start": "bun run src/index.ts",

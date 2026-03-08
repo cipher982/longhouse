@@ -107,7 +107,7 @@ export function getRunnerMetadata(): RunnerMetadata {
     hostname: process.env.HOSTNAME || 'unknown',
     platform: process.platform,
     arch: process.arch,
-    runner_version: '0.1.2',
+    runner_version: '0.1.3',
     docker_available: detectDockerAvailable(),
     install_mode: process.env.RUNNER_INSTALL_MODE || undefined,
   };
