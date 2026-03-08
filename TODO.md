@@ -206,6 +206,7 @@ Notes:
 - 2026-03-08: Fresh `cube` VM validation confirmed `longhouse-runner doctor --json` is healthy on runner `v0.1.3` with `installMode=server` after install.
 - 2026-03-08: Shipped `runner-v0.1.3` with an explicit websocket connect watchdog in the runner client so boot-time/re-enroll handshakes cannot hang forever before `hello`.
 - 2026-03-08: Re-ran the disposable `cube` exec.full canary after the `runner-v0.1.3` deploy; it passed end-to-end (install -> reboot -> re-enroll -> reboot -> Oikos `bash -lc`).
+- 2026-03-08: Follow-up cleanup: simplify the runner websocket handler so early close/abort paths stop emitting noisy double-close errors after reconnect success.
 - 2026-03-08: One canary rerun failed earlier due to `uvt-simplestreams-libvirt sync` timing out on `cube`; rerunning succeeded, so that was infra flake, not a product regression.
 
 **Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
@@ -610,7 +611,7 @@ Status (2026-03-06): Done.
 
 Notes:
 - 2026-03-06: Live on `zerg`, `cp_instances.data_path` rows now point at `/var/app-data/longhouse/<subdomain>`, the control-plane Coolify app mounts `/var/app-data/longhouse` directly, and the old compatibility bind mount is gone.
-- 2026-03-08: Added a generic control-plane self-heal so legacy persisted rows that still say `/var/lib/docker/data/longhouse/<subdomain>` resolve to the configured canonical root on reprovision, then persist the repaired path after recreate.
+- 2026-03-08: Simplified follow-up: normalized the handful of stale internal `cp_instances.data_path` rows directly in the live control-plane DB and kept runtime path resolution simple instead of carrying a compatibility shim in product code.
 - 2026-03-06: Verification passed end to end: `make test`, `make test-e2e`, live tenant-GUID scan, active-instance reprovision, post-unmount reprovision, and `make qa-live`.
 - 2026-03-06: Additional simplifications landed: extracted shared control-plane recreate/deploy helpers, corrected the ship skill examples, and removed stale old-path references from docs/scripts.
 - Spec: `docs/specs/tenant-data-root-cleanup.md`.

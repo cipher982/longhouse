@@ -53,7 +53,6 @@ from control_plane.services.provisioner import (  # noqa: E402
     _volume_for,
     normalize_custom_env_overrides,
     parse_custom_env_json,
-    resolve_instance_data_path,
 )
 from control_plane.routers.auth import _hash_password, _issue_session_token  # noqa: E402
 from control_plane.config import settings  # noqa: E402
@@ -328,24 +327,6 @@ class TestVolumeCreation:
             assert volumes[data_path]["bind"] == "/data"
             assert volumes[data_path]["mode"] == "rw"
 
-    def test_resolve_instance_data_path_repairs_legacy_root(self):
-        with patch.object(settings, "instance_data_root", "/var/app-data/longhouse"):
-            resolved = resolve_instance_data_path(
-                "testuser",
-                data_path="/var/lib/docker/data/longhouse/testuser",
-            )
-
-        assert resolved == "/var/app-data/longhouse/testuser"
-
-    def test_resolve_instance_data_path_preserves_custom_override(self):
-        with patch.object(settings, "instance_data_root", "/var/app-data/longhouse"):
-            resolved = resolve_instance_data_path(
-                "testuser",
-                data_path="/srv/longhouse-tenants/testuser",
-            )
-
-        assert resolved == "/srv/longhouse-tenants/testuser"
-
 
 # ===========================================================================
 # Instances API tests
@@ -614,32 +595,6 @@ class TestInstancesAPI:
             "OPENAI_BASE_URL": None,
         }
         assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
-
-    @patch("control_plane.routers.instances.Provisioner")
-    def test_reprovision_repairs_legacy_instance_data_root(self, MockProv, client, db_session):
-        prov = _mock_provisioner()
-        MockProv.return_value = prov
-
-        user = _make_user(db_session)
-        with patch.object(settings, "instance_data_root", "/var/app-data/longhouse"):
-            inst = _make_instance(
-                db_session,
-                user,
-                status="deprovisioned",
-                data_path="/var/lib/docker/data/longhouse/inst1",
-            )
-
-            resp = client.post(f"/api/instances/{inst.id}/reprovision", headers=ADMIN_HEADERS)
-
-        assert resp.status_code == 200
-        prov.run_migration_preflight.assert_called_once_with(
-            "inst1",
-            data_path="/var/app-data/longhouse/inst1",
-        )
-        _, call_kwargs = prov.provision_instance.call_args
-        assert call_kwargs["data_path"] == "/var/app-data/longhouse/inst1"
-        db_session.refresh(inst)
-        assert inst.data_path == "/var/app-data/longhouse/inst1"
 
     @patch("control_plane.routers.instances.Provisioner")
     def test_reprovision_aborts_on_preflight_failure(self, MockProv, client, db_session):
