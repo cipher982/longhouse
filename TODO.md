@@ -34,6 +34,28 @@ Notes:
 
 ---
 
+## [Launch][Product] Make cross-device continuation branch-safe and explicit (size: 6)
+
+Status (2026-03-08): Design clarified, not started. Current cloud continuation is effectively export snapshot -> resume in cloud -> ship back. We explicitly do not want full bidirectional transcript sync. The product needs honest lineage: one logical thread, explicit child continuations, a latest writable head, and visible divergence when an older laptop transcript continues after a cloud branch.
+
+**Goal:** Make "continue from phone, then continue later on laptop" understandable and safe without pretending there is one magical transcript being kept in sync everywhere.
+
+- [ ] Add session-level continuation lineage metadata (for example `thread_root_session_id`, `continued_from_session_id`, `continuation_kind`, `origin_label`, and a branch-point event/offset) and keep it distinct from the existing rewind-oriented `session_branches` table
+- [ ] On the first cloud/web/mobile message from a synced session, create a new child continuation explicitly instead of presenting it as an in-place mutation of the original source session
+- [ ] Define writable-head semantics: the latest continuation is writable, older branches are historical/stale, and typing there should start a new continuation instead of silently mutating history
+- [ ] Detect later laptop shipping after a cloud branch and ingest it as a new local continuation child instead of appending to the pre-branch source session as if nothing changed
+- [ ] Update timeline/detail UX to show lineage clearly (`Started on Cinder` -> `Continued in Cloud`, latest head, stale branch warning, open latest) while keeping the main path fast for the current head
+- [ ] Add regression coverage for branch creation, stale-branch handling, later local divergence, and timeline grouping of continuations under one logical thread
+
+Notes:
+- 2026-03-08: The current lock only protects web-vs-web `POST /sessions/{id}/chat`; it does not coordinate with the laptop CLI or the local shipper.
+- 2026-03-08: The current Claude web continuation path exports a session from Longhouse, resumes it in a cloud workspace, and then re-ingests it without preserving the original Longhouse `session_id`, so sibling sessions already happen accidentally. Formalize that instead of hiding it.
+- 2026-03-08: We should not try to patch cloud changes back into laptop provider transcript files. Longhouse should model divergence honestly, not fake two-way sync.
+- 2026-03-08: Good UX split: the latest writable head gets an immediate active composer; historical/stale branches should say `Start new continuation from here`, not pretend they are live in-place edits.
+- 2026-03-08: Use user-facing labels like `Cloud` and machine names (`Cinder`, `Cube`, etc.), never internal terms like `commis`.
+
+---
+
 ## [Launch][Product] Codex/Gemini cloud continuation parity (size: 5)
 
 Status (2026-03-08): Not started. Longhouse can reconstruct/resume Claude sessions today, but Codex/Gemini direct continuation is still missing even though the current local `codex` CLI exposes `codex exec resume ... --json`.
