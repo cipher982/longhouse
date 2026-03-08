@@ -382,27 +382,25 @@ test.describe('Session Detail Page', () => {
     await expect(page).toHaveURL('/timeline');
   });
 
-  test('Resume Session opens chat overlay for Claude sessions', async ({ page, request }) => {
+  test('Claude sessions keep the transcript and inline continuation on one page', async ({ page, request }) => {
     const sessionId = await ingestSession(request, {
       provider: 'claude',
       project: 'resume-e2e',
       provider_session_id: 'resume-session-e2e',
     });
 
-    await page.goto(`/timeline/${sessionId}`);
+    await page.goto(`/timeline/${sessionId}?resume=1`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
-    await expect(page.getByRole('button', { name: 'Resume Session' })).toBeVisible();
-    await page.getByRole('button', { name: 'Resume Session' }).click();
-
+    await expect(page.locator('.timeline-header')).toContainText('Event Timeline');
+    await expect(page.getByRole('button', { name: 'Continue in Cloud' })).toBeVisible();
+    await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
     await expect(page.locator('.session-chat')).toBeVisible();
     await expect(page.locator('.session-chat-empty')).toContainText('Context from previous turns');
-
-    await page.locator('.session-chat-back').click();
-    await expect(page.locator('.timeline-header')).toContainText('Event Timeline');
+    await expect(page.locator('.session-chat-composer textarea')).toBeFocused();
   });
 
-  test('Resume Session action is hidden for non-Claude sessions', async ({ page, request }) => {
+  test('Non-Claude sessions explain the cloud continuation gap explicitly', async ({ page, request }) => {
     const sessionId = await ingestSession(request, {
       provider: 'codex',
       project: 'resume-hidden-e2e',
@@ -411,7 +409,54 @@ test.describe('Session Detail Page', () => {
     await page.goto(`/timeline/${sessionId}`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
-    await expect(page.getByRole('button', { name: 'Resume Session' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Latest Context' })).toBeVisible();
+    await expect(page.getByTestId('session-continuation-panel')).toContainText('not resumable from the web yet');
+    await expect(page.getByTestId('session-continuation-unavailable')).toContainText('Direct Codex cloud continuation');
+    await expect(page.locator('.session-chat-composer textarea')).toHaveCount(0);
+  });
+
+  test('Opening a long session lands near the latest continuation point instead of the top', async ({ page, request }) => {
+    const sessionId = randomUUID();
+    const now = Date.now();
+    const events = Array.from({ length: 80 }, (_, idx) => {
+      const timestamp = new Date(now + idx * 1000).toISOString();
+      return {
+        role: idx % 2 === 0 ? 'user' : 'assistant',
+        content_text: `Latest-context event ${idx + 1}`,
+        timestamp,
+        source_path: '/tmp/session.jsonl',
+        source_offset: idx,
+      };
+    });
+
+    const ingest = await request.post('/api/agents/ingest', {
+      data: {
+        id: sessionId,
+        provider: 'claude',
+        environment: 'development',
+        project: 'latest-context-e2e',
+        device_id: 'e2e-device',
+        cwd: '/tmp',
+        git_repo: null,
+        git_branch: null,
+        provider_session_id: 'latest-context-session-e2e',
+        started_at: new Date(now).toISOString(),
+        ended_at: new Date(now + 79_000).toISOString(),
+        events,
+      },
+    });
+
+    expect(ingest.ok()).toBe(true);
+
+    await page.goto(`/timeline/${sessionId}`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+
+    const shell = page.locator('.page-shell');
+    await expect
+      .poll(async () => shell.evaluate((el) => el.scrollTop), { timeout: 4000 })
+      .toBeGreaterThan(0);
+
+    await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
   });
 
   test('scrolls from left and right gutters on timeline detail', async ({ page, request }) => {

@@ -108,6 +108,24 @@ function getProviderColor(provider: string): string {
   }
 }
 
+function supportsCloudContinuation(provider: string): boolean {
+  return provider === "claude";
+}
+
+function buildSessionDetailPath(
+  session: Pick<AgentSession, "id" | "provider" | "match_event_id">,
+  matchEventId?: number | null,
+): string {
+  const params = new URLSearchParams();
+  if (matchEventId != null) {
+    params.set("event_id", String(matchEventId));
+  } else if (supportsCloudContinuation(session.provider)) {
+    params.set("resume", "1");
+  }
+  const search = params.toString();
+  return `/timeline/${session.id}${search ? `?${search}` : ""}`;
+}
+
 function ProviderIcon({ provider }: { provider: string }) {
   const color = getProviderColor(provider);
   const svgProps = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", "aria-hidden": true as const, style: { color, flexShrink: 0 } };
@@ -453,6 +471,7 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
   const showSemanticSnippet = isSemanticResult && !!session.match_snippet;
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
+  const primaryActionLabel = supportsCloudContinuation(session.provider) ? "Continue in cloud" : "Latest context";
 
   return (
     <Card
@@ -525,6 +544,7 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
           <span className="session-stat session-stat--secondary">Started {formatRelativeTime(session.started_at)}</span>
         </div>
         <div className="session-card-actions">
+          <span className="session-card-action-label">{primaryActionLabel}</span>
           <span className="session-card-arrow">&rarr;</span>
         </div>
       </div>
@@ -759,8 +779,8 @@ export default function SessionsPage() {
 
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((session: AgentSession) => {
-    const matchId = debouncedQuery && session.match_event_id ? `?event_id=${session.match_event_id}` : "";
-    navigate(`/timeline/${session.id}${matchId}`, {
+    const matchEventId = debouncedQuery ? session.match_event_id : null;
+    navigate(buildSessionDetailPath(session, matchEventId), {
       state: { from: location.pathname + location.search },
     });
   }, [navigate, location, debouncedQuery]);
@@ -987,7 +1007,7 @@ export default function SessionsPage() {
                         type="button"
                         className={rowClass}
                         onClick={() => {
-                          navigate(`/timeline/${session.id}`);
+                          navigate(buildSessionDetailPath(session));
                         }}
                       >
                         <div className="sessions-live-row-title">

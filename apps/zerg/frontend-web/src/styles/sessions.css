@@ -728,6 +728,11 @@
     gap: var(--space-2);
   }
 
+  .session-card-action-label {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
 
   .session-card-arrow {
     color: var(--color-text-muted);
@@ -899,11 +904,70 @@
     min-height: 400px;
   }
 
-  .session-resume-container .session-chat {
+  .session-resume-container--inline {
+    height: auto;
+    min-height: 420px;
+    border: 1px solid rgba(158, 124, 90, 0.18);
+    border-radius: var(--radius-lg);
+    background: rgba(18, 11, 9, 0.42);
+    overflow: hidden;
+  }
+
+  .session-resume-container .session-chat,
+  .session-resume-container--inline .session-chat {
     flex: 1;
     display: flex;
     flex-direction: column;
     height: 100%;
+  }
+
+  .session-continuation-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    margin-top: var(--space-6);
+    padding: var(--space-5);
+    background: rgba(26, 18, 13, 0.7);
+    border: 1px solid rgba(158, 124, 90, 0.18);
+    border-radius: var(--radius-xl);
+    scroll-margin-top: 96px;
+  }
+
+  .session-continuation-panel--unavailable {
+    border-color: rgba(158, 124, 90, 0.12);
+  }
+
+  .session-continuation-copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .session-continuation-eyebrow {
+    font-size: var(--font-size-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: rgba(212, 184, 122, 0.85);
+  }
+
+  .session-continuation-title {
+    margin: 0;
+    font-size: var(--font-size-xl);
+    color: var(--color-text-primary);
+  }
+
+  .session-continuation-description {
+    margin: 0;
+    color: var(--color-text-secondary);
+    line-height: 1.6;
+  }
+
+  .session-continuation-status {
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-lg);
+    background: rgba(92, 79, 61, 0.18);
+    border: 1px dashed rgba(158, 124, 90, 0.28);
+    color: var(--color-text-secondary);
   }
 
   .session-detail-meta {

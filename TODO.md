@@ -17,19 +17,38 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch][Product] Session continuation from timeline should feel native (size: 3)
 
-Status (2026-03-08): In progress. The backend Claude resume path exists, but the main timeline/detail UI still behaves like an audit log first and a continuation surface second.
+Status (2026-03-08): UX shipped for the current Claude-backed continuation path. Opening a session now lands near the latest context, the transcript and composer live on the same page, and non-Claude sessions explicitly explain the remaining provider gap instead of failing silently.
 
 **Goal:** Make opening a synced session from timeline/mobile feel like a natural continuation flow: land near the latest context, show a clear composer where users expect it, and make cloud resume obvious instead of hidden.
 
-- [ ] Replace the current split detail-vs-resume mode with a single transcript page that can open an inline continuation composer
-- [ ] Make timeline/live-session entrypoints guide users into continuation more clearly instead of burying it behind a small header button
-- [ ] Auto-position resumed sessions near the latest context/composer instead of always opening at the top of long transcripts
-- [ ] Add focused frontend regression coverage for the resumed-session UX
-- [ ] Capture the remaining provider-parity gap explicitly if Codex/Gemini still cannot resume synced sessions directly
+- [x] Replace the current split detail-vs-resume mode with a single transcript page that can open an inline continuation composer
+- [x] Make timeline/live-session entrypoints guide users into continuation more clearly instead of burying it behind a small header button
+- [x] Auto-position resumed sessions near the latest context/composer instead of always opening at the top of long transcripts
+- [x] Add focused frontend regression coverage for the resumed-session UX
+- [x] Capture the remaining provider-parity gap explicitly if Codex/Gemini still cannot resume synced sessions directly
 
 Notes:
-- 2026-03-08: `POST /sessions/{id}/chat` exists today, but only for Claude-backed sessions; the main product issue is UX, not total backend absence.
-- 2026-03-08: Current `SessionDetailPage` shows the timeline first and hides continuation behind a top-right `Resume Session` button or a `?resume=1` alternate full-page view, which is why the experience feels broken on mobile/web.
+- 2026-03-08: `POST /sessions/{id}/chat` exists today, but only for Claude-backed sessions; the main product issue on web/mobile was UX, not total backend absence.
+- 2026-03-08: Timeline cards and live rows now route Claude sessions through `?resume=1`, detail pages auto-jump to the latest continuation point, and the inline composer lives below the full transcript instead of replacing it.
+- 2026-03-08: Codex/Gemini sessions now show an explicit “not resumable from the web yet” state. That is honest, but it is still a real product gap for launch.
+
+---
+
+## [Launch][Product] Codex/Gemini cloud continuation parity (size: 5)
+
+Status (2026-03-08): Not started. Longhouse can reconstruct/resume Claude sessions today, but Codex/Gemini direct continuation is still missing even though the current local `codex` CLI exposes `codex exec resume ... --json`.
+
+**Goal:** Make the core “pick up any synced session from the cloud” promise true across the main providers users will actually run.
+
+- [ ] Extend the headless executor/Hatch path so provider-specific resume commands can be invoked for Codex (and verify Gemini’s equivalent contract)
+- [ ] Teach Longhouse how to reconstruct provider-local session state for Codex/Gemini the way `session_continuity.py` already does for Claude
+- [ ] Generalize `POST /sessions/{id}/chat` beyond Claude-only backend assumptions
+- [ ] Add regression coverage for Codex web continuation once the backend path exists
+- [ ] Revisit any remaining UI copy once the provider gap is actually closed
+
+Notes:
+- 2026-03-08: Local `codex` CLI supports `codex exec resume [SESSION_ID] [PROMPT] --json`; the missing layer is Longhouse/Hatch/provider-state reconstruction, not the existence of a Codex resume command.
+- 2026-03-08: `session_continuity.py` and session export are currently Claude-specific, and `cloud_executor.py` only forwards `resume_session_id` for Claude backends.
 
 ---
 
