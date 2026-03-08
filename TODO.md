@@ -163,7 +163,7 @@ Status (2026-03-08): Phase 1 shipped to main; launch-hardening follow-through re
 
 ## [Launch] Runner doctor + repair UX (size: 3)
 
-**Status (2026-03-08): Core v1 shipped locally; real-machine validation still pending on live runners.**
+**Status (2026-03-08): Core v1 is shipped, deployed, and live-validated; a separate runner reconnect issue remains outside the doctor UX itself.**
 
 **Goal:** Make runner failures obvious and fixable without teaching users service-manager trivia.
 
@@ -171,7 +171,7 @@ Status (2026-03-08): Phase 1 shipped to main; launch-hardening follow-through re
 - [x] Add per-runner doctor API with reason codes and recommended repair action
 - [x] Add `Run Doctor` UI on runner detail with generated repair command
 - [x] Add local `longhouse-runner doctor` command for machine-side checks
-- [ ] Validate the v1 on `david010`, `cinder`, and the disposable `cube` VM canary
+- [x] Validate the v1 on `david010`, `cinder`, and the disposable `cube` VM canary
 
 Notes:
 - 2026-03-08: Keep v1 diagnose-first. Avoid hidden self-healing or a large fleet-management surface.
@@ -180,6 +180,9 @@ Notes:
 - 2026-03-08: Repair command generation reuses `POST /api/runners/enroll-token` plus the existing runner name; no bespoke repair mutation API was added in v1.
 - 2026-03-08: Local validation passed via backend tests, runner Bun tests, frontend typecheck, frontend vitest, and a real CLI smoke with `longhouse-runner doctor --json`.
 - 2026-03-08: Important shipping quirk: `bun run src/index.ts doctor` works now, but already-installed compiled runner binaries will not expose `doctor` until the next runner release is built and users reinstall/update the binary.
+- 2026-03-08: Live validation passed on `david010`: `clifford` defaults repair to `server`, `cinder` defaults repair to `desktop`, and both generated commands now preserve `RUNNER_NAME`.
+- 2026-03-08: Fresh `cube` VM validation confirmed `longhouse-runner doctor --json` is healthy on runner `v0.1.2` with `installMode=server` after install.
+- 2026-03-08: Separate follow-up: the old exec.full VM canary still times out after the re-enroll + reboot hop because the second websocket closes before `hello`; that is a runner reconnect issue, not a doctor UX bug.
 
 **Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
 
@@ -825,6 +828,19 @@ Notes:
 - 2026-03-04: Regression coverage added in `tests_lite/test_rewind_branch_projection.py` and `tests_lite/test_session_events_branch_mode.py`.
 
 ## [Tech Debt] Demo seed/reset reliability + session environment fidelity (size: 2)
+
+Status (2026-03-08): Done.
+
+**Goal:** Make session metadata resilient when multiple shipper paths race, so a generic `production` row can be corrected by a later machine-labeled ingest.
+
+- [x] Update duplicate-ingest handling so existing sessions can self-heal `environment` from generic labels to machine labels
+- [x] Fix any remaining ingest payload path that omits `environment`
+- [x] Add regression coverage for generic->machine-label correction without regressing the reverse case
+- [x] Re-verify live local shipping after disabling obsolete local shipper paths
+
+Notes:
+- 2026-03-08: Live evidence showed the active engine eventually re-ingests the same session files with machine labels, but current store behavior leaves the first-created generic `production` session row unchanged.
+- 2026-03-08: Added backend self-heal so repeat ingest upgrades generic labels like `production` to machine labels like `cinder`, patched `session_continuity.py` to always send `environment`, disabled the obsolete `io.drose.agent-shipper` LaunchAgent locally, re-signed + restarted `com.longhouse.shipper`, and backfilled the 6 remaining hosted `production` rows after taking a fresh backup at `/data/longhouse.db.pre-cinder-backfill-20260308T171538Z`.
 
 Status (2026-03-03): Done.
 
