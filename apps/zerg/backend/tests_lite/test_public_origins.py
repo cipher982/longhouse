@@ -40,7 +40,7 @@ def _make_settings(**overrides):
         public_site_url=None,
         public_api_url=None,
         runner_docker_image="test",
-        runner_binary_tag="runner-v0.1.2",
+        runner_binary_tag="runner-v0.1.3",
         pubsub_audience=None,
         gmail_pubsub_topic=None,
         pubsub_sa_email=None,
