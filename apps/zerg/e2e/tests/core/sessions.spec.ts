@@ -460,7 +460,7 @@ test.describe('Session Detail Page', () => {
       ],
     });
 
-    await page.goto('/timeline');
+    await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     const card = page.locator('.session-card', { hasText: project });
