@@ -681,6 +681,11 @@ test.describe('Session Detail Page', () => {
     const shell = page.locator('.page-shell');
     await expect(shell).toBeVisible();
 
+    await shell.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect.poll(async () => shell.evaluate((el) => el.scrollTop)).toBe(0);
+
     const startTop = await shell.evaluate((el) => el.scrollTop);
     const viewportHeight = await page.evaluate(() => window.innerHeight);
     const gutterY = Math.max(120, Math.floor(viewportHeight * 0.5));
