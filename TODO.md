@@ -15,6 +15,24 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Product] Session continuation from timeline should feel native (size: 3)
+
+Status (2026-03-08): In progress. The backend Claude resume path exists, but the main timeline/detail UI still behaves like an audit log first and a continuation surface second.
+
+**Goal:** Make opening a synced session from timeline/mobile feel like a natural continuation flow: land near the latest context, show a clear composer where users expect it, and make cloud resume obvious instead of hidden.
+
+- [ ] Replace the current split detail-vs-resume mode with a single transcript page that can open an inline continuation composer
+- [ ] Make timeline/live-session entrypoints guide users into continuation more clearly instead of burying it behind a small header button
+- [ ] Auto-position resumed sessions near the latest context/composer instead of always opening at the top of long transcripts
+- [ ] Add focused frontend regression coverage for the resumed-session UX
+- [ ] Capture the remaining provider-parity gap explicitly if Codex/Gemini still cannot resume synced sessions directly
+
+Notes:
+- 2026-03-08: `POST /sessions/{id}/chat` exists today, but only for Claude-backed sessions; the main product issue is UX, not total backend absence.
+- 2026-03-08: Current `SessionDetailPage` shows the timeline first and hides continuation behind a top-right `Resume Session` button or a `?resume=1` alternate full-page view, which is why the experience feels broken on mobile/web.
+
+---
+
 ## [Launch] Runner onboarding hardening to 100 (size: 4)
 
 Status (2026-03-08): Standard CI is green, `cinder` + `clifford` installs are complete, and the disposable `cube` VM now proves Linux `server` install -> reboot -> re-enroll -> `exec.full`; remaining work is explicit manual persistence/device proof plus a small amount of polish.
