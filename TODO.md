@@ -88,7 +88,7 @@ Notes:
 
 ## [QA/Test] Solo-dev runner onboarding validation ring (size: 4)
 
-Status (2026-03-08): Implemented and partially green; hosted onboarding browser coverage is still failing.
+Status (2026-03-08): Local root-cause fix landed and passed targeted validation; awaiting CI rerun for hosted/browser confirmation.
 
 **Goal:** Catch onboarding regressions across browser, OS, and hardware before beta users ever see them.
 
@@ -115,6 +115,8 @@ Notes:
 - 2026-03-07: After making the root README smoke build frontend assets for a fresh clone, the old 90-second timeout was no longer realistic on `cube`; the block now uses a 240-second budget.
 - 2026-03-08: `README Tests` is now green; the remaining onboarding failure is the hosted browser ring repeatedly failing `tests/onboarding/runner_install_modes.spec.ts` across multiple projects.
 - 2026-03-08: Main CI is now failing in `oss-qa--fresh-clone--sqlite--demo-serve`, which shares the same onboarding UI surface and should be treated as the same blocker until proven otherwise.
+- 2026-03-08: Root cause was not selector drift — `Add Runner` depends on `POST /api/runners/enroll-token`, and that route still 500ed when `APP_PUBLIC_URL` was unset. The route now derives `longhouse_url` from `request.base_url` in local/demo flows, with backend regression coverage.
+- 2026-03-08: Local validation after the fix passed with `make test`, `make test-e2e-onboarding`, and `make onboarding-funnel`.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 

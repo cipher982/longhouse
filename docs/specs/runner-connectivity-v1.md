@@ -191,6 +191,7 @@ Instead, the product should express intent in user language:
 - 2026-03-07: Added `make test-e2e-onboarding`, a dedicated GitHub Actions workflow for hosted + self-hosted onboarding validation, and a release-candidate checklist for real-device spot checks.
 - 2026-03-07: The first live GitHub Actions run exposed a real workflow-shaping constraint: `jobs.<job_id>.if` is evaluated before `strategy.matrix`, so hosted baseline and extended coverage must be separate jobs rather than one matrix with `matrix.run_on_push` gating.
 - 2026-03-07: Fixed `make onboarding-funnel` so the README contract now exercises the onboarding Playwright smoke instead of stopping at `/api/health`.
+- 2026-03-08: Hosted onboarding/browser failures traced back to `POST /api/runners/enroll-token` returning 500 when `APP_PUBLIC_URL` was unset. Local/demo enrollment now derives `longhouse_url` from `request.base_url`, and the route has regression coverage.
 
 ## Discoveries / Quirks
 
@@ -209,4 +210,5 @@ Instead, the product should express intent in user language:
 - Fresh-clone README smoke coverage also needs Node/Bun and a frontend build because the backend editable install force-includes `apps/zerg/frontend-web/dist`.
 - Runner README smoke exposed a real packaging dependency gap: `apps/runner` needs `bun-types` in `devDependencies` because its `tsconfig.json` includes that type library.
 - Once the README smoke became a true fresh-clone flow, its timeout needed to account for frontend asset build time on slower self-hosted machines like `cube`.
+- The Add Runner modal is only as healthy as `POST /api/runners/enroll-token`; backend URL-resolution bugs there can masquerade as multi-browser UI failures even when selectors and rendering are fine.
 - README/service smoke checks should poll health instead of sleeping a fixed number of seconds; cold-start variance already exceeds 4 seconds on a fresh local boot.
