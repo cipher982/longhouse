@@ -36,23 +36,23 @@ Notes:
 
 ## [Launch][Product] Make cross-device continuation branch-safe and explicit (size: 6)
 
-Status (2026-03-08): Design clarified, not started. Current cloud continuation is effectively export snapshot -> resume in cloud -> ship back. We explicitly do not want full bidirectional transcript sync. The product needs honest lineage: one logical thread, explicit child continuations, a latest writable head, and visible divergence when an older laptop transcript continues after a cloud branch.
+Status (2026-03-08): Done. Continuation now models one logical thread with explicit child sessions, one writable head, and honest stale-branch behavior instead of pretending laptop + cloud are mutating the same transcript in place.
 
 **Goal:** Make "continue from phone, then continue later on laptop" understandable and safe without pretending there is one magical transcript being kept in sync everywhere.
 
-- [ ] Add session-level continuation lineage metadata (for example `thread_root_session_id`, `continued_from_session_id`, `continuation_kind`, `origin_label`, and a branch-point event/offset) and keep it distinct from the existing rewind-oriented `session_branches` table
-- [ ] On the first cloud/web/mobile message from a synced session, create a new child continuation explicitly instead of presenting it as an in-place mutation of the original source session
-- [ ] Define writable-head semantics: the latest continuation is writable, older branches are historical/stale, and typing there should start a new continuation instead of silently mutating history
-- [ ] Detect later laptop shipping after a cloud branch and ingest it as a new local continuation child instead of appending to the pre-branch source session as if nothing changed
-- [ ] Update timeline/detail UX to show lineage clearly (`Started on Cinder` -> `Continued in Cloud`, latest head, stale branch warning, open latest) while keeping the main path fast for the current head
-- [ ] Add regression coverage for branch creation, stale-branch handling, later local divergence, and timeline grouping of continuations under one logical thread
+- [x] Add session-level continuation lineage metadata (for example `thread_root_session_id`, `continued_from_session_id`, `continuation_kind`, `origin_label`, and a branch-point event/offset) and keep it distinct from the existing rewind-oriented `session_branches` table
+- [x] On the first cloud/web/mobile message from a synced session, create a new child continuation explicitly instead of presenting it as an in-place mutation of the original source session
+- [x] Define writable-head semantics: the latest continuation is writable, older branches are historical/stale, and typing there should start a new continuation instead of silently mutating history
+- [x] Detect later laptop shipping after a cloud branch and ingest it as a new local continuation child instead of appending to the pre-branch source session as if nothing changed
+- [x] Update timeline/detail UX to show lineage clearly (`Started on Cinder` -> `Continued in Cloud`, latest head, stale branch warning, open latest) while keeping the main path fast for the current head
+- [x] Add regression coverage for branch creation, stale-branch handling, later local divergence, and timeline grouping of continuations under one logical thread
 
 Notes:
-- 2026-03-08: The current lock only protects web-vs-web `POST /sessions/{id}/chat`; it does not coordinate with the laptop CLI or the local shipper.
-- 2026-03-08: The current Claude web continuation path exports a session from Longhouse, resumes it in a cloud workspace, and then re-ingests it without preserving the original Longhouse `session_id`, so sibling sessions already happen accidentally. Formalize that instead of hiding it.
-- 2026-03-08: We should not try to patch cloud changes back into laptop provider transcript files. Longhouse should model divergence honestly, not fake two-way sync.
-- 2026-03-08: Good UX split: the latest writable head gets an immediate active composer; historical/stale branches should say `Start new continuation from here`, not pretend they are live in-place edits.
-- 2026-03-08: Use user-facing labels like `Cloud` and machine names (`Cinder`, `Cube`, etc.), never internal terms like `commis`.
+- 2026-03-08: We deliberately did not build fake bidirectional transcript sync. Longhouse now treats cloud/local continuation as explicit branching with one latest writable head.
+- 2026-03-08: `POST /sessions/{id}/chat` now creates explicit cloud child continuations when needed, scopes locks at the thread root, and ships resumed cloud sessions back with lineage metadata instead of accidental sibling rows.
+- 2026-03-08: Session ingest now turns later laptop shipping after a cloud branch into a local child continuation (and reuses the latest same-origin child) instead of mutating the pre-branch source session.
+- 2026-03-08: Timeline is now thread-centric: one card per logical task, latest head by default, stale-branch banner on older continuations, lineage rail in detail, and `Branch from Here` copy for historical branches.
+- 2026-03-08: Regression coverage exists at three levels: backend lineage tests, core browser E2E in `apps/zerg/e2e/tests/core/sessions.spec.ts`, and live hosted proof in `apps/zerg/e2e/tests/live/session-continuation-lineage.spec.ts`.
 - Spec: `docs/specs/session-continuation-lineage.md`.
 
 ---
@@ -89,7 +89,7 @@ Status (2026-03-08): Standard CI is green, `cinder` + `clifford` installs are co
 - [ ] Verify Telegram can run `hostname` on the newly installed runners (`Oikos` already proved `cinder`, `clifford`, and the `cube` canary)
 - [x] Make the disposable `cube` VM canary prove `exec.full` by promoting capabilities and running a real bash command through Oikos
 - [ ] Do final iPhone Safari + Android Chrome spot checks (or BrowserStack/AWS Device Farm equivalent)
-- [ ] Triage clean-clone polish warnings: frontend CSS syntax warning, oversized bundle warning, and the non-fatal startup `pip install failed` log
+- [ ] Triage remaining clean-clone polish warnings: oversized bundle warning and the non-fatal startup `pip install failed` log
 
 Notes:
 - 2026-03-08: Current `main` at `1f01a3dd` has standard CI green: `push-pr-ci`, `Test Installer`, `Web Quality`, and `Provisioning E2E`.
