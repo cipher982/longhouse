@@ -27,6 +27,7 @@ Status (2026-03-08): Real installs completed on `cinder` + `clifford`; disposabl
 - [x] Add a disposable Linux VM canary on `cube` that proves `server` install -> reboot -> Oikos reconnect without touching shared hosts
 - [ ] Do one real desktop install and one real always-on Linux server install, including logout/reboot persistence
 - [ ] Verify Oikos/Telegram can run `hostname` on each newly installed runner
+- [ ] Make the disposable `cube` VM canary prove `exec.full` by promoting capabilities and running a real bash command through Oikos
 - [ ] Do final iPhone Safari + Android Chrome spot checks (or BrowserStack/AWS Device Farm equivalent)
 - [ ] Triage clean-clone polish warnings: frontend CSS syntax warning, oversized bundle warning, and the non-fatal startup `pip install failed` log
 
@@ -57,21 +58,21 @@ Notes:
 - 2026-03-08: Shipped scheduler + queue status promotion, Jobs UI degraded badges, and ai-tools digest degraded counts so partial-failure runs stop showing up as green.
 - 2026-03-08: Direct `job_registry.run_job()` now also emits `JobRun` rows with degraded/failure derivation, so manual triggers and non-queue APScheduler jobs show up in the same downstream reporting path as queued jobs.
 
-## [Infra] Infisical-first secret loading for hosted ops scripts (size: 3)
+## [Infra] Infisical-first personal ops secrets without OSS lock-in (size: 3)
 
 Status (2026-03-08): Done.
 
-**Goal:** Make Infisical the real source of truth for local ops/admin secrets, provide a script-safe helper, and stop teaching new Keychain patterns.
+**Goal:** Make Infisical the real source of truth for David's personal/private ops secrets without baking it into Longhouse's public repo/runtime contract.
 
 - [x] Add a script-safe Infisical secret helper with exact-key lookup and loud failure on missing/empty values
-- [x] Wire hosted-control-plane scripts to auto-load `CONTROL_PLANE_ADMIN_TOKEN` from Infisical instead of Keychain hints
-- [x] Migrate the live control-plane admin token into Infisical `ops-infra` and validate real hosted-instance resolution
-- [x] Update global agent/docs guidance so future agents treat Keychain as legacy-only and migrate old references when touched
+- [x] Keep Longhouse hosted-control-plane helpers env-driven so self-hosters can use any secret manager they want
+- [x] Migrate the live control-plane admin token into Infisical `ops-infra` and validate private helper reads + hosted instance resolution
+- [x] Update global agent/docs guidance so future agents treat Keychain as legacy-only and keep public repos provider-agnostic
 
 Notes:
-- 2026-03-08: `~/.zshrc` already uses `infisical export` for common shell keys, but `CONTROL_PLANE_ADMIN_TOKEN` is not globally exported and `scripts/provision-e2e-live.sh` still printed a Keychain recipe before this slice.
-- 2026-03-08: `infisical secrets get` can exit successfully with empty output for missing secrets, so scripts now use the stricter shared helper `~/git/me/scripts/infisical-get.py` or the repo-local wrapper in `scripts/lib/infisical.sh`.
-- 2026-03-08: Live validation succeeded with real `ops-infra/prod` secret reads, `lh_hosted_resolve_instance david010`, and `lh_hosted_issue_login_token` through the control plane.
+- 2026-03-08: `~/.zshrc` already uses `infisical export` for common shell keys, but `CONTROL_PLANE_ADMIN_TOKEN` is not globally exported and long-lived admin tokens should stay fetched on demand.
+- 2026-03-08: `infisical secrets get` can exit successfully with empty output for missing secrets, so private scripts now use the stricter shared helper `~/git/me/scripts/infisical-get.py`.
+- 2026-03-08: Course-corrected after review: Longhouse repo scripts no longer auto-load control-plane auth from Infisical; repo code expects normal env vars and leaves secret sourcing to the operator.
 
 ## [QA/Test] Full verification sweep and CI follow-through (size: 2)
 

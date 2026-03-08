@@ -1,15 +1,5 @@
 #!/usr/bin/env bash
 
-LH_HOSTED_HELPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LH_HOSTED_INFISICAL_HELPER="${LH_HOSTED_INFISICAL_HELPER:-$LH_HOSTED_HELPER_DIR/infisical.sh}"
-if [[ -f "$LH_HOSTED_INFISICAL_HELPER" ]]; then
-  # shellcheck disable=SC1090
-  if ! . "$LH_HOSTED_INFISICAL_HELPER"; then
-    echo "Failed to source Infisical helper: $LH_HOSTED_INFISICAL_HELPER" >&2
-    return 1 2>/dev/null || exit 1
-  fi
-fi
-
 _lh_hosted_python_bin() {
   if [[ -n "${LH_HOSTED_PYTHON_BIN:-}" ]]; then
     printf '%s\n' "$LH_HOSTED_PYTHON_BIN"
@@ -187,16 +177,12 @@ lh_hosted_default_control_plane_url() {
 lh_hosted_prepare_control_plane_auth() {
   lh_hosted_default_control_plane_url
   CONTROL_PLANE_ADMIN_TOKEN="${CONTROL_PLANE_ADMIN_TOKEN:-${ADMIN_TOKEN:-}}"
-
-  if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]] && declare -F lh_infisical_export_secret_if_missing >/dev/null 2>&1; then
-    if ! lh_infisical_export_secret_if_missing CONTROL_PLANE_ADMIN_TOKEN CONTROL_PLANE_ADMIN_TOKEN; then
-      echo "Set CONTROL_PLANE_ADMIN_TOKEN/ADMIN_TOKEN or populate CONTROL_PLANE_ADMIN_TOKEN in Infisical ops-infra/prod and ensure infisical login works." >&2
-      return 1
-    fi
-  fi
-
   export CONTROL_PLANE_ADMIN_TOKEN
-  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN
+
+  if ! lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN; then
+    echo "Set CONTROL_PLANE_ADMIN_TOKEN or ADMIN_TOKEN before using hosted control-plane helpers. Secret loading is intentionally external so Longhouse stays provider-agnostic." >&2
+    return 1
+  fi
 }
 
 lh_hosted_create_instance() {
@@ -309,7 +295,7 @@ lh_hosted_prepare_target() {
   fi
 
   if [[ -z "$frontend_url" || -z "$api_url" ]]; then
-    echo "Set INSTANCE_SUBDOMAIN, CONTROL_PLANE_* (or Infisical ops-infra access), or FRONTEND_URL/API_URL before preparing hosted target." >&2
+    echo "Set INSTANCE_SUBDOMAIN + CONTROL_PLANE_* or FRONTEND_URL/API_URL before preparing hosted target. Secret sourcing stays outside the repo so operators can use any manager they want." >&2
     return 1
   fi
 

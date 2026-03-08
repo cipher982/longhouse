@@ -5,8 +5,8 @@
 # health check passes → SSO into instance → verify API works → cleanup.
 #
 # Usage:
-#   ./scripts/provision-e2e-live.sh                                 # default: fetch CONTROL_PLANE_ADMIN_TOKEN from Infisical ops-infra/prod
-#   CONTROL_PLANE_ADMIN_TOKEN=xxx ./scripts/provision-e2e-live.sh   # explicit override
+#   CONTROL_PLANE_ADMIN_TOKEN=xxx ./scripts/provision-e2e-live.sh
+#   ADMIN_TOKEN=xxx ./scripts/provision-e2e-live.sh                 # legacy alias
 #
 # Options:
 #   --keep    Skip cleanup (leave instance running for debugging)
@@ -45,7 +45,7 @@ fi
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
 if ! lh_hosted_prepare_control_plane_auth; then
-  echo "Unable to resolve hosted control-plane auth. Set CONTROL_PLANE_ADMIN_TOKEN/ADMIN_TOKEN explicitly or log into Infisical and populate CONTROL_PLANE_ADMIN_TOKEN in ops-infra/prod." >&2
+  echo "Unable to resolve hosted control-plane auth. Set CONTROL_PLANE_ADMIN_TOKEN or ADMIN_TOKEN before running this smoke test." >&2
   exit 1
 fi
 
