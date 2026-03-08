@@ -185,7 +185,7 @@ Status (2026-03-08): Phase 1 shipped to main; launch-hardening follow-through re
 
 ## [Launch] Runner doctor + repair UX (size: 3)
 
-**Status (2026-03-08): Core v1 is shipped, deployed, and live-validated; a separate runner reconnect issue remains outside the doctor UX itself.**
+**Status (2026-03-08): Core v1 is shipped, deployed, and live-validated. The reconnect follow-up is also fixed and shipped in `runner-v0.1.3`.**
 
 **Goal:** Make runner failures obvious and fixable without teaching users service-manager trivia.
 
@@ -203,8 +203,10 @@ Notes:
 - 2026-03-08: Local validation passed via backend tests, runner Bun tests, frontend typecheck, frontend vitest, and a real CLI smoke with `longhouse-runner doctor --json`.
 - 2026-03-08: Important shipping quirk: `bun run src/index.ts doctor` works now, but already-installed compiled runner binaries will not expose `doctor` until the next runner release is built and users reinstall/update the binary.
 - 2026-03-08: Live validation passed on `david010`: `clifford` defaults repair to `server`, `cinder` defaults repair to `desktop`, and both generated commands now preserve `RUNNER_NAME`.
-- 2026-03-08: Fresh `cube` VM validation confirmed `longhouse-runner doctor --json` is healthy on runner `v0.1.2` with `installMode=server` after install.
-- 2026-03-08: Separate follow-up: the old exec.full VM canary still times out after the re-enroll + reboot hop because the second websocket closes before `hello`; that is a runner reconnect issue, not a doctor UX bug.
+- 2026-03-08: Fresh `cube` VM validation confirmed `longhouse-runner doctor --json` is healthy on runner `v0.1.3` with `installMode=server` after install.
+- 2026-03-08: Shipped `runner-v0.1.3` with an explicit websocket connect watchdog in the runner client so boot-time/re-enroll handshakes cannot hang forever before `hello`.
+- 2026-03-08: Re-ran the disposable `cube` exec.full canary after the `runner-v0.1.3` deploy; it passed end-to-end (install -> reboot -> re-enroll -> reboot -> Oikos `bash -lc`).
+- 2026-03-08: One canary rerun failed earlier due to `uvt-simplestreams-libvirt sync` timing out on `cube`; rerunning succeeded, so that was infra flake, not a product regression.
 
 **Goal:** Make runner installs reliable across laptops and always-on Linux machines while keeping Longhouse runner-first and SSH optional for power users.
 
