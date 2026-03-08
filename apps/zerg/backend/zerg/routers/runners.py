@@ -60,6 +60,27 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 
 
+async def _safe_close_runner_websocket(
+    websocket: WebSocket,
+    *,
+    code: int | None = None,
+    reason: str | None = None,
+) -> None:
+    """Best-effort websocket close for runner routes.
+
+    Fast reconnects and boot-time races can leave Starlette/FastAPI thinking the
+    socket is already closed. That should not cascade into noisy secondary
+    exceptions in the handler.
+    """
+    try:
+        if code is None:
+            await websocket.close()
+        else:
+            await websocket.close(code=code, reason=reason)
+    except Exception as exc:
+        logger.debug("Ignoring runner websocket close race: %s", exc)
+
+
 async def _handle_exec_chunk(
     db: Session,
     message: dict,
@@ -737,15 +758,18 @@ async def runner_websocket(
         # Wait for hello message
         try:
             hello_data = await websocket.receive_json()
+        except WebSocketDisconnect as e:
+            logger.info(f"Runner disconnected before hello (code={e.code})")
+            return
         except Exception as e:
-            logger.error(f"Failed to receive hello message: {e}")
-            await websocket.close(code=1008, reason="Invalid hello message")
+            logger.warning(f"Failed to receive hello message: {e}")
+            await _safe_close_runner_websocket(websocket, code=1008, reason="Invalid hello message")
             return
 
         # Validate hello message
         if hello_data.get("type") != "hello":
             logger.warning(f"Expected hello message, got: {hello_data.get('type')}")
-            await websocket.close(code=1008, reason="Expected hello message")
+            await _safe_close_runner_websocket(websocket, code=1008, reason="Expected hello message")
             return
 
         runner_id = hello_data.get("runner_id")
@@ -755,12 +779,12 @@ async def runner_websocket(
 
         if not secret:
             logger.warning("Hello message missing secret")
-            await websocket.close(code=1008, reason="Missing secret")
+            await _safe_close_runner_websocket(websocket, code=1008, reason="Missing secret")
             return
 
         if not runner_id and not runner_name:
             logger.warning("Hello message missing runner_id or runner_name")
-            await websocket.close(code=1008, reason="Missing runner_id or runner_name")
+            await _safe_close_runner_websocket(websocket, code=1008, reason="Missing runner_id or runner_name")
             return
 
         computed_hash = runner_crud.hash_token(secret)
@@ -788,12 +812,12 @@ async def runner_websocket(
             runner = results[0] if results else None
             if not runner:
                 logger.warning(f"Runner not found by name: {runner_name}")
-                await websocket.close(code=1008, reason="Invalid runner_name or secret")
+                await _safe_close_runner_websocket(websocket, code=1008, reason="Invalid runner_name or secret")
                 return
 
         if not runner:
             logger.warning(f"Runner not found: {runner_id}")
-            await websocket.close(code=1008, reason="Invalid runner_id")
+            await _safe_close_runner_websocket(websocket, code=1008, reason="Invalid runner_id")
             return
 
         runner_id = runner.id  # Ensure runner_id is set for name-based auth
@@ -801,13 +825,13 @@ async def runner_websocket(
         # Check secret using constant-time comparison
         if not secrets.compare_digest(computed_hash, runner.auth_secret_hash):
             logger.warning(f"Invalid secret for runner {runner_id}")
-            await websocket.close(code=1008, reason="Invalid secret")
+            await _safe_close_runner_websocket(websocket, code=1008, reason="Invalid secret")
             return
 
         # Check if runner is revoked
         if runner.status == "revoked":
             logger.warning(f"Revoked runner attempted to connect: {runner_id}")
-            await websocket.close(code=1008, reason="Runner has been revoked")
+            await _safe_close_runner_websocket(websocket, code=1008, reason="Runner has been revoked")
             return
 
         owner_id = runner.owner_id
@@ -833,7 +857,7 @@ async def runner_websocket(
             # Close the websocket so the runner will reconnect cleanly.
             db.rollback()
             logger.error(f"Failed to mark runner {runner_id} online: {e}")
-            await websocket.close(code=1011, reason="Server DB error")
+            await _safe_close_runner_websocket(websocket, code=1011, reason="Server DB error")
             return
 
         logger.info(f"Runner {runner_id} (owner {owner_id}) connected")
@@ -852,18 +876,18 @@ async def runner_websocket(
                         if result.rowcount != 1:
                             db.rollback()
                             logger.warning(f"Runner {runner_id} missing during heartbeat (rowcount={result.rowcount})")
-                            await websocket.close(code=1008, reason="Runner not found")
+                            await _safe_close_runner_websocket(websocket, code=1008, reason="Runner not found")
                             break
                         db.commit()
                     except StaleDataError as e:
                         db.rollback()
                         logger.warning(f"Runner {runner_id} stale during heartbeat: {e}")
-                        await websocket.close(code=1011, reason="Stale runner state")
+                        await _safe_close_runner_websocket(websocket, code=1011, reason="Stale runner state")
                         break
                     except Exception as e:
                         db.rollback()
                         logger.error(f"DB error during heartbeat for runner {runner_id}: {e}")
-                        await websocket.close(code=1011, reason="Server DB error")
+                        await _safe_close_runner_websocket(websocket, code=1011, reason="Server DB error")
                         break
 
                 elif message_type == "exec_chunk":
@@ -966,6 +990,6 @@ async def runner_websocket(
                     logger.warning(f"Failed to mark runner {runner_id} offline during cleanup: {e}")
 
         try:
-            await websocket.close()
+            await _safe_close_runner_websocket(websocket)
         except Exception:
             pass  # Already closed
