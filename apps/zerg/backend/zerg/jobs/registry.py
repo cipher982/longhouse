@@ -27,6 +27,9 @@ from typing import TypedDict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from zerg.jobs.ops_db import emit_job_run
+from zerg.jobs.ops_db import get_scheduler_name
+
 logger = logging.getLogger(__name__)
 
 _legacy_env_lock = asyncio.Lock()
@@ -330,7 +333,7 @@ class JobRegistry:
             return True
         return False
 
-    async def run_job(self, job_id: str) -> JobRunResult:
+    async def run_job(self, job_id: str, *, scheduler_name: str | None = None) -> JobRunResult:
         """Execute a job immediately with retry support.
 
         Handles:
@@ -415,6 +418,25 @@ class JobRegistry:
         ended_at = datetime.now(UTC)
         duration_ms = int((ended_at - started_at).total_seconds() * 1000)
 
+        try:
+            from zerg.jobs.loader import get_manifest_metadata
+
+            await emit_job_run(
+                job_id=job_id,
+                status=status,
+                started_at=started_at,
+                ended_at=ended_at,
+                duration_ms=duration_ms,
+                error_message=error,
+                error_type=error_type,
+                tags=config.tags,
+                project=config.project,
+                scheduler=scheduler_name,
+                metadata=get_manifest_metadata(job_id),
+            )
+        except Exception as exc:
+            logger.error("Failed to emit direct job run for %s: %s", job_id, exc)
+
         return JobRunResult(
             job_id=job_id,
             status=status,
@@ -460,7 +482,7 @@ class JobRegistry:
             else:
 
                 async def job_wrapper(job_id: str = config.id) -> None:
-                    await self.run_job(job_id)
+                    await self.run_job(job_id, scheduler_name=get_scheduler_name())
 
                 self._scheduler.add_job(
                     job_wrapper,

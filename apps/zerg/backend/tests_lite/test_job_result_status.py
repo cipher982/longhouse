@@ -17,7 +17,13 @@ from zerg.jobs.registry import interpret_job_result
 from zerg.jobs.registry import job_registry
 
 
-def _register_test_job(job_id: str, *, max_attempts: int = 1) -> None:
+def _register_test_job(
+    job_id: str,
+    *,
+    max_attempts: int = 1,
+    tags: list[str] | None = None,
+    project: str | None = None,
+) -> None:
     async def _noop():
         return {"ok": True}
 
@@ -29,6 +35,8 @@ def _register_test_job(job_id: str, *, max_attempts: int = 1) -> None:
         max_attempts=max_attempts,
         timeout_seconds=30,
         description="job status test",
+        tags=tags or [],
+        project=project,
     )
     job_registry.unregister(job_id)
     job_registry.register(config)
@@ -78,6 +86,7 @@ async def test_run_job_returns_degraded_for_non_success_pipeline_summary(monkeyp
         }
 
     monkeypatch.setattr("zerg.jobs.registry._invoke_job_func", fake_invoke)
+    monkeypatch.setattr("zerg.jobs.registry.emit_job_run", AsyncMock())
 
     result = await job_registry.run_job(job_id)
 
@@ -96,12 +105,50 @@ async def test_run_job_treats_reported_error_status_as_failure(monkeypatch):
 
     monkeypatch.setattr("zerg.jobs.registry._invoke_job_func", fake_invoke)
     monkeypatch.setattr("zerg.jobs.registry.asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("zerg.jobs.registry.emit_job_run", AsyncMock())
 
     result = await job_registry.run_job(job_id)
 
     assert result.status == "failure"
     assert result.error_type == "ReportedFailure"
     assert "reported failure" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_run_job_emits_degraded_run_record_for_direct_scheduler(monkeypatch):
+    job_id = "job-status-degraded"
+    _register_test_job(job_id, tags=["ai-tools"], project="ai-tools")
+
+    async def fake_invoke(_config):
+        return {
+            "status": "success",
+            "pipeline_summaries": [
+                {
+                    "status": "error",
+                    "error_type": "PartialFailure",
+                    "error_note": "1 editorial reviews failed",
+                }
+            ],
+        }
+
+    emit_mock = AsyncMock()
+    monkeypatch.setattr("zerg.jobs.registry._invoke_job_func", fake_invoke)
+    monkeypatch.setattr("zerg.jobs.registry.emit_job_run", emit_mock)
+    monkeypatch.setattr("zerg.jobs.loader.get_manifest_metadata", lambda _job_id: {"source": "manifest"})
+
+    result = await job_registry.run_job(job_id, scheduler_name="sched-test")
+
+    assert result.status == "degraded"
+    emit_mock.assert_awaited_once()
+    kwargs = emit_mock.await_args.kwargs
+    assert kwargs["job_id"] == job_id
+    assert kwargs["status"] == "degraded"
+    assert kwargs["error_message"] == "1 editorial reviews failed"
+    assert kwargs["error_type"] == "PartialFailure"
+    assert kwargs["tags"] == ["ai-tools"]
+    assert kwargs["project"] == "ai-tools"
+    assert kwargs["scheduler"] == "sched-test"
+    assert kwargs["metadata"] == {"source": "manifest"}
 
 
 @pytest.mark.asyncio

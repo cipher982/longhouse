@@ -51,6 +51,7 @@ Status (2026-03-08): Done.
 Notes:
 - 2026-03-08: Current ai-tools editorial loop returns successful process exit with pipeline summary `status=error` for partial failures; scheduler ignores that and stores the top-level run as success.
 - 2026-03-08: Shipped scheduler + queue status promotion, Jobs UI degraded badges, and ai-tools digest degraded counts so partial-failure runs stop showing up as green.
+- 2026-03-08: Direct `job_registry.run_job()` now also emits `JobRun` rows with degraded/failure derivation, so manual triggers and non-queue APScheduler jobs show up in the same downstream reporting path as queued jobs.
 
 ## [Infra] Infisical-first secret loading for hosted ops scripts (size: 3)
 
