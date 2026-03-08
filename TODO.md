@@ -69,6 +69,7 @@ Notes:
 - 2026-03-07: Fixed `make onboarding-funnel` so the README contract now runs the onboarding Playwright smoke instead of only checking `/api/health`.
 - 2026-03-07: First live GitHub Actions run surfaced two concrete issues: job-level `if` cannot use `matrix.*`, and `README Tests` on `cube` needs an explicit `make` install step.
 - 2026-03-07: The README smoke block also used a fixed 4-second sleep; a fresh `longhouse serve` cold start currently takes about 7 seconds locally, so the contract now polls `/api/health` instead of racing startup.
+- 2026-03-07: The first `README Tests` rerun on `cube` also showed the workflow was missing `uv`; the readme-test harness relies on `uv venv` and `uv pip`, so the workflow now mirrors the normal CI bootstrap.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
