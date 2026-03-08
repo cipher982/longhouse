@@ -10,8 +10,8 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
-import { useAgentSession, useAgentSessionEventsInfinite } from "../hooks/useAgentSessions";
-import type { AgentEvent } from "../services/api/agents";
+import { useAgentSession, useAgentSessionEventsInfinite, useAgentSessionThread } from "../hooks/useAgentSessions";
+import type { AgentEvent, AgentSession } from "../services/api/agents";
 import {
   Button,
   Badge,
@@ -89,6 +89,19 @@ function supportsCloudContinuation(provider: string): boolean {
 function formatProviderLabel(provider: string): string {
   if (!provider) return "Unknown";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
+function formatContinuationStamp(dateStr: string): string {
+  return parseUTC(dateStr).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function getSessionOriginLabel(session: Pick<AgentSession, "origin_label" | "environment">): string {
+  return session.origin_label || session.environment || "Local";
 }
 
 function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
@@ -685,6 +698,7 @@ export default function SessionDetailPage() {
   // Fetch session and events
   const { data: session, isLoading: sessionLoading, error: sessionError } =
     useAgentSession(sessionId || null);
+  const { data: threadData } = useAgentSessionThread(sessionId || null);
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
   const {
     data: eventsPagesData,
@@ -710,6 +724,21 @@ export default function SessionDetailPage() {
     () => eventsPagesData?.pages[0]?.abandoned_events ?? 0,
     [eventsPagesData]
   );
+
+  const threadSessions = useMemo(
+    () => threadData?.sessions || (session ? [session] : []),
+    [threadData, session]
+  );
+  const headSessionId = threadData?.head_session_id || session?.thread_head_session_id || session?.id || null;
+  const currentThreadSession = useMemo(
+    () => threadSessions.find((item) => item.id === session?.id) || session || null,
+    [threadSessions, session]
+  );
+  const headThreadSession = useMemo(
+    () => threadSessions.find((item) => item.id === headSessionId) || currentThreadSession,
+    [threadSessions, headSessionId, currentThreadSession]
+  );
+  const isViewingHead = !!currentThreadSession && !!headThreadSession && currentThreadSession.id === headThreadSession.id;
 
   // Build merged timeline view-model
   const { items: timelineItems, toolItems, eventIdToAnchor } = useMemo(
@@ -984,33 +1013,97 @@ export default function SessionDetailPage() {
       ? session.summary_title
       : session.project || session.git_branch || "Session";
 
-  const canContinueInCloud = supportsCloudContinuation(session.provider);
-  const providerLabel = formatProviderLabel(session.provider);
+  const continuationSourceSession = currentThreadSession || session;
+  const providerLabel = formatProviderLabel(continuationSourceSession.provider);
+  const canContinueInCloud = supportsCloudContinuation(continuationSourceSession.provider);
+  const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
+  const sourceOriginLabel = continuationSourceSession ? getSessionOriginLabel(continuationSourceSession) : null;
+  const continuationMode: "unsupported" | "head" | "promote" | "branch" = !canContinueInCloud
+    ? "unsupported"
+    : !isViewingHead
+      ? "branch"
+      : continuationSourceSession.continuation_kind === "cloud"
+        ? "head"
+        : "promote";
+
+  const continuationCtaLabel =
+    continuationMode === "branch"
+      ? "Branch from Here"
+      : canContinueInCloud
+        ? "Continue in Cloud"
+        : "Latest Context";
+
+  const continuationTitle =
+    continuationMode === "head"
+      ? "Keep going on the current cloud branch"
+      : continuationMode === "promote"
+        ? "Continue this thread in cloud"
+        : continuationMode === "branch"
+          ? "Start a new cloud continuation from this point"
+          : `This ${providerLabel} transcript is synced, but not resumable from the web yet`;
+
+  const continuationDescription =
+    continuationMode === "head"
+      ? "This is the writable head for the thread. Messages you send here keep extending the current cloud continuation."
+      : continuationMode === "promote"
+        ? `This is the latest synced head from ${sourceOriginLabel}. Your first message here will create the cloud continuation for the thread.`
+        : continuationMode === "branch"
+          ? `You’re viewing an older continuation from ${sourceOriginLabel}. Sending a message here creates a new cloud continuation from this history instead of mutating the latest head${headOriginLabel ? ` (${headOriginLabel})` : ""}.`
+          : `Direct cloud continuation is currently wired for Claude sessions only. This ${providerLabel} transcript is still searchable and auditable here while we close that provider gap.`;
+
+  const continuationEmptyTitle =
+    continuationMode === "branch"
+      ? "Send a message to branch from this history."
+      : continuationMode === "promote"
+        ? "Send the first cloud message for this thread."
+        : "Start a conversation with this session.";
+
+  const continuationHint =
+    continuationMode === "branch"
+      ? "Longhouse will create a new cloud continuation and leave the current transcript immutable."
+      : continuationMode === "promote"
+        ? "Longhouse will create the cloud continuation on first send and keep the current transcript as the source branch."
+        : "Context from previous turns will be preserved via --resume.";
+
+  const continuationPlaceholder =
+    continuationMode === "branch"
+      ? "Start a new cloud continuation from this point..."
+      : continuationMode === "promote"
+        ? "Continue this thread in the cloud..."
+        : "Type a message...";
 
   const activeSessionForChat: ActiveSession | null = canContinueInCloud
     ? {
-        id: session.id,
-        project: session.project,
-        provider: session.provider,
-        cwd: session.cwd,
-        git_repo: session.git_repo,
-        git_branch: session.git_branch,
-        started_at: session.started_at,
-        ended_at: session.ended_at,
-        last_activity_at: session.ended_at || session.started_at,
-        status: session.ended_at ? "completed" : "working",
+        id: continuationSourceSession.id,
+        project: continuationSourceSession.project,
+        provider: continuationSourceSession.provider,
+        cwd: continuationSourceSession.cwd,
+        git_repo: continuationSourceSession.git_repo,
+        git_branch: continuationSourceSession.git_branch,
+        started_at: continuationSourceSession.started_at,
+        ended_at: continuationSourceSession.ended_at,
+        last_activity_at: continuationSourceSession.ended_at || continuationSourceSession.started_at,
+        status: continuationSourceSession.ended_at ? "completed" : "working",
         attention: "auto",
         duration_minutes: 0,
         last_user_message: null,
         last_assistant_message: null,
-        message_count: session.user_messages + session.assistant_messages,
-        tool_calls: session.tool_calls,
+        message_count: continuationSourceSession.user_messages + continuationSourceSession.assistant_messages,
+        tool_calls: continuationSourceSession.tool_calls,
         presence_state: null,
         presence_tool: null,
         presence_updated_at: null,
         user_state: "active",
       }
     : null;
+
+  const handleContinuationSessionChanged = (nextSessionId: string) => {
+    if (!nextSessionId || nextSessionId === continuationSourceSession.id) return;
+    navigate(`/timeline/${nextSessionId}`, {
+      replace: true,
+      state: { from: `${location.pathname}${location.search}` },
+    });
+  };
 
   return (
     <PageShell size="wide" className="sessions-page-container">
@@ -1031,7 +1124,7 @@ export default function SessionDetailPage() {
                 size="sm"
                 onClick={() => scrollToContinuationSection("smooth", canContinueInCloud)}
               >
-                {canContinueInCloud ? "Continue in Cloud" : "Latest Context"}
+                {continuationCtaLabel}
               </Button>
               {toolItems.length > 0 && (
                 <Button variant="ghost" size="sm" onClick={toggleAll}>
@@ -1041,6 +1134,56 @@ export default function SessionDetailPage() {
             </div>
           </div>
         </div>
+
+        {!isViewingHead && headThreadSession && (
+          <div className="session-branch-banner" data-testid="session-branch-banner">
+            <div>
+              <strong>This is not the latest continuation.</strong>{" "}
+              The writable head is {getSessionOriginLabel(headThreadSession)} from {formatContinuationStamp(headThreadSession.started_at)}.
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate(`/timeline/${headThreadSession.id}`)}
+            >
+              Open Latest
+            </Button>
+          </div>
+        )}
+
+        {threadSessions.length > 1 && (
+          <div className="session-lineage-panel" data-testid="session-lineage-panel">
+            <div className="session-lineage-header">
+              <div>
+                <div className="session-lineage-title">Continuations</div>
+                <div className="session-lineage-subtitle">
+                  One task, {threadSessions.length} concrete continuations.
+                </div>
+              </div>
+            </div>
+            <div className="session-lineage-rail">
+              {threadSessions.map((threadSession) => {
+                const isCurrent = threadSession.id === session.id;
+                const isHead = threadSession.id === headSessionId;
+                return (
+                  <button
+                    key={threadSession.id}
+                    type="button"
+                    className={`session-lineage-node${isCurrent ? " session-lineage-node--current" : ""}${isHead ? " session-lineage-node--head" : ""}`}
+                    onClick={() => navigate(`/timeline/${threadSession.id}`)}
+                  >
+                    <span className="session-lineage-node-label">{getSessionOriginLabel(threadSession)}</span>
+                    <span className="session-lineage-node-time">{formatContinuationStamp(threadSession.started_at)}</span>
+                    <span className="session-lineage-node-badges">
+                      {isHead && <Badge variant="success">Latest</Badge>}
+                      {isCurrent && <Badge variant="neutral">Viewing</Badge>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Compact metadata row */}
         <div className="session-detail-meta">
@@ -1301,26 +1444,19 @@ export default function SessionDetailPage() {
         >
           <div className="session-continuation-copy">
             <div className="session-continuation-eyebrow">Cloud Continuation</div>
-            {canContinueInCloud ? (
-              <>
-                <h2 className="session-continuation-title">Keep going from the latest synced context</h2>
-                <p className="session-continuation-description">
-                  The transcript above stays auditable. Messages you send here resume the original {providerLabel} session in the cloud.
-                </p>
-              </>
-            ) : (
-              <>
-                <h2 className="session-continuation-title">This transcript is synced, but not resumable from the web yet</h2>
-                <p className="session-continuation-description">
-                  Direct cloud continuation is currently wired for Claude sessions only. This {providerLabel} transcript is still searchable and auditable here while we close that provider gap.
-                </p>
-              </>
-            )}
+            <h2 className="session-continuation-title">{continuationTitle}</h2>
+            <p className="session-continuation-description">{continuationDescription}</p>
           </div>
 
           {canContinueInCloud && activeSessionForChat ? (
             <div className="session-resume-container session-resume-container--inline">
-              <SessionChat session={activeSessionForChat} />
+              <SessionChat
+                session={activeSessionForChat}
+                emptyStateTitle={continuationEmptyTitle}
+                hintText={continuationHint}
+                composerPlaceholder={continuationPlaceholder}
+                onSessionChanged={handleContinuationSessionChanged}
+              />
             </div>
           ) : (
             <div className="session-continuation-status" data-testid="session-continuation-unavailable">

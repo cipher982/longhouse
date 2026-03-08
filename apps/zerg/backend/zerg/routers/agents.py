@@ -224,6 +224,14 @@ class SessionResponse(UTCBaseModel):
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role for matching event")
     match_score: Optional[float] = Field(None, description="Semantic similarity score (0–1) when result is from vector search")
+    thread_root_session_id: str = Field(..., description="Logical thread root session UUID")
+    thread_head_session_id: str = Field(..., description="Current writable head session UUID")
+    thread_continuation_count: int = Field(..., description="Number of concrete continuations in this logical thread")
+    continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID")
+    continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
+    origin_label: Optional[str] = Field(None, description="User-facing execution origin label")
+    branched_from_event_id: Optional[int] = Field(None, description="Event id where this continuation branched")
+    is_writable_head: bool = Field(False, description="True when this session is the current writable head")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
 
 
@@ -258,6 +266,74 @@ class SessionsListResponse(BaseModel):
     has_real_sessions: bool = Field(
         True,
         description="True if any non-demo sessions exist (device_id != 'demo-mac'). " "False means only demo-seeded data is present.",
+    )
+
+
+class SessionThreadResponse(BaseModel):
+    """Response for a logical thread and its concrete continuations."""
+
+    root_session_id: str
+    head_session_id: str
+    sessions: List[SessionResponse]
+
+
+def _get_thread_meta(store: AgentsStore, session: AgentSession, thread_cache: Dict[str, tuple[str, int]]) -> tuple[str, int]:
+    root_id = str(session.thread_root_session_id or session.id)
+    cached = thread_cache.get(root_id)
+    if cached is not None:
+        return cached
+    head = store.get_thread_head(session)
+    thread_sessions = store.list_thread_sessions(session)
+    meta = (str(head.id if head else session.id), max(1, len(thread_sessions)))
+    thread_cache[root_id] = meta
+    return meta
+
+
+def _build_session_response(
+    store: AgentsStore,
+    session: AgentSession,
+    *,
+    thread_cache: Dict[str, tuple[str, int]] | None = None,
+    last_activity_at: datetime | None = None,
+    first_user_message: str | None = None,
+    match_event_id: int | None = None,
+    match_snippet: str | None = None,
+    match_role: str | None = None,
+    match_score: float | None = None,
+) -> SessionResponse:
+    cache = thread_cache if thread_cache is not None else {}
+    thread_head_session_id, thread_continuation_count = _get_thread_meta(store, session, cache)
+    return SessionResponse(
+        id=str(session.id),
+        provider=session.provider,
+        project=session.project,
+        device_id=session.device_id,
+        environment=session.environment,
+        cwd=session.cwd,
+        git_repo=session.git_repo,
+        git_branch=session.git_branch,
+        started_at=session.started_at,
+        ended_at=session.ended_at,
+        user_messages=session.user_messages or 0,
+        assistant_messages=session.assistant_messages or 0,
+        tool_calls=session.tool_calls or 0,
+        last_activity_at=last_activity_at,
+        summary=session.summary,
+        summary_title=session.summary_title,
+        first_user_message=first_user_message,
+        match_event_id=match_event_id,
+        match_snippet=match_snippet,
+        match_role=match_role,
+        match_score=match_score,
+        thread_root_session_id=str(session.thread_root_session_id or session.id),
+        thread_head_session_id=thread_head_session_id,
+        thread_continuation_count=thread_continuation_count,
+        continued_from_session_id=(str(session.continued_from_session_id) if session.continued_from_session_id else None),
+        continuation_kind=session.continuation_kind,
+        origin_label=session.origin_label,
+        branched_from_event_id=session.branched_from_event_id,
+        is_writable_head=bool(session.is_writable_head),
+        is_sidechain=bool(session.is_sidechain or False),
     )
 
 
@@ -1476,6 +1552,7 @@ async def semantic_search_sessions(
 
     sessions: list[SessionResponse] = []
     store = AgentsStore(db)
+    thread_cache: dict[str, tuple[str, int]] = {}
 
     if context_mode == "forensic":
         if not cache._session_loaded:
@@ -1487,24 +1564,10 @@ async def semantic_search_sessions(
             if not session:
                 continue
             sessions.append(
-                SessionResponse(
-                    id=str(session.id),
-                    provider=session.provider,
-                    project=session.project,
-                    device_id=session.device_id,
-                    environment=session.environment,
-                    cwd=session.cwd,
-                    git_repo=session.git_repo,
-                    git_branch=session.git_branch,
-                    started_at=session.started_at,
-                    ended_at=session.ended_at,
-                    user_messages=session.user_messages or 0,
-                    assistant_messages=session.assistant_messages or 0,
-                    tool_calls=session.tool_calls or 0,
-                    summary=session.summary,
-                    summary_title=session.summary_title,
-                    # Use summary as the snippet — more useful than the raw similarity score.
-                    # Fall back to summary_title, then None (UI will hide the snippet field).
+                _build_session_response(
+                    store,
+                    session,
+                    thread_cache=thread_cache,
                     match_snippet=session.summary or session.summary_title or None,
                     match_score=score,
                 )
@@ -1550,22 +1613,10 @@ async def semantic_search_sessions(
                 else (snippet_source or session.summary or session.summary_title or None)
             )
             sessions.append(
-                SessionResponse(
-                    id=str(session.id),
-                    provider=session.provider,
-                    project=session.project,
-                    device_id=session.device_id,
-                    environment=session.environment,
-                    cwd=session.cwd,
-                    git_repo=session.git_repo,
-                    git_branch=session.git_branch,
-                    started_at=session.started_at,
-                    ended_at=session.ended_at,
-                    user_messages=session.user_messages or 0,
-                    assistant_messages=session.assistant_messages or 0,
-                    tool_calls=session.tool_calls or 0,
-                    summary=session.summary,
-                    summary_title=session.summary_title,
+                _build_session_response(
+                    store,
+                    session,
+                    thread_cache=thread_cache,
                     match_snippet=snippet,
                     match_score=score,
                 )
@@ -1923,31 +1974,19 @@ async def list_sessions(
             activity_map = store.get_last_activity_map([s.id for s in fused])
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
             sem_score_map = {s.id: score for s, score in sem_hits}
+            thread_cache: dict[str, tuple[str, int]] = {}
 
             response_sessions = [
-                SessionResponse(
-                    id=str(s.id),
-                    provider=s.provider,
-                    project=s.project,
-                    device_id=s.device_id,
-                    environment=s.environment,
-                    cwd=s.cwd,
-                    git_repo=s.git_repo,
-                    git_branch=s.git_branch,
-                    started_at=s.started_at,
-                    ended_at=s.ended_at,
+                _build_session_response(
+                    store,
+                    s,
+                    thread_cache=thread_cache,
                     last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
-                    user_messages=s.user_messages or 0,
-                    assistant_messages=s.assistant_messages or 0,
-                    tool_calls=s.tool_calls or 0,
-                    summary=s.summary,
-                    summary_title=s.summary_title,
                     first_user_message=first_user_map.get(s.id),
                     match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                     match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(s.id),
                     match_role=(match_map.get(s.id) or {}).get("role"),
                     match_score=sem_score_map.get(s.id),
-                    is_sidechain=bool(s.is_sidechain or False),
                 )
                 for s in fused
             ]
@@ -2000,30 +2039,18 @@ async def list_sessions(
         match_map = store.get_session_matches(session_ids, query, context_mode=context_mode) if query else {}
         activity_map = store.get_last_activity_map(session_ids)
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
+        thread_cache: dict[str, tuple[str, int]] = {}
 
         response_sessions = [
-            SessionResponse(
-                id=str(s.id),
-                provider=s.provider,
-                project=s.project,
-                device_id=s.device_id,
-                environment=s.environment,
-                cwd=s.cwd,
-                git_repo=s.git_repo,
-                git_branch=s.git_branch,
-                started_at=s.started_at,
-                ended_at=s.ended_at,
+            _build_session_response(
+                store,
+                s,
+                thread_cache=thread_cache,
                 last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
-                user_messages=s.user_messages or 0,
-                assistant_messages=s.assistant_messages or 0,
-                tool_calls=s.tool_calls or 0,
-                summary=s.summary,
-                summary_title=s.summary_title,
                 first_user_message=first_user_map.get(s.id),
                 match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                 match_snippet=(match_map.get(s.id) or {}).get("snippet"),
                 match_role=(match_map.get(s.id) or {}).get("role"),
-                is_sidechain=bool(s.is_sidechain or False),
             )
             for s in sessions
         ]
@@ -2453,22 +2480,51 @@ async def get_session(
             detail=f"Session {session_id} not found",
         )
 
-    return SessionResponse(
-        id=str(session.id),
-        provider=session.provider,
-        project=session.project,
-        device_id=session.device_id,
-        environment=session.environment,
-        cwd=session.cwd,
-        git_repo=session.git_repo,
-        git_branch=session.git_branch,
-        started_at=session.started_at,
-        ended_at=session.ended_at,
-        user_messages=session.user_messages or 0,
-        assistant_messages=session.assistant_messages or 0,
-        tool_calls=session.tool_calls or 0,
-        summary=session.summary,
-        summary_title=session.summary_title,
+    activity_map = store.get_last_activity_map([session.id])
+    first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
+    return _build_session_response(
+        store,
+        session,
+        last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
+        first_user_message=first_user_map.get(session.id),
+    )
+
+
+@router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
+async def get_session_thread(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_read_access),
+    _single: None = Depends(require_single_tenant),
+) -> SessionThreadResponse:
+    """Get all concrete continuations in a logical thread."""
+    store = AgentsStore(db)
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    thread_sessions = store.list_thread_sessions(session)
+    head = store.get_thread_head(session)
+    activity_map = store.get_last_activity_map([item.id for item in thread_sessions])
+    first_user_map = store.get_first_message_map([item.id for item in thread_sessions], role="user", max_len=80)
+    thread_cache: dict[str, tuple[str, int]] = {}
+
+    return SessionThreadResponse(
+        root_session_id=str(session.thread_root_session_id or session.id),
+        head_session_id=str(head.id if head else session.id),
+        sessions=[
+            _build_session_response(
+                store,
+                item,
+                thread_cache=thread_cache,
+                last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
+                first_user_message=first_user_map.get(item.id),
+            )
+            for item in thread_sessions
+        ],
     )
 
 
