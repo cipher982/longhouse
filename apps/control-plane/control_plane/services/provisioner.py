@@ -35,6 +35,7 @@ _CORE_OWNED_ENV_KEYS = {
     "CONTROL_PLANE_URL",
     "LONGHOUSE_PASSWORD",
 }
+_LEGACY_INSTANCE_DATA_ROOTS = ("/var/lib/docker/data/longhouse",)
 
 
 def _generate_fernet_key() -> str:
@@ -243,7 +244,20 @@ def _env_for(
 
 
 def resolve_instance_data_path(subdomain: str, *, data_path: str | None = None) -> str:
-    return data_path or os.path.join(settings.instance_data_root, subdomain)
+    canonical_path = os.path.normpath(os.path.join(settings.instance_data_root, subdomain))
+    if not data_path:
+        return canonical_path
+
+    normalized_path = os.path.normpath(data_path)
+    if normalized_path == canonical_path:
+        return canonical_path
+
+    for legacy_root in _LEGACY_INSTANCE_DATA_ROOTS:
+        legacy_path = os.path.normpath(os.path.join(legacy_root, subdomain))
+        if normalized_path == legacy_path:
+            return canonical_path
+
+    return normalized_path
 
 
 def _ensure_data_path(data_path: str) -> None:

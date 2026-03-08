@@ -608,6 +608,7 @@ Status (2026-03-06): Done.
 
 Notes:
 - 2026-03-06: Live on `zerg`, `cp_instances.data_path` rows now point at `/var/app-data/longhouse/<subdomain>`, the control-plane Coolify app mounts `/var/app-data/longhouse` directly, and the old compatibility bind mount is gone.
+- 2026-03-08: Added a generic control-plane self-heal so legacy persisted rows that still say `/var/lib/docker/data/longhouse/<subdomain>` resolve to the configured canonical root on reprovision, then persist the repaired path after recreate.
 - 2026-03-06: Verification passed end to end: `make test`, `make test-e2e`, live tenant-GUID scan, active-instance reprovision, post-unmount reprovision, and `make qa-live`.
 - 2026-03-06: Additional simplifications landed: extracted shared control-plane recreate/deploy helpers, corrected the ship skill examples, and removed stale old-path references from docs/scripts.
 - Spec: `docs/specs/tenant-data-root-cleanup.md`.
