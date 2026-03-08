@@ -1,5 +1,6 @@
 """Tests for job registration warning capture and API exposure."""
 
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -14,6 +15,8 @@ from zerg.database import make_sessionmaker
 from zerg.jobs.registry import get_registration_warnings
 from zerg.jobs.registry import register_all_jobs
 from zerg.models.models import User
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 
 def _make_db(tmp_path):
@@ -69,7 +72,10 @@ async def test_register_all_jobs_captures_import_failures(monkeypatch):
 
     monkeypatch.setattr(registry.importlib, "import_module", fake_import_module)
 
-    with patch("zerg.jobs.loader.load_jobs_manifest", AsyncMock(return_value=None)):
+    with (
+        patch("zerg.jobs.registry.should_load_manifest_jobs", return_value=True),
+        patch("zerg.jobs.loader.load_jobs_manifest", AsyncMock(return_value=None)),
+    ):
         await register_all_jobs(scheduler=None)
 
     warnings = get_registration_warnings()
@@ -98,3 +104,35 @@ def test_list_jobs_includes_registration_warnings(tmp_path):
             assert payload["registration_warnings"] == ["Failed to import zerg.jobs.daily_digest"]
         finally:
             api_app_ref.dependency_overrides = {}
+
+
+@pytest.mark.asyncio
+async def test_register_all_jobs_skips_manifest_without_external_config(monkeypatch):
+    """Builtin-only mode should not try to execute a stale local jobs manifest."""
+    import importlib
+
+    import zerg.jobs.registry as registry
+
+    real_import_module = importlib.import_module
+
+    def fake_import_module(module_name: str):
+        if module_name in {
+            "zerg.jobs.daily_digest",
+            "zerg.jobs.reflection",
+            "zerg.jobs.health_monitor",
+            "zerg.jobs.check_stale_agents",
+        }:
+            return SimpleNamespace(__name__=module_name)
+        return real_import_module(module_name)
+
+    monkeypatch.setattr(registry.importlib, "import_module", fake_import_module)
+    load_manifest = AsyncMock(return_value=None)
+
+    with (
+        patch("zerg.jobs.registry.should_load_manifest_jobs", return_value=False),
+        patch("zerg.jobs.loader.load_jobs_manifest", load_manifest),
+    ):
+        await register_all_jobs(scheduler=None)
+
+    load_manifest.assert_not_awaited()
+    assert get_registration_warnings() == []
