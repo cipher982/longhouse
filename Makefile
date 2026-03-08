@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge
 
 
 # ---------------------------------------------------------------------------
@@ -182,18 +182,6 @@ reset: ## Reset database (destroys all data)
 # =============================================================================
 # EXPLICIT TEST TIERS (long names for agents; keep legacy targets for scripts)
 # =============================================================================
-
-test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s: test ## Super-fast unit suite (~36s, measured locally)
-	@echo "✓ Super-fast unit suite complete"
-
-test-push-ci--e2e-core-a11y--approx-50s: test-e2e ## Push CI E2E core + a11y (~50s, measured after timeout trim)
-	@echo "✓ Push CI E2E core + a11y complete"
-
-test-pre-merge-or-nightly--evals-live-openai--approx-4m: eval ## Live evals (~4m, real OpenAI calls, costs money)
-	@echo "✓ Live evals complete"
-
-test-validate-contracts-and-lints--approx-10s: validate ## Fast preflight validations (~10s)
-	@echo "✓ Preflight validations complete"
 
 # =============================================================================
 
