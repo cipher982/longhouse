@@ -72,6 +72,7 @@ Notes:
 - 2026-03-07: The first `README Tests` rerun on `cube` also showed the workflow was missing `uv`; the readme-test harness relies on `uv venv` and `uv pip`, so the workflow now mirrors the normal CI bootstrap.
 - 2026-03-07: A true fresh-clone README smoke also needs Node/Bun plus a frontend build, because the editable backend package force-includes `apps/zerg/frontend-web/dist`.
 - 2026-03-07: The runner README smoke also exposed a real package issue: `apps/runner/tsconfig.json` referenced `bun-types`, but `apps/runner/package.json` did not declare it.
+- 2026-03-07: After making the root README smoke build frontend assets for a fresh clone, the old 90-second timeout was no longer realistic on `cube`; the block now uses a 240-second budget.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 

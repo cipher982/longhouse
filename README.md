@@ -73,7 +73,7 @@ cd longhouse && make dev
   "name": "longhouse-serve-health",
   "mode": "smoke",
   "workdir": ".",
-  "timeout": 90,
+  "timeout": 240,
   "env": {
     "AUTH_DISABLED": "1",
     "SKIP_DEMO_SEED": "1"
