@@ -38,6 +38,8 @@ from zerg.models.agents import AgentSourceLine
 logger = logging.getLogger(__name__)
 
 _GENERIC_ENVIRONMENT_LABELS = {"production", "development", "dev", "test", "e2e"}
+_CONTINUATION_KIND_LOCAL = "local"
+_CONTINUATION_KIND_CLOUD = "cloud"
 
 
 def _is_generic_environment_label(value: str | None) -> bool:
@@ -56,6 +58,67 @@ def _normalize_utc_naive(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _normalize_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _infer_continuation_kind_from_ingest(data: "SessionIngest") -> str:
+    if data.continuation_kind:
+        return data.continuation_kind
+    device_id = (data.device_id or "").strip().lower()
+    if device_id.startswith("zerg-commis-"):
+        return _CONTINUATION_KIND_CLOUD
+    return _CONTINUATION_KIND_LOCAL
+
+
+def _infer_origin_label_from_ingest(data: "SessionIngest") -> str:
+    explicit = _normalize_label(data.origin_label)
+    if explicit:
+        return explicit
+    inferred_kind = _infer_continuation_kind_from_ingest(data)
+    if inferred_kind == _CONTINUATION_KIND_CLOUD:
+        return "Cloud"
+    env = _normalize_label(data.environment)
+    if env and not _is_generic_environment_label(env):
+        return env
+    device_id = _normalize_label(data.device_id)
+    if device_id:
+        return device_id.replace("shipper-", "")
+    if env:
+        return env
+    return "Local"
+
+
+def _infer_continuation_kind_from_session(session: AgentSession) -> str:
+    if session.continuation_kind:
+        return session.continuation_kind
+    device_id = (session.device_id or "").strip().lower()
+    if device_id.startswith("zerg-commis-"):
+        return _CONTINUATION_KIND_CLOUD
+    return _CONTINUATION_KIND_LOCAL
+
+
+def _infer_origin_label_from_session(session: AgentSession) -> str:
+    explicit = _normalize_label(session.origin_label)
+    if explicit:
+        return explicit
+    inferred_kind = _infer_continuation_kind_from_session(session)
+    if inferred_kind == _CONTINUATION_KIND_CLOUD:
+        return "Cloud"
+    env = _normalize_label(session.environment)
+    if env and not _is_generic_environment_label(env):
+        return env
+    device_id = _normalize_label(session.device_id)
+    if device_id:
+        return device_id.replace("shipper-", "")
+    if env:
+        return env
+    return "Local"
 
 
 @dataclass(frozen=True)
@@ -119,6 +182,11 @@ class SessionIngest(BaseModel):
     started_at: datetime = Field(..., description="Session start time")
     ended_at: Optional[datetime] = Field(None, description="Session end time")
     provider_session_id: Optional[str] = Field(None, description="Provider-specific session ID (e.g., Claude Code session UUID)")
+    thread_root_session_id: Optional[UUID] = Field(None, description="Logical thread root session UUID")
+    continued_from_session_id: Optional[UUID] = Field(None, description="Parent continuation session UUID")
+    continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
+    origin_label: Optional[str] = Field(None, description="User-facing execution origin label, e.g. Cinder or Cloud")
+    branched_from_event_id: Optional[int] = Field(None, description="Event ID where this continuation branched from its parent")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (isSidechain:true in JSONL)")
     events: List[EventIngest] = Field(default_factory=list, description="Session events")
     source_lines: List[SourceLineIngest] = Field(default_factory=list, description="Lossless source-line archive")
@@ -144,6 +212,146 @@ class AgentsStore:
     def __init__(self, db: Session):
         self.db = db
 
+    def _thread_root_id(self, session: AgentSession) -> UUID:
+        return session.thread_root_session_id or session.id
+
+    def _coerce_session_lineage_defaults(self, session: AgentSession) -> None:
+        if session.thread_root_session_id is None:
+            session.thread_root_session_id = session.id
+        if session.continuation_kind is None:
+            session.continuation_kind = _infer_continuation_kind_from_session(session)
+        if not _normalize_label(session.origin_label):
+            session.origin_label = _infer_origin_label_from_session(session)
+        if session.is_writable_head is None:
+            session.is_writable_head = 1
+
+    def _get_thread_sessions(self, session_or_id: UUID | AgentSession) -> list[AgentSession]:
+        session = session_or_id if isinstance(session_or_id, AgentSession) else self.get_session(session_or_id)
+        if session is None:
+            return []
+        root_id = self._thread_root_id(session)
+        sessions = (
+            self.db.query(AgentSession)
+            .filter(or_(AgentSession.thread_root_session_id == root_id, AgentSession.id == root_id))
+            .order_by(AgentSession.started_at.asc(), AgentSession.created_at.asc(), AgentSession.id.asc())
+            .all()
+        )
+        for item in sessions:
+            self._coerce_session_lineage_defaults(item)
+        return sessions
+
+    def get_thread_head(self, session_or_id: UUID | AgentSession) -> AgentSession | None:
+        session = session_or_id if isinstance(session_or_id, AgentSession) else self.get_session(session_or_id)
+        if session is None:
+            return None
+        root_id = self._thread_root_id(session)
+        head = (
+            self.db.query(AgentSession)
+            .filter(or_(AgentSession.thread_root_session_id == root_id, AgentSession.id == root_id))
+            .filter(AgentSession.is_writable_head == 1)
+            .order_by(AgentSession.started_at.desc(), AgentSession.created_at.desc(), AgentSession.id.desc())
+            .first()
+        )
+        if head is None:
+            return session
+        self._coerce_session_lineage_defaults(head)
+        return head
+
+    def get_latest_event_id(self, session_id: UUID) -> int | None:
+        head_branch_id = self.get_head_branch_id(session_id)
+        stmt = self.db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id == session_id)
+        if head_branch_id is not None:
+            stmt = stmt.filter(AgentEvent.branch_id == head_branch_id)
+        return stmt.scalar()
+
+    def _has_novel_source_content(self, session: AgentSession, data: SessionIngest) -> bool:
+        source_lines = self._normalize_source_lines_for_ingest(data)
+        if not source_lines:
+            return bool(data.events)
+
+        head_branch_id = self.get_head_branch_id(session.id)
+        source_paths = {line.source_path for line in source_lines}
+        latest_by_offset, max_offset_by_path = self._list_branch_source_lines(session.id, head_branch_id, source_paths)
+
+        for line in source_lines:
+            source_offset = int(line.source_offset)
+            if source_offset > max_offset_by_path.get(line.source_path, -1):
+                return True
+            row = latest_by_offset.get((line.source_path, source_offset))
+            if row is None:
+                return True
+            if row.line_hash != self._compute_line_hash(line.raw_json):
+                return True
+        return False
+
+    def _get_source_continuation_base(self, session: AgentSession, data: SessionIngest) -> AgentSession:
+        thread_sessions = self._get_thread_sessions(session)
+        desired_kind = _infer_continuation_kind_from_ingest(data)
+        desired_origin = _infer_origin_label_from_ingest(data)
+        provider_session_id = data.provider_session_id or session.provider_session_id
+
+        candidates = [
+            item
+            for item in thread_sessions
+            if (item.provider_session_id or provider_session_id) == provider_session_id
+            and _infer_continuation_kind_from_session(item) == desired_kind
+            and _infer_origin_label_from_session(item) == desired_origin
+        ]
+        if not candidates:
+            return session
+        return max(candidates, key=lambda item: (item.started_at, item.created_at, str(item.id)))
+
+    def create_continuation_session(
+        self,
+        parent_session_id: UUID,
+        *,
+        continuation_kind: str,
+        origin_label: str,
+        branched_from_event_id: int | None = None,
+        environment: str | None = None,
+        device_id: str | None = None,
+        provider_session_id: str | None = None,
+        started_at: datetime | None = None,
+    ) -> AgentSession:
+        parent = self.get_session(parent_session_id)
+        if parent is None:
+            raise ValueError(f"Session {parent_session_id} not found")
+        self._coerce_session_lineage_defaults(parent)
+        root_id = self._thread_root_id(parent)
+
+        (
+            self.db.query(AgentSession)
+            .filter(or_(AgentSession.thread_root_session_id == root_id, AgentSession.id == root_id))
+            .update({AgentSession.is_writable_head: 0}, synchronize_session=False)
+        )
+
+        session = AgentSession(
+            id=uuid4(),
+            provider=parent.provider,
+            environment=environment or origin_label,
+            project=parent.project,
+            device_id=device_id,
+            cwd=parent.cwd,
+            git_repo=parent.git_repo,
+            git_branch=parent.git_branch,
+            started_at=started_at or datetime.now(timezone.utc),
+            ended_at=None,
+            provider_session_id=provider_session_id or parent.provider_session_id,
+            thread_root_session_id=root_id,
+            continued_from_session_id=parent.id,
+            continuation_kind=continuation_kind,
+            origin_label=origin_label,
+            branched_from_event_id=branched_from_event_id,
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            is_writable_head=1,
+            is_sidechain=1 if parent.is_sidechain else 0,
+        )
+        self.db.add(session)
+        self.db.flush()
+        return session
+
     def _fts_available(self) -> bool:
         """Return True if FTS5 index exists for agent events (SQLite only)."""
         bind = self.db.get_bind()
@@ -157,6 +365,8 @@ class AgentsStore:
 
     def _refresh_existing_session_metadata(self, session: AgentSession, data: SessionIngest) -> None:
         """Backfill richer session metadata when the same session is ingested again."""
+        self._coerce_session_lineage_defaults(session)
+
         incoming_started_at = _normalize_utc_naive(data.started_at)
         existing_started_at = _normalize_utc_naive(session.started_at)
         if incoming_started_at and (existing_started_at is None or incoming_started_at < existing_started_at):
@@ -182,6 +392,16 @@ class AgentsStore:
             session.git_branch = data.git_branch
         if data.provider_session_id and not session.provider_session_id:
             session.provider_session_id = data.provider_session_id
+        if data.thread_root_session_id and not session.thread_root_session_id:
+            session.thread_root_session_id = data.thread_root_session_id
+        if data.continued_from_session_id and not session.continued_from_session_id:
+            session.continued_from_session_id = data.continued_from_session_id
+        if data.continuation_kind and not session.continuation_kind:
+            session.continuation_kind = data.continuation_kind
+        if data.origin_label and not session.origin_label:
+            session.origin_label = data.origin_label
+        if data.branched_from_event_id and not session.branched_from_event_id:
+            session.branched_from_event_id = data.branched_from_event_id
 
         incoming_environment = data.environment.strip()
         existing_environment = (session.environment or "").strip()
@@ -190,6 +410,13 @@ class AgentsStore:
             or (_is_generic_environment_label(existing_environment) and not _is_generic_environment_label(incoming_environment))
         ):
             session.environment = incoming_environment
+
+        if session.thread_root_session_id is None:
+            session.thread_root_session_id = session.id
+        if session.continuation_kind is None:
+            session.continuation_kind = _infer_continuation_kind_from_ingest(data)
+        if not _normalize_label(session.origin_label):
+            session.origin_label = _infer_origin_label_from_ingest(data)
 
     def rebuild_fts(self) -> None:
         """Rebuild the FTS5 index when available (SQLite only)."""
@@ -863,13 +1090,44 @@ class AgentsStore:
             IngestResult with counts of inserted/skipped events.
         """
         session_id = data.id if data.id else uuid4()
+        incoming_kind = _infer_continuation_kind_from_ingest(data)
+        incoming_origin = _infer_origin_label_from_ingest(data)
+        incoming_provider_session_id = data.provider_session_id
 
         existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        session_created = False
 
         if existing:
-            self._refresh_existing_session_metadata(existing, data)
-            session_created = False
+            self._coerce_session_lineage_defaults(existing)
+            target_session = self._get_source_continuation_base(existing, data)
+            self._coerce_session_lineage_defaults(target_session)
+
+            if target_session.is_writable_head != 1 and self._has_novel_source_content(target_session, data):
+                continuation_started_at = min((event.timestamp for event in data.events), default=datetime.now(timezone.utc))
+                target_session = self.create_continuation_session(
+                    target_session.id,
+                    continuation_kind=incoming_kind,
+                    origin_label=incoming_origin,
+                    branched_from_event_id=self.get_latest_event_id(target_session.id),
+                    environment=data.environment,
+                    device_id=data.device_id,
+                    provider_session_id=incoming_provider_session_id,
+                    started_at=continuation_started_at,
+                )
+                session_created = True
+
+            self._refresh_existing_session_metadata(target_session, data)
+            existing = target_session
+            session_id = target_session.id
         else:
+            root_id = data.thread_root_session_id or session_id
+            if data.thread_root_session_id and data.thread_root_session_id != session_id:
+                (
+                    self.db.query(AgentSession)
+                    .filter(or_(AgentSession.thread_root_session_id == root_id, AgentSession.id == root_id))
+                    .update({AgentSession.is_writable_head: 0}, synchronize_session=False)
+                )
+
             session = AgentSession(
                 id=session_id,
                 provider=data.provider,
@@ -882,13 +1140,20 @@ class AgentsStore:
                 started_at=data.started_at,
                 ended_at=data.ended_at,
                 provider_session_id=data.provider_session_id,
+                thread_root_session_id=root_id,
+                continued_from_session_id=data.continued_from_session_id,
+                continuation_kind=incoming_kind,
+                origin_label=incoming_origin,
+                branched_from_event_id=data.branched_from_event_id,
                 user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
+                is_writable_head=1,
                 is_sidechain=1 if data.is_sidechain else 0,
             )
             self.db.add(session)
             self.db.flush()
+            existing = session
             session_created = True
 
         source_lines = self._normalize_source_lines_for_ingest(data)

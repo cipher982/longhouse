@@ -80,6 +80,14 @@ class AgentSession(AgentsBase):
     # Provider-specific session ID (e.g., Claude Code session UUID from filename)
     provider_session_id = Column(String(255), nullable=True, index=True)
 
+    # Product-level continuation lineage (distinct from rewind/source-line branches).
+    thread_root_session_id = Column(GUID(), nullable=True, index=True)
+    continued_from_session_id = Column(GUID(), nullable=True, index=True)
+    continuation_kind = Column(String(20), nullable=True)  # local, cloud, runner
+    origin_label = Column(String(255), nullable=True)
+    branched_from_event_id = Column(Integer, nullable=True)
+    is_writable_head = Column(Integer, nullable=False, server_default=text("1"))
+
     # Pre-computed summary (generated async after ingest)
     summary = Column(Text, nullable=True)  # 2-4 sentence quick summary
     summary_title = Column(String(200), nullable=True)  # Short title for briefing
@@ -112,6 +120,8 @@ class AgentSession(AgentsBase):
     __table_args__ = (
         Index("ix_sessions_project_started", "project", "started_at"),
         Index("ix_sessions_provider_started", "provider", "started_at"),
+        Index("ix_sessions_thread_head", "thread_root_session_id", "is_writable_head"),
+        Index("ix_sessions_continued_from_started", "continued_from_session_id", "started_at"),
     )
 
 
