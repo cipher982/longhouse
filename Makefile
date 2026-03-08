@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite ensure-js-deps test-legacy test-control-plane test-e2e-cp test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-visual-compare qa-visual-compare-fast test-perf test-zerg-unit test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge
 
 
 # ---------------------------------------------------------------------------
@@ -204,13 +204,8 @@ E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 SHIPPER_E2E_URL ?= http://localhost:47300
 
-test: ## Run lite tests by default (set TEST_SUITE=legacy for full suite)
-	@set -e; \
-	if [ "$(TEST_SUITE)" = "legacy" ]; then \
-		$(MAKE) test-legacy; \
-	else \
-		$(MAKE) test-lite; \
-	fi
+test: ## Run lite tests by default
+	$(MAKE) test-lite
 
 test-readmes: ## Run README contract tests (MODE=smoke[default] or full)
 	@python3 scripts/run-readme-tests.py --mode $(or $(MODE),smoke) $(FILES)
@@ -233,18 +228,6 @@ test-e2e-cp: ## Control plane E2E (Playwright, local server, no Docker)
 	uv sync --extra dev --frozen >/dev/null && \
 	uv run --extra dev playwright install chromium --with-deps >/dev/null 2>&1 || true && \
 	uv run --extra dev pytest e2e/ -v
-
-test-legacy: ## Deprecated: legacy Postgres test suite removed. Use make test (SQLite-lite).
-	@echo "⚠️  make test-legacy: the Postgres legacy test suite (tests/) was removed."
-	@echo "   The default test suite is now SQLite-lite: make test"
-	@echo "   Running make test instead..."
-	$(MAKE) test
-
-test-unit: ## @internal Deprecated alias for test
-	$(MAKE) test
-
-test-zerg-unit: ## @internal Deprecated alias for test
-	$(MAKE) test
 
 install-engine: ## Build + sign the Rust engine binary (run after any engine source change)
 	cd apps/engine && cargo build --release
@@ -294,9 +277,6 @@ test-full: ## Full local suite (unit + full E2E + visual baselines + visual comp
 	$(MAKE) qa-ui-baseline
 	$(MAKE) qa-ui-baseline-mobile
 	$(MAKE) qa-visual-compare-fast
-
-test-all: ## @internal Deprecated alias for test-full
-	$(MAKE) test-full
 
 test-chat-e2e: ## Run Oikos chat E2E tests (inside unified SPA)
 	@$(MAKE) ensure-js-deps

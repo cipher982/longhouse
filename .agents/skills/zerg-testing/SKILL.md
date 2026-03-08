@@ -13,7 +13,7 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
 make test                # unit tests
 make test-e2e-core       # core E2E (must pass 100%)
 make test-e2e            # full E2E (retries ok)
-make test-all            # unit + full E2E
+make test-full           # unit + full E2E + visual checks
 make test-e2e-single TEST=tests/<spec>.ts
 make test-e2e-errors     # show last E2E errors
 make test-e2e-verbose    # full output for debugging
