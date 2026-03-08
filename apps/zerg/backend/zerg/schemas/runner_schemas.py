@@ -52,6 +52,10 @@ class RunnerRegisterResponse(BaseModel):
     runner_id: int = Field(..., description="Unique runner ID")
     runner_secret: str = Field(..., description="Long-lived secret for runner authentication (store securely!)")
     name: str = Field(..., description="Runner name")
+    runner_capabilities_csv: str = Field(
+        default="exec.readonly",
+        description="Comma-separated runner capabilities for installer env files",
+    )
 
 
 # ---------------------------------------------------------------------------
