@@ -89,6 +89,8 @@ export type RunnerRegisterRequest = Schemas["RunnerRegisterRequest"];
 export type RunnerRegisterResponse = Schemas["RunnerRegisterResponse"];
 export type RunnerUpdate = Schemas["RunnerUpdate"];
 export type RunnerListResponse = Schemas["RunnerListResponse"];
+export type RunnerDoctorCheck = Schemas["RunnerDoctorCheck"];
+export type RunnerDoctorResponse = Schemas["RunnerDoctorResponse"];
 
 export type RotateSecretResponse = {
   runner_id: number;

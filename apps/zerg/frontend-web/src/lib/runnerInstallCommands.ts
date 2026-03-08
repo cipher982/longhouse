@@ -4,6 +4,7 @@ interface RunnerInstallCommandInput {
   enrollToken: string;
   longhouseUrl: string;
   oneLinerInstallCommand?: string | null;
+  runnerName?: string | null;
 }
 
 function trimTrailingSlash(value: string): string {
@@ -19,11 +20,15 @@ export function buildRunnerNativeInstallCommand(
   }
 
   const installUrl = `${trimTrailingSlash(input.longhouseUrl)}/api/runners/install.sh`;
-  const envPrefix = mode === "server"
-    ? `ENROLL_TOKEN=${input.enrollToken} RUNNER_INSTALL_MODE=server`
-    : `ENROLL_TOKEN=${input.enrollToken}`;
+  const envParts = [`ENROLL_TOKEN=${input.enrollToken}`];
+  if (input.runnerName) {
+    envParts.push(`RUNNER_NAME=${input.runnerName}`);
+  }
+  if (mode === "server") {
+    envParts.push("RUNNER_INSTALL_MODE=server");
+  }
 
-  return `${envPrefix} bash -c 'curl -fsSL ${installUrl} | bash'`;
+  return `${envParts.join(" ")} bash -c 'curl -fsSL ${installUrl} | bash'`;
 }
 
 export function describeRunnerNativeInstallMode(mode: RunnerNativeInstallMode): string {

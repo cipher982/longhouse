@@ -3,12 +3,14 @@ import {
   createEnrollToken,
   fetchRunner,
   fetchRunners,
+  fetchRunnerDoctor,
   revokeRunner,
   rotateRunnerSecret,
   updateRunner,
   type EnrollTokenResponse,
   type RotateSecretResponse,
   type Runner,
+  type RunnerDoctorResponse,
   type RunnerUpdate,
 } from "../services/api";
 
@@ -27,6 +29,12 @@ export function useRunner(id: number) {
     queryKey: ["runners", id],
     queryFn: () => fetchRunner(id),
     enabled: id > 0,
+  });
+}
+
+export function useRunnerDoctor() {
+  return useMutation<RunnerDoctorResponse, Error, number>({
+    mutationFn: (id: number) => fetchRunnerDoctor(id),
   });
 }
 

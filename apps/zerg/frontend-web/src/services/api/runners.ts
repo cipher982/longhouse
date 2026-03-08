@@ -4,6 +4,7 @@ import type {
   EnrollTokenResponse,
   RunnerUpdate,
   RunnerListResponse,
+  RunnerDoctorResponse,
   RotateSecretResponse,
   RunnerStatusResponse,
 } from "./types";
@@ -21,6 +22,10 @@ export async function fetchRunners(): Promise<Runner[]> {
 
 export async function fetchRunner(runnerId: number): Promise<Runner> {
   return request<Runner>(`/runners/${runnerId}`);
+}
+
+export async function fetchRunnerDoctor(runnerId: number): Promise<RunnerDoctorResponse> {
+  return request<RunnerDoctorResponse>(`/runners/${runnerId}/doctor`);
 }
 
 export async function updateRunner(runnerId: number, payload: RunnerUpdate): Promise<Runner> {
