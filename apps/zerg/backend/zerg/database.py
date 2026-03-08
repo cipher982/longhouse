@@ -489,6 +489,24 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state_at DATETIME"))
             if "is_sidechain" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"))
+            if "thread_root_session_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN thread_root_session_id CHAR(36)"))
+            if "continued_from_session_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN continued_from_session_id CHAR(36)"))
+            if "continuation_kind" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN continuation_kind VARCHAR(20)"))
+            if "origin_label" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN origin_label VARCHAR(255)"))
+            if "branched_from_event_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN branched_from_event_id INTEGER"))
+            if "is_writable_head" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN is_writable_head INTEGER NOT NULL DEFAULT 1"))
+            conn.execute(text("UPDATE sessions SET thread_root_session_id = id WHERE thread_root_session_id IS NULL"))
+            conn.execute(text("UPDATE sessions SET is_writable_head = 1 WHERE is_writable_head IS NULL"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head ON sessions(thread_root_session_id, is_writable_head)"))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
+            )
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
