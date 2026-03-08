@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -190,3 +191,131 @@ def test_duplicate_event_different_hash(tmp_path):
 
         all_events = store.get_session_events(session_id, branch_mode="all")
         assert len(all_events) == 2
+
+
+def test_duplicate_ingest_upgrades_generic_environment_to_machine_label(tmp_path):
+    db_path = tmp_path / "duplicate_metadata_upgrade.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    AgentsBase.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+
+        base_time = datetime(2026, 3, 8, 16, 38, 52, tzinfo=timezone.utc)
+        later_time = datetime(2026, 3, 8, 16, 39, 0, tzinfo=timezone.utc)
+
+        first = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="production",
+                device_id="host-123",
+                started_at=base_time,
+                ended_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="please review",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        second = store.ingest_session(
+            SessionIngest(
+                id=first.session_id,
+                provider="claude",
+                environment="work-laptop",
+                project="sample-project",
+                device_id="host-123",
+                cwd="/workspace/sample-project",
+                git_repo="git@github.com:example/sample-project.git",
+                git_branch="main",
+                started_at=base_time,
+                ended_at=later_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="please review",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert second.events_inserted == 0
+        assert second.events_skipped == 1
+
+        stored = db.query(AgentSession).filter(AgentSession.id == first.session_id).one()
+        assert stored.environment == "work-laptop"
+        assert stored.project == "sample-project"
+        assert stored.cwd == "/workspace/sample-project"
+        assert stored.git_repo == "git@github.com:example/sample-project.git"
+        assert stored.git_branch == "main"
+        assert stored.ended_at == later_time.replace(tzinfo=None)
+
+
+def test_duplicate_ingest_keeps_machine_label_when_generic_environment_arrives_later(tmp_path):
+    db_path = tmp_path / "duplicate_metadata_preserve.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    AgentsBase.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+
+        base_time = datetime(2026, 3, 8, 16, 59, 38, tzinfo=timezone.utc)
+
+        first = store.ingest_session(
+            SessionIngest(
+                provider="codex",
+                environment="work-laptop",
+                project="sample-project",
+                device_id="host-123",
+                cwd="/workspace/sample-project",
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="fix this correctly",
+                        timestamp=base_time,
+                        source_path="/tmp/codex.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        second = store.ingest_session(
+            SessionIngest(
+                id=first.session_id,
+                provider="codex",
+                environment="production",
+                project="sample-project",
+                device_id="host-123",
+                cwd="/workspace/sample-project",
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="fix this correctly",
+                        timestamp=base_time,
+                        source_path="/tmp/codex.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert second.events_inserted == 0
+        assert second.events_skipped == 1
+
+        stored = db.query(AgentSession).filter(AgentSession.id == first.session_id).one()
+        assert stored.environment == "work-laptop"
