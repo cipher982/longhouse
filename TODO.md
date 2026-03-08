@@ -17,13 +17,14 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch] Runner onboarding hardening to 100 (size: 4)
 
-Status (2026-03-08): Real installs completed on `cinder` + `clifford`; only true logout/reboot proof remains.
+Status (2026-03-08): Real installs completed on `cinder` + `clifford`; disposable `cube` VM now proves Linux `server` install -> reboot -> Oikos reconnect; only literal macOS logout/reboot proof remains.
 
 **Goal:** Turn the runner onboarding slice from "credible pre-launch" into something David can trust on launch day across fresh clones, hosted CI, and real machines.
 
 - [x] Fix `tests/onboarding/runner_install_modes.spec.ts` in hosted CI across Chromium, Firefox, WebKit, and mobile emulation
 - [x] Make the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job green again
 - [ ] Run `workflow_dispatch` coverage for hosted extended (`ubuntu-24.04-arm`, `macos-latest`) and self-hosted (`cube`, `clifford`, macOS) jobs
+- [x] Add a disposable Linux VM canary on `cube` that proves `server` install -> reboot -> Oikos reconnect without touching shared hosts
 - [ ] Do one real desktop install and one real always-on Linux server install, including logout/reboot persistence
 - [ ] Verify Oikos/Telegram can run `hostname` on each newly installed runner
 - [ ] Do final iPhone Safari + Android Chrome spot checks (or BrowserStack/AWS Device Farm equivalent)
@@ -37,6 +38,9 @@ Notes:
 - 2026-03-08: `cinder` was migrated from a source-based LaunchAgent (`bun run src/index.ts`) to the shipped binary LaunchAgent with `~/.config/longhouse/runner.env`, and `clifford` was migrated from the old `systemd --user` + linger setup to the new `/etc/systemd/system/longhouse-runner.service` path. Both retained `RUNNER_CAPABILITIES=exec.full`.
 - 2026-03-08: Hosted Oikos successfully ran `hostname -s` on both newly migrated runners before and after service restarts, returning `cinder` and `clifford` respectively.
 - 2026-03-08: I did not run a literal logout/reboot on `cinder` or `clifford` yet; `cinder` would require an interactive local logout/restart, and rebooting `clifford` would be a production-impacting action that should be explicit.
+- 2026-03-08: Added `scripts/runner-vm-canary.sh` + `scripts/runner-vm-canary-host.sh` and live-validated the flow on `cube`: Ubuntu `noble` cloud VM -> `RUNNER_INSTALL_MODE=server` install -> guest reboot -> hosted runner online -> Oikos `runner_exec hostname -s` -> revoke runner -> destroy VM.
+- 2026-03-08: Live probing showed `cube` is `x86_64`, not ARM, so the disposable canary uses Ubuntu `amd64` cloud images there.
+- 2026-03-08: `cube` mounts both `/tmp` and `/var/tmp` as 2 GiB tmpfs, so `uvtool` image sync must use a disk-backed temp dir; the host harness now uses `/var/lib/longhouse-vm/tmp`.
 
 ## [Infra] Honest degraded job status for scheduled jobs (size: 2)
 
@@ -137,13 +141,13 @@ Notes:
 
 ## [QA/Test] Solo-dev runner onboarding validation ring (size: 4)
 
-Status (2026-03-08): Core hosted + fresh-clone coverage is green; cinder/clifford installs are validated, extended/manual coverage remains.
+Status (2026-03-08): Core hosted + fresh-clone coverage is green; `cinder`/`clifford` installs and the disposable `cube` Linux reboot canary are validated, extended/manual coverage remains.
 
 **Goal:** Catch onboarding regressions across browser, OS, and hardware before beta users ever see them.
 
 - [x] Add Playwright onboarding projects for Chromium, Firefox, WebKit, and mobile emulation with trace capture
 - [x] Add GitHub Actions matrix jobs for hosted OS coverage and scheduled/manual synthetic onboarding runs
-- [x] Add labeled self-hosted hardware smoke jobs for macOS arm64, Linux x64, and Linux arm64
+- [x] Add labeled self-hosted hardware smoke jobs for macOS arm64 and Linux x64, plus hosted Linux arm64 coverage
 - [x] Add a tiny release-candidate real-device checklist for iPhone Safari and Android Chrome via a cloud device lab
 - [x] Make hosted `onboarding--ubuntu-latest--all` green in GitHub Actions
 - [x] Make the shared fresh-clone `oss-qa` onboarding UI path green in main CI
@@ -169,6 +173,7 @@ Notes:
 - 2026-03-08: `contract-first-ci` now pins `ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium` so its lightweight fresh-clone smoke matches the browsers it installs; local validation should use the same env when mimicking that job.
 - 2026-03-08: Real-device install validation on owned hardware is now partly done: `cinder` desktop and `clifford` server installs both succeeded with post-restart Oikos hostname checks. The remaining manual proof is literal logout/reboot behavior, plus extended hosted/self-hosted matrix runs.
 - 2026-03-08: Local validation after the fix passed with `make test`, `make test-e2e-onboarding`, and `make onboarding-funnel`.
+- 2026-03-08: Added `make test-runner-vm-canary` and passed a live disposable-VM proof on `cube` without touching `clifford`: install -> reboot -> hosted online -> Oikos hostname -> revoke -> destroy.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 

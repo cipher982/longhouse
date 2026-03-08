@@ -149,7 +149,8 @@ Instead, the product should express intent in user language:
    - Use this ring for installer fetch/parse, non-interactive setup, and API/UI smoke checks.
 4. **Self-hosted hardware ring**
    - Attach a tiny labeled fleet of real machines to GitHub Actions for cases emulation cannot prove: real `systemd`, real `launchd`, reboot survival, home-LAN quirks, and long-lived service behavior.
-   - Current pre-launch canaries can simply be David-owned hardware: local macOS arm64, `clifford` (Linux x64), and `cube` (Linux arm64).
+   - Current pre-launch canaries can simply be David-owned hardware: local macOS arm64, `clifford` (Linux x64), and `cube` (Linux x64).
+   - For Linux reboot/persistence proof, prefer disposable Ubuntu cloud-image VMs on `cube` over rebooting shared long-lived hosts.
 5. **Real-device spot-check ring**
    - Before shipping onboarding UI changes, do short manual sessions on a real iPhone Safari device and a real Android Chrome device via BrowserStack Live or AWS Device Farm remote access.
    - Use BrowserStack Local or an equivalent secure tunnel when validating localhost/staging builds that are not publicly reachable.
@@ -160,7 +161,7 @@ Instead, the product should express intent in user language:
 ### Recommended Pre-Launch Matrix
 
 - **Browsers (automated):** Chromium, Firefox, WebKit, Mobile Safari emulation, Mobile Chrome emulation
-- **Real machines (automated/self-hosted):** macOS arm64 laptop/desktop, Linux x64 always-on server, Linux arm64 always-on server
+- **Real machines (automated/self-hosted):** macOS arm64 laptop/desktop, Linux x64 always-on server, disposable Linux x64 VM on `cube`
 - **Real devices (manual/cloud):** one current iPhone Safari session, one recent Android Chrome session
 - **Deferred:** Windows, exhaustive distro coverage, broad browser/version cartesian products
 
@@ -195,6 +196,7 @@ Instead, the product should express intent in user language:
 - 2026-03-08: The remaining `contract-first-ci` fresh-clone smoke failure was a workflow mismatch, not another product bug: the job installed only Chromium but still ran the full onboarding Playwright project set. It now pins `ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium` to match the lightweight smoke contract.
 - 2026-03-08: Real hardware validation uncovered a capability-preservation bug: the installer wrote `LONGHOUSE_URL`, `RUNNER_NAME`, and `RUNNER_SECRET`, but not `RUNNER_CAPABILITIES`. Re-enrolling an existing `exec.full` runner would therefore reconnect as the client default `exec.readonly`. The register response now returns a capabilities CSV and the installers persist it into every env file path.
 - 2026-03-08: Live migration validation completed on owned hardware: `cinder` moved from a source-based LaunchAgent to the shipped binary LaunchAgent, and `clifford` moved from the old linger-dependent user service to the new Linux system service. Hosted Oikos successfully ran `hostname -s` against both immediately after install and again after service restarts.
+- 2026-03-08: Implemented a disposable Linux VM canary with `scripts/runner-vm-canary.sh` and `scripts/runner-vm-canary-host.sh`. Live validation on `cube` passed end-to-end: Ubuntu `noble` cloud image -> `server` install -> guest reboot -> hosted runner online -> Oikos `runner_exec hostname -s` -> runner revoke -> VM destroy.
 
 ## Discoveries / Quirks
 
@@ -216,3 +218,5 @@ Instead, the product should express intent in user language:
 - The Add Runner modal is only as healthy as `POST /api/runners/enroll-token`; backend URL-resolution bugs there can masquerade as multi-browser UI failures even when selectors and rendering are fine.
 - Existing self-hosted runners may already have higher capabilities than the backend default. The installer must persist server-provided capabilities on re-enroll or it will silently downgrade a working runner during migration.
 - README/service smoke checks should poll health instead of sleeping a fixed number of seconds; cold-start variance already exceeds 4 seconds on a fresh local boot.
+- Live checks showed `cube` is `x86_64`, not ARM, so disposable runner VMs there must use Ubuntu `amd64` cloud images.
+- `cube` mounts both `/tmp` and `/var/tmp` as 2 GiB tmpfs; `uvtool` image sync needs a disk-backed `TMPDIR`, so the VM harness uses `/var/lib/longhouse-vm/tmp`.
