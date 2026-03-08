@@ -299,7 +299,18 @@ class AgentsStore:
         ]
         if not candidates:
             return session
-        return max(candidates, key=lambda item: (item.started_at, item.created_at, str(item.id)))
+        return max(
+            candidates,
+            key=lambda item: (
+                1 if item.is_writable_head else 0,
+                item.started_at,
+                item.created_at,
+                str(item.id),
+            ),
+        )
+
+    def list_thread_sessions(self, session_or_id: UUID | AgentSession) -> list[AgentSession]:
+        return self._get_thread_sessions(session_or_id)
 
     def create_continuation_session(
         self,
@@ -352,6 +363,30 @@ class AgentsStore:
         self.db.flush()
         return session
 
+    def ensure_cloud_continuation_target(self, session_id: UUID) -> tuple[AgentSession, bool]:
+        session = self.get_session(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+
+        self._coerce_session_lineage_defaults(session)
+        head = self.get_thread_head(session)
+        if head is None:
+            head = session
+
+        if session.id == head.id and session.continuation_kind == _CONTINUATION_KIND_CLOUD:
+            return session, False
+
+        target = self.create_continuation_session(
+            session.id,
+            continuation_kind=_CONTINUATION_KIND_CLOUD,
+            origin_label="Cloud",
+            environment="Cloud",
+            device_id="zerg-commis-cloud",
+            provider_session_id=session.provider_session_id,
+            branched_from_event_id=self.get_latest_event_id(session.id),
+        )
+        return target, True
+
     def _fts_available(self) -> bool:
         """Return True if FTS5 index exists for agent events (SQLite only)."""
         bind = self.db.get_bind()
@@ -370,7 +405,8 @@ class AgentsStore:
         incoming_started_at = _normalize_utc_naive(data.started_at)
         existing_started_at = _normalize_utc_naive(session.started_at)
         if incoming_started_at and (existing_started_at is None or incoming_started_at < existing_started_at):
-            session.started_at = data.started_at
+            if session.continued_from_session_id is None:
+                session.started_at = data.started_at
 
         incoming_ended_at = _normalize_utc_naive(data.ended_at)
         existing_ended_at = _normalize_utc_naive(session.ended_at)
