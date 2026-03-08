@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch] Runner onboarding hardening to 100 (size: 4)
 
-Status (2026-03-08): Real installs completed on `cinder` + `clifford`; disposable `cube` VM now proves Linux `server` install -> reboot -> Oikos reconnect; only literal macOS logout/reboot proof remains.
+Status (2026-03-08): Standard CI is green, `cinder` + `clifford` installs are complete, and the disposable `cube` VM now proves Linux `server` install -> reboot -> re-enroll -> `exec.full`; remaining work is explicit manual persistence/device proof plus a small amount of polish.
 
 **Goal:** Turn the runner onboarding slice from "credible pre-launch" into something David can trust on launch day across fresh clones, hosted CI, and real machines.
 
@@ -25,24 +25,21 @@ Status (2026-03-08): Real installs completed on `cinder` + `clifford`; disposabl
 - [x] Make the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job green again
 - [ ] Run `workflow_dispatch` coverage for hosted extended (`ubuntu-24.04-arm`, `macos-latest`) and self-hosted (`cube`, `clifford`, macOS) jobs
 - [x] Add a disposable Linux VM canary on `cube` that proves `server` install -> reboot -> Oikos reconnect without touching shared hosts
-- [ ] Do one real desktop install and one real always-on Linux server install, including logout/reboot persistence
-- [ ] Verify Oikos/Telegram can run `hostname` on each newly installed runner
+- [ ] Finish literal persistence proof on the real machines: logout/restart on `cinder`, and either explicit reboot proof on `clifford` or an intentional decision that the `cube` reboot canary is sufficient for Linux
+- [ ] Verify Telegram can run `hostname` on the newly installed runners (`Oikos` already proved `cinder`, `clifford`, and the `cube` canary)
 - [x] Make the disposable `cube` VM canary prove `exec.full` by promoting capabilities and running a real bash command through Oikos
 - [ ] Do final iPhone Safari + Android Chrome spot checks (or BrowserStack/AWS Device Farm equivalent)
 - [ ] Triage clean-clone polish warnings: frontend CSS syntax warning, oversized bundle warning, and the non-fatal startup `pip install failed` log
 
 Notes:
-- 2026-03-08: Latest push `3c4de41a` has `README Tests`, `Test Installer`, `Web Quality`, and `Provisioning E2E` green.
-- 2026-03-08: Remaining red surfaces are `Runner Onboarding Validation Ring` and the main CI `oss-qa--fresh-clone--sqlite--demo-serve` job.
-- 2026-03-08: Current evidence points at hosted-browser failures concentrated in `tests/onboarding/runner_install_modes.spec.ts`, not the core install-script contract.
-- 2026-03-08: While starting the real install pass on `cinder` + `clifford`, live inspection found a new blocker: the installer does not write `RUNNER_CAPABILITIES`, so a re-enroll would silently downgrade existing `exec.full` runners to the client default `exec.readonly`. Fix that before migrating live machines.
-- 2026-03-08: `cinder` was migrated from a source-based LaunchAgent (`bun run src/index.ts`) to the shipped binary LaunchAgent with `~/.config/longhouse/runner.env`, and `clifford` was migrated from the old `systemd --user` + linger setup to the new `/etc/systemd/system/longhouse-runner.service` path. Both retained `RUNNER_CAPABILITIES=exec.full`.
+- 2026-03-08: Current `main` at `1f01a3dd` has standard CI green: `push-pr-ci`, `Test Installer`, `Web Quality`, and `Provisioning E2E`.
+- 2026-03-08: `Runner Onboarding Validation Ring` is green on `9794072b`; the later `cube` canary follow-up only touched the disposable VM path and standard CI stayed green around it.
+- 2026-03-08: Fixed the re-enroll capability regression: installers now persist `RUNNER_CAPABILITIES`, and `cinder` + `clifford` retained `exec.full` after migration.
 - 2026-03-08: Hosted Oikos successfully ran `hostname -s` on both newly migrated runners before and after service restarts, returning `cinder` and `clifford` respectively.
-- 2026-03-08: I did not run a literal logout/reboot on `cinder` or `clifford` yet; `cinder` would require an interactive local logout/restart, and rebooting `clifford` would be a production-impacting action that should be explicit.
-- 2026-03-08: Added `scripts/runner-vm-canary.sh` + `scripts/runner-vm-canary-host.sh` and live-validated the flow on `cube`: Ubuntu `noble` cloud VM -> `RUNNER_INSTALL_MODE=server` install -> guest reboot -> hosted runner online -> Oikos `runner_exec hostname -s` -> revoke runner -> destroy VM.
+- 2026-03-08: I did not run a literal logout/reboot on `cinder` or `clifford` yet; `cinder` needs an interactive local logout/restart, and rebooting `clifford` is still a deliberate production-impacting choice.
 - 2026-03-08: Live probing showed `cube` is `x86_64`, not ARM, so the disposable canary uses Ubuntu `amd64` cloud images there.
 - 2026-03-08: `cube` mounts both `/tmp` and `/var/tmp` as 2 GiB tmpfs, so `uvtool` image sync must use a disk-backed temp dir; the host harness now uses `/var/lib/longhouse-vm/tmp`.
-- 2026-03-08: Strengthened the disposable VM canary to prove full bash access, not just connectivity: it now patches the hosted runner to `exec.full`, re-enrolls the same VM runner, reboots again, and verifies Oikos can execute `bash -lc 'hostname -s'` successfully.
+- 2026-03-08: Disposable `cube` canary now proves the full hosted contract: Ubuntu `noble` VM -> `RUNNER_INSTALL_MODE=server` install -> reboot -> Oikos `hostname -s` -> promote runner to `exec.full` -> re-enroll -> reboot -> Oikos `bash -lc 'hostname -s'` -> revoke -> destroy.
 
 ## [Infra] Honest degraded job status for scheduled jobs (size: 2)
 
@@ -77,19 +74,19 @@ Notes:
 
 ## [QA/Test] Full verification sweep and CI follow-through (size: 2)
 
-Status (2026-03-08): In progress — GitHub workflows have been exercised; remaining failures are now narrowed to hosted onboarding browser coverage.
+Status (2026-03-08): Done for the current repo state.
 
 **Goal:** Run the full local verification surface plus the matching GitHub Actions workflows, then fix any real failures instead of carrying speculative cleanup debt.
 
-- [ ] Run the main local verification gates (`make test`, `make test-e2e`, `bun run validate:all`)
+- [x] Run the main local verification gates (`make test`, `make test-e2e`, `bun run validate:all`)
 - [x] Kick off the matching GitHub Actions CI workflows and watch them to completion
-- [ ] Fix any concrete failures found and re-run only the affected surfaces until clean
+- [x] Fix any concrete failures found and re-run only the affected surfaces until clean
 
 Notes:
-- 2026-03-07: This sweep is intentionally using the real local gates and the live GitHub workflows rather than reasoning from repo structure alone.
-- 2026-03-08: Latest green runs on `3c4de41a`: `README Tests`, `Test Installer`, `Web Quality`, and `Provisioning E2E`.
-- 2026-03-08: Remaining red runs on `3c4de41a`: `Runner Onboarding Validation Ring` and main CI `oss-qa--fresh-clone--sqlite--demo-serve`.
-- 2026-03-08: Local targeted gates already passed: `make test`, `make onboarding-funnel`, `make test-install-runner`, and clean-clone `make test-readmes MODE=smoke`.
+- 2026-03-07: This sweep intentionally used the real local gates and the live GitHub workflows rather than reasoning from repo structure alone.
+- 2026-03-08: Current `main` at `1f01a3dd` has green `push-pr-ci`, `Test Installer`, `Web Quality`, and `Provisioning E2E`.
+- 2026-03-08: Exact local gates also passed on this checkout: `make test`, `make test-e2e`, and `bun run validate:all`.
+- 2026-03-08: Any remaining warnings are polish items now tracked under runner onboarding hardening, not active CI/test breakage.
 
 
 ## [Tech Debt] Remove secret-shaped dev bootstrap literals (size: 1)
@@ -143,7 +140,7 @@ Notes:
 
 ## [QA/Test] Solo-dev runner onboarding validation ring (size: 4)
 
-Status (2026-03-08): Core hosted + fresh-clone coverage is green; `cinder`/`clifford` installs and the disposable `cube` Linux reboot canary are validated, extended/manual coverage remains.
+Status (2026-03-08): Core hosted + fresh-clone coverage is green; `cinder`/`clifford` installs and the disposable `cube` Linux reboot canary are validated, and the remaining work is the explicit extended/manual proof ring.
 
 **Goal:** Catch onboarding regressions across browser, OS, and hardware before beta users ever see them.
 
@@ -162,20 +159,12 @@ Notes:
 - 2026-03-07: Keep macOS hosted coverage selective because GitHub-hosted macOS minutes cost much more than Linux in private repos.
 - 2026-03-07: Implemented `make test-e2e-onboarding`, expanded the Playwright onboarding config, added `/runners` install-mode coverage, and added the workflow/checklist scaffolding for hosted + self-hosted validation.
 - 2026-03-07: Fixed `make onboarding-funnel` so the README contract now runs the onboarding Playwright smoke instead of only checking `/api/health`.
-- 2026-03-07: First live GitHub Actions run surfaced two concrete issues: job-level `if` cannot use `matrix.*`, and `README Tests` on `cube` needs an explicit `make` install step.
-- 2026-03-07: The README smoke block also used a fixed 4-second sleep; a fresh `longhouse serve` cold start currently takes about 7 seconds locally, so the contract now polls `/api/health` instead of racing startup.
-- 2026-03-07: The first `README Tests` rerun on `cube` also showed the workflow was missing `uv`; the readme-test harness relies on `uv venv` and `uv pip`, so the workflow now mirrors the normal CI bootstrap.
-- 2026-03-07: A true fresh-clone README smoke also needs Node/Bun plus a frontend build, because the editable backend package force-includes `apps/zerg/frontend-web/dist`.
-- 2026-03-07: The runner README smoke also exposed a real package issue: `apps/runner/tsconfig.json` referenced `bun-types`, but `apps/runner/package.json` did not declare it.
-- 2026-03-07: After making the root README smoke build frontend assets for a fresh clone, the old 90-second timeout was no longer realistic on `cube`; the block now uses a 240-second budget.
-- 2026-03-08: `README Tests` is now green; the remaining onboarding failure is the hosted browser ring repeatedly failing `tests/onboarding/runner_install_modes.spec.ts` across multiple projects.
-- 2026-03-08: Main CI is now failing in `oss-qa--fresh-clone--sqlite--demo-serve`; that is a separate fresh-clone smoke mismatch, not the same backend blocker as hosted onboarding.
-- 2026-03-08: Root cause was not selector drift — `Add Runner` depends on `POST /api/runners/enroll-token`, and that route still 500ed when `APP_PUBLIC_URL` was unset. The route now derives `longhouse_url` from `request.base_url` in local/demo flows, with backend regression coverage.
-- 2026-03-08: After the backend fix, the dedicated `Runner Onboarding Validation Ring` went green on GitHub for `97cdd55a`; the remaining fresh-clone CI failure came from `contract-first-ci` installing only Chromium while `qa-oss.sh` still ran the full five-project onboarding matrix.
-- 2026-03-08: `contract-first-ci` now pins `ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium` so its lightweight fresh-clone smoke matches the browsers it installs; local validation should use the same env when mimicking that job.
-- 2026-03-08: Real-device install validation on owned hardware is now partly done: `cinder` desktop and `clifford` server installs both succeeded with post-restart Oikos hostname checks. The remaining manual proof is literal logout/reboot behavior, plus extended hosted/self-hosted matrix runs.
-- 2026-03-08: Local validation after the fix passed with `make test`, `make test-e2e-onboarding`, and `make onboarding-funnel`.
-- 2026-03-08: Added `make test-runner-vm-canary` and passed a live disposable-VM proof on `cube` without touching `clifford`: install -> reboot -> hosted online -> Oikos hostname -> promote to `exec.full` -> re-enroll -> reboot -> Oikos `bash -lc` -> revoke -> destroy.
+- 2026-03-07: The first fresh-clone passes uncovered real bootstrap issues (`make`, `uv`, frontend build, `bun-types`, and longer startup budget); those are all now folded into the harness.
+- 2026-03-08: Hosted browser ring and fresh-clone onboarding smoke are green in GitHub Actions.
+- 2026-03-08: Root cause for the fresh-clone onboarding break was `POST /api/runners/enroll-token` deriving bad URLs when `APP_PUBLIC_URL` was unset; local/demo flows now derive `longhouse_url` from `request.base_url`, with regression coverage.
+- 2026-03-08: `contract-first-ci` now pins `ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium` so its lightweight fresh-clone smoke matches the browsers it actually installs.
+- 2026-03-08: Real-machine validation is partly done: `cinder` desktop and `clifford` server installs both succeeded with post-restart Oikos hostname checks. The remaining manual proof is literal logout/reboot behavior plus the first green extended `workflow_dispatch` runs.
+- 2026-03-08: Disposable `cube` VM canary passed the full exec proof without touching `clifford`: install -> reboot -> Oikos hostname -> promote to `exec.full` -> re-enroll -> reboot -> Oikos `bash -lc` -> revoke -> destroy.
 
 ## [Docs/Drift] Docs retention prune (size: 3)
 
