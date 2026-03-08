@@ -595,10 +595,12 @@ class CommisJobProcessor:
                 try:
                     from zerg.services.session_continuity import prepare_session_for_resume
 
-                    prepared_resume_id = await prepare_session_for_resume(
-                        session_id=resume_session_id,
-                        workspace_path=workspace_path,
-                    )
+                    with db_session() as resume_prep_db:
+                        prepared_resume_id = await prepare_session_for_resume(
+                            session_id=resume_session_id,
+                            workspace_path=workspace_path,
+                            db=resume_prep_db,
+                        )
                     logger.info(f"Prepared session {resume_session_id} for resume as {prepared_resume_id}")
                 except Exception as resume_error:
                     logger.warning(f"Failed to prepare session for resume: {resume_error}")

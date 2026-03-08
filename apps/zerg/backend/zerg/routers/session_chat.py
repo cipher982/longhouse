@@ -379,6 +379,7 @@ async def chat_with_session(
         provider_session_id = await prepare_session_for_resume(
             session_id=str(source_session.id),
             workspace_path=resolved_workspace.path,
+            db=db,
         )
 
         logger.info(
