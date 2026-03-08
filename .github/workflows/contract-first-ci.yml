@@ -223,4 +223,6 @@ jobs:
       run: cd apps/zerg/e2e && bun install && bunx playwright install chromium
 
     - name: Run OSS QA (no unit/e2e, UI check only)
+      env:
+        ONBOARDING_PLAYWRIGHT_PROJECT: onboarding-chromium
       run: ./scripts/qa-oss.sh --no-unit --no-e2e

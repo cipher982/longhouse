@@ -192,6 +192,7 @@ Instead, the product should express intent in user language:
 - 2026-03-07: The first live GitHub Actions run exposed a real workflow-shaping constraint: `jobs.<job_id>.if` is evaluated before `strategy.matrix`, so hosted baseline and extended coverage must be separate jobs rather than one matrix with `matrix.run_on_push` gating.
 - 2026-03-07: Fixed `make onboarding-funnel` so the README contract now exercises the onboarding Playwright smoke instead of stopping at `/api/health`.
 - 2026-03-08: Hosted onboarding/browser failures traced back to `POST /api/runners/enroll-token` returning 500 when `APP_PUBLIC_URL` was unset. Local/demo enrollment now derives `longhouse_url` from `request.base_url`, and the route has regression coverage.
+- 2026-03-08: The remaining `contract-first-ci` fresh-clone smoke failure was a workflow mismatch, not another product bug: the job installed only Chromium but still ran the full onboarding Playwright project set. It now pins `ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium` to match the lightweight smoke contract.
 
 ## Discoveries / Quirks
 
