@@ -67,11 +67,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y make
 
       - name: Install JS deps (repo root)
-        if: contains('validate unit frontend e2e-core e2e-a11y e2e-single full', inputs.suite)
+        if: contains('frontend e2e-core e2e-a11y e2e-single full', inputs.suite)
         run: bun install --frozen-lockfile
 
       - name: Build frontend (required by hatch)
-        if: contains('validate unit e2e-core e2e-a11y e2e-single full', inputs.suite)
+        if: contains('e2e-core e2e-a11y e2e-single full', inputs.suite)
         run: cd apps/zerg/frontend-web && bun install && bun run build
 
       - name: Pre-install backend deps

@@ -180,7 +180,7 @@ const config = {
       use: { ...devices['Desktop Chrome'] },
     },
     // Full suite: All non-core tests, with retries (core suite has its own project with retries=0)
-    // Run with: make test-zerg-e2e or bunx playwright test --project=chromium
+    // Run with: make test-e2e-single TEST="--project=chromium <spec>" or bunx playwright test --project=chromium
     {
       name: 'chromium',
       testDir: './tests',

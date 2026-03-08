@@ -9,7 +9,6 @@ NOTE: Evals cost money. Not run in CI. Use for manual quality testing.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -18,13 +17,12 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-# Import fixtures from the main conftest.py
-# Add parent dir to path so we can import from tests/
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# Import test fixtures (db_session, test_user, etc.)
-# This makes them available to eval tests
-pytest_plugins = ["tests.conftest"]
+from zerg import database as database_module
+from zerg.database import initialize_database
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models import User
+from zerg.models.enums import UserRole
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +88,39 @@ class EvalDataset(BaseModel):
     description: str | None = None
     variants: dict[str, VariantConfig] = Field(default_factory=dict)
     cases: list[EvalCase]
+
+
+@pytest.fixture
+def db_session(tmp_path):
+    """Create an isolated SQLite database for eval runs."""
+    db_path = tmp_path / "evals.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+    SessionLocal = make_sessionmaker(engine)
+
+    previous_engine = database_module.default_engine
+    previous_factory = database_module.default_session_factory
+    database_module.default_engine = engine
+    database_module.default_session_factory = SessionLocal
+
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        database_module.default_engine = previous_engine
+        database_module.default_session_factory = previous_factory
+        engine.dispose()
+
+
+@pytest.fixture
+def test_user(db_session):
+    """Provide the canonical eval user expected by auto-seed helpers."""
+    user = User(email="dev@local", role=UserRole.ADMIN.value)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
 
 
 # ---------------------------------------------------------------------------

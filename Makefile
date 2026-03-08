@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-legacy test-control-plane test-e2e-cp test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-visual-compare qa-visual-compare-fast test-perf test-zerg-unit test-zerg-e2e test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-legacy test-control-plane test-e2e-cp test-integration test-unit test-e2e test-e2e-core test-all test-full test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-visual-compare qa-visual-compare-fast test-perf test-zerg-unit test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-install test-provision-e2e test-prompts test-ci test-backend-docker test-backend-ci test-super-fast--unit-backend-frontend-hatch-runner-install--approx-36s test-push-ci--e2e-core-a11y--approx-50s test-pre-merge-or-nightly--evals-live-openai--approx-4m test-validate-contracts-and-lints--approx-10s test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge
 
 
 # ---------------------------------------------------------------------------
@@ -269,22 +269,28 @@ test-shipper-premerge: ## Full shipper QA: engine fast tests + pipeline E2E (run
 	$(MAKE) test-engine-fast
 	$(MAKE) test-shipper-e2e
 
+ensure-js-deps: ## @internal Install workspace JS deps when a clean clone needs them
+	@if [ ! -f node_modules/@playwright/test/package.json ]; then \
+		echo "📦 Installing JS workspace dependencies..."; \
+		bun install --frozen-lockfile; \
+	fi
+
 test-e2e: ## Run E2E tests (core + a11y)
 	@echo "🎭 Running E2E tests (core + a11y)..."
 	$(MAKE) test-e2e-core
 	$(MAKE) test-e2e-a11y
 
 test-e2e-core: ## @internal Run core E2E tests only (no retries, must pass 100%)
+	@$(MAKE) ensure-js-deps
 	@echo "🔴 Running CORE E2E tests (no retries, must pass 100%)..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=core --retries=0 --workers=1
 
-test-full: ## Full suite (unit + full E2E + evals + visual baselines + visual compare)
+test-full: ## Full local suite (unit + full E2E + visual baselines + visual compare)
 	@echo "🧪 Running full suite (unit + full E2E + evals + visual baselines)..."
 	$(MAKE) test
 	$(MAKE) test-e2e-core
-	$(MAKE) test-zerg-e2e
-	$(MAKE) eval
+	$(MAKE) test-e2e-a11y
 	$(MAKE) qa-ui-baseline
 	$(MAKE) qa-ui-baseline-mobile
 	$(MAKE) qa-visual-compare-fast
@@ -293,17 +299,21 @@ test-all: ## @internal Deprecated alias for test-full
 	$(MAKE) test-full
 
 test-chat-e2e: ## Run Oikos chat E2E tests (inside unified SPA)
+	@$(MAKE) ensure-js-deps
 	@echo "🧪 Running chat E2E tests (unified SPA)..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/unified-frontend.spec.ts
 
 test-e2e-single: ## @internal Run a single E2E test (usage: make test-e2e-single TEST=tests/unified-frontend.spec.ts)
+	@$(MAKE) ensure-js-deps
 	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-args>" && exit 1)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
 
 test-e2e-ui: ## @internal Run Playwright E2E tests with interactive UI
+	@$(MAKE) ensure-js-deps
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --ui
 
 test-e2e-verbose: ## @internal Run E2E tests with full verbose output (for debugging)
+	@$(MAKE) ensure-js-deps
 	cd apps/zerg/e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
 
 test-e2e-errors: ## @internal Show detailed errors from last E2E run
@@ -321,10 +331,12 @@ test-e2e-query: ## @internal Query last E2E results (usage: make test-e2e-query 
 	fi
 
 test-e2e-grep: ## @internal Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
+	@$(MAKE) ensure-js-deps
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
 
 test-e2e-a11y: ## @internal Run accessibility UI/UX checks (axe + heuristics)
+	@$(MAKE) ensure-js-deps
 	@echo "🧪 Running accessibility UI/UX checks..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
 
@@ -345,16 +357,16 @@ qa-ui-baseline: ## Visual baselines for app + public pages
 	$(MAKE) test-e2e-single TEST=tests/ui_baseline_app.spec.ts
 
 qa-ui-baseline-update: ## @internal Update visual baselines for app + public pages
-	PWUPDATE=1 $(MAKE) test-e2e-single TEST=tests/ui_baseline_public.spec.ts
-	PWUPDATE=1 $(MAKE) test-e2e-single TEST=tests/ui_baseline_app.spec.ts
+	$(MAKE) test-e2e-single TEST="--update-snapshots=all tests/ui_baseline_public.spec.ts"
+	$(MAKE) test-e2e-single TEST="--update-snapshots=all tests/ui_baseline_app.spec.ts"
 
 qa-ui-baseline-mobile: ## Visual baselines for mobile viewport pages
 	$(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
 	$(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
 
 qa-ui-baseline-mobile-update: ## @internal Update visual baselines for mobile viewport pages
-	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
-	PWUPDATE=1 $(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
+	$(MAKE) test-e2e-single TEST="--project=mobile --update-snapshots=all tests/mobile/ui_baseline_mobile.spec.ts"
+	$(MAKE) test-e2e-single TEST="--project=mobile-small --update-snapshots=all tests/mobile/ui_baseline_mobile.spec.ts"
 
 qa-visual-compare: ## Visual comparison with LLM triage (catches color/layout catastrophes)
 	$(MAKE) test-e2e-single TEST="--project=chromium tests/visual_compare.spec.ts"
@@ -369,6 +381,7 @@ qa-ui-full: ## Full UI regression sweep (a11y + desktop + mobile baselines + vis
 	$(MAKE) qa-visual-compare-fast
 
 test-perf: ## Run performance evaluation tests (chat latency profiling)
+	@$(MAKE) ensure-js-deps
 	@echo "🧪 Running performance evaluation tests..."
 	cd apps/zerg/e2e && RUN_PERF=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
 	@echo "✅ Performance tests complete. Metrics exported to apps/zerg/e2e/metrics/"
@@ -438,10 +451,6 @@ shipper-smoke-test: ## Run shipper live smoke test script (requires backend runn
 
 test-hooks: ## E2E test for hook outbox pipeline (requires daemon running)
 	@./scripts/test-hooks-e2e.sh
-
-test-zerg-e2e: ## @internal Run full Zerg E2E tests (Playwright)
-	@echo "🧪 Running Zerg E2E tests..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
 
 test-prompts: ## @internal Run live prompt quality tests (requires backend running + --live-token)
 	@echo "🧪 Running prompt quality tests (requires backend running)..."
