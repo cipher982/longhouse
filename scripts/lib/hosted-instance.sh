@@ -4,7 +4,10 @@ LH_HOSTED_HELPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LH_HOSTED_INFISICAL_HELPER="${LH_HOSTED_INFISICAL_HELPER:-$LH_HOSTED_HELPER_DIR/infisical.sh}"
 if [[ -f "$LH_HOSTED_INFISICAL_HELPER" ]]; then
   # shellcheck disable=SC1090
-  . "$LH_HOSTED_INFISICAL_HELPER"
+  if ! . "$LH_HOSTED_INFISICAL_HELPER"; then
+    echo "Failed to source Infisical helper: $LH_HOSTED_INFISICAL_HELPER" >&2
+    return 1 2>/dev/null || exit 1
+  fi
 fi
 
 _lh_hosted_python_bin() {
@@ -24,6 +27,26 @@ _lh_hosted_python_bin() {
 
   export LH_HOSTED_PYTHON_BIN
   printf '%s\n' "$LH_HOSTED_PYTHON_BIN"
+}
+
+_lh_hosted_json_object() {
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+
+  "$python_bin" - "$@" <<'PY'
+import json
+import sys
+
+args = sys.argv[1:]
+if len(args) % 2 != 0:
+    raise SystemExit("Expected even key/value pairs")
+
+payload = {}
+for index in range(0, len(args), 2):
+    payload[args[index]] = args[index + 1]
+
+print(json.dumps(payload, separators=(",", ":")), end="")
+PY
 }
 
 lh_hosted_require_env() {
@@ -183,6 +206,7 @@ lh_hosted_create_instance() {
   local http_code=""
   local parsed=""
   local parse_status=0
+  local payload=""
 
   if [[ -z "$email" || -z "$subdomain" ]]; then
     echo "Usage: lh_hosted_create_instance <email> <subdomain>" >&2
@@ -190,6 +214,7 @@ lh_hosted_create_instance() {
   fi
 
   lh_hosted_prepare_control_plane_auth || return 1
+  payload="$(_lh_hosted_json_object email "$email" subdomain "$subdomain")" || return 1
 
   response_file="$(mktemp)"
   http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
@@ -197,7 +222,7 @@ lh_hosted_create_instance() {
     -X POST "${CONTROL_PLANE_URL%/}/api/instances" \
     -H "Content-Type: application/json" \
     -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
-    -d "{\"email\":\"${email}\",\"subdomain\":\"${subdomain}\"}")"
+    -d "$payload")"
 
   if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
     echo "Failed to create instance ${subdomain} (HTTP ${http_code})" >&2
@@ -373,16 +398,19 @@ lh_hosted_accept_login_token() {
   local cookie_jar="$2"
   local instance_url="${3:-${LH_INSTANCE_URL:-}}"
   local http_code=""
+  local payload=""
 
   if [[ -z "$token" || -z "$cookie_jar" || -z "$instance_url" ]]; then
     echo "Usage: lh_hosted_accept_login_token <token> <cookie_jar> [instance_url]" >&2
     return 1
   fi
 
+  payload="$(_lh_hosted_json_object token "$token")" || return 1
+
   http_code="$(curl -sS -o /dev/null -w "%{http_code}" \
     -c "$cookie_jar" \
     -H "Content-Type: application/json" \
-    -d "{\"token\":\"${token}\"}" \
+    -d "$payload" \
     "${instance_url%/}/api/auth/accept-token")"
 
   if [[ "$http_code" != "200" && "$http_code" != "302" ]]; then

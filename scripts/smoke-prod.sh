@@ -36,6 +36,11 @@ fi
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
 
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Missing jq. Install it first (brew install jq)." >&2
+    exit 1
+fi
+
 INSTANCE_SUBDOMAIN="${INSTANCE_SUBDOMAIN:-}"
 FRONTEND_URL="${FRONTEND_URL:-}"
 API_URL="${API_URL:-$FRONTEND_URL}"

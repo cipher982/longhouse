@@ -4,6 +4,14 @@ LH_INFISICAL_PERSONAL_SHELL_PROJECT_ID="${LH_INFISICAL_PERSONAL_SHELL_PROJECT_ID
 LH_INFISICAL_OPS_INFRA_PROJECT_ID="${LH_INFISICAL_OPS_INFRA_PROJECT_ID:-d303262d-e281-4100-aba7-28940cf2741e}"
 LH_INFISICAL_DOMAIN="${LH_INFISICAL_DOMAIN:-${INFISICAL_DOMAIN:-https://secrets.drose.io}}"
 
+_lh_infisical_require_var_name() {
+  local var_name="$1"
+  if [[ ! "$var_name" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+    echo "Invalid shell variable name: ${var_name}" >&2
+    return 1
+  fi
+}
+
 lh_infisical_default_project_id() {
   local secret_key="$1"
   case "$secret_key" in
@@ -62,8 +70,8 @@ _lh_infisical_cli_fallback_get() {
   local env_name="$3"
   local secret_path="$4"
   local domain="$5"
-  local json_file=""
   local python_bin=""
+  local raw_json=""
 
   if ! command -v infisical >/dev/null 2>&1; then
     echo "Missing infisical CLI. Install it or configure LH_INFISICAL_GET_BIN." >&2
@@ -71,27 +79,38 @@ _lh_infisical_cli_fallback_get() {
   fi
 
   python_bin="$(_lh_infisical_python_bin)" || return 1
-  json_file="$(mktemp)"
-
-  if ! infisical secrets \
+  if ! raw_json="$(infisical secrets \
     --projectId "$project_id" \
     --env "$env_name" \
     --path "$secret_path" \
     --output json \
     --silent \
-    --domain "$domain" >"$json_file"; then
-    rm -f "$json_file"
+    --domain "$domain")"; then
     echo "Failed to read Infisical secret ${secret_key} from project ${project_id} env ${env_name}." >&2
     return 1
   fi
 
-  "$python_bin" - "$secret_key" "$json_file" <<'PY'
+  if [[ -z "$raw_json" ]]; then
+    echo "Infisical returned no secrets for project ${project_id} env ${env_name} path ${secret_path}." >&2
+    return 1
+  fi
+
+  INFISICAL_RAW_JSON="$raw_json" "$python_bin" - "$secret_key" <<'PY'
 import json
+import os
 import sys
 
-secret_key, json_path = sys.argv[1], sys.argv[2]
-with open(json_path, encoding="utf-8") as handle:
-    payload = json.load(handle)
+secret_key = sys.argv[1]
+raw_json = os.environ.get("INFISICAL_RAW_JSON", "")
+if not raw_json:
+    raise SystemExit("Failed to parse Infisical JSON output: empty response")
+
+try:
+    payload = json.loads(raw_json)
+except UnicodeDecodeError as exc:
+    raise SystemExit(f"Failed to decode Infisical JSON output: {exc}")
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"Failed to parse Infisical JSON output: {exc}")
 
 if not isinstance(payload, list):
     raise SystemExit("Unexpected Infisical JSON response shape")
@@ -107,9 +126,6 @@ for item in payload:
 
 raise SystemExit(f"Secret {secret_key} not found")
 PY
-  local status=$?
-  rm -f "$json_file"
-  return "$status"
 }
 
 lh_infisical_get_secret() {
@@ -135,6 +151,8 @@ lh_infisical_export_secret_if_missing() {
   local env_name="${4:-$(lh_infisical_default_env "$secret_key")}"
   local secret_path="${5:-/}"
   local value=""
+
+  _lh_infisical_require_var_name "$var_name" || return 1
 
   if [[ -n "${!var_name:-}" ]]; then
     return 0

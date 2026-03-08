@@ -95,4 +95,16 @@ if lh_infisical_get_secret CONTROL_PLANE_ADMIN_TOKEN >/dev/null 2>&1; then
   exit 1
 fi
 
+export FAKE_INFISICAL_MODE=ok
+if lh_infisical_export_secret_if_missing BAD-NAME CONTROL_PLANE_ADMIN_TOKEN >/dev/null 2>&1; then
+  echo "Expected invalid shell variable name to fail"
+  exit 1
+fi
+
+json_payload="$(_lh_hosted_json_object email 'quote"@example.com' subdomain 'demo\slash')"
+if [[ "$json_payload" != '{"email":"quote\"@example.com","subdomain":"demo\\slash"}' ]]; then
+  echo "Expected hosted JSON helper to escape values safely"
+  exit 1
+fi
+
 echo "hosted-instance Infisical tests passed"
