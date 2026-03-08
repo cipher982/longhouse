@@ -154,7 +154,8 @@ class JobConfig:
     description: str = ""
     queue_mode: bool = True  # Use durable queue (False = direct execution for debugging)
     secrets: list[str | SecretField] = field(default_factory=list)  # Declared secret keys (str or rich SecretField)
-    jitter_minutes: int = 0  # Random delay [0, jitter_minutes] added at enqueue time; 0 = no jitter. Must be < cron interval.
+    # Random delay [0, jitter_minutes] added at enqueue time; 0 = no jitter.
+    jitter_minutes: int = 0  # Must be < cron interval.
 
     def __post_init__(self):
         if self.jitter_minutes < 0:
@@ -166,13 +167,69 @@ class JobRunResult:
     """Result of a job execution."""
 
     job_id: str
-    status: str  # "success", "failure", "timeout"
+    status: str  # "success", "degraded", "failure", "timeout"
     started_at: datetime
     ended_at: datetime
     duration_ms: int
     result: dict[str, Any] | None = None
     error: str | None = None
     error_type: str | None = None
+
+
+_REPORTED_DEGRADED_STATUSES = {"degraded", "partial", "partial_failure", "warning"}
+_REPORTED_FAILURE_STATUSES = {"error", "failure", "failed", "dead"}
+_REPORTED_TIMEOUT_STATUSES = {"timeout"}
+
+
+def interpret_job_result(result: dict[str, Any] | None) -> tuple[str | None, str | None, str | None]:
+    """Translate a job's returned payload into scheduler status/error semantics.
+
+    Only explicit failure-like statuses or non-success pipeline summaries affect the
+    scheduler. Neutral statuses like ``ok``/``healthy``/``skipped`` keep the legacy
+    behavior of counting as success.
+    """
+    if not isinstance(result, dict):
+        return None, None, None
+
+    raw_status = str(result.get("status") or "").strip().lower()
+    summaries = [s for s in (result.get("pipeline_summaries") or []) if isinstance(s, dict)]
+    bad_summaries = [s for s in summaries if str(s.get("status") or "success").strip().lower() != "success"]
+
+    derived_status: str | None = None
+    if raw_status in _REPORTED_TIMEOUT_STATUSES:
+        derived_status = "timeout"
+    elif raw_status in _REPORTED_FAILURE_STATUSES:
+        derived_status = "failure"
+    elif raw_status in _REPORTED_DEGRADED_STATUSES:
+        derived_status = "degraded"
+    elif bad_summaries:
+        derived_status = "degraded"
+
+    if not derived_status:
+        return None, None, None
+
+    first_bad = bad_summaries[0] if bad_summaries else {}
+    error = result.get("error") or result.get("error_message")
+    if not error and first_bad:
+        error = first_bad.get("error_note") or first_bad.get("note")
+    if not error:
+        if derived_status == "degraded":
+            error = "Job completed with non-success pipeline summary"
+        elif derived_status == "timeout":
+            error = "Job reported timeout status"
+        else:
+            error = f"Job reported {raw_status or derived_status} status"
+
+    error_type = result.get("error_type") or first_bad.get("error_type")
+    if not error_type:
+        if derived_status == "degraded":
+            error_type = "PartialFailure"
+        elif derived_status == "timeout":
+            error_type = "ReportedTimeout"
+        else:
+            error_type = "ReportedFailure"
+
+    return derived_status, str(error), str(error_type)
 
 
 class JobRegistry:
@@ -310,16 +367,35 @@ class JobRegistry:
                     _invoke_job_func(config),
                     timeout=config.timeout_seconds,
                 )
-                # Success - break out of retry loop
-                status = "success"
-                error = None
-                error_type = None
-                break
+                reported_status, reported_error, reported_error_type = interpret_job_result(result)
+                if reported_status in {"failure", "timeout"}:
+                    status = reported_status
+                    error = f"{reported_error} (attempt {attempts}/{max_attempts})" if reported_error else None
+                    error_type = reported_error_type
+                    logger.error(
+                        "Job %s reported %s without raising (attempt %d/%d): %s",
+                        job_id,
+                        reported_status,
+                        attempts,
+                        max_attempts,
+                        reported_error,
+                    )
+                else:
+                    status = reported_status or "success"
+                    error = reported_error
+                    error_type = reported_error_type
+                    break
             except asyncio.TimeoutError:
                 status = "timeout"
                 error = f"Job exceeded {config.timeout_seconds}s timeout (attempt {attempts}/{max_attempts})"
                 error_type = "TimeoutError"
-                logger.error("Job %s timed out after %ds (attempt %d/%d)", job_id, config.timeout_seconds, attempts, max_attempts)
+                logger.error(
+                    "Job %s timed out after %ds (attempt %d/%d)",
+                    job_id,
+                    config.timeout_seconds,
+                    attempts,
+                    max_attempts,
+                )
             except Exception as e:
                 status = "failure"
                 error = f"{str(e)[:5000]} (attempt {attempts}/{max_attempts})"

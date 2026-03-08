@@ -98,4 +98,33 @@ describe("JobsPage", () => {
     expect(screen.getByText("Failed to import zerg.jobs.daily_digest")).toBeInTheDocument();
     expect(screen.getByText("daily-digest")).toBeInTheDocument();
   });
+
+
+  it("renders degraded last-run badges as warning state", async () => {
+    hooks.useLastJobRuns.mockReturnValue({
+      data: {
+        last_runs: {
+          "daily-digest": {
+            id: "run-1",
+            job_id: "daily-digest",
+            status: "degraded",
+            started_at: "2026-03-08T02:00:00Z",
+            finished_at: "2026-03-08T02:01:00Z",
+            duration_ms: 60000,
+            error_message: "1 pipeline step degraded",
+            error_type: "PartialFailure",
+            created_at: "2026-03-08T02:01:00Z",
+          },
+        },
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderJobsPage();
+
+    const badge = await screen.findByText("degraded");
+    expect(badge).toHaveClass("ui-badge--warning");
+    expect(screen.getByText("PartialFailure")).toBeInTheDocument();
+  });
 });

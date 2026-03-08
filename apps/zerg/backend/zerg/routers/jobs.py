@@ -71,7 +71,7 @@ class JobRunResponse(BaseModel):
     """Response for job execution."""
 
     job_id: str
-    status: str  # "success", "failure", "timeout"
+    status: str  # "success", "degraded", "failure", "timeout"
     duration_ms: int
     result: dict[str, Any] | None = None
     error: str | None = None

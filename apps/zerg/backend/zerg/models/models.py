@@ -907,7 +907,7 @@ class JobRun(Base):
 
     id = Column(String(36), primary_key=True)  # UUID
     job_id = Column(String(255), nullable=False, index=True)
-    status = Column(String(20), nullable=False)  # success, failure, dead, timeout
+    status = Column(String(20), nullable=False)  # success, degraded, failure, dead, timeout
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     duration_ms = Column(Integer, nullable=True)
