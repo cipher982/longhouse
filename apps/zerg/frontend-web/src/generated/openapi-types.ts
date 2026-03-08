@@ -8370,6 +8370,12 @@ export interface components {
              * @description Runner name
              */
             name: string;
+            /**
+             * Runner Capabilities Csv
+             * @description Comma-separated runner capabilities for installer env files
+             * @default exec.readonly
+             */
+            runner_capabilities_csv: string;
         };
         /**
          * RunnerResponse

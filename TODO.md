@@ -55,6 +55,20 @@ Notes:
 - 2026-03-08: Local targeted gates already passed: `make test`, `make onboarding-funnel`, `make test-install-runner`, and clean-clone `make test-readmes MODE=smoke`.
 
 
+## [Tech Debt] Remove secret-shaped dev bootstrap literals (size: 1)
+
+Status (2026-03-08): Done.
+
+**Goal:** Stop GitGuardian noise from committed dummy auth/encryption values while keeping OpenAPI/typegen bootstrap self-contained.
+
+- [x] Replace committed Fernet-format bootstrap values with runtime-generated ephemeral secrets
+- [x] Route OpenAPI export through one backend script instead of duplicating inline bootstrap env logic
+- [x] Remove Fernet-looking placeholders from example/test files that could retrigger incidents on future edits
+
+Notes:
+- 2026-03-08: Commit `09586ae` introduced a Fernet-shaped dummy value for OpenAPI export; this cleanup removes that pattern entirely instead of adding dashboard ignores.
+- 2026-03-08: Canonical OpenAPI export entrypoint is now `apps/zerg/backend/scripts/export_openapi.py`.
+
 ## [Infra] Restore Oikos direct runner terminal access (size: 2)
 
 Status (2026-03-07): Done.

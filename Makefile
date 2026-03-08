@@ -457,7 +457,7 @@ eval-tool-selection: ## @internal Run tool selection evals (tests tool picking q
 generate-sdk: ## Generate OpenAPI types from backend schema
 	@echo "🔄 Generating SDK..."
 	@$(MAKE) ensure-js-deps
-	@cd apps/zerg/backend && TESTING=1 AUTH_DISABLED=1 DATABASE_URL=sqlite:// JWT_SECRET=generate-sdk-jwt-secret-123456 INTERNAL_API_SECRET=generate-sdk-internal-secret-123456 FERNET_SECRET=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY= uv run python -c "from zerg.main import app; app.openapi()" 2>/dev/null
+	@cd apps/zerg/backend && uv run python scripts/export_openapi.py >/dev/null
 	@cd apps/zerg/frontend-web && bun run openapi-typescript ../openapi.json --output src/generated/openapi-types.ts
 	@echo "✅ SDK generation complete"
 
