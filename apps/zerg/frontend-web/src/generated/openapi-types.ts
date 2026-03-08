@@ -1104,7 +1104,7 @@ export interface paths {
          *     1. Detects OS (macOS/Linux)
          *     2. Registers the runner using the enroll token
          *     3. Downloads the native binary from GitHub Releases
-         *     4. Installs as a launchd (macOS) or systemd (Linux) service
+         *     4. Installs as a launchd (macOS), systemd user service (`desktop`), or Linux system service (`server`)
          *     5. Starts the runner automatically
          *
          *     No authentication required - this is for bootstrapping new runners.
