@@ -17,6 +17,10 @@ import type { ActiveSession } from "../hooks/useActiveSessions";
 interface SSESystemEvent {
   type: string;
   session_id?: string;
+  source_session_id?: string;
+  thread_root_session_id?: string;
+  continued_from_session_id?: string | null;
+  created_continuation?: boolean;
   provider_session_id?: string;
   workspace?: string;
   timestamp?: string;
@@ -38,6 +42,11 @@ interface SSEError {
 }
 
 interface SSEDone {
+  session_id?: string;
+  source_session_id?: string;
+  shipped_session_id?: string;
+  created_continuation?: boolean;
+  branched_from_event_id?: number | null;
   exit_code: number;
   total_text_length: number;
   timestamp: string;
@@ -56,9 +65,20 @@ interface ChatMessage {
 interface SessionChatProps {
   session: ActiveSession;
   onClose?: () => void;
+  emptyStateTitle?: string;
+  hintText?: string;
+  composerPlaceholder?: string;
+  onSessionChanged?: (nextSessionId: string, createdContinuation: boolean) => void;
 }
 
-export function SessionChat({ session, onClose }: SessionChatProps) {
+export function SessionChat({
+  session,
+  onClose,
+  emptyStateTitle,
+  hintText,
+  composerPlaceholder,
+  onSessionChanged,
+}: SessionChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -268,7 +288,11 @@ export function SessionChat({ session, onClose }: SessionChatProps) {
           break;
         }
         case "done": {
-          // Final cleanup handled in finally block
+          const done = data as SSEDone;
+          const nextSessionId = done.shipped_session_id || done.session_id;
+          if (nextSessionId) {
+            onSessionChanged?.(nextSessionId, Boolean(done.created_continuation));
+          }
           break;
         }
         default:
@@ -276,7 +300,7 @@ export function SessionChat({ session, onClose }: SessionChatProps) {
           break;
       }
     },
-    [],
+    [onSessionChanged],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -339,9 +363,9 @@ export function SessionChat({ session, onClose }: SessionChatProps) {
       <div className="session-chat-messages">
         {messages.length === 0 ? (
           <div className="session-chat-empty">
-            <p>Start a conversation with this session.</p>
+            <p>{emptyStateTitle || "Start a conversation with this session."}</p>
             <p className="session-chat-hint">
-              Context from previous turns will be preserved via --resume.
+              {hintText || "Context from previous turns will be preserved via --resume."}
             </p>
           </div>
         ) : (
@@ -362,7 +386,7 @@ export function SessionChat({ session, onClose }: SessionChatProps) {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message..."
+          placeholder={composerPlaceholder || "Type a message..."}
           disabled={isStreaming || lockInfo?.locked}
           rows={2}
         />

@@ -80,13 +80,76 @@ function getDateKey(dateStr: string): string {
   });
 }
 
-function groupSessionsByDay(sessions: AgentSession[]): Map<string, AgentSession[]> {
-  const groups = new Map<string, AgentSession[]>();
+interface SessionThreadCard {
+  threadId: string;
+  head: AgentSession;
+  detail: AgentSession;
+  root: AgentSession;
+  sessions: AgentSession[];
+  continuationCount: number;
+  startedOriginLabel: string | null;
+  headOriginLabel: string | null;
+}
 
-  for (const session of sessions) {
-    const key = getDateKey(session.last_activity_at || session.started_at);
+function buildThreadCards(sessions: AgentSession[]): SessionThreadCard[] {
+  const groups = new Map<string, {
+    order: number;
+    sessions: AgentSession[];
+    detail: AgentSession;
+    head: AgentSession | null;
+  }>();
+
+  sessions.forEach((session, index) => {
+    const threadId = session.thread_root_session_id || session.id;
+    const existing = groups.get(threadId);
+    if (!existing) {
+      groups.set(threadId, {
+        order: index,
+        sessions: [session],
+        detail: session,
+        head: session.id === session.thread_head_session_id || session.is_writable_head ? session : null,
+      });
+      return;
+    }
+
+    existing.sessions.push(session);
+    if (session.id === session.thread_head_session_id || session.is_writable_head) {
+      existing.head = session;
+    }
+  });
+
+  return Array.from(groups.entries())
+    .sort((a, b) => a[1].order - b[1].order)
+    .map(([threadId, group]) => {
+      const orderedSessions = [...group.sessions].sort(
+        (a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime(),
+      );
+      const root = orderedSessions.find((session) => session.id === threadId) || orderedSessions[0] || group.detail;
+      const head =
+        group.head ||
+        orderedSessions.find((session) => session.id === group.detail.thread_head_session_id) ||
+        group.detail;
+
+      return {
+        threadId,
+        head,
+        detail: group.detail,
+        root,
+        sessions: orderedSessions,
+        continuationCount: head.thread_continuation_count || orderedSessions.length,
+        startedOriginLabel: root.origin_label || root.environment,
+        headOriginLabel: head.origin_label || head.environment,
+      };
+    });
+}
+
+function groupThreadCardsByDay(cards: SessionThreadCard[]): Map<string, SessionThreadCard[]> {
+  const groups = new Map<string, SessionThreadCard[]>();
+
+  for (const card of cards) {
+    const key = getDateKey(card.head.last_activity_at || card.head.started_at);
     const existing = groups.get(key) || [];
-    existing.push(session);
+    existing.push(card);
     groups.set(key, existing);
   }
 
@@ -450,13 +513,15 @@ function FilterPopover({
 // ---------------------------------------------------------------------------
 
 interface SessionCardProps {
-  session: AgentSession;
+  thread: SessionThreadCard;
   onClick: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
 }
 
-function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
+function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
+  const session = thread.head;
+  const detailSession = thread.detail;
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const isActive = !session.ended_at;
@@ -464,11 +529,8 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
 
-  // Keyword: show FTS matched excerpt with word highlights
-  // AI/hybrid: show best matching turn excerpt (no word highlights — semantic match)
-  // Fall back to session summary if no snippet available
-  const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!session.match_snippet;
-  const showSemanticSnippet = isSemanticResult && !!session.match_snippet;
+  const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
+  const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
   const primaryActionLabel = supportsCloudContinuation(session.provider) ? "Continue in cloud" : "Latest context";
@@ -479,13 +541,11 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
       onClick={onClick}
       style={!isActive ? { borderLeftColor: getProviderColor(session.provider) } : undefined}
     >
-      {/* Primary: project/repo identifier */}
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
         <span className="session-card-time">{formatRelativeTime(session.last_activity_at || session.started_at)}</span>
       </div>
 
-      {/* Secondary: provider + branch metadata */}
       <div className="session-card-meta">
         <span className="session-card-provider-badge">
           <ProviderIcon provider={session.provider} />
@@ -497,9 +557,15 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
             {session.git_branch}
           </span>
         )}
-        {session.environment && (
-          <span className="environment-badge">
-            {session.environment}
+        {thread.headOriginLabel && (
+          <span className="environment-badge">Head: {thread.headOriginLabel}</span>
+        )}
+        {thread.continuationCount > 1 && thread.startedOriginLabel && thread.startedOriginLabel !== thread.headOriginLabel && (
+          <span className="environment-badge environment-badge--secondary">Started: {thread.startedOriginLabel}</span>
+        )}
+        {thread.continuationCount > 1 && (
+          <span className="environment-badge environment-badge--secondary">
+            {thread.continuationCount} continuations
           </span>
         )}
         {isActive && (
@@ -507,7 +573,6 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
         )}
       </div>
 
-      {/* What was done */}
       <div className="session-card-body">
         {title && <div className="session-card-title">{title}</div>}
         {showSummary && (
@@ -520,17 +585,17 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
         )}
         {showKeywordSnippet && (
           <div className="session-card-snippet">
-            {renderHighlightedText(session.match_snippet!, highlightQuery!)}
+            {renderHighlightedText(detailSession.match_snippet!, highlightQuery!)}
           </div>
         )}
         {showSemanticSnippet && (
           <div className="session-card-snippet session-card-snippet--ai">
-            {session.match_snippet}
+            {detailSession.match_snippet}
           </div>
         )}
-        {isSemanticResult && session.match_score != null && session.match_score >= 0.5 && (
-          <div className="session-card-score" title={`Semantic similarity: ${Math.round(session.match_score * 100)}%`}>
-            {Math.round(session.match_score * 100)}% match
+        {isSemanticResult && detailSession.match_score != null && detailSession.match_score >= 0.5 && (
+          <div className="session-card-score" title={`Semantic similarity: ${Math.round(detailSession.match_score * 100)}%`}>
+            {Math.round(detailSession.match_score * 100)}% match
           </div>
         )}
       </div>
@@ -541,7 +606,7 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
           <span className="session-stat-separator">&middot;</span>
           <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
           <span className="session-stat-separator">&middot;</span>
-          <span className="session-stat session-stat--secondary">Started {formatRelativeTime(session.started_at)}</span>
+          <span className="session-stat session-stat--secondary">Started {formatRelativeTime(thread.root.started_at)}</span>
         </div>
         <div className="session-card-actions">
           <span className="session-card-action-label">{primaryActionLabel}</span>
@@ -558,8 +623,8 @@ function SessionCard({ session, onClick, highlightQuery, isSemanticResult }: Ses
 
 interface SessionGroupProps {
   title: string;
-  sessions: AgentSession[];
-  onSessionClick: (session: AgentSession) => void;
+  sessions: SessionThreadCard[];
+  onSessionClick: (thread: SessionThreadCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
 }
@@ -572,11 +637,11 @@ function SessionGroup({ title, sessions, onSessionClick, highlightQuery, isSeman
         <Badge variant="neutral" className="session-group-count">{sessions.length}</Badge>
       </div>
       <div className="session-group-list">
-        {sessions.map((session) => (
+        {sessions.map((thread) => (
           <SessionCard
-            key={session.id}
-            session={session}
-            onClick={() => onSessionClick(session)}
+            key={thread.threadId}
+            thread={thread}
+            onClick={() => onSessionClick(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
           />
@@ -752,12 +817,12 @@ export default function SessionsPage() {
     return () => clearApiError(); // ensure footer clears if user navigates away
   }, [error]);
 
-  // Group sessions by day
-  const groupedSessions = useMemo(() => groupSessionsByDay(sessions), [sessions]);
+  const threadCards = useMemo(() => buildThreadCards(sessions), [sessions]);
+  const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards), [threadCards]);
 
   const headerActions = (
     <div className="sessions-header-actions">
-      {total > 0 && <span className="sessions-header-count">{total} sessions</span>}
+      {threadCards.length > 0 && <span className="sessions-header-count">{threadCards.length} tasks</span>}
       <Button
         variant="ghost"
         size="sm"
@@ -778,9 +843,10 @@ export default function SessionsPage() {
   );
 
   // Handle session click - preserve current filters in location state
-  const handleSessionClick = useCallback((session: AgentSession) => {
-    const matchEventId = debouncedQuery ? session.match_event_id : null;
-    navigate(buildSessionDetailPath(session, matchEventId), {
+  const handleSessionClick = useCallback((thread: SessionThreadCard) => {
+    const detailSession = thread.detail;
+    const matchEventId = debouncedQuery ? detailSession.match_event_id : null;
+    navigate(buildSessionDetailPath(detailSession, matchEventId), {
       state: { from: location.pathname + location.search },
     });
   }, [navigate, location, debouncedQuery]);
@@ -1197,7 +1263,7 @@ export default function SessionsPage() {
         )}
 
         {/* Timeline List */}
-        {sessions.length === 0 ? (
+        {threadCards.length === 0 ? (
           <EmptyState
             title="No timeline sessions found"
             description={
@@ -1232,7 +1298,9 @@ export default function SessionsPage() {
         {total > 0 && (
           <div className="sessions-footer">
             <span className="sessions-count">
-              Showing {sessions.length} of {total} sessions
+              {threadCards.length === sessions.length
+                ? `Showing ${threadCards.length} of ${total} sessions`
+                : `Showing ${threadCards.length} task threads from ${sessions.length} sessions`}
             </span>
             {hasMore && (
               <Button

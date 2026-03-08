@@ -59,10 +59,24 @@ async function ingestSession(
     project: string;
     environment: string;
     provider_session_id: string;
+    thread_root_session_id: string;
+    continued_from_session_id: string;
+    continuation_kind: string;
+    origin_label: string;
+    branched_from_event_id: number;
+    started_at: string;
+    ended_at: string;
+    events: Array<{
+      role: string;
+      content_text: string;
+      timestamp: string;
+      source_path: string;
+      source_offset: number;
+    }>;
   }> = {},
 ): Promise<string> {
   const sessionId = overrides.id || randomUUID();
-  const timestamp = new Date().toISOString();
+  const timestamp = overrides.started_at || new Date().toISOString();
 
   const ingest = await request.post('/api/agents/ingest', {
     data: {
@@ -74,18 +88,24 @@ async function ingestSession(
       cwd: '/tmp',
       git_repo: null,
       git_branch: null,
-      provider_session_id: overrides.provider_session_id || 'claude-session-e2e',
+      provider_session_id: overrides.provider_session_id || `claude-session-${sessionId}`,
+      thread_root_session_id: overrides.thread_root_session_id,
+      continued_from_session_id: overrides.continued_from_session_id,
+      continuation_kind: overrides.continuation_kind,
+      origin_label: overrides.origin_label,
+      branched_from_event_id: overrides.branched_from_event_id,
       started_at: timestamp,
-      ended_at: timestamp,
-      events: [
-        {
-          role: 'user',
-          content_text: 'hello',
-          timestamp,
-          source_path: '/tmp/session.jsonl',
-          source_offset: 0,
-        },
-      ],
+      ended_at: overrides.ended_at || timestamp,
+      events:
+        overrides.events || [
+          {
+            role: 'user',
+            content_text: 'hello',
+            timestamp,
+            source_path: '/tmp/session.jsonl',
+            source_offset: 0,
+          },
+        ],
     },
   });
 
@@ -396,8 +416,171 @@ test.describe('Session Detail Page', () => {
     await expect(page.getByRole('button', { name: 'Continue in Cloud' })).toBeVisible();
     await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
     await expect(page.locator('.session-chat')).toBeVisible();
-    await expect(page.locator('.session-chat-empty')).toContainText('Context from previous turns');
+    await expect(page.locator('.session-chat-empty')).toContainText('Send the first cloud message for this thread');
     await expect(page.locator('.session-chat-composer textarea')).toBeFocused();
+  });
+
+
+  test('Timeline groups continuations into one task card and opens the latest head', async ({ page, request }) => {
+    const project = `thread-group-${randomUUID().slice(0, 8)}`;
+    const rootId = await ingestSession(request, {
+      provider: 'claude',
+      project,
+      environment: 'Cinder',
+      events: [
+        {
+          role: 'user',
+          content_text: 'Started on laptop',
+          timestamp: new Date().toISOString(),
+          source_path: '/tmp/session.jsonl',
+          source_offset: 0,
+        },
+      ],
+    });
+
+    const childTimestamp = new Date(Date.now() + 60_000).toISOString();
+    const childId = await ingestSession(request, {
+      provider: 'claude',
+      project,
+      environment: 'cloud-runtime',
+      thread_root_session_id: rootId,
+      continued_from_session_id: rootId,
+      continuation_kind: 'cloud',
+      origin_label: 'Cloud',
+      started_at: childTimestamp,
+      ended_at: childTimestamp,
+      events: [
+        {
+          role: 'user',
+          content_text: 'Continued in cloud',
+          timestamp: childTimestamp,
+          source_path: '/tmp/session-cloud.jsonl',
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    const card = page.locator('.session-card', { hasText: project });
+    await expect(card).toHaveCount(1);
+    await expect(card).toContainText('Head: Cloud');
+    await expect(card).toContainText('Started: Cinder');
+    await expect(card).toContainText('2 continuations');
+
+    await card.click();
+    await expect(page).toHaveURL(new RegExp(`/timeline/${childId}(?:\\?resume=1)?`));
+    await expect(page.getByTestId('session-lineage-panel')).toBeVisible();
+    await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
+  });
+
+  test('Older branches show a stale banner and branch-from-here continuation copy', async ({ page, request }) => {
+    const project = `thread-branch-${randomUUID().slice(0, 8)}`;
+    const rootId = await ingestSession(request, {
+      provider: 'claude',
+      project,
+      environment: 'Cinder',
+      events: [
+        {
+          role: 'user',
+          content_text: 'Laptop origin branch',
+          timestamp: new Date().toISOString(),
+          source_path: '/tmp/session.jsonl',
+          source_offset: 0,
+        },
+      ],
+    });
+
+    const childTimestamp = new Date(Date.now() + 60_000).toISOString();
+    const childId = await ingestSession(request, {
+      provider: 'claude',
+      project,
+      environment: 'cloud-runtime',
+      thread_root_session_id: rootId,
+      continued_from_session_id: rootId,
+      continuation_kind: 'cloud',
+      origin_label: 'Cloud',
+      started_at: childTimestamp,
+      ended_at: childTimestamp,
+      events: [
+        {
+          role: 'user',
+          content_text: 'Cloud head branch',
+          timestamp: childTimestamp,
+          source_path: '/tmp/session-cloud.jsonl',
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await page.goto(`/timeline/${rootId}`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+
+    await expect(page.getByTestId('session-branch-banner')).toContainText('not the latest continuation');
+    await expect(page.getByTestId('session-lineage-panel')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Branch from Here' })).toBeVisible();
+    await expect(page.locator('.session-chat-empty')).toContainText('branch from this history');
+
+    await page.getByRole('button', { name: 'Open Latest' }).click();
+    await expect(page).toHaveURL(new RegExp(`/timeline/${childId}(?:\\?resume=1)?`));
+    await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
+  });
+
+  test('Search keeps one thread card but opens the matching older continuation', async ({ page, request }) => {
+    const project = `thread-search-${randomUUID().slice(0, 8)}`;
+    const token = `branch-token-${randomUUID().slice(0, 8)}`;
+    const rootId = await ingestSession(request, {
+      provider: 'claude',
+      project,
+      environment: 'Cinder',
+      events: [
+        {
+          role: 'user',
+          content_text: `Original laptop branch contains ${token}`,
+          timestamp: new Date().toISOString(),
+          source_path: '/tmp/session.jsonl',
+          source_offset: 0,
+        },
+      ],
+    });
+
+    const childTimestamp = new Date(Date.now() + 60_000).toISOString();
+    await ingestSession(request, {
+      provider: 'claude',
+      project,
+      environment: 'cloud-runtime',
+      thread_root_session_id: rootId,
+      continued_from_session_id: rootId,
+      continuation_kind: 'cloud',
+      origin_label: 'Cloud',
+      started_at: childTimestamp,
+      ended_at: childTimestamp,
+      events: [
+        {
+          role: 'user',
+          content_text: 'Cloud continuation without the search token',
+          timestamp: childTimestamp,
+          source_path: '/tmp/session-cloud.jsonl',
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await page.goto('/timeline');
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    const searchInput = page.locator('input[type="search"]');
+    await searchInput.fill(token);
+    await expect(page).toHaveURL(new RegExp(`query=${token}`));
+
+    const card = page.locator('.session-card', { hasText: project });
+    await expect(card).toHaveCount(1);
+    await expect(card.locator('.session-card-snippet')).toContainText(token);
+
+    await card.click();
+    await expect(page).toHaveURL(new RegExp(`/timeline/${rootId}.*event_id=`));
+    await expect(page.getByTestId('session-branch-banner')).toBeVisible();
   });
 
   test('Non-Claude sessions explain the cloud continuation gap explicitly', async ({ page, request }) => {

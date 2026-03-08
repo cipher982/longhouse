@@ -8,6 +8,7 @@ import { useInfiniteQuery, useQuery, keepPreviousData } from "@tanstack/react-qu
 import {
   fetchAgentSessions,
   fetchAgentSession,
+  fetchAgentSessionThread,
   fetchAgentSessionEvents,
   fetchAgentSessionSummaries,
   fetchAgentSessionPreview,
@@ -18,6 +19,7 @@ import {
   type AgentSessionFilters,
   type AgentSessionsListResponse,
   type AgentSession,
+  type AgentSessionThreadResponse,
   type AgentEventsListResponse,
   type AgentSessionSummaryFilters,
   type AgentSessionSummaryListResponse,
@@ -52,6 +54,16 @@ export function useAgentSession(sessionId: string | null) {
   return useQuery<AgentSession>({
     queryKey: ["agent-session", sessionId],
     queryFn: () => fetchAgentSession(sessionId!),
+    enabled: !!sessionId,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+  });
+}
+
+export function useAgentSessionThread(sessionId: string | null) {
+  return useQuery<AgentSessionThreadResponse>({
+    queryKey: ["agent-session-thread", sessionId],
+    queryFn: () => fetchAgentSessionThread(sessionId!),
     enabled: !!sessionId,
     staleTime: 30_000,
     gcTime: 5 * 60_000,

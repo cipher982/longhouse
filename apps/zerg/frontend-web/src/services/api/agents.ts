@@ -33,12 +33,26 @@ export interface AgentSession {
   match_snippet?: string | null;
   match_role?: string | null;
   match_score?: number | null;
+  thread_root_session_id: string;
+  thread_head_session_id: string;
+  thread_continuation_count: number;
+  continued_from_session_id: string | null;
+  continuation_kind: string | null;
+  origin_label: string | null;
+  branched_from_event_id: number | null;
+  is_writable_head: boolean;
 }
 
 export interface AgentSessionsListResponse {
   sessions: AgentSession[];
   total: number;
   has_real_sessions: boolean;
+}
+
+export interface AgentSessionThreadResponse {
+  root_session_id: string;
+  head_session_id: string;
+  sessions: AgentSession[];
 }
 
 export interface AgentSessionSummary {
@@ -258,6 +272,10 @@ export async function fetchAgentActiveSessions(
  */
 export async function fetchAgentSession(sessionId: string): Promise<AgentSession> {
   return request<AgentSession>(`/agents/sessions/${sessionId}`, { method: "GET" });
+}
+
+export async function fetchAgentSessionThread(sessionId: string): Promise<AgentSessionThreadResponse> {
+  return request<AgentSessionThreadResponse>(`/agents/sessions/${sessionId}/thread`, { method: "GET" });
 }
 
 /**
