@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -42,6 +43,10 @@ from zerg.services.session_continuity import workspace_resolver
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
+
+
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +105,58 @@ class SSEEvent:
         return f"event: {self.event}\ndata: {self.data}\n\n"
 
 
+async def _stream_fake_claude_output(
+    *,
+    source_session_id: str,
+    target_session_id: str,
+    thread_root_session_id: str,
+    continued_from_session_id: str | None,
+    created_continuation: bool,
+    branched_from_event_id: int | None,
+    provider_session_id: str,
+    workspace_path: Path,
+    message: str,
+) -> AsyncIterator[str]:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    assistant_text = f"Test continuation reply to: {message}"
+
+    yield SSEEvent(
+        event="system",
+        data=json.dumps(
+            {
+                "type": "session_started",
+                "session_id": target_session_id,
+                "source_session_id": source_session_id,
+                "thread_root_session_id": thread_root_session_id,
+                "continued_from_session_id": continued_from_session_id,
+                "created_continuation": created_continuation,
+                "provider_session_id": provider_session_id,
+                "workspace": str(workspace_path),
+                "timestamp": timestamp,
+            }
+        ),
+    ).encode()
+    yield SSEEvent(
+        event="assistant_delta",
+        data=json.dumps({"text": assistant_text, "accumulated": assistant_text}),
+    ).encode()
+    yield SSEEvent(
+        event="done",
+        data=json.dumps(
+            {
+                "session_id": target_session_id,
+                "source_session_id": source_session_id,
+                "shipped_session_id": target_session_id,
+                "created_continuation": created_continuation,
+                "branched_from_event_id": branched_from_event_id,
+                "exit_code": 0,
+                "total_text_length": len(assistant_text),
+                "timestamp": timestamp,
+            }
+        ),
+    ).encode()
+
+
 async def stream_claude_output(
     *,
     source_session_id: str,
@@ -124,6 +181,21 @@ async def stream_claude_output(
     """
     proc = None
     try:
+        if _truthy_env("TESTING") and _truthy_env("E2E_FAKE_SESSION_CHAT"):
+            async for event in _stream_fake_claude_output(
+                source_session_id=source_session_id,
+                target_session_id=target_session_id,
+                thread_root_session_id=thread_root_session_id,
+                continued_from_session_id=continued_from_session_id,
+                created_continuation=created_continuation,
+                branched_from_event_id=branched_from_event_id,
+                provider_session_id=provider_session_id,
+                workspace_path=workspace_path,
+                message=message,
+            ):
+                yield event
+            return
+
         yield SSEEvent(
             event="system",
             data=json.dumps(
