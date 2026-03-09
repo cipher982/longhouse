@@ -27,8 +27,6 @@ jobs:
   continuation-provider-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      PROVIDER_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/continuation-provider-smoke
 
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +65,9 @@ jobs:
 
       - name: Install Playwright browsers + deps
         run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
+
+      - name: Set smoke artifact dir
+        run: echo "PROVIDER_SMOKE_ARTIFACT_DIR=$RUNNER_TEMP/continuation-provider-smoke" >> "$GITHUB_ENV"
 
       - name: Run provider-backed continuation smoke
         run: make test-e2e-continuation-provider
