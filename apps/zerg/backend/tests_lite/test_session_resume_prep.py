@@ -4,10 +4,10 @@ import asyncio
 import json
 from datetime import datetime
 from datetime import timezone
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
@@ -179,7 +179,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
             assert response.status_code == 200
             body = response.text
             assert '"created_continuation": true' in body
-            assert 'event: done' in body
+            assert "event: done" in body
 
             sessions = db.query(AgentSession).filter(AgentSession.thread_root_session_id == source_session_id).all()
             assert len(sessions) == 2
@@ -191,3 +191,145 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
             assert target.continuation_kind == "cloud"
         finally:
             api_app.dependency_overrides.clear()
+
+
+def test_build_claude_resume_runtime_uses_zai_env(monkeypatch):
+    monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
+    monkeypatch.setenv(session_chat.SESSION_CHAT_MODEL_ENV, "glm-4.7")
+
+    runtime = session_chat._build_claude_resume_runtime(
+        provider_session_id="resume-root",
+        message="anything else?",
+    )
+
+    assert runtime.backend == session_chat.SESSION_CHAT_BACKEND_ZAI
+    assert runtime.cmd == [
+        "claude",
+        "--resume",
+        "resume-root",
+        "-p",
+        "anything else?",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--print",
+    ]
+    assert runtime.env_updates == {
+        "ANTHROPIC_BASE_URL": session_chat.DEFAULT_SESSION_CHAT_ZAI_BASE_URL,
+        "ANTHROPIC_AUTH_TOKEN": "zai-test-key",
+        "ANTHROPIC_MODEL": "glm-4.7",
+    }
+    assert runtime.env_unset == ("CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY")
+
+
+def test_build_claude_resume_runtime_requires_zai_key(monkeypatch):
+    monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="requires ZAI_API_KEY"):
+        session_chat._build_claude_resume_runtime(
+            provider_session_id="resume-root",
+            message="anything else?",
+        )
+
+
+def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
+    monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("E2E_FAKE_SESSION_CHAT", raising=False)
+
+    captured: dict[str, object] = {}
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = iter(
+                [
+                    (
+                        json.dumps(
+                            {
+                                "type": "assistant",
+                                "message": {"content": [{"type": "text", "text": "hello from glm"}]},
+                            }
+                        )
+                        + "\n"
+                    ).encode(),
+                    (json.dumps({"type": "result", "result": "ok"}) + "\n").encode(),
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._lines)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.returncode = 0
+
+        async def wait(self):
+            return None
+
+        def terminate(self):
+            return None
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["env"] = kwargs["env"]
+        captured["cwd"] = kwargs["cwd"]
+        return FakeProc()
+
+    async def fake_ship_session_to_zerg(**kwargs):
+        captured["ship_kwargs"] = kwargs
+        return kwargs["session_id"]
+
+    monkeypatch.setattr(session_chat.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(session_chat, "ship_session_to_zerg", fake_ship_session_to_zerg)
+
+    async def collect_events():
+        return [
+            event
+            async for event in session_chat.stream_claude_output(
+                source_session_id=str(uuid4()),
+                target_session_id=str(uuid4()),
+                thread_root_session_id=str(uuid4()),
+                continued_from_session_id=str(uuid4()),
+                created_continuation=True,
+                branched_from_event_id=7,
+                provider_session_id="resume-root",
+                workspace_path=tmp_path,
+                message="anything else?",
+                request_id="req-zai",
+            )
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert captured["cmd"] == [
+        "claude",
+        "--resume",
+        "resume-root",
+        "-p",
+        "anything else?",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--print",
+    ]
+    env = captured["env"]
+    assert env["ANTHROPIC_BASE_URL"] == session_chat.DEFAULT_SESSION_CHAT_ZAI_BASE_URL
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "zai-test-key"
+    assert env["ANTHROPIC_MODEL"] == session_chat.DEFAULT_SESSION_CHAT_ZAI_MODEL
+    assert "CLAUDE_CODE_USE_BEDROCK" not in env
+    assert captured["cwd"] == tmp_path
+    assert captured["ship_kwargs"]["continuation_kind"] == "cloud"
+    assert any('"execution_backend": "zai"' in event for event in events)
+    assert any("event: assistant_delta" in event for event in events)
+    assert any("event: tool_result" in event for event in events)
+    assert any("event: done" in event for event in events)

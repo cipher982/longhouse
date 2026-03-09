@@ -59,6 +59,23 @@ Notes:
 
 ---
 
+## [QA/Test] Provider-backed continuation smoke via z.ai (size: 1)
+
+Status (2026-03-09): Feasible, not wired. Direct `claude --resume` works against z.ai/GLM when `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_MODEL` are set, and `session_chat.py` now exposes that via `SESSION_CHAT_BACKEND=zai`.
+
+**Goal:** Add one optional manual/nightly smoke that exercises the real continuation send path against a Claude-compatible provider without depending on expiring Bedrock SSO.
+
+- [x] Keep per-push continuation E2E deterministic (`TESTING=1` + fake stream) so core CI stays fast and reliable
+- [x] Make the real continuation route backend-configurable for `ambient`, `zai`, or `bedrock` while preserving the current production default
+- [ ] Add repo `ZAI_API_KEY` and ensure the chosen smoke runner has the `claude` CLI available
+- [ ] Add a manual/nightly workflow that runs the single continuation-send browser E2E with `E2E_FAKE_SESSION_CHAT=0` and `SESSION_CHAT_BACKEND=zai`
+
+Notes:
+- 2026-03-09: `hatch -b zai` can create and resume Claude-compatible sessions locally, but its current `stream-json` path omits Claude's required `--verbose`, so the live SSE route still uses direct `claude` invocation instead of `hatch`.
+- 2026-03-09: GitHub Actions repo secrets currently do not include `ZAI_API_KEY`, and there is no existing workflow step that installs the `claude` CLI on hosted runners.
+
+---
+
 ## [Launch][Product] Codex/Gemini cloud continuation parity (size: 5)
 
 Status (2026-03-08): Not started. Longhouse can reconstruct/resume Claude sessions today, but Codex/Gemini direct continuation is still missing even though the current local `codex` CLI exposes `codex exec resume ... --json`.

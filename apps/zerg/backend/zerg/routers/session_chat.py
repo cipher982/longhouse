@@ -44,9 +44,93 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
 
+SESSION_CHAT_BACKEND_ENV = "SESSION_CHAT_BACKEND"
+SESSION_CHAT_MODEL_ENV = "SESSION_CHAT_MODEL"
+SESSION_CHAT_ZAI_BASE_URL_ENV = "SESSION_CHAT_ZAI_BASE_URL"
+SESSION_CHAT_AWS_PROFILE_ENV = "SESSION_CHAT_AWS_PROFILE"
+SESSION_CHAT_AWS_REGION_ENV = "SESSION_CHAT_AWS_REGION"
+SESSION_CHAT_BACKEND_AMBIENT = "ambient"
+SESSION_CHAT_BACKEND_ZAI = "zai"
+SESSION_CHAT_BACKEND_BEDROCK = "bedrock"
+DEFAULT_SESSION_CHAT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
+DEFAULT_SESSION_CHAT_ZAI_MODEL = "glm-5"
+SUPPORTED_SESSION_CHAT_BACKENDS = {
+    SESSION_CHAT_BACKEND_AMBIENT,
+    SESSION_CHAT_BACKEND_ZAI,
+    SESSION_CHAT_BACKEND_BEDROCK,
+}
+
 
 def _truthy_env(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_session_chat_backend() -> str:
+    backend = os.getenv(SESSION_CHAT_BACKEND_ENV, SESSION_CHAT_BACKEND_AMBIENT).strip().lower()
+    if not backend:
+        return SESSION_CHAT_BACKEND_AMBIENT
+    if backend not in SUPPORTED_SESSION_CHAT_BACKENDS:
+        raise RuntimeError(f"{SESSION_CHAT_BACKEND_ENV} must be one of {sorted(SUPPORTED_SESSION_CHAT_BACKENDS)} (got {backend!r})")
+    return backend
+
+
+@dataclass(frozen=True)
+class ClaudeResumeRuntime:
+    backend: str
+    cmd: list[str]
+    env_updates: dict[str, str]
+    env_unset: tuple[str, ...] = ()
+
+
+def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> ClaudeResumeRuntime:
+    cmd = [
+        "claude",
+        "--resume",
+        provider_session_id,
+        "-p",
+        message,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--print",
+    ]
+    backend = _get_session_chat_backend()
+    if backend == SESSION_CHAT_BACKEND_AMBIENT:
+        return ClaudeResumeRuntime(backend=backend, cmd=cmd, env_updates={})
+
+    model = os.getenv(SESSION_CHAT_MODEL_ENV, "").strip()
+    if backend == SESSION_CHAT_BACKEND_ZAI:
+        api_key = os.getenv("ZAI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError(f"{SESSION_CHAT_BACKEND_ENV}=zai requires ZAI_API_KEY")
+        env_updates = {
+            "ANTHROPIC_BASE_URL": os.getenv(SESSION_CHAT_ZAI_BASE_URL_ENV, DEFAULT_SESSION_CHAT_ZAI_BASE_URL).strip()
+            or DEFAULT_SESSION_CHAT_ZAI_BASE_URL,
+            "ANTHROPIC_AUTH_TOKEN": api_key,
+            "ANTHROPIC_MODEL": model or DEFAULT_SESSION_CHAT_ZAI_MODEL,
+        }
+        return ClaudeResumeRuntime(
+            backend=backend,
+            cmd=cmd,
+            env_updates=env_updates,
+            env_unset=("CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY"),
+        )
+
+    env_updates = {"CLAUDE_CODE_USE_BEDROCK": "1"}
+    aws_profile = os.getenv(SESSION_CHAT_AWS_PROFILE_ENV, "").strip()
+    aws_region = os.getenv(SESSION_CHAT_AWS_REGION_ENV, "").strip()
+    if aws_profile:
+        env_updates["AWS_PROFILE"] = aws_profile
+    if aws_region:
+        env_updates["AWS_REGION"] = aws_region
+    if model:
+        env_updates["ANTHROPIC_MODEL"] = model
+    return ClaudeResumeRuntime(
+        backend=backend,
+        cmd=cmd,
+        env_updates=env_updates,
+        env_unset=("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +280,8 @@ async def stream_claude_output(
                 yield event
             return
 
+        runtime = _build_claude_resume_runtime(provider_session_id=provider_session_id, message=message)
+
         yield SSEEvent(
             event="system",
             data=json.dumps(
@@ -208,30 +294,30 @@ async def stream_claude_output(
                     "created_continuation": created_continuation,
                     "provider_session_id": provider_session_id,
                     "workspace": str(workspace_path),
+                    "execution_backend": runtime.backend,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             ),
         ).encode()
 
-        cmd = [
-            "claude",
-            "--resume",
-            provider_session_id,
-            "-p",
-            message,
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--print",
-        ]
+        proc_env = os.environ.copy()
+        proc_env.update(runtime.env_updates)
+        for env_name in runtime.env_unset:
+            proc_env.pop(env_name, None)
 
-        logger.info(f"[{request_id}] Starting Claude: cwd={workspace_path}")
+        logger.info(
+            "[%s] Starting Claude-compatible continuation: backend=%s cwd=%s",
+            request_id,
+            runtime.backend,
+            workspace_path,
+        )
 
         proc = await asyncio.create_subprocess_exec(
-            *cmd,
+            *runtime.cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             cwd=workspace_path,
+            env=proc_env,
         )
 
         assistant_text = ""
@@ -337,6 +423,7 @@ async def stream_claude_output(
                     "created_continuation": created_continuation,
                     "branched_from_event_id": branched_from_event_id,
                     "exit_code": proc.returncode,
+                    "execution_backend": runtime.backend if "runtime" in locals() else SESSION_CHAT_BACKEND_AMBIENT,
                     "total_text_length": len(assistant_text),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
