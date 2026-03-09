@@ -1,0 +1,79 @@
+name: Continuation Provider Smoke
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '17 09 * * *'
+
+concurrency:
+  group: continuation-provider-smoke
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
+  LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
+  LIFE_HUB_URL: https://data.drose.io
+  E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}
+  PLAYWRIGHT_WORKERS: '1'
+  E2E_FAKE_SESSION_CHAT: '0'
+  SESSION_CHAT_BACKEND: anthropic
+  SESSION_CHAT_MODEL: claude-sonnet-4-20250514
+  ANTHROPIC_API_KEY: ${{ secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY }}
+
+jobs:
+  continuation-provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Install Claude Code CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Install JS deps (repo root)
+        run: bun install --frozen-lockfile
+
+      - name: Pre-install backend deps
+        run: cd apps/zerg/backend && uv sync
+
+      - name: Install Playwright browsers + deps
+        run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
+
+      - name: Run provider-backed continuation smoke
+        run: make test-e2e-continuation-provider
+
+      - name: Upload Playwright artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: continuation-provider-smoke-artifacts
+          path: |
+            apps/zerg/e2e/test-results
+            apps/zerg/e2e/playwright-report

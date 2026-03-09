@@ -59,20 +59,21 @@ Notes:
 
 ---
 
-## [QA/Test] Provider-backed continuation smoke via z.ai (size: 1)
+## [QA/Test] Provider-backed continuation smoke (Anthropic CI key) (size: 1)
 
-Status (2026-03-09): Feasible, not wired. Direct `claude --resume` works against z.ai/GLM when `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_MODEL` are set, and `session_chat.py` now exposes that via `SESSION_CHAT_BACKEND=zai`.
+Status (2026-03-09): Done.
 
-**Goal:** Add one optional manual/nightly smoke that exercises the real continuation send path against a Claude-compatible provider without depending on expiring Bedrock SSO.
+**Goal:** Add one optional manual/nightly smoke that exercises the real continuation send path against a real Claude backend without depending on expiring Bedrock SSO or ambient personal laptop auth.
 
 - [x] Keep per-push continuation E2E deterministic (`TESTING=1` + fake stream) so core CI stays fast and reliable
-- [x] Make the real continuation route backend-configurable for `ambient`, `zai`, or `bedrock` while preserving the current production default
-- [ ] Add repo `ZAI_API_KEY` and ensure the chosen smoke runner has the `claude` CLI available
-- [ ] Add a manual/nightly workflow that runs the single continuation-send browser E2E with `E2E_FAKE_SESSION_CHAT=0` and `SESSION_CHAT_BACKEND=zai`
+- [x] Make the real continuation route backend-configurable for `ambient`, `zai`, `bedrock`, or `anthropic` while preserving the current production default
+- [x] Store a dedicated CI-only Anthropic key outside the repo and inject it into GitHub Actions as `LONGHOUSE_CI_ANTHROPIC_API_KEY`
+- [x] Add a manual/nightly workflow that runs the single continuation-send browser smoke with `SESSION_CHAT_BACKEND=anthropic`
+- [x] Verify the real browser path locally with proof (`make test-e2e-continuation-provider`)
 
 Notes:
-- 2026-03-09: `hatch -b zai` can create and resume Claude-compatible sessions locally, but its current `stream-json` path omits Claude's required `--verbose`, so the live SSE route still uses direct `claude` invocation instead of `hatch`.
-- 2026-03-09: GitHub Actions repo secrets currently do not include `ZAI_API_KEY`, and there is no existing workflow step that installs the `claude` CLI on hosted runners.
+- 2026-03-09: The real provider smoke now lives in `apps/zerg/e2e/scripts/provider-continuation-smoke.mjs` instead of the normal Playwright suite. That keeps the core browser E2E deterministic and avoids runner/global-setup noise while still proving the literal user action with a real Claude session.
+- 2026-03-09: The Anthropic key is CI-only. Do not export it globally on developer laptops or switch normal Claude coding flows away from Bedrock SSO.
 
 ---
 
