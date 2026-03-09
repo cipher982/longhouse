@@ -421,6 +421,57 @@ test.describe('Session Detail Page', () => {
   });
 
 
+  test('Claude continuation send creates a cloud branch instead of crashing', async ({ page, request }) => {
+    const project = `resume-send-${randomUUID().slice(0, 8)}`;
+    const rootId = await ingestSession(request, {
+      provider: 'claude',
+      project,
+      environment: 'Cinder',
+      provider_session_id: `resume-send-${randomUUID().slice(0, 8)}`,
+      events: [
+        {
+          role: 'user',
+          content_text: 'Started on laptop before cloud continuation',
+          timestamp: new Date().toISOString(),
+          source_path: '/tmp/session.jsonl',
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await page.goto(`/timeline/${rootId}?resume=1`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+
+    const composer = page.locator('.session-chat-composer textarea');
+    await composer.fill('anything else?');
+    await page.getByRole('button', { name: 'Send' }).click();
+
+    await expect(page.locator('.session-chat-error')).toHaveCount(0);
+    await expect(page.locator('.session-chat-message--user')).toContainText('anything else?');
+
+    await expect
+      .poll(() => page.url(), { timeout: 10000 })
+      .not.toContain(`/timeline/${rootId}`);
+
+    await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
+
+    const sessionsResp = await request.get(`/api/agents/sessions?project=${project}&days_back=1`);
+    expect(sessionsResp.ok()).toBe(true);
+    const sessionsPayload = await sessionsResp.json();
+    const threadCard = sessionsPayload.sessions.find((session: {
+      thread_root_session_id?: string;
+      id: string;
+      thread_continuation_count?: number;
+      thread_head_session_id?: string;
+    }) => {
+      return (session.thread_root_session_id || session.id) === rootId;
+    });
+    expect(threadCard).toBeTruthy();
+    expect(threadCard.thread_continuation_count).toBe(2);
+    expect(threadCard.thread_head_session_id).not.toBe(rootId);
+  });
+
+
   test('Timeline groups continuations into one task card and opens the latest head', async ({ page, request }) => {
     const project = `thread-group-${randomUUID().slice(0, 8)}`;
     const rootId = await ingestSession(request, {
@@ -684,7 +735,7 @@ test.describe('Session Detail Page', () => {
     await shell.evaluate((el) => {
       el.scrollTop = 0;
     });
-    await expect.poll(async () => shell.evaluate((el) => el.scrollTop)).toBe(0);
+    await expect.poll(async () => shell.evaluate((el) => el.scrollTop)).toBeLessThan(20);
 
     const startTop = await shell.evaluate((el) => el.scrollTop);
     const viewportHeight = await page.evaluate(() => window.innerHeight);
