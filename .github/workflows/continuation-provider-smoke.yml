@@ -22,12 +22,13 @@ env:
   SESSION_CHAT_BACKEND: anthropic
   SESSION_CHAT_MODEL: claude-sonnet-4-20250514
   ANTHROPIC_API_KEY: ${{ secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY }}
-  PROVIDER_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/continuation-provider-smoke
 
 jobs:
   continuation-provider-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      PROVIDER_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/continuation-provider-smoke
 
     steps:
       - uses: actions/checkout@v4
