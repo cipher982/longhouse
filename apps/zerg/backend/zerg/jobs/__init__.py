@@ -1,7 +1,8 @@
-"""Scheduled jobs framework for Zerg.
+"""Scheduled jobs framework for Longhouse.
 
-This module provides the infrastructure for running scheduled jobs (migrated from Sauron).
-Jobs are registered with APScheduler and executed on cron schedules.
+This package provides Longhouse's scheduler/queue infrastructure for builtin
+product jobs and, when explicitly configured, optional external job packs. It
+shares lineage with Sauron but is not the standalone Sauron service.
 
 Job Categories:
 - backups: Backup verification and sync (backup-sentinel, minio-sync)

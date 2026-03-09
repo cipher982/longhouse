@@ -1,7 +1,7 @@
-"""Shared utilities for Zerg jobs.
+"""Shared helpers for Longhouse scheduled jobs.
 
-These utilities are portable versions of Sauron's shared modules,
-used by scheduled jobs migrated from Sauron.
+These helpers support builtin product jobs and optional external job packs that
+Longhouse can load, while remaining distinct from the standalone Sauron runtime.
 """
 
 from .email import send_alert_email

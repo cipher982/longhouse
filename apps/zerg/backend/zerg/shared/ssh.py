@@ -1,6 +1,7 @@
-"""SSH utilities for remote command execution.
+"""SSH utilities for Longhouse scheduled jobs.
 
-Ported from Sauron for use in scheduled jobs.
+Used by builtin product jobs and optional external job packs when a jobs repo is
+explicitly configured. This module is separate from the standalone Sauron service.
 """
 
 from __future__ import annotations
