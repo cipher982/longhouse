@@ -52,12 +52,15 @@ SESSION_CHAT_AWS_REGION_ENV = "SESSION_CHAT_AWS_REGION"
 SESSION_CHAT_BACKEND_AMBIENT = "ambient"
 SESSION_CHAT_BACKEND_ZAI = "zai"
 SESSION_CHAT_BACKEND_BEDROCK = "bedrock"
+SESSION_CHAT_BACKEND_ANTHROPIC = "anthropic"
 DEFAULT_SESSION_CHAT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
 DEFAULT_SESSION_CHAT_ZAI_MODEL = "glm-5"
+DEFAULT_SESSION_CHAT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 SUPPORTED_SESSION_CHAT_BACKENDS = {
     SESSION_CHAT_BACKEND_AMBIENT,
     SESSION_CHAT_BACKEND_ZAI,
     SESSION_CHAT_BACKEND_BEDROCK,
+    SESSION_CHAT_BACKEND_ANTHROPIC,
 }
 
 
@@ -114,6 +117,22 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
             cmd=cmd,
             env_updates=env_updates,
             env_unset=("CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY"),
+        )
+
+    if backend == SESSION_CHAT_BACKEND_ANTHROPIC:
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError(f"{SESSION_CHAT_BACKEND_ENV}=anthropic requires ANTHROPIC_API_KEY")
+        env_updates = {"ANTHROPIC_API_KEY": api_key}
+        if model:
+            env_updates["ANTHROPIC_MODEL"] = model
+        else:
+            env_updates["ANTHROPIC_MODEL"] = DEFAULT_SESSION_CHAT_ANTHROPIC_MODEL
+        return ClaudeResumeRuntime(
+            backend=backend,
+            cmd=cmd,
+            env_updates=env_updates,
+            env_unset=("CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"),
         )
 
     env_updates = {"CLAUDE_CODE_USE_BEDROCK": "1"}

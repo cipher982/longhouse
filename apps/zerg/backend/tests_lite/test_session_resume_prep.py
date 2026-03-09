@@ -333,3 +333,36 @@ def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
     assert any("event: assistant_delta" in event for event in events)
     assert any("event: tool_result" in event for event in events)
     assert any("event: done" in event for event in events)
+
+
+def test_build_claude_resume_runtime_uses_anthropic_env(monkeypatch):
+    monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ANTHROPIC)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
+    monkeypatch.delenv(session_chat.SESSION_CHAT_MODEL_ENV, raising=False)
+
+    runtime = session_chat._build_claude_resume_runtime(
+        provider_session_id="resume-root",
+        message="anything else?",
+    )
+
+    assert runtime.backend == session_chat.SESSION_CHAT_BACKEND_ANTHROPIC
+    assert runtime.env_updates == {
+        "ANTHROPIC_API_KEY": "anthropic-test-key",
+        "ANTHROPIC_MODEL": session_chat.DEFAULT_SESSION_CHAT_ANTHROPIC_MODEL,
+    }
+    assert runtime.env_unset == (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+    )
+
+
+def test_build_claude_resume_runtime_requires_anthropic_key(monkeypatch):
+    monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ANTHROPIC)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="requires ANTHROPIC_API_KEY"):
+        session_chat._build_claude_resume_runtime(
+            provider_session_id="resume-root",
+            message="anything else?",
+        )
