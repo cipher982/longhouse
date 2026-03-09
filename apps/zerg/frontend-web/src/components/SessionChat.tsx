@@ -10,6 +10,7 @@
 
 import { useCallback, useRef, useState, type FormEvent, useEffect } from "react";
 import { buildUrl } from "../services/api/base";
+import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
 import { Badge, Button, Spinner } from "./ui";
 import type { ActiveSession } from "../hooks/useActiveSessions";
 
@@ -192,31 +193,28 @@ export function SessionChat({
         const decoder = new TextDecoder();
         let buffer = "";
 
+        const processEvent = ({ eventType, data }: { eventType: string; data: string }) => {
+          try {
+            const parsed = JSON.parse(data);
+            handleSSEEvent(eventType, parsed, assistantId);
+          } catch {
+            // Ignore parse errors
+          }
+        };
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
-
-          // Parse SSE events
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || ""; // Keep incomplete line in buffer
-
-          let eventType = "";
-          for (const line of lines) {
-            if (line.startsWith("event: ")) {
-              eventType = line.slice(7);
-            } else if (line.startsWith("data: ")) {
-              const data = line.slice(6);
-              try {
-                const parsed = JSON.parse(data);
-                handleSSEEvent(eventType, parsed, assistantId);
-              } catch {
-                // Ignore parse errors
-              }
-            }
-          }
+          buffer = consumeSessionChatSseBuffer(
+            buffer,
+            decoder.decode(value, { stream: true }),
+            processEvent,
+          );
         }
+
+        buffer = consumeSessionChatSseBuffer(buffer, decoder.decode(), processEvent);
+        flushSessionChatSseBuffer(buffer, processEvent);
       } catch (e) {
         if (e instanceof Error && e.name === "AbortError") {
           // Cancelled by user
