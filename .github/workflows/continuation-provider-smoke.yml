@@ -22,6 +22,7 @@ env:
   SESSION_CHAT_BACKEND: anthropic
   SESSION_CHAT_MODEL: claude-sonnet-4-20250514
   ANTHROPIC_API_KEY: ${{ secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY }}
+  PROVIDER_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/continuation-provider-smoke
 
 jobs:
   continuation-provider-smoke:
@@ -69,11 +70,57 @@ jobs:
       - name: Run provider-backed continuation smoke
         run: make test-e2e-continuation-provider
 
-      - name: Upload Playwright artifacts (on failure)
+      - name: Write smoke summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path(os.environ['PROVIDER_SMOKE_ARTIFACT_DIR']) / 'manifest.json'
+          summary_path = Path(os.environ['GITHUB_STEP_SUMMARY'])
+
+          lines = ['## Continuation Provider Smoke', '']
+          if not manifest_path.exists():
+              lines.append('- No manifest was produced.')
+              summary_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+              raise SystemExit(0)
+
+          data = json.loads(manifest_path.read_text(encoding='utf-8'))
+          lines.append(f"- Status: **{data.get('status', 'unknown')}**")
+          for label, key in [
+              ('Backend', 'backend'),
+              ('Model', 'model'),
+              ('Root session', 'root_session_id'),
+              ('Child session', 'child_session_id'),
+              ('Head session', 'head_session_id'),
+              ('Continuation count', 'continuation_count'),
+              ('Final URL', 'final_url'),
+          ]:
+              value = data.get(key)
+              if value is not None:
+                  lines.append(f"- {label}: `{value}`")
+          error = data.get('error')
+          if error:
+              lines.append(f"- Error: `{error}`")
+          summary_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+
+      - name: Upload smoke proof manifest
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: continuation-provider-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PROVIDER_SMOKE_ARTIFACT_DIR }}/manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload smoke debug bundle
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: continuation-provider-smoke-artifacts
-          path: |
-            apps/zerg/e2e/test-results
-            apps/zerg/e2e/playwright-report
+          name: continuation-provider-smoke-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PROVIDER_SMOKE_ARTIFACT_DIR }}
+          if-no-files-found: ignore
+          retention-days: 14
