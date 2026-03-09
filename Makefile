@@ -276,7 +276,7 @@ test-e2e-single: ## @internal Run a single E2E test (usage: make test-e2e-single
 	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-args>" && exit 1)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
 
-test-e2e-continuation-provider: ## Run the real provider-backed continuation smoke (requires ANTHROPIC_API_KEY + claude CLI)
+test-e2e-continuation-provider: ## Run the real provider-backed continuation smoke (requires ANTHROPIC_API_KEY + claude CLI; optional PROVIDER_SMOKE_ARTIFACT_DIR)
 	@$(MAKE) ensure-js-deps
 	cd apps/zerg/frontend-web && bun run build
 	cd apps/zerg/e2e && E2E_BACKEND_PORT=$(E2E_BACKEND_PORT) node scripts/provider-continuation-smoke.mjs
