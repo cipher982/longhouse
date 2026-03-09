@@ -33,8 +33,6 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
-from zerg.services.agents_store import AgentsStore
-
 if TYPE_CHECKING:
     pass
 
@@ -112,6 +110,8 @@ def _export_session_from_db(session_id: str, db: Session) -> tuple[bytes, str, s
         session_uuid = UUID(session_id)
     except ValueError as exc:
         raise ValueError(f"Invalid session id: {session_id}") from exc
+
+    from zerg.services.agents_store import AgentsStore
 
     result = AgentsStore(db).export_session_jsonl(session_uuid, branch_mode="head")
     if not result:
