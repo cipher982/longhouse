@@ -1098,7 +1098,7 @@ export default function SessionDetailPage() {
     : null;
 
   const handleContinuationSessionChanged = (nextSessionId: string) => {
-    if (!nextSessionId || nextSessionId === continuationSourceSession.id) return;
+    if (!nextSessionId || nextSessionId === session.id) return;
     navigate(`/timeline/${nextSessionId}`, {
       replace: true,
       state: { from: `${location.pathname}${location.search}` },
