@@ -1,6 +1,7 @@
-"""Email utilities using AWS SES.
+"""Email utilities for Longhouse scheduled jobs.
 
-Ported from Sauron for use in scheduled jobs.
+Used by builtin product jobs and, when explicitly configured, optional external
+job packs loaded by Longhouse. This helper is not the standalone Sauron runtime.
 """
 
 from __future__ import annotations

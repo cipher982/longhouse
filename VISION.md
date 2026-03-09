@@ -396,13 +396,13 @@ If the README drifts from reality, CI should fail. No hidden env flags — every
 
 ## Mental Model (Core vs Scheduler vs Jobs)
 
-Longhouse is the product. Sauron is the scheduler service. Jobs are the thing it runs.
+Longhouse is the product. Sauron is the standalone scheduler service. Jobs are the thing the scheduler runs.
 
-- **Longhouse Core**: UI + API + agents. Runs standalone (no scheduler required).
-- **Sauron**: cron/scheduler service. Optional for Longhouse overall, but its whole purpose is to run jobs (think “cron for Longhouse jobs/commis/fiches”).
-- **Jobs Pack**: the job source Sauron needs. Options: a local template for zero-config OSS, or a private repo for real workloads.
+- **Longhouse Core**: UI + API + agents. Runs standalone, with a small builtin jobs framework for product maintenance.
+- **Sauron**: separate cron/scheduler service for broader automation workloads. David's private jobs pack runs here today, outside the Longhouse product runtime.
+- **Jobs Pack**: the job source a scheduler needs. Options: a local template for zero-config OSS, or a private repo for real workloads.
 
-This framing keeps OSS onboarding simple while preserving the “power user” path.
+This framing keeps OSS onboarding simple while preserving the power-user path without blurring Longhouse and Sauron together.
 
 ---
 
