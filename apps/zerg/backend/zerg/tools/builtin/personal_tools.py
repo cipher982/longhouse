@@ -1,4 +1,4 @@
-"""Personal tools for Oikos integration (Phase 4 v2.1).
+"""Personal tools for Oikos integration.
 
 These tools enable Oikos to access personal data sources:
 - Location: GPS position from Traccar tracking server
