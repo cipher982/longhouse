@@ -64,6 +64,26 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         ON spool_queue(status, next_retry_at);",
     )?;
 
+    // Old builds could create duplicate pending pointers for the same file/range.
+    // Collapse those rows before enforcing uniqueness so restart recovery becomes idempotent.
+    conn.execute(
+        "DELETE FROM spool_queue
+         WHERE status = 'pending'
+           AND id NOT IN (
+             SELECT MIN(id)
+             FROM spool_queue
+             WHERE status = 'pending'
+             GROUP BY provider, file_path, start_offset, end_offset
+           )",
+        [],
+    )?;
+
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_spool_pending_unique
+         ON spool_queue(provider, file_path, start_offset, end_offset)
+         WHERE status = 'pending';",
+    )?;
+
     tracing::debug!("Opened shipper DB: {}", path.display());
     Ok(conn)
 }
@@ -109,5 +129,81 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal");
+    }
+
+    #[test]
+    fn test_open_db_dedupes_pending_spool_rows_before_unique_index() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE file_state (
+                path TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                queued_offset INTEGER NOT NULL DEFAULT 0,
+                acked_offset INTEGER NOT NULL DEFAULT 0,
+                session_id TEXT,
+                provider_session_id TEXT,
+                last_updated TEXT NOT NULL
+            );
+            CREATE TABLE spool_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                start_offset INTEGER NOT NULL,
+                end_offset INTEGER NOT NULL,
+                session_id TEXT,
+                created_at TEXT NOT NULL,
+                retry_count INTEGER DEFAULT 0,
+                next_retry_at TEXT NOT NULL,
+                last_error TEXT,
+                status TEXT DEFAULT 'pending'
+            );",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/dup.jsonl', 100, 500, datetime('now'), datetime('now'), 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/dup.jsonl', 100, 500, datetime('now'), datetime('now'), 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/dup.jsonl', 100, 500, datetime('now'), datetime('now'), 'dead')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open_db(Some(tmp.path())).unwrap();
+        let pending_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM spool_queue WHERE status = 'pending'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let dead_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM spool_queue WHERE status = 'dead'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending_count, 1);
+        assert_eq!(dead_count, 1);
+
+        let err = conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/dup.jsonl', 100, 500, datetime('now'), datetime('now'), 'pending')",
+            [],
+        );
+        assert!(err.is_err(), "unique pending range index should reject duplicates");
     }
 }
