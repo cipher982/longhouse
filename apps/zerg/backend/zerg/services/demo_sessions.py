@@ -392,7 +392,9 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Bash",
             tool_call_id="call_s3_01",
-            tool_input_json={"command": "grep -n 'days_back\\|timedelta\\|utc\\|now()' ~/git/sauron-jobs/jobs/daily_digest.py | head -20"},
+            tool_input_json={
+                "command": "grep -n 'days_back\\|timedelta\\|utc\\|now()' ~/git/sauron/jobs/jobs/worklog/daily_digest.py | head -20"
+            },
             timestamp=t3 + timedelta(minutes=3),
         ),
         EventIngest(
