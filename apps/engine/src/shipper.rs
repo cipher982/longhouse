@@ -91,6 +91,7 @@ pub fn prepare_file(
     }
 
     let event_count = parse_result.events.len();
+    let new_offset = parse_result.last_good_offset;
     let compressed = compressor::build_and_compress_with_source_lines(
         &parse_result.metadata.session_id,
         &parse_result.events,
@@ -105,7 +106,7 @@ pub fn prepare_file(
         path_str,
         provider: provider.to_string(),
         offset,
-        new_offset: file_size,
+        new_offset,
         event_count,
         session_id: parse_result.metadata.session_id.clone(),
         compressed,
@@ -379,7 +380,8 @@ pub async fn full_scan(
     for (path, provider_name) in &all_files {
         match prepare_file(path, provider_name, algo, conn) {
             Ok(Some(item)) => {
-                let (events, _is_connect_err) = ship_and_record(item, client, conn, tracker).await?;
+                let (events, _is_connect_err) =
+                    ship_and_record(item, client, conn, tracker).await?;
                 if events > 0 {
                     files_shipped += 1;
                     events_shipped += events;
@@ -417,16 +419,21 @@ mod tests {
 
     fn claude_session_lines() -> &'static str {
         concat!(
-            r#"{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#, "\n",
-            r#"{"type":"assistant","uuid":"22222222-2222-2222-2222-222222222222","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi there"}]}}"#, "\n",
+            r#"{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"22222222-2222-2222-2222-222222222222","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi there"}]}}"#,
+            "\n",
         )
     }
 
     fn codex_session_lines() -> &'static str {
         concat!(
-            r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#, "\n",
-            r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"}]}}"#, "\n",
-            r#"{"type":"response_item","timestamp":"2026-02-15T10:00:02Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi from codex"}]}}"#, "\n",
+            r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#,
+            "\n",
+            r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"}]}}"#,
+            "\n",
+            r#"{"type":"response_item","timestamp":"2026-02-15T10:00:02Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi from codex"}]}}"#,
+            "\n",
         )
     }
 
@@ -449,7 +456,9 @@ mod tests {
             claude_session_lines(),
             "aaaa1111-2222-3333-4444-555566667777.jsonl",
         );
-        let path = dir.path().join("aaaa1111-2222-3333-4444-555566667777.jsonl");
+        let path = dir
+            .path()
+            .join("aaaa1111-2222-3333-4444-555566667777.jsonl");
         let file_size = std::fs::metadata(&path).unwrap().len();
 
         // Simulate Python shipper having set the offset to file_size
@@ -465,7 +474,10 @@ mod tests {
 
         // prepare_file should return None (no new content)
         let result = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
-        assert!(result.is_none(), "Stale offset should cause file to be skipped");
+        assert!(
+            result.is_none(),
+            "Stale offset should cause file to be skipped"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -479,7 +491,9 @@ mod tests {
             claude_session_lines(),
             "aaaa1111-2222-3333-4444-555566667777.jsonl",
         );
-        let path = dir.path().join("aaaa1111-2222-3333-4444-555566667777.jsonl");
+        let path = dir
+            .path()
+            .join("aaaa1111-2222-3333-4444-555566667777.jsonl");
         let file_size = std::fs::metadata(&path).unwrap().len();
 
         // Set stale offset
@@ -515,9 +529,9 @@ mod tests {
             codex_session_lines(),
             "rollout-2026-02-15T10-00-00-cccc1111-2222-3333-4444-555566667777.jsonl",
         );
-        let path = dir.path().join(
-            "rollout-2026-02-15T10-00-00-cccc1111-2222-3333-4444-555566667777.jsonl",
-        );
+        let path = dir
+            .path()
+            .join("rollout-2026-02-15T10-00-00-cccc1111-2222-3333-4444-555566667777.jsonl");
 
         let result = prepare_file(&path, "codex", CompressionAlgo::Gzip, &conn).unwrap();
         assert!(result.is_some(), "Codex file should be prepared");
@@ -553,7 +567,10 @@ mod tests {
         .unwrap();
 
         let result = prepare_file(&path, "codex", CompressionAlgo::Gzip, &conn).unwrap();
-        assert!(result.is_some(), "Codex file should still prepare from incremental offset");
+        assert!(
+            result.is_some(),
+            "Codex file should still prepare from incremental offset"
+        );
         let item = result.unwrap();
 
         // Parser-resolved canonical ID must win over stale file_state.
@@ -567,10 +584,7 @@ mod tests {
     #[test]
     fn test_subagent_file_gets_uuid() {
         let (_tmp, conn) = make_db();
-        let dir = write_session_file(
-            claude_session_lines(),
-            "agent-a51c878.jsonl",
-        );
+        let dir = write_session_file(claude_session_lines(), "agent-a51c878.jsonl");
         let path = dir.path().join("agent-a51c878.jsonl");
 
         let result = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
@@ -592,10 +606,7 @@ mod tests {
     #[test]
     fn test_subagent_uuid_is_deterministic() {
         let (_tmp, conn) = make_db();
-        let dir = write_session_file(
-            claude_session_lines(),
-            "agent-a51c878.jsonl",
-        );
+        let dir = write_session_file(claude_session_lines(), "agent-a51c878.jsonl");
         let path = dir.path().join("agent-a51c878.jsonl");
 
         let result1 = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
@@ -622,7 +633,9 @@ mod tests {
             claude_session_lines(),
             "bbbb1111-2222-3333-4444-555566667777.jsonl",
         );
-        let path = dir.path().join("bbbb1111-2222-3333-4444-555566667777.jsonl");
+        let path = dir
+            .path()
+            .join("bbbb1111-2222-3333-4444-555566667777.jsonl");
 
         // Set offset way beyond actual file size (simulates truncation)
         let fs = FileState::new(&conn);
@@ -639,7 +652,10 @@ mod tests {
         let result = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
         assert!(result.is_some(), "Truncated file should be re-processed");
         let item = result.unwrap();
-        assert_eq!(item.offset, 0, "Should start from offset 0 after truncation");
+        assert_eq!(
+            item.offset, 0,
+            "Should start from offset 0 after truncation"
+        );
         assert_eq!(item.event_count, 2);
     }
 
@@ -651,7 +667,9 @@ mod tests {
     fn test_incremental_append_ships_new_events_only() {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dddd1111-2222-3333-4444-555566667777.jsonl");
+        let path = dir
+            .path()
+            .join("dddd1111-2222-3333-4444-555566667777.jsonl");
 
         // Write initial content
         let line1 = r#"{"type":"user","uuid":"inc-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"first"}}"#;
@@ -674,14 +692,44 @@ mod tests {
         .unwrap();
 
         // Append more content
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         writeln!(f, r#"{{"type":"assistant","uuid":"inc-2","timestamp":"2026-02-15T10:00:01Z","message":{{"content":[{{"type":"text","text":"second"}}]}}}}"#).unwrap();
 
         // Second prepare ships only the new event
         let result2 = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
         let item2 = result2.unwrap();
         assert_eq!(item2.event_count, 1, "Should only ship the appended event");
-        assert_eq!(item2.offset, item1.new_offset, "Should start from previous offset");
+        assert_eq!(
+            item2.offset, item1.new_offset,
+            "Should start from previous offset"
+        );
+    }
+
+    #[test]
+    fn test_prepare_file_uses_last_good_offset_for_partial_eof() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("eeee1111-2222-3333-4444-555566667777.jsonl");
+
+        let complete = r#"{"type":"user","uuid":"partial-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"complete"}}"#;
+        let partial = r#"{"type":"assistant","uuid":"partial-2","timestamp":"2026-02-15T10:00:01Z","message":{"con"#;
+        std::fs::write(&path, format!("{}\n{}", complete, partial)).unwrap();
+
+        let result = prepare_file(&path, "claude", CompressionAlgo::Gzip, &conn).unwrap();
+        let item = result.expect("prepare_file should ship the complete line");
+
+        assert_eq!(item.event_count, 1);
+        assert_eq!(item.offset, 0);
+        assert_eq!(item.new_offset, (complete.len() + 1) as u64);
+        assert!(
+            item.new_offset < std::fs::metadata(&path).unwrap().len(),
+            "new_offset should stop before the incomplete trailing line",
+        );
     }
 
     // ---------------------------------------------------------------
@@ -695,8 +743,10 @@ mod tests {
         let spool = Spool::new(&conn);
 
         // Simulate a file that was queued but not acked (daemon crashed mid-ship)
-        fs.set_offset("/tmp/test.jsonl", 100, "sess-1", "sess-1", "claude").unwrap();
-        fs.set_queued_offset("/tmp/test.jsonl", 500, "claude", "sess-1", "sess-1").unwrap();
+        fs.set_offset("/tmp/test.jsonl", 100, "sess-1", "sess-1", "claude")
+            .unwrap();
+        fs.set_queued_offset("/tmp/test.jsonl", 500, "claude", "sess-1", "sess-1")
+            .unwrap();
 
         // Run recovery
         let count = run_startup_recovery(&conn).unwrap();
@@ -724,7 +774,8 @@ mod tests {
         let spool = Spool::new(&conn);
 
         // Record acked_offset = 0 for the file
-        fs.set_offset("/bp/test.jsonl", 0, "sess-bp", "sess-bp", "claude").unwrap();
+        fs.set_offset("/bp/test.jsonl", 0, "sess-bp", "sess-bp", "claude")
+            .unwrap();
 
         // Fill spool to capacity by inserting MAX_SPOOL_ENTRIES rows directly
         // Use a very large start_offset so they won't be the same as our test entry
@@ -737,7 +788,9 @@ mod tests {
         }
 
         // Now enqueue should fail (spool full) for a new entry
-        let enqueued = spool.enqueue("claude", "/bp/test.jsonl", 0, 100, Some("sess-bp")).unwrap();
+        let enqueued = spool
+            .enqueue("claude", "/bp/test.jsonl", 0, 100, Some("sess-bp"))
+            .unwrap();
         assert!(!enqueued, "Spool should be full");
 
         // queued_offset must remain at 0 (not advanced to 100)

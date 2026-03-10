@@ -34,7 +34,11 @@ fn parse_compression_algo(s: &str) -> anyhow::Result<CompressionAlgo> {
 }
 
 #[derive(Parser)]
-#[command(name = "longhouse-engine", version, about = "Longhouse session shipper (Rust engine)")]
+#[command(
+    name = "longhouse-engine",
+    version,
+    about = "Longhouse session shipper (Rust engine)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -442,10 +446,7 @@ async fn cmd_ship(
     }
 
     if !json_output {
-        eprintln!(
-            "{} files with new content to ship",
-            files_to_ship.len()
-        );
+        eprintln!("{} files with new content to ship", files_to_ship.len());
     }
 
     if files_to_ship.is_empty() {
@@ -472,7 +473,11 @@ async fn cmd_ship(
     };
 
     // Configure rayon thread pool
-    let num_workers = if workers > 0 { workers } else { num_cpus::get() };
+    let num_workers = if workers > 0 {
+        workers
+    } else {
+        num_cpus::get()
+    };
     rayon::ThreadPoolBuilder::new()
         .num_threads(num_workers)
         .build_global()
@@ -507,10 +512,9 @@ async fn cmd_ship(
         .par_iter()
         .map(|(path, offset)| {
             let path_str = path.to_string_lossy().to_string();
-            let file_size = match std::fs::metadata(path) {
-                Ok(m) => m.len(),
-                Err(_) => return None,
-            };
+            if std::fs::metadata(path).is_err() {
+                return None;
+            }
 
             let parse_result = match pipeline::parser::parse_session_file(path, *offset) {
                 Ok(r) => r,
@@ -525,7 +529,7 @@ async fn cmd_ship(
             }
 
             let event_count = parse_result.events.len();
-            let new_offset = file_size;
+            let new_offset = parse_result.last_good_offset;
 
             // Always compress (this is the real work we're benchmarking).
             // For dry-run, drop the result immediately to save memory.
@@ -539,7 +543,11 @@ async fn cmd_ship(
                 algo,
             ) {
                 Ok(c) => {
-                    if dry_run { Vec::new() } else { c }
+                    if dry_run {
+                        Vec::new()
+                    } else {
+                        c
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("Compress failed {}: {}", path_str, e);
@@ -551,7 +559,7 @@ async fn cmd_ship(
 
             // Progress reporting
             let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
-            bytes_done.fetch_add(file_size - offset, Ordering::Relaxed);
+            bytes_done.fetch_add(new_offset.saturating_sub(*offset), Ordering::Relaxed);
             events_done.fetch_add(event_count, Ordering::Relaxed);
 
             if !json_output && (done % 1000 == 0 || done == total_files) {
@@ -560,7 +568,11 @@ async fn cmd_ship(
                 let evts = events_done.load(Ordering::Relaxed);
                 eprintln!(
                     "  [{}/{}] {} events, {:.1} MB, {:.1} MB/s",
-                    done, total_files, evts, mb, mb / elapsed,
+                    done,
+                    total_files,
+                    evts,
+                    mb,
+                    mb / elapsed,
                 );
             }
 
@@ -591,11 +603,37 @@ async fn cmd_ship(
     let mut files_skipped = 0usize;
 
     if dry_run {
-        // Batch all state writes in a single transaction (8000+ writes → ~10ms)
-        conn.execute_batch("BEGIN")?;
         for item in &ship_items {
             match item {
                 Some(item) => {
+                    files_shipped += 1;
+                    events_shipped += item.event_count;
+                    bytes_shipped += item.new_offset - item.offset;
+                }
+                None => {
+                    files_skipped += 1;
+                }
+            }
+        }
+    }
+
+    // Live HTTP shipping (skip if dry run — already handled above)
+    if !dry_run {
+        for item in ship_items {
+            let item = match item {
+                Some(item) => item,
+                None => {
+                    files_skipped += 1;
+                    continue;
+                }
+            };
+
+            // Ship via HTTP
+            let client = client.as_ref().unwrap();
+            let result = client.ship(item.compressed).await;
+
+            match result {
+                ShipResult::Ok(_) => {
                     file_state.set_offset(
                         &item.path_str,
                         item.new_offset,
@@ -607,86 +645,54 @@ async fn cmd_ship(
                     events_shipped += item.event_count;
                     bytes_shipped += item.new_offset - item.offset;
                 }
-                None => {
+                ShipResult::RateLimited
+                | ShipResult::ServerError(_, _)
+                | ShipResult::ConnectError(_) => {
+                    let spool = Spool::new(&conn);
+                    file_state.set_queued_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        "claude",
+                        &item.session_id,
+                        &item.session_id,
+                    )?;
+                    spool.enqueue(
+                        "claude",
+                        &item.path_str,
+                        item.offset,
+                        item.new_offset,
+                        Some(&item.session_id),
+                    )?;
+                    files_failed += 1;
+
+                    let err_msg = match &result {
+                        ShipResult::RateLimited => "rate limited".to_string(),
+                        ShipResult::ServerError(code, body) => {
+                            format!("{}:{}", code, &body[..body.len().min(200)])
+                        }
+                        ShipResult::ConnectError(e) => e.clone(),
+                        _ => unreachable!(),
+                    };
+                    tracing::warn!("Failed to ship {}: {}", item.path_str, err_msg);
+                }
+                ShipResult::ClientError(code, body) => {
+                    tracing::error!(
+                        "Client error shipping {}: {} {}",
+                        item.path_str,
+                        code,
+                        &body[..body.len().min(200)]
+                    );
+                    file_state.set_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.session_id,
+                        &item.session_id,
+                        "claude",
+                    )?;
                     files_skipped += 1;
                 }
             }
         }
-        conn.execute_batch("COMMIT")?;
-    }
-
-    // Live HTTP shipping (skip if dry run — already handled above)
-    if !dry_run {
-    for item in ship_items {
-        let item = match item {
-            Some(item) => item,
-            None => {
-                files_skipped += 1;
-                continue;
-            }
-        };
-
-        // Ship via HTTP
-        let client = client.as_ref().unwrap();
-        let result = client.ship(item.compressed).await;
-
-        match result {
-            ShipResult::Ok(_) => {
-                file_state.set_offset(
-                    &item.path_str,
-                    item.new_offset,
-                    &item.session_id,
-                    &item.session_id,
-                    "claude",
-                )?;
-                files_shipped += 1;
-                events_shipped += item.event_count;
-                bytes_shipped += item.new_offset - item.offset;
-            }
-            ShipResult::RateLimited | ShipResult::ServerError(_, _) | ShipResult::ConnectError(_) => {
-                let spool = Spool::new(&conn);
-                file_state.set_queued_offset(
-                    &item.path_str,
-                    item.new_offset,
-                    "claude",
-                    &item.session_id,
-                    &item.session_id,
-                )?;
-                spool.enqueue(
-                    "claude",
-                    &item.path_str,
-                    item.offset,
-                    item.new_offset,
-                    Some(&item.session_id),
-                )?;
-                files_failed += 1;
-
-                let err_msg = match &result {
-                    ShipResult::RateLimited => "rate limited".to_string(),
-                    ShipResult::ServerError(code, body) => format!("{}:{}", code, &body[..body.len().min(200)]),
-                    ShipResult::ConnectError(e) => e.clone(),
-                    _ => unreachable!(),
-                };
-                tracing::warn!("Failed to ship {}: {}", item.path_str, err_msg);
-            }
-            ShipResult::ClientError(code, body) => {
-                tracing::error!(
-                    "Client error shipping {}: {} {}",
-                    item.path_str,
-                    code,
-                    &body[..body.len().min(200)]
-                );
-                file_state.set_offset(
-                    &item.path_str,
-                    item.new_offset,
-                    &item.session_id,
-                    &item.session_id,
-                    "claude",
-                )?;
-                files_skipped += 1;
-            }
-        }
-    }
     } // end if !dry_run
 
     // Replay spool (if not dry run)
@@ -707,7 +713,8 @@ async fn cmd_ship(
                 continue;
             }
 
-            let parse_result = match pipeline::parser::parse_session_file(&path, entry.start_offset) {
+            let parse_result = match pipeline::parser::parse_session_file(&path, entry.start_offset)
+            {
                 Ok(r) => r,
                 Err(e) => {
                     spool.mark_failed(entry.id, &e.to_string())?;
@@ -779,7 +786,10 @@ async fn cmd_ship(
         eprintln!("\n=== Ship Results ===");
         eprintln!("Files shipped: {}", files_shipped);
         eprintln!("Events shipped: {}", events_shipped);
-        eprintln!("Bytes shipped: {:.2} MB", bytes_shipped as f64 / 1_048_576.0);
+        eprintln!(
+            "Bytes shipped: {:.2} MB",
+            bytes_shipped as f64 / 1_048_576.0
+        );
         if files_failed > 0 {
             eprintln!("Files failed (spooled): {}", files_failed);
         }
@@ -865,15 +875,6 @@ async fn cmd_ship_file(
     };
 
     if dry_run {
-        let file_state = FileState::new(&conn);
-        file_state.set_offset(
-            &item.path_str,
-            item.new_offset,
-            &item.session_id,
-            &item.session_id,
-            &item.provider,
-        )?;
-
         if json_output {
             let summary = serde_json::json!({
                 "status": "ok",
@@ -883,7 +884,7 @@ async fn cmd_ship_file(
             });
             println!("{}", serde_json::to_string_pretty(&summary)?);
         } else {
-            println!("Shipped {} events", item.event_count);
+            println!("Would ship {} events", item.event_count);
         }
         return Ok(());
     }
@@ -1024,11 +1025,72 @@ fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> 
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_claude_file(dir: &tempfile::TempDir, name: &str, content: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_cmd_ship_file_dry_run_does_not_mutate_state() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "ffff1111-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"dry-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"dry-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            None,
+            None,
+            Some(&db_path),
+            true,
+            true,
+            CompressionAlgo::Gzip,
+        ))
+        .unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        assert_eq!(
+            file_state.get_offset(&file.to_string_lossy()).unwrap(),
+            0,
+            "dry-run should not advance acked_offset",
+        );
+        assert_eq!(
+            file_state
+                .get_queued_offset(&file.to_string_lossy())
+                .unwrap(),
+            0,
+            "dry-run should not advance queued_offset",
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // bench subcommand
 // ---------------------------------------------------------------------------
 
-fn cmd_bench(level: &str, compress: bool, parallel: bool, workers: usize, algo: CompressionAlgo) -> anyhow::Result<()> {
+fn cmd_bench(
+    level: &str,
+    compress: bool,
+    parallel: bool,
+    workers: usize,
+    algo: CompressionAlgo,
+) -> anyhow::Result<()> {
     eprintln!("Discovering session files...");
     let all_files = bench::discover_session_files();
     eprintln!("Found {} non-empty JSONL files", all_files.len());
@@ -1038,7 +1100,10 @@ fn cmd_bench(level: &str, compress: bool, parallel: bool, workers: usize, algo: 
         .filter_map(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .sum();
-    eprintln!("Total: {:.2} GB on disk", total_bytes as f64 / 1_073_741_824.0);
+    eprintln!(
+        "Total: {:.2} GB on disk",
+        total_bytes as f64 / 1_073_741_824.0
+    );
 
     let files: Vec<PathBuf> = match level.to_uppercase().as_str() {
         "L1" => {
