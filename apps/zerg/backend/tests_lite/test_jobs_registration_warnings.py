@@ -62,11 +62,18 @@ async def test_register_all_jobs_captures_import_failures(monkeypatch):
     import zerg.jobs.registry as registry
 
     real_import_module = importlib.import_module
+    imported_modules: list[str] = []
 
     def fake_import_module(module_name: str):
+        imported_modules.append(module_name)
         if module_name == "zerg.jobs.daily_digest":
             raise ImportError("simulated daily_digest import failure")
-        if module_name in {"zerg.jobs.reflection", "zerg.jobs.health_monitor", "zerg.jobs.check_stale_agents"}:
+        if module_name in {
+            "zerg.jobs.reflection",
+            "zerg.jobs.health_monitor",
+            "zerg.jobs.check_stale_agents",
+            "zerg.jobs.oikos_operator_sweep",
+        }:
             return SimpleNamespace(__name__=module_name)
         return real_import_module(module_name)
 
@@ -81,6 +88,7 @@ async def test_register_all_jobs_captures_import_failures(monkeypatch):
     warnings = get_registration_warnings()
     assert any("zerg.jobs.daily_digest" in warning for warning in warnings)
     assert any("simulated daily_digest import failure" in warning for warning in warnings)
+    assert "zerg.jobs.oikos_operator_sweep" in imported_modules
 
 
 def test_list_jobs_includes_registration_warnings(tmp_path):
@@ -93,7 +101,10 @@ def test_list_jobs_includes_registration_warnings(tmp_path):
             with (
                 patch("zerg.routers.jobs._ensure_jobs_registered", AsyncMock(return_value=None)),
                 patch("zerg.routers.jobs.job_registry.list_jobs", return_value=[]),
-                patch("zerg.routers.jobs.get_registration_warnings", return_value=["Failed to import zerg.jobs.daily_digest"]),
+                patch(
+                    "zerg.routers.jobs.get_registration_warnings",
+                    return_value=["Failed to import zerg.jobs.daily_digest"],
+                ),
             ):
                 response = client.get("/api/jobs")
 
@@ -114,13 +125,16 @@ async def test_register_all_jobs_skips_manifest_without_external_config(monkeypa
     import zerg.jobs.registry as registry
 
     real_import_module = importlib.import_module
+    imported_modules: list[str] = []
 
     def fake_import_module(module_name: str):
+        imported_modules.append(module_name)
         if module_name in {
             "zerg.jobs.daily_digest",
             "zerg.jobs.reflection",
             "zerg.jobs.health_monitor",
             "zerg.jobs.check_stale_agents",
+            "zerg.jobs.oikos_operator_sweep",
         }:
             return SimpleNamespace(__name__=module_name)
         return real_import_module(module_name)
@@ -136,3 +150,4 @@ async def test_register_all_jobs_skips_manifest_without_external_config(monkeypa
 
     load_manifest.assert_not_awaited()
     assert get_registration_warnings() == []
+    assert "zerg.jobs.oikos_operator_sweep" in imported_modules
