@@ -776,7 +776,7 @@
     min-height: 0;
   }
 
-  @media (max-width: 1280px) {
+  @media (max-width: 1180px) {
     .workspace-shell__body {
       grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr) minmax(260px, 34vh);

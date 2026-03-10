@@ -40,6 +40,7 @@ export function useSessionWorkspace(
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const highlightedEventRef = useRef<number | null>(null);
+  const autoScrolledSelectionRef = useRef(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
@@ -53,6 +54,7 @@ export function useSessionWorkspace(
     setDebouncedSearch("");
     setSelectedKey(null);
     highlightedEventRef.current = null;
+    autoScrolledSelectionRef.current = false;
   }, [sessionId]);
 
   const events = useMemo(
@@ -188,6 +190,22 @@ export function useSessionWorkspace(
 
     highlightedEventRef.current = highlightEventId;
   }, [highlightEventId, hasHighlightEvent, model.eventIdToRowId, model.eventIdToSelectionKey]);
+
+  useEffect(() => {
+    if (highlightEventId != null) return;
+    if (eventsLoading) return;
+    if (autoScrolledSelectionRef.current) return;
+    if (!selectedKey) return;
+
+    const selection = model.selectionMap.get(selectedKey);
+    if (!selection) return;
+
+    const target = document.getElementById(selection.rowId);
+    if (!target) return;
+
+    target.scrollIntoView({ behavior: "auto", block: "center" });
+    autoScrolledSelectionRef.current = true;
+  }, [highlightEventId, eventsLoading, selectedKey, model.selectionMap]);
 
   const selectedSelection = useMemo(
     () => (selectedKey ? model.selectionMap.get(selectedKey) ?? null : null),

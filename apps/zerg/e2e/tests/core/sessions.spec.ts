@@ -239,7 +239,7 @@ test.describe('Sessions Page', () => {
     if (highlightedCount > 0) {
       await expect(highlight).toContainText(magicToken, { timeout: 15000 });
     } else {
-      const matchedEvent = page.locator('.event-item', { hasText: magicToken }).first();
+      const matchedEvent = page.getByTestId('session-timeline-row').filter({ hasText: magicToken }).first();
       await expect(matchedEvent).toBeVisible({ timeout: 15000 });
     }
   });
@@ -412,7 +412,7 @@ test.describe('Session Detail Page', () => {
     await page.goto(`/timeline/${sessionId}?resume=1`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
-    await expect(page.locator('.timeline-header')).toContainText('Event Timeline');
+    await expect(page.getByTestId('session-timeline-header')).toContainText('Event Timeline');
     await expect(page.getByRole('button', { name: 'Continue in Cloud' })).toBeVisible();
     await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
     await expect(page.locator('.session-chat')).toBeVisible();
@@ -573,7 +573,8 @@ test.describe('Session Detail Page', () => {
     await expect(page.getByRole('button', { name: 'Branch from Here' })).toBeVisible();
     await expect(page.locator('.session-chat-empty')).toContainText('branch from this history');
 
-    await page.getByRole('button', { name: 'Open Latest' }).click();
+    await page.getByRole('button', { name: 'Open Latest' }).focus();
+    await page.keyboard.press('Enter');
     await expect(page).toHaveURL(new RegExp(`/timeline/${childId}(?:\\?resume=1)?`));
     await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
   });
@@ -685,9 +686,9 @@ test.describe('Session Detail Page', () => {
     await page.goto(`/timeline/${sessionId}`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
-    const shell = page.locator('.page-shell');
+    const timelineList = page.getByTestId('session-timeline-list');
     await expect
-      .poll(async () => shell.evaluate((el) => el.scrollTop), { timeout: 4000 })
+      .poll(async () => timelineList.evaluate((el) => el.scrollTop), { timeout: 4000 })
       .toBeGreaterThan(0);
 
     await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
@@ -727,37 +728,41 @@ test.describe('Session Detail Page', () => {
 
     await page.goto(`/timeline/${sessionId}`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
-    await expect(page.locator('.timeline-events .event-item').first()).toBeVisible();
+    const timelineList = page.getByTestId('session-timeline-list');
+    await expect(page.getByTestId('session-timeline-row').first()).toBeVisible();
 
-    const shell = page.locator('.page-shell');
-    await expect(shell).toBeVisible();
+    await expect(timelineList).toBeVisible();
 
-    await shell.evaluate((el) => {
+    await timelineList.evaluate((el) => {
       el.scrollTop = 0;
     });
-    await expect.poll(async () => shell.evaluate((el) => el.scrollTop)).toBeLessThan(20);
+    await expect.poll(async () => timelineList.evaluate((el) => el.scrollTop)).toBeLessThan(20);
 
-    const startTop = await shell.evaluate((el) => el.scrollTop);
-    const viewportHeight = await page.evaluate(() => window.innerHeight);
-    const gutterY = Math.max(120, Math.floor(viewportHeight * 0.5));
+    const startTop = await timelineList.evaluate((el) => el.scrollTop);
+    const box = await timelineList.boundingBox();
+    expect(box).toBeTruthy();
+    const paneHeight = box?.height ?? 0;
+    const paneWidth = box?.width ?? 0;
+    const gutterY = Math.max(40, Math.floor(paneHeight * 0.5));
+    const leftX = Math.min(Math.max(24, Math.floor(paneWidth * 0.08)), Math.max(24, paneWidth - 24));
+    const rightX = Math.max(24, paneWidth - 24);
 
-    // Wheel from far-left viewport gutter.
-    await page.mouse.move(4, gutterY);
+    // Wheel from the far-left edge of the timeline pane.
+    await timelineList.hover({ position: { x: leftX, y: gutterY } });
     await page.mouse.wheel(0, 600);
 
     await expect
-      .poll(async () => shell.evaluate((el) => el.scrollTop), { timeout: 4000 })
+      .poll(async () => timelineList.evaluate((el) => el.scrollTop), { timeout: 4000 })
       .toBeGreaterThan(startTop);
 
-    const afterLeft = await shell.evaluate((el) => el.scrollTop);
+    const afterLeft = await timelineList.evaluate((el) => el.scrollTop);
 
-    // Wheel from far-right viewport gutter.
-    const viewportWidth = await page.evaluate(() => window.innerWidth);
-    await page.mouse.move(Math.max(4, viewportWidth - 4), gutterY);
+    // Wheel from the far-right edge of the timeline pane.
+    await timelineList.hover({ position: { x: rightX, y: gutterY } });
     await page.mouse.wheel(0, 600);
 
     await expect
-      .poll(async () => shell.evaluate((el) => el.scrollTop), { timeout: 4000 })
+      .poll(async () => timelineList.evaluate((el) => el.scrollTop), { timeout: 4000 })
       .toBeGreaterThan(afterLeft);
   });
 });
