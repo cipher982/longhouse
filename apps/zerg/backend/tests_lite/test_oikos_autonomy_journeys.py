@@ -54,16 +54,23 @@ async def test_runner_persists_artifacts_and_matches_expected_outcomes(tmp_path)
         assert result.manifest_path.exists()
         assert result.context_path.exists()
         assert result.decision_path.exists()
+        assert result.assertions_path.exists()
 
         manifest = json.loads(result.manifest_path.read_text())
         context = json.loads(result.context_path.read_text())
         decision = json.loads(result.decision_path.read_text())
+        assertions = json.loads(result.assertions_path.read_text())
 
         assert manifest["case_id"] == case.id
+        assert manifest["assertion_count"] == len(assertions)
+        assert manifest["assertions_passed"] is True
         assert context["trigger"]["type"] == case.trigger.type
         assert context["primary_session"]["session_id"] == case.primary_session.session_id
         assert decision["decision"] == case.expected.decision
+        assert decision["needs_human"] == case.expected.needs_human
         assert decision["summary"]
+        assert assertions
+        assert all(assertion["passed"] for assertion in assertions)
 
 
 @pytest.mark.asyncio
@@ -98,3 +105,5 @@ async def test_run_autonomy_journeys_executes_fixture_file_into_stable_root(tmp_
     ]
     assert all(result.run_dir.parent == tmp_path for result in results)
     assert all(result.context_path.exists() for result in results)
+    assert all(result.assertions_path.exists() for result in results)
+    assert all(all(assertion.passed for assertion in result.assertions) for result in results)

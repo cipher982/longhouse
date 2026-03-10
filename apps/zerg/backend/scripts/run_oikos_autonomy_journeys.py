@@ -44,6 +44,7 @@ async def _run(args: argparse.Namespace) -> int:
         artifact_root=run_root,
     )
 
+    failed_cases = 0
     summary = {
         "fixture_path": str(fixture_path),
         "artifact_root": str(run_root),
@@ -54,6 +55,9 @@ async def _run(args: argparse.Namespace) -> int:
                 "actual_decision": result.decision.decision,
                 "needs_human": result.decision.needs_human,
                 "proposed_action_count": len(result.decision.proposed_actions),
+                "assertion_count": len(result.assertions),
+                "assertions_passed": all(assertion.passed for assertion in result.assertions),
+                "assertions_path": str(result.assertions_path),
                 "run_dir": str(result.run_dir),
             }
             for case, result in zip(cases, results, strict=True)
@@ -66,12 +70,19 @@ async def _run(args: argparse.Namespace) -> int:
     print(f"Fixture: {fixture_path}")
     print(f"Artifacts: {run_root}")
     for case, result in zip(cases, results, strict=True):
-        status = "match" if result.decision.decision == case.expected.decision else "drift"
+        assertions_passed = all(assertion.passed for assertion in result.assertions)
+        status = "match" if assertions_passed else "drift"
+        if not assertions_passed:
+            failed_cases += 1
         print(
             f"- {case.id}: {result.decision.decision} "
-            f"(expected {case.expected.decision}, {status}, actions={len(result.decision.proposed_actions)})"
+            f"(expected {case.expected.decision}, {status}, actions={len(result.decision.proposed_actions)}, "
+            f"assertions={len(result.assertions)})"
         )
     print(f"Summary: {summary_path}")
+    if failed_cases:
+        print(f"Drift detected in {failed_cases} case(s).")
+        return 1
     return 0
 
 
