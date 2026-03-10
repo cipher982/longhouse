@@ -221,6 +221,16 @@ impl<'a> Spool<'a> {
         Ok(count as usize)
     }
 
+    /// Count dead-lettered entries retained for operator inspection.
+    pub fn dead_count(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM spool_queue WHERE status = 'dead'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
     /// Total entries (for backpressure check).
     pub fn total_size(&self) -> Result<usize> {
         let count: i64 = self
@@ -374,6 +384,7 @@ mod tests {
         assert_eq!(row.3, 220);
         assert_eq!(row.4, "dead");
         assert!(row.5.contains("oversize"));
+        assert_eq!(spool.dead_count().unwrap(), 1);
     }
 
     #[test]

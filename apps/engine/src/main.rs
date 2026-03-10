@@ -615,9 +615,11 @@ async fn cmd_ship(
     }
 
     let total_elapsed = start.elapsed();
+    let spool = Spool::new(&conn);
+    let spool_pending = spool.pending_count()?;
+    let spool_dead = spool.dead_count()?;
 
     if json_output {
-        let spool = Spool::new(&conn);
         let summary = serde_json::json!({
             "status": "ok",
             "files_scanned": all_files.len(),
@@ -627,7 +629,8 @@ async fn cmd_ship(
             "events_shipped": events_shipped,
             "bytes_shipped": bytes_shipped,
             "spool_replayed": spool_replayed,
-            "spool_pending": spool.pending_count()?,
+            "spool_pending": spool_pending,
+            "spool_dead": spool_dead,
             "total_seconds": total_elapsed.as_secs_f64(),
             "throughput_mb_s": bytes_shipped as f64 / 1_048_576.0 / total_elapsed.as_secs_f64(),
             "dry_run": dry_run,
@@ -646,6 +649,9 @@ async fn cmd_ship(
         }
         if spool_replayed > 0 {
             eprintln!("Spool replayed: {}", spool_replayed);
+        }
+        if spool_dead > 0 {
+            eprintln!("Dead-lettered ranges retained: {}", spool_dead);
         }
         eprintln!("Total: {:.3}s", total_elapsed.as_secs_f64());
         if bytes_shipped > 0 {
@@ -746,17 +752,22 @@ async fn cmd_ship_file(
     let client = ShipperClient::with_compression(&config, algo)?;
     let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None).await?;
     let events_shipped = outcome.events_shipped;
+    let spool_dead = Spool::new(&conn).dead_count()?;
 
     if json_output {
         let summary = serde_json::json!({
             "status": "ok",
             "file": path.display().to_string(),
             "events_shipped": events_shipped,
+            "spool_dead": spool_dead,
             "dry_run": false,
         });
         println!("{}", serde_json::to_string_pretty(&summary)?);
     } else {
         println!("Shipped {} events", events_shipped);
+        if spool_dead > 0 {
+            println!("Dead-lettered ranges retained: {}", spool_dead);
+        }
     }
 
     Ok(())
