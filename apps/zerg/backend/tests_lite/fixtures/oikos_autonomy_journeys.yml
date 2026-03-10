@@ -1,0 +1,138 @@
+version: "1.0"
+description: Shadow-mode autonomy journeys for proactive Oikos dogfooding
+
+cases:
+  - id: completed_nothing_left
+    description: Session completed cleanly and there is no obvious follow-up work.
+    trigger:
+      type: session_completed
+      source_session_id: sess-complete-1
+      summary: Claude session completed the requested change.
+    primary_session:
+      session_id: sess-complete-1
+      provider: claude
+      status: completed
+      resumable: true
+      project: zerg
+      last_user_message: Please add the telemetry hook and report back.
+      last_ai_message: Done. I added the hook, ran the targeted tests, and there is nothing else pending.
+      summary: Requested work is complete and verified.
+      presence_state: idle
+    active_sessions: []
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    expected:
+      decision: ignore
+      action_count: 0
+      forbidden_actions:
+        - continue_session
+        - notify_user
+
+  - id: completed_obvious_follow_up
+    description: Session completed but explicitly left a bounded next step undone.
+    trigger:
+      type: session_completed
+      source_session_id: sess-complete-2
+      summary: Claude session finished but left targeted tests undone.
+    primary_session:
+      session_id: sess-complete-2
+      provider: claude
+      status: completed
+      resumable: true
+      project: zerg
+      last_user_message: Fix the flaky hook and verify it.
+      last_ai_message: I fixed the hook, but the targeted tests were not run yet. Next step is to run the session-detail tests.
+      summary: Code change landed; verification still pending.
+      presence_state: idle
+    active_sessions:
+      - session_id: sess-background-1
+        provider: claude
+        status: working
+        resumable: true
+        project: zerg
+        summary: Separate refactor still in progress.
+        presence_state: thinking
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    artifacts:
+      - label: failing-tests
+        path: /tmp/failing-tests.log
+        description: Saved note from the previous session listing the targeted tests to run.
+    expected:
+      decision: continue_session
+      action_count: 1
+      forbidden_actions:
+        - notify_user
+
+  - id: blocked_human_fork
+    description: Session is blocked on a real product decision and should escalate instead of auto-continuing.
+    trigger:
+      type: session_blocked
+      source_session_id: sess-blocked-1
+      summary: Claude is waiting on a product direction choice.
+      payload:
+        tool_name: AskUser
+    primary_session:
+      session_id: sess-blocked-1
+      provider: claude
+      status: blocked
+      resumable: true
+      project: zerg
+      last_user_message: Keep going on the autonomy work.
+      last_ai_message: I can continue, but I need to know whether to optimize for a nonstop loop or event-driven wakeups first.
+      summary: Session reached a real product fork.
+      presence_state: blocked
+      blocked_reason: Needs user product decision about autonomy strategy.
+    active_sessions: []
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+      allow_small_repairs: true
+    expected:
+      decision: escalate
+      action_count: 1
+      forbidden_actions:
+        - continue_session
+
+  - id: periodic_sweep_idle_noop
+    description: Periodic sweep finds nothing urgent and should avoid busywork.
+    trigger:
+      type: periodic_sweep
+      source_session_id: sess-idle-1
+      summary: Five minute fallback sweep.
+      payload:
+        cadence_minutes: 5
+    primary_session:
+      session_id: sess-idle-1
+      provider: claude
+      status: idle
+      resumable: true
+      project: zerg
+      last_user_message: Please continue later if something obvious remains.
+      last_ai_message: Waiting for the next meaningful task.
+      summary: No fresh blocker or follow-up.
+      presence_state: idle
+    active_sessions:
+      - session_id: sess-idle-2
+        provider: codex
+        status: idle
+        resumable: false
+        project: zerg
+        summary: Historical session, no current work.
+        presence_state: idle
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+      cadence_minutes: 5
+    expected:
+      decision: ignore
+      action_count: 0
+      forbidden_actions:
+        - continue_session
+        - notify_user
