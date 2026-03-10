@@ -95,6 +95,13 @@ Acceptance criteria:
 - `qa-live` uses the stable hook when available and stays compatible with current hosted output.
 - `make qa-live` passes.
 
+Implementation status:
+- Completed on 2026-03-10.
+- Exported isolated patch artifacts to `/tmp/zerg-isolated-patches-20260310/`:
+  - `0001-fix-engine-dedupe-pending-spool-gaps.patch`
+  - `0001-fix-e2e-harden-live-qa-harness.patch`
+- Added stable `data-testid="session-timeline-row"` hooks to session timeline rows and updated the live harness to prefer that hook while preserving compatibility with currently deployed DOM variants.
+
 ### Phase 2: Progressive Session Detail Loading
 Acceptance criteria:
 - Session detail no longer full-screen blocks solely because timeline events are still loading.
@@ -129,3 +136,6 @@ Acceptance criteria:
 
 - Do not edit unrelated dirty frontend files unless the change is required and can be made without overwriting current work.
 - `TODO.md` is not the source of truth for this slice while another agent is editing it; this spec owns the decisions and phase tracking for now.
+- Regenerate the isolated patch bundle with:
+  - `git format-patch -1 1764ec90 -o /tmp/zerg-isolated-patches-20260310`
+  - `git format-patch -1 ed52fc41 -o /tmp/zerg-isolated-patches-20260310`

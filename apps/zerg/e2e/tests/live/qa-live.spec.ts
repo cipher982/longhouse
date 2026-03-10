@@ -221,7 +221,7 @@ test('session detail renders event timeline', async ({ agentsRequest, context })
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
   const authErrors: string[] = [];
   const detailPath = `/api/agents/sessions/${sessionId}`;
-  const timelineItems = page.locator('button[id^="event-"], .timeline-row, .event-item');
+  const timelineItems = page.locator('[data-testid="session-timeline-row"], button[id^="event-"], .timeline-row, .event-item');
 
   page.on('response', (response) => {
     const url = response.url();
@@ -245,7 +245,7 @@ test('session detail renders event timeline', async ({ agentsRequest, context })
     await failWithScreenshot(
       page,
       'session-detail',
-      `No compatible timeline items found for session ${sessionId}. Expected button[id^=\"event-\"], .timeline-row, or .event-item.`,
+      `No compatible timeline items found for session ${sessionId}. Expected [data-testid=\"session-timeline-row\"], button[id^=\"event-\"], .timeline-row, or .event-item.`,
     );
   });
 
