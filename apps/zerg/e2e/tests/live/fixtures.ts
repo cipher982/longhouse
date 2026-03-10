@@ -174,6 +174,11 @@ export const test = base.extend<LiveFixtures>({
   },
 
   agentsRequest: async ({ playwright, apiBaseUrl, deviceToken }, use) => {
+    // Hosted auth is intentionally split today:
+    // - `/api/agents/*` works with the device token header.
+    // - Browser navigation is validated separately via the longhouse_session cookie.
+    // Keep API-side session discovery on the device token path until hosted browser auth
+    // can list agents sessions without a 403.
     const extraHTTPHeaders: Record<string, string> = {};
     if (deviceToken) {
       extraHTTPHeaders['X-Agents-Token'] = deviceToken;
