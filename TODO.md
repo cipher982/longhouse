@@ -52,6 +52,7 @@ Notes:
 - 2026-03-10: The autonomy harness is no longer pytest-only. `make run-autonomy-journeys` now runs the shared baseline decider against the fixture set and writes durable artifacts plus `summary.json` under `.tmp/oikos-autonomy-journeys/`.
 - 2026-03-10: Tightened the journey evidence contract. Each run now writes `assertions.json`, tracks `assertion_count`/`assertions_passed` in `manifest.json`, fixtures can assert `needs_human`, and `make run-autonomy-journeys` exits non-zero on any drift instead of silently printing mismatches.
 - 2026-03-10: Landed the first live wakeup seam on the existing presence hook path. With `OIKOS_OPERATOR_MODE_ENABLED=1`, `blocked` and `needs_user` transitions now wake Oikos through a dedicated `operator` surface adapter, repeated identical pause-state signals are deduped, and `idle`/`Stop` still does not trigger because transcript shipping/completion ordering is not reliable there.
+- 2026-03-10: Landed the periodic sweep fallback on the existing jobs stack. The builtin `oikos-operator-sweep` job now registers with the normal Longhouse scheduler, stays dormant unless `OIKOS_OPERATOR_MODE_ENABLED=1`, and wakes Oikos through the dedicated `operator` surface with a `periodic_sweep` trigger instead of inventing another scheduler path.
 - Spec: `docs/specs/oikos-proactive-operator.md`.
 - Roadmap: `docs/plans/oikos-autonomy-roadmap.md`.
 
