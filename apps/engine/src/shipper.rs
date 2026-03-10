@@ -692,6 +692,7 @@ pub fn prepare_file_batches(
     let file_state = FileState::new(conn);
 
     let current_offset = file_state.get_offset(&path_str)?;
+    let queued_offset = file_state.get_queued_offset(&path_str)?;
     let file_size = match std::fs::metadata(path) {
         Ok(m) => m.len(),
         Err(e) => {
@@ -709,6 +710,14 @@ pub fn prepare_file_batches(
         );
         file_state.reset_offsets(&path_str)?;
         0
+    } else if queued_offset > current_offset {
+        tracing::debug!(
+            path = %path_str,
+            acked_offset = current_offset,
+            queued_offset,
+            "Skipping fresh ship because file has an unacked queued gap"
+        );
+        return Ok(None);
     } else if file_size == current_offset {
         return Ok(None);
     } else {
@@ -920,7 +929,7 @@ pub fn run_startup_recovery(conn: &Connection) -> Result<usize> {
     let file_state = FileState::new(conn);
     let spool = Spool::new(conn);
     let unacked = file_state.get_unacked_files()?;
-    let count = unacked.len();
+    let pending_before = spool.pending_count()?;
 
     for f in &unacked {
         tracing::info!(
@@ -938,7 +947,8 @@ pub fn run_startup_recovery(conn: &Connection) -> Result<usize> {
         )?;
     }
 
-    Ok(count)
+    let pending_after = spool.pending_count()?;
+    Ok(pending_after.saturating_sub(pending_before))
 }
 
 /// Replay pending spool entries. Returns (entries fully resolved, entries failed/backed off).
@@ -1879,6 +1889,77 @@ mod tests {
         assert_eq!(pending[0].file_path, "/tmp/test.jsonl");
         assert_eq!(pending[0].start_offset, 100);
         assert_eq!(pending[0].end_offset, 500);
+    }
+
+    #[test]
+    fn test_startup_recovery_is_idempotent_when_gap_already_pending() {
+        let (_tmp, conn) = make_db();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+
+        fs.set_offset("/tmp/test.jsonl", 100, "sess-1", "sess-1", "claude")
+            .unwrap();
+        fs.set_queued_offset("/tmp/test.jsonl", 500, "claude", "sess-1", "sess-1")
+            .unwrap();
+        spool
+            .enqueue("claude", "/tmp/test.jsonl", 100, 500, Some("sess-1"))
+            .unwrap();
+
+        let count = run_startup_recovery(&conn).unwrap();
+        assert_eq!(count, 0, "existing pending gap should not be duplicated");
+
+        let pending_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM spool_queue WHERE status = 'pending' AND file_path = '/tmp/test.jsonl'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending_count, 1);
+    }
+
+    #[test]
+    fn test_prepare_file_batches_skips_when_unacked_gap_exists() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("queuedgap1111-2222-3333-4444-555566667777.jsonl");
+        let line1 = make_line("gap-1", "one");
+        let line2 = make_line("gap-2", "two");
+        let line3 = make_line("gap-3", "three-newer");
+        std::fs::write(&path, format!("{}\n{}\n{}\n", line1, line2, line3)).unwrap();
+
+        let path_str = path.to_string_lossy().to_string();
+        let line1_end = (line1.len() + 1) as u64;
+        let line2_end = (line1.len() + 1 + line2.len() + 1) as u64;
+        let file_end = std::fs::metadata(&path).unwrap().len();
+        assert!(file_end > line2_end, "test requires newer bytes beyond queued gap");
+
+        let fs = FileState::new(&conn);
+        fs.set_offset(
+            &path_str,
+            line1_end,
+            "queuedgap1111-2222-3333-4444-555566667777",
+            "queuedgap1111-2222-3333-4444-555566667777",
+            "claude",
+        )
+        .unwrap();
+        fs.set_queued_offset(
+            &path_str,
+            line2_end,
+            "claude",
+            "queuedgap1111-2222-3333-4444-555566667777",
+            "queuedgap1111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000).unwrap();
+        assert!(
+            prepared.is_none(),
+            "fresh shipping must stop while an earlier queued gap is still unacked"
+        );
     }
 
     // ---------------------------------------------------------------

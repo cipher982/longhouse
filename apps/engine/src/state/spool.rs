@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Maximum spool entries before backpressure kicks in.
 const MAX_QUEUE_SIZE: usize = 10_000;
@@ -53,6 +53,33 @@ impl<'a> Spool<'a> {
         end_offset: u64,
         session_id: Option<&str>,
     ) -> Result<bool> {
+        let existing_id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id
+                 FROM spool_queue
+                 WHERE status = 'pending'
+                   AND provider = ?1
+                   AND file_path = ?2
+                   AND start_offset = ?3
+                   AND end_offset = ?4
+                 LIMIT 1",
+                rusqlite::params![provider, file_path, start_offset as i64, end_offset as i64],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(id) = existing_id {
+            if let Some(session_id) = session_id {
+                self.conn.execute(
+                    "UPDATE spool_queue
+                     SET session_id = COALESCE(session_id, ?1)
+                     WHERE id = ?2",
+                    rusqlite::params![session_id, id],
+                )?;
+            }
+            return Ok(true);
+        }
+
         if self.total_size()? >= MAX_QUEUE_SIZE {
             tracing::warn!(
                 "Spool at capacity ({} entries), rejecting enqueue",
@@ -63,7 +90,7 @@ impl<'a> Spool<'a> {
 
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, session_id, created_at, next_retry_at, status)
+            "INSERT OR IGNORE INTO spool_queue (provider, file_path, start_offset, end_offset, session_id, created_at, next_retry_at, status)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 'pending')",
             rusqlite::params![
                 provider,
@@ -277,6 +304,28 @@ mod tests {
         spool.mark_shipped(batch[0].id).unwrap();
         assert_eq!(spool.pending_count().unwrap(), 0);
         assert_eq!(spool.total_size().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_enqueue_is_idempotent_for_pending_range() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        assert!(spool
+            .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
+            .unwrap());
+        assert!(spool
+            .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
+            .unwrap());
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM spool_queue WHERE status = 'pending'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

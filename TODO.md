@@ -79,6 +79,8 @@ Notes:
 - 2026-03-10: Forced live batching succeeded against the real instance. A 51 MB Codex session proved the multi-batch path with 8 successful ~1 MiB POSTs before the manual interruption; the temp DB advanced `acked_offset`/`queued_offset` to `8302957`.
 - 2026-03-10: Clean completion run used a 7.6 MB Codex session at `max_batch_bytes=1048576`. Result: `410` events shipped live, temp DB reached EOF (`8015424`), and exactly one dead-letter row was recorded for a single oversize source range `758780..2519193` (1.76 MB raw line > 1 MiB cap). That is expected under the current design.
 - 2026-03-10: After returning to stable Wi-Fi, the real daemon spool backlog moved from `33` pending entries to `28` over one replay interval, so installed replay is making forward progress, but the backlog is not yet fully drained.
+- 2026-03-10: Follow-up hardening slice shipped for the pointer spool path. Pending spool rows are now unique per `(provider, file_path, start_offset, end_offset)` via startup dedupe + a partial unique index, startup recovery is idempotent, and fresh shipping stops while `queued_offset > acked_offset` so the same gap cannot be re-enqueued from `acked_offset`.
+- 2026-03-10: Follow-up verification passed with `make test-engine-fast`, `make test-shipper-e2e`, and a fresh `make qa-live` run (`8/8`). The earlier prod session-detail failure did not reproduce after the network stabilized.
 
 ## [Infra][QA/Test] Longhouse engine shipper correctness fixes (size: 3)
 

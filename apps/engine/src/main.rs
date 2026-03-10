@@ -400,29 +400,9 @@ async fn cmd_ship(
     // Open state DB
     let conn = open_db(config.db_path.as_deref())?;
 
-    // Startup recovery: re-enqueue gaps (queued > acked)
-    {
-        let file_state = FileState::new(&conn);
-        let spool = Spool::new(&conn);
-        let unacked = file_state.get_unacked_files()?;
-        for f in &unacked {
-            tracing::info!(
-                "Recovering gap for {}: acked={}, queued={}",
-                f.path,
-                f.acked_offset,
-                f.queued_offset
-            );
-            spool.enqueue(
-                &f.provider,
-                &f.path,
-                f.acked_offset,
-                f.queued_offset,
-                f.session_id.as_deref(),
-            )?;
-        }
-        if !unacked.is_empty() && !json_output {
-            eprintln!("Recovered {} unacked file gaps into spool", unacked.len());
-        }
+    let recovered = shipper::run_startup_recovery(&conn)?;
+    if recovered > 0 && !json_output {
+        eprintln!("Recovered {} unacked file gaps into spool", recovered);
     }
 
     // Discover files
