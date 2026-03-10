@@ -28,6 +28,12 @@ pub struct ShipItem {
     pub compressed: Vec<u8>,
 }
 
+pub enum ShipAndRecordOutcome {
+    Shipped { events: usize },
+    Spooled { is_connect_error: bool },
+    SkippedClientError { status_code: u16 },
+}
+
 /// Parse and compress a single file from its current offset.
 ///
 /// Returns `None` if the file has no new content, can't be read, or has no events.
@@ -117,15 +123,14 @@ pub fn prepare_file(
 /// On transient failure, advance queued_offset and enqueue to spool.
 /// On client error (4xx), skip (advance offsets to avoid re-processing).
 ///
-/// Returns (events_shipped, is_connect_error).
-/// is_connect_error is true when the server was unreachable — callers
-/// should enter offline mode and stop shipping until connectivity recovers.
+/// Returns a structured outcome so callers can distinguish shipped, spooled,
+/// and skipped-client-error paths without duplicating transport logic.
 pub async fn ship_and_record(
     item: ShipItem,
     client: &ShipperClient,
     conn: &Connection,
     tracker: Option<&ConsecutiveErrorTracker>,
-) -> Result<(usize, bool)> {
+) -> Result<ShipAndRecordOutcome> {
     let file_state = FileState::new(conn);
     let result = client.ship(item.compressed).await;
 
@@ -153,7 +158,9 @@ pub async fn ship_and_record(
                 item.event_count,
                 item.new_offset - item.offset
             );
-            Ok((item.event_count, false))
+            Ok(ShipAndRecordOutcome::Shipped {
+                events: item.event_count,
+            })
         }
         ShipResult::RateLimited | ShipResult::ServerError(_, _) | ShipResult::ConnectError(_) => {
             let err_msg = match &result {
@@ -206,7 +213,7 @@ pub async fn ship_and_record(
             }
             // Signal ConnectError to caller so it can enter offline mode
             let is_connect_error = matches!(result, ShipResult::ConnectError(_));
-            Ok((0, is_connect_error))
+            Ok(ShipAndRecordOutcome::Spooled { is_connect_error })
         }
         ShipResult::ClientError(code, body) => {
             tracing::error!(
@@ -242,7 +249,9 @@ pub async fn ship_and_record(
                         item.path_str
                     );
                 }
-                Ok((0, false))
+                Ok(ShipAndRecordOutcome::Spooled {
+                    is_connect_error: false,
+                })
             } else {
                 // Other 4xx (400, 401, 403, 422) — skip to avoid infinite re-processing
                 file_state.set_offset(
@@ -252,7 +261,7 @@ pub async fn ship_and_record(
                     &item.session_id,
                     &item.provider,
                 )?;
-                Ok((0, false))
+                Ok(ShipAndRecordOutcome::SkippedClientError { status_code: code })
             }
         }
     }
@@ -316,11 +325,14 @@ pub async fn replay_spool_batch(
                 continue;
             }
         };
+        let acked_end = parse_result.last_good_offset.min(entry.end_offset);
 
         if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
-            spool.mark_shipped(entry.id)?;
-            file_state.set_acked_offset(&entry.file_path, entry.end_offset)?;
-            shipped += 1;
+            if acked_end > entry.start_offset {
+                spool.mark_shipped(entry.id)?;
+                file_state.set_acked_offset(&entry.file_path, acked_end)?;
+                shipped += 1;
+            }
             continue;
         }
 
@@ -337,7 +349,7 @@ pub async fn replay_spool_batch(
         match client.ship(compressed).await {
             ShipResult::Ok(_) => {
                 spool.mark_shipped(entry.id)?;
-                file_state.set_acked_offset(&entry.file_path, entry.end_offset)?;
+                file_state.set_acked_offset(&entry.file_path, acked_end)?;
                 shipped += 1;
             }
             ShipResult::ConnectError(_) => {
@@ -346,6 +358,14 @@ pub async fn replay_spool_batch(
             }
             ShipResult::RateLimited | ShipResult::ServerError(_, _) => {
                 spool.mark_failed(entry.id, "server error during replay")?;
+                failed += 1;
+            }
+            ShipResult::ClientError(413, _) => {
+                spool.mark_failed_with_max(
+                    entry.id,
+                    "413 payload too large during replay",
+                    u32::MAX,
+                )?;
                 failed += 1;
             }
             ShipResult::ClientError(code, _) => {
@@ -380,9 +400,9 @@ pub async fn full_scan(
     for (path, provider_name) in &all_files {
         match prepare_file(path, provider_name, algo, conn) {
             Ok(Some(item)) => {
-                let (events, _is_connect_err) =
-                    ship_and_record(item, client, conn, tracker).await?;
-                if events > 0 {
+                if let ShipAndRecordOutcome::Shipped { events } =
+                    ship_and_record(item, client, conn, tracker).await?
+                {
                     files_shipped += 1;
                     events_shipped += events;
 
@@ -408,8 +428,10 @@ pub async fn full_scan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ShipperConfig;
     use crate::state::db::open_db;
-    use std::io::Write;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     fn make_db() -> (tempfile::NamedTempFile, Connection) {
         let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -443,6 +465,36 @@ mod tests {
         let path = dir.path().join(name);
         std::fs::write(&path, content).unwrap();
         dir
+    }
+
+    fn spawn_http_response_server(
+        status_line: &str,
+        body: &str,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let status_line = status_line.to_string();
+        let body = body.to_string();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                status_line,
+                body.len(),
+                body,
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        (format!("http://{}", addr), handle)
+    }
+
+    fn make_test_client(url: &str) -> ShipperClient {
+        let mut config = ShipperConfig::default();
+        config.api_url = url.to_string();
+        config.timeout_seconds = 5;
+        ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap()
     }
 
     // ---------------------------------------------------------------
@@ -796,5 +848,113 @@ mod tests {
         // queued_offset must remain at 0 (not advanced to 100)
         let qoff = fs.get_queued_offset("/bp/test.jsonl").unwrap();
         assert_eq!(qoff, 0, "queued_offset must not advance when spool is full");
+    }
+
+    #[test]
+    fn test_replay_413_stays_pending_with_backoff() {
+        let (_tmp, conn) = make_db();
+        let dir = write_session_file(
+            claude_session_lines(),
+            "99991111-2222-3333-4444-555566667777.jsonl",
+        );
+        let path = dir
+            .path()
+            .join("99991111-2222-3333-4444-555566667777.jsonl");
+        let path_str = path.to_string_lossy().to_string();
+        let file_size = std::fs::metadata(&path).unwrap().len();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        fs.set_queued_offset(
+            &path_str,
+            file_size,
+            "claude",
+            "99991111-2222-3333-4444-555566667777",
+            "99991111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                file_size,
+                Some("99991111-2222-3333-4444-555566667777"),
+            )
+            .unwrap();
+
+        let (url, handle) = spawn_http_response_server("413 Payload Too Large", "too large");
+        let client = make_test_client(&url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let (shipped, failed) = rt
+            .block_on(replay_spool_batch(&conn, &client, CompressionAlgo::Gzip, 10))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(shipped, 0);
+        assert_eq!(failed, 1);
+        assert_eq!(fs.get_offset(&path_str).unwrap(), 0);
+
+        let (status, retry_count, last_error): (String, i64, String) = conn
+            .query_row(
+                "SELECT status, retry_count, last_error FROM spool_queue WHERE file_path = ?1",
+                [&path_str],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "pending");
+        assert_eq!(retry_count, 1);
+        assert!(last_error.contains("413"));
+    }
+
+    #[test]
+    fn test_replay_success_acks_only_complete_bytes() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("88881111-2222-3333-4444-555566667777.jsonl");
+        let complete =
+            r#"{"type":"user","uuid":"replay-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"complete"}}"#;
+        let partial =
+            r#"{"type":"assistant","uuid":"replay-2","timestamp":"2026-02-15T10:00:01Z","message":{"con"#;
+        std::fs::write(&path, format!("{}\n{}", complete, partial)).unwrap();
+
+        let path_str = path.to_string_lossy().to_string();
+        let file_size = std::fs::metadata(&path).unwrap().len();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        fs.set_queued_offset(
+            &path_str,
+            file_size,
+            "claude",
+            "88881111-2222-3333-4444-555566667777",
+            "88881111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                file_size,
+                Some("88881111-2222-3333-4444-555566667777"),
+            )
+            .unwrap();
+
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let client = make_test_client(&url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let (shipped, failed) = rt
+            .block_on(replay_spool_batch(&conn, &client, CompressionAlgo::Gzip, 10))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(shipped, 1);
+        assert_eq!(failed, 0);
+        assert_eq!(fs.get_offset(&path_str).unwrap(), (complete.len() + 1) as u64);
+        assert_eq!(fs.get_queued_offset(&path_str).unwrap(), file_size);
+        assert_eq!(spool.total_size().unwrap(), 0);
     }
 }

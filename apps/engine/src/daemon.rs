@@ -112,7 +112,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     // 6. Initial full scan (catch up on anything missed while stopped)
     tracing::info!("Running initial full scan...");
-    let (files, events) = shipper::full_scan(&providers, &conn, &client, config.algo, Some(&tracker)).await?;
+    let (files, events) =
+        shipper::full_scan(&providers, &conn, &client, config.algo, Some(&tracker)).await?;
     tracing::info!(
         "Initial scan: shipped {} files, {} events in {:.1}s",
         files,
@@ -121,14 +122,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
 
     // 7. Replay any pending spool entries
-    let (spool_ok, spool_fail) = shipper::replay_spool_batch(&conn, &client, config.algo, 100).await?;
+    let (spool_ok, spool_fail) =
+        shipper::replay_spool_batch(&conn, &client, config.algo, 100).await?;
     if spool_ok > 0 || spool_fail > 0 {
         tracing::info!("Spool replay: {} shipped, {} failed", spool_ok, spool_fail);
     }
 
     // 8. Start file watcher
     let mut watcher = SessionWatcher::new(&providers)?;
-    tracing::info!("Daemon ready — watching for file changes (flush interval: {:?})", config.flush_interval);
+    tracing::info!(
+        "Daemon ready — watching for file changes (flush interval: {:?})",
+        config.flush_interval
+    );
 
     // 9. Main event loop
     let fallback_interval = Duration::from_secs(config.fallback_scan_secs.max(10));
@@ -320,14 +325,16 @@ async fn ship_batch(
         match shipper::prepare_file(path, provider, algo, conn) {
             Ok(Some(item)) => {
                 match shipper::ship_and_record(item, client, conn, Some(tracker)).await {
-                    Ok((e, is_connect_err)) => {
-                        if is_connect_err {
+                    Ok(shipper::ShipAndRecordOutcome::Shipped { events: e }) => {
+                        shipped += 1;
+                        events += e;
+                    }
+                    Ok(shipper::ShipAndRecordOutcome::Spooled { is_connect_error }) => {
+                        if is_connect_error {
                             had_connect_error = true;
-                        } else if e > 0 {
-                            shipped += 1;
-                            events += e;
                         }
                     }
+                    Ok(shipper::ShipAndRecordOutcome::SkippedClientError { .. }) => {}
                     Err(e) => {
                         // Unexpected error (not a ShipResult variant)
                         if tracker.record_error() {
@@ -362,8 +369,7 @@ async fn shutdown_signal() {
     use tokio::signal::unix::{signal, SignalKind};
 
     let ctrl_c = tokio::signal::ctrl_c();
-    let mut sigterm = signal(SignalKind::terminate())
-        .expect("failed to install SIGTERM handler");
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
 
     tokio::select! {
         _ = ctrl_c => {},

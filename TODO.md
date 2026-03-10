@@ -23,8 +23,8 @@ Status (2026-03-09): In progress. The immediate correctness work is to stop drop
 
 - [x] Use parser `last_good_offset` for shipped/spooled/acked ranges instead of raw file size
 - [x] Make `longhouse-engine ship --dry-run` and `ship --file --dry-run` non-mutating
-- [ ] Align one-shot `ship` and spool replay handling with daemon 413/backpressure semantics
-- [ ] Add regression coverage for partial-line EOF handling, dry-run non-mutation, and 413 replay behavior
+- [x] Align one-shot `ship` and spool replay handling with daemon 413/backpressure semantics
+- [x] Add regression coverage for partial-line EOF handling, dry-run non-mutation, and 413 replay behavior
 - [x] Re-run supported shipper verification targets (`make test-engine-fast`, `make test-shipper-e2e`)
 
 Notes:
@@ -32,6 +32,7 @@ Notes:
 - 2026-03-09: `main.rs` bulk ship path still special-cases neither 413 nor spool backpressure correctly, so it can regress the daemon fix.
 - 2026-03-09: The current dry-run paths advance offsets, which is not acceptable for a debugging command.
 - 2026-03-09: First slice shipped: buffered parser now leaves trailing partial EOF lines unacked, shipper offsets follow `last_good_offset`, `ship --dry-run` paths no longer mutate state, and `test-engine-fast` now includes engine unit tests so these regressions stay covered.
+- 2026-03-09: Second slice shipped: bulk `ship` now reuses shared `ship_and_record()` semantics, replay keeps 413 payloads pending with backoff instead of killing them, and replay acks only complete bytes so partial trailing lines remain recoverable.
 
 ## [Launch][Product] Session continuation from timeline should feel native (size: 3)
 
