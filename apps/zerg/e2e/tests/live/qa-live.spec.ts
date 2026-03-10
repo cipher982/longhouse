@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from './fixtures';
-import type { Page } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
 // Shared error collectors
@@ -57,6 +57,39 @@ async function failWithScreenshot(page: Page, testName: string, message: string)
   const path = `/tmp/qa-live-fail-${testName.replace(/\s+/g, '-')}.png`;
   await page.screenshot({ path, fullPage: false }).catch(() => {});
   throw new Error(`${message}\nScreenshot saved: ${path}`);
+}
+
+async function findRecentSessionWithEvents(request: APIRequestContext): Promise<string | null> {
+  const sessionsRes = await request.get('/api/agents/sessions?limit=5');
+  expect(sessionsRes.ok(), `GET /api/agents/sessions failed: ${sessionsRes.status()}`).toBe(true);
+
+  const sessionsData = await sessionsRes.json();
+  const sessions = sessionsData?.sessions ?? sessionsData ?? [];
+  if (!Array.isArray(sessions) || sessions.length === 0) {
+    return null;
+  }
+
+  for (const session of sessions) {
+    const sessionId = typeof session?.id === 'string' ? session.id : null;
+    if (!sessionId) continue;
+
+    const eventsRes = await request.get(`/api/agents/sessions/${sessionId}/events?limit=1&branch_mode=head`);
+    if (!eventsRes.ok()) continue;
+
+    const eventsData = await eventsRes.json();
+    const total =
+      typeof eventsData?.total === 'number'
+        ? eventsData.total
+        : Array.isArray(eventsData?.events)
+          ? eventsData.events.length
+          : 0;
+    if (total > 0) {
+      return sessionId;
+    }
+  }
+
+  const fallbackId = sessions[0]?.id;
+  return typeof fallbackId === 'string' ? fallbackId : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,37 +210,44 @@ test('forum route redirects to timeline without auth errors', async ({ context }
 test('session detail renders event timeline', async ({ agentsRequest, context }) => {
   test.setTimeout(20_000);
 
-  // Pull the most recent session id via API (avoids UI scraping)
-  const sessionsRes = await agentsRequest.get('/api/agents/sessions?limit=1');
-  expect(sessionsRes.ok(), `GET /api/agents/sessions failed: ${sessionsRes.status()}`).toBe(true);
-
-  const sessionsData = await sessionsRes.json();
-  const sessions = sessionsData?.sessions ?? sessionsData ?? [];
-  if (!Array.isArray(sessions) || sessions.length === 0) {
+  const sessionId = await findRecentSessionWithEvents(agentsRequest);
+  if (!sessionId) {
     // No sessions at all — skip (instance may be newly provisioned)
     test.skip(true, 'No sessions available to test detail view');
     return;
   }
 
-  const sessionId: string = sessions[0].id;
-
   const page = await context.newPage();
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
+  const authErrors: string[] = [];
+  const detailPath = `/api/agents/sessions/${sessionId}`;
+  const timelineItems = page.locator('button[id^="event-"], .timeline-row, .event-item');
+
+  page.on('response', (response) => {
+    const url = response.url();
+    if (url.includes(detailPath) && (response.status() === 401 || response.status() === 403)) {
+      authErrors.push(`${response.status()} ${url}`);
+    }
+  });
 
   await page.goto(`/timeline/${sessionId}`, { waitUntil: 'domcontentloaded' });
 
-  // Wait for at least one event item to render
-  await page
-    .locator('.event-item')
-    .first()
-    .waitFor({ timeout: 12_000 })
-    .catch(async () => {
-      await failWithScreenshot(
-        page,
-        'session-detail',
-        `No .event-item elements found for session ${sessionId}. Event timeline may be broken.`,
-      );
-    });
+  if (authErrors.length > 0) {
+    await failWithScreenshot(
+      page,
+      'session-detail-auth',
+      `Auth failures on session detail: ${authErrors.join(', ')}`,
+    );
+  }
+
+  // Support both the current workspace DOM and the older live session-detail shape.
+  await timelineItems.first().waitFor({ timeout: 12_000 }).catch(async () => {
+    await failWithScreenshot(
+      page,
+      'session-detail',
+      `No compatible timeline items found for session ${sessionId}. Expected button[id^=\"event-\"], .timeline-row, or .event-item.`,
+    );
+  });
 
   if (serverErrors.length > 0) {
     await failWithScreenshot(
@@ -225,8 +265,8 @@ test('session detail renders event timeline', async ({ agentsRequest, context })
     );
   }
 
-  const eventCount = await page.locator('.event-item').count();
-  expect(eventCount, `Expected at least 1 event item in session ${sessionId}`).toBeGreaterThan(0);
+  const eventCount = await timelineItems.count();
+  expect(eventCount, `Expected at least 1 compatible timeline item in session ${sessionId}`).toBeGreaterThan(0);
 
   await page.close();
 });

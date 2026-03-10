@@ -54,7 +54,7 @@ export async function waitForHealthy(
 
     console.warn(`[health] Timeout after ${attempt} attempts - proceeding anyway`);
   } finally {
-    await healthRequest.dispose();
+    await healthRequest.dispose().catch(() => {});
   }
 }
 
@@ -110,6 +110,13 @@ export async function exchangeLoginToken(
   }
 }
 
+function getCookieHosts(apiBaseUrl: string, frontendBaseUrl: string): string[] {
+  const hosts = new Set<string>();
+  hosts.add(new URL(apiBaseUrl).hostname);
+  hosts.add(new URL(frontendBaseUrl).hostname);
+  return Array.from(hosts);
+}
+
 type LiveFixtures = {
   apiBaseUrl: string;
   frontendBaseUrl: string;
@@ -121,17 +128,17 @@ type LiveFixtures = {
 };
 
 export const test = base.extend<LiveFixtures>({
-  apiBaseUrl: async ({}, use) => {
+  apiBaseUrl: [async ({}, use) => {
     const apiBaseUrl = process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || process.env.E2E_API_URL || '';
     await use(apiBaseUrl);
-  },
+  }, { scope: 'worker' }],
 
-  frontendBaseUrl: async ({ apiBaseUrl }, use) => {
+  frontendBaseUrl: [async ({ apiBaseUrl }, use) => {
     const frontendBaseUrl = process.env.FRONTEND_URL || process.env.PLAYWRIGHT_BASE_URL || process.env.E2E_FRONTEND_URL || apiBaseUrl;
     await use(frontendBaseUrl);
-  },
+  }, { scope: 'worker' }],
 
-  authToken: async ({ apiBaseUrl, playwright }, use) => {
+  authToken: [async ({ apiBaseUrl, playwright }, use) => {
     if (!process.env.RUN_LIVE_E2E) {
       test.skip(true, 'RUN_LIVE_E2E not set; skipping live prod E2E');
     }
@@ -148,11 +155,11 @@ export const test = base.extend<LiveFixtures>({
     await waitForHealthy(playwright.request, apiBaseUrl);
     const accessToken = await exchangeLoginToken(playwright.request, apiBaseUrl, loginToken);
     await use(accessToken);
-  },
+  }, { scope: 'worker' }],
 
-  deviceToken: async ({}, use) => {
+  deviceToken: [async ({}, use) => {
     await use(readDeviceToken());
-  },
+  }, { scope: 'worker' }],
 
   request: async ({ playwright, apiBaseUrl, authToken }, use) => {
     const request = await playwright.request.newContext({
@@ -185,20 +192,20 @@ export const test = base.extend<LiveFixtures>({
     const context = await browser.newContext({
       baseURL: frontendBaseUrl,
     });
-    const apiHost = new URL(apiBaseUrl).hostname;
-    const secure = apiBaseUrl.startsWith('https://');
+    const secure = apiBaseUrl.startsWith('https://') || frontendBaseUrl.startsWith('https://');
+    const cookieHosts = getCookieHosts(apiBaseUrl, frontendBaseUrl);
 
-    await context.addCookies([
-      {
+    await context.addCookies(
+      cookieHosts.map((domain) => ({
         name: 'longhouse_session',
         value: authToken,
-        domain: apiHost,
+        domain,
         path: '/',
         httpOnly: true,
         secure,
-        sameSite: 'Lax',
-      },
-    ]);
+        sameSite: 'Lax' as const,
+      })),
+    );
 
     await use(context);
     await context.close();
