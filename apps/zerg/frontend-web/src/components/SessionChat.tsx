@@ -13,6 +13,7 @@ import { buildUrl } from "../services/api/base";
 import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
 import { Badge, Button, Spinner } from "./ui";
 import type { ActiveSession } from "../hooks/useActiveSessions";
+import "../styles/session-chat.css";
 
 // SSE Event types from backend
 interface SSESystemEvent {
