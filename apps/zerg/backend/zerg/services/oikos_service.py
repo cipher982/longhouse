@@ -1292,35 +1292,29 @@ class OikosService:
 # ---------------------------------------------------------------------------
 
 
-async def invoke_oikos(
+@dataclass
+class OikosRunSetup:
+    """Result of creating an Oikos run record (no execution started)."""
+
+    run_id: int
+    fiche_id: int
+    thread_id: int
+    trace_id: uuid.UUID
+
+
+async def create_oikos_run(
     owner_id: int,
-    message: str,
-    message_id: str,
     *,
-    source: str = "web",
     model: str | None = None,
     reasoning_effort: str | None = None,
-) -> int:
-    """Start an Oikos execution without any transport coupling.
+) -> OikosRunSetup:
+    """Create a Run record and publish lifecycle events — no execution.
 
-    Creates a Run record, publishes lifecycle events, and starts background
-    execution via the SurfaceOrchestrator. Returns the run_id immediately.
-
-    Any caller (HTTP endpoint, shepherd job, Telegram adapter, tests) can use
-    this function. SSE streaming is a separate concern — callers can subscribe
-    to the run's events via ``stream_run_events_live(run_id, owner_id)`` if
-    they need real-time output.
-
-    Args:
-        owner_id: User/owner ID.
-        message: The user message text.
-        message_id: Client-generated UUID string for deduplication.
-        source: Surface identifier ("web", "telegram", "system", etc.).
-        model: Optional model override.
-        reasoning_effort: Optional reasoning effort (none/low/medium/high).
+    Used by replay mode and any caller that needs a run_id without
+    triggering real SurfaceOrchestrator execution.
 
     Returns:
-        The newly created run_id.
+        OikosRunSetup with run_id, fiche_id, thread_id, trace_id.
     """
     from zerg.database import db_session
     from zerg.events import EventType
@@ -1330,7 +1324,6 @@ async def invoke_oikos(
 
     trace_id = uuid.uuid4()
 
-    # --- short-lived DB session for run setup ---
     with db_session() as db:
         service = OikosService(db)
         fiche = service.get_or_create_oikos_fiche(owner_id)
@@ -1349,21 +1342,21 @@ async def invoke_oikos(
         db.commit()
         db.refresh(run)
 
-        run_id = run.id
-        fiche_id = fiche.id
-        thread_id = thread.id
-        run_status_value = run.status.value
-    # --- DB session closed ---
+        setup = OikosRunSetup(
+            run_id=run.id,
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            trace_id=trace_id,
+        )
 
-    # Publish lifecycle events
     await event_bus.publish(
         EventType.RUN_CREATED,
         {
             "event_type": "run_created",
-            "fiche_id": fiche_id,
-            "run_id": run_id,
-            "status": run_status_value,
-            "thread_id": thread_id,
+            "fiche_id": setup.fiche_id,
+            "run_id": setup.run_id,
+            "status": "running",
+            "thread_id": setup.thread_id,
             "owner_id": owner_id,
         },
     )
@@ -1371,21 +1364,50 @@ async def invoke_oikos(
         EventType.RUN_UPDATED,
         {
             "event_type": "run_updated",
-            "fiche_id": fiche_id,
-            "run_id": run_id,
+            "fiche_id": setup.fiche_id,
+            "run_id": setup.run_id,
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(),
-            "thread_id": thread_id,
+            "thread_id": setup.thread_id,
             "owner_id": owner_id,
         },
     )
 
+    return setup
+
+
+async def invoke_oikos(
+    owner_id: int,
+    message: str,
+    message_id: str,
+    *,
+    source: str = "web",
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> int:
+    """Start an Oikos execution without any transport coupling.
+
+    Creates a Run record, publishes lifecycle events, and starts background
+    execution via the SurfaceOrchestrator. Returns the run_id immediately.
+
+    Any caller (HTTP endpoint, shepherd job, Telegram adapter, tests) can use
+    this function. SSE streaming is a separate concern — callers can subscribe
+    to the run's events via ``stream_run_events_live(run_id, owner_id)`` if
+    they need real-time output.
+    """
+    setup = await create_oikos_run(
+        owner_id,
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
+    run_id = setup.run_id
+    trace_id = setup.trace_id
+
     logger.info(
-        f"invoke_oikos: run {run_id} for user {owner_id}, " f"source={source}, message: {message[:50]}...",
+        f"invoke_oikos: run {run_id} for user {owner_id}, source={source}, message: {message[:50]}...",
         extra={"tag": "OIKOS"},
     )
 
-    # Start background execution via the surface adapter
     conversation_id = f"{source}:main"
 
     async def _execute():
@@ -1415,6 +1437,9 @@ async def invoke_oikos(
                 raise RuntimeError(f"surface orchestration failed: {handle_result.status}")
         except Exception as e:
             logger.exception(f"invoke_oikos: background execution failed for run {run_id}: {e}")
+            from zerg.events import EventType
+            from zerg.events.event_bus import event_bus
+
             await event_bus.publish(
                 EventType.ERROR,
                 {
@@ -1424,6 +1449,17 @@ async def invoke_oikos(
                     "error": str(e),
                 },
             )
+        finally:
+            # Mark run as FAILED if it's still RUNNING (crash safety)
+            from zerg.database import db_session
+
+            with db_session() as db:
+                run_row = db.query(Run).filter(Run.id == run_id).first()
+                if run_row and run_row.status == RunStatus.RUNNING:
+                    run_row.status = RunStatus.FAILED
+                    run_row.finished_at = datetime.now(timezone.utc)
+                    db.commit()
+                    logger.warning(f"invoke_oikos: run {run_id} marked FAILED (still RUNNING after _execute)")
 
     asyncio.create_task(_execute())
 
@@ -1433,6 +1469,8 @@ async def invoke_oikos(
 __all__ = [
     "OikosService",
     "OikosRunResult",
+    "OikosRunSetup",
+    "create_oikos_run",
     "invoke_oikos",
     "OIKOS_THREAD_TYPE",
     "RECENT_COMMIS_HISTORY_LIMIT",
