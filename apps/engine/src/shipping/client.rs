@@ -15,8 +15,8 @@ use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 /// Result of a shipping attempt.
 #[derive(Debug)]
 pub enum ShipResult {
-    /// Successfully shipped. Contains the response body.
-    Ok(serde_json::Value),
+    /// Successfully shipped.
+    Ok,
     /// Rate limited and retries exhausted. Should spool for later.
     RateLimited,
     /// Server error (5xx). Should spool for later.
@@ -31,18 +31,11 @@ pub enum ShipResult {
 pub struct ShipperClient {
     client: reqwest::Client,
     ingest_url: String,
-    api_token: Option<String>,
     max_retries_429: u32,
     base_backoff: f64,
-    compression: CompressionAlgo,
 }
 
 impl ShipperClient {
-    /// Create a new client from config.
-    pub fn new(config: &ShipperConfig) -> Result<Self> {
-        Self::with_compression(config, CompressionAlgo::Gzip)
-    }
-
     /// Create a new client with specific compression algorithm.
     pub fn with_compression(config: &ShipperConfig, compression: CompressionAlgo) -> Result<Self> {
         let mut default_headers = HeaderMap::new();
@@ -71,16 +64,9 @@ impl ShipperClient {
         Ok(Self {
             client,
             ingest_url,
-            api_token: config.api_token.clone(),
             max_retries_429: config.max_retries_429,
             base_backoff: config.base_backoff_seconds,
-            compression,
         })
-    }
-
-    /// Get the compression algorithm being used.
-    pub fn compression(&self) -> CompressionAlgo {
-        self.compression
     }
 
     /// Ship a gzip-compressed payload. Handles 429 retries internally.
@@ -105,11 +91,7 @@ impl ShipperClient {
 
                     match status {
                         200..=299 => {
-                            let body = response
-                                .json::<serde_json::Value>()
-                                .await
-                                .unwrap_or(serde_json::Value::Null);
-                            return ShipResult::Ok(body);
+                            return ShipResult::Ok;
                         }
                         429 => {
                             if retries >= self.max_retries_429 {
@@ -193,20 +175,6 @@ impl ShipperClient {
             Ok(resp) => Ok(resp.status().is_success()),
             Err(_) => Ok(false),
         }
-    }
-}
-
-/// Read API URL from the standard location.
-pub fn read_api_url() -> Result<String> {
-    let config = ShipperConfig::from_env()?;
-    Ok(config.api_url)
-}
-
-/// Check if the shipper has valid config (URL + token).
-pub fn has_valid_config() -> bool {
-    match ShipperConfig::from_env() {
-        Ok(config) => !config.api_url.is_empty() && config.api_token.is_some(),
-        Err(_) => false,
     }
 }
 

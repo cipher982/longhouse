@@ -64,11 +64,6 @@ struct FileResult {
     compress_secs: f64,
 }
 
-/// Run benchmark sequentially (for baseline comparison).
-pub fn run_benchmark(files: &[PathBuf], compress: bool) -> BenchResult {
-    run_benchmark_with(files, compress, CompressionAlgo::Gzip)
-}
-
 /// Run benchmark sequentially with specified compression.
 pub fn run_benchmark_with(files: &[PathBuf], compress: bool, algo: CompressionAlgo) -> BenchResult {
     let overall_start = Instant::now();
@@ -139,11 +134,6 @@ pub fn run_benchmark_with(files: &[PathBuf], compress: bool, algo: CompressionAl
         parallel: false,
         workers: 1,
     }
-}
-
-/// Run benchmark with rayon parallel file processing.
-pub fn run_benchmark_parallel(files: &[PathBuf], compress: bool, workers: usize) -> BenchResult {
-    run_benchmark_parallel_with(files, compress, workers, CompressionAlgo::Gzip)
 }
 
 /// Run benchmark with rayon parallel file processing and specified compression.
