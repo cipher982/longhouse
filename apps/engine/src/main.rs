@@ -20,7 +20,7 @@ use rayon::prelude::*;
 
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
-use shipping::client::{ShipResult, ShipperClient};
+use shipping::client::ShipperClient;
 use state::db::open_db;
 use state::file_state::FileState;
 use state::spool::Spool;
@@ -498,17 +498,7 @@ async fn cmd_ship(
     let events_done = AtomicUsize::new(0);
     let total_files = files_to_ship.len();
 
-    struct ShipItem {
-        path_str: String,
-        offset: u64,
-        new_offset: u64,
-        event_count: usize,
-        session_id: String,
-        /// Compressed payload for live HTTP shipping. Empty for dry-run (saves memory).
-        compressed: Vec<u8>,
-    }
-
-    let ship_items: Vec<Option<ShipItem>> = files_to_ship
+    let ship_items: Vec<Option<shipper::ShipItem>> = files_to_ship
         .par_iter()
         .map(|(path, offset)| {
             let path_str = path.to_string_lossy().to_string();
@@ -576,8 +566,9 @@ async fn cmd_ship(
                 );
             }
 
-            Some(ShipItem {
+            Some(shipper::ShipItem {
                 path_str,
+                provider: "claude".to_string(),
                 offset: *offset,
                 new_offset,
                 event_count,
@@ -628,67 +619,18 @@ async fn cmd_ship(
                 }
             };
 
-            // Ship via HTTP
             let client = client.as_ref().unwrap();
-            let result = client.ship(item.compressed).await;
-
-            match result {
-                ShipResult::Ok(_) => {
-                    file_state.set_offset(
-                        &item.path_str,
-                        item.new_offset,
-                        &item.session_id,
-                        &item.session_id,
-                        "claude",
-                    )?;
+            let byte_count = item.new_offset - item.offset;
+            match shipper::ship_and_record(item, client, &conn, None).await? {
+                shipper::ShipAndRecordOutcome::Shipped { events } => {
                     files_shipped += 1;
-                    events_shipped += item.event_count;
-                    bytes_shipped += item.new_offset - item.offset;
+                    events_shipped += events;
+                    bytes_shipped += byte_count;
                 }
-                ShipResult::RateLimited
-                | ShipResult::ServerError(_, _)
-                | ShipResult::ConnectError(_) => {
-                    let spool = Spool::new(&conn);
-                    file_state.set_queued_offset(
-                        &item.path_str,
-                        item.new_offset,
-                        "claude",
-                        &item.session_id,
-                        &item.session_id,
-                    )?;
-                    spool.enqueue(
-                        "claude",
-                        &item.path_str,
-                        item.offset,
-                        item.new_offset,
-                        Some(&item.session_id),
-                    )?;
+                shipper::ShipAndRecordOutcome::Spooled { .. } => {
                     files_failed += 1;
-
-                    let err_msg = match &result {
-                        ShipResult::RateLimited => "rate limited".to_string(),
-                        ShipResult::ServerError(code, body) => {
-                            format!("{}:{}", code, &body[..body.len().min(200)])
-                        }
-                        ShipResult::ConnectError(e) => e.clone(),
-                        _ => unreachable!(),
-                    };
-                    tracing::warn!("Failed to ship {}: {}", item.path_str, err_msg);
                 }
-                ShipResult::ClientError(code, body) => {
-                    tracing::error!(
-                        "Client error shipping {}: {} {}",
-                        item.path_str,
-                        code,
-                        &body[..body.len().min(200)]
-                    );
-                    file_state.set_offset(
-                        &item.path_str,
-                        item.new_offset,
-                        &item.session_id,
-                        &item.session_id,
-                        "claude",
-                    )?;
+                shipper::ShipAndRecordOutcome::SkippedClientError { .. } => {
                     files_skipped += 1;
                 }
             }
@@ -698,69 +640,9 @@ async fn cmd_ship(
     // Replay spool (if not dry run)
     let mut spool_replayed = 0usize;
     if !dry_run {
-        let spool = Spool::new(&conn);
-        let pending = spool.dequeue_batch(100)?;
-        if !pending.is_empty() && !json_output {
-            eprintln!("Replaying {} spool entries...", pending.len());
-        }
         let client = client.as_ref().unwrap();
-        for entry in &pending {
-            // Re-read and re-parse the source file range
-            let path = PathBuf::from(&entry.file_path);
-            if !path.exists() {
-                tracing::warn!("Spool file missing: {}", entry.file_path);
-                spool.mark_failed_with_max(entry.id, "file missing", 0)?;
-                continue;
-            }
-
-            let parse_result = match pipeline::parser::parse_session_file(&path, entry.start_offset)
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    spool.mark_failed(entry.id, &e.to_string())?;
-                    continue;
-                }
-            };
-
-            if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
-                spool.mark_shipped(entry.id)?;
-                continue;
-            }
-
-            let compressed = pipeline::compressor::build_and_compress_with_source_lines(
-                &parse_result.metadata.session_id,
-                &parse_result.events,
-                &parse_result.metadata,
-                &entry.file_path,
-                &entry.provider,
-                Some(&parse_result.source_lines),
-                algo,
-            )?;
-
-            match client.ship(compressed).await {
-                ShipResult::Ok(_) => {
-                    spool.mark_shipped(entry.id)?;
-                    file_state.set_acked_offset(&entry.file_path, entry.end_offset)?;
-                    spool_replayed += 1;
-                }
-                ShipResult::ConnectError(_) => {
-                    // Don't mark failed on connect error — will retry next cycle
-                    break;
-                }
-                ShipResult::RateLimited | ShipResult::ServerError(_, _) => {
-                    spool.mark_failed(entry.id, "server error during replay")?;
-                }
-                ShipResult::ClientError(code, _) => {
-                    spool.mark_failed_with_max(entry.id, &format!("client error {}", code), 0)?;
-                }
-            }
-        }
-
-        // Cleanup old dead entries
-        let cleaned = spool.cleanup()?;
-        if cleaned > 0 {
-            tracing::info!("Cleaned {} old spool entries", cleaned);
-        }
+        let (ok, _failed) = shipper::replay_spool_batch(&conn, client, algo, 100).await?;
+        spool_replayed = ok;
     }
 
     let total_elapsed = start.elapsed();
@@ -890,8 +772,11 @@ async fn cmd_ship_file(
     }
 
     let client = ShipperClient::with_compression(&config, algo)?;
-    let (events_shipped, _is_connect_err) =
-        shipper::ship_and_record(item, &client, &conn, None).await?;
+    let events_shipped = match shipper::ship_and_record(item, &client, &conn, None).await? {
+        shipper::ShipAndRecordOutcome::Shipped { events } => events,
+        shipper::ShipAndRecordOutcome::Spooled { .. }
+        | shipper::ShipAndRecordOutcome::SkippedClientError { .. } => 0,
+    };
 
     if json_output {
         let summary = serde_json::json!({
