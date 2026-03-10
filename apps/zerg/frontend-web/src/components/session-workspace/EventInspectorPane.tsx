@@ -36,13 +36,13 @@ export function EventInspectorPane({ selection, onSelectKey }: EventInspectorPan
     return (
       <div className="event-inspector">
         <div className="event-inspector__header">
-          <div className="event-inspector__title">Inspector</div>
-          <div className="event-inspector__subtitle">Select an event to inspect details.</div>
+          <div className="event-inspector__title">Tool Inspector</div>
+          <div className="event-inspector__subtitle">Select a tool event to inspect raw details.</div>
         </div>
         <div className="event-inspector__body">
           <EmptyState
-            title="No event selected"
-            description="Pick a message or tool event from the timeline."
+            title="No tool selected"
+            description="Messages render directly in the transcript. Select a tool call to inspect input, output, and timing."
           />
         </div>
       </div>
@@ -51,25 +51,18 @@ export function EventInspectorPane({ selection, onSelectKey }: EventInspectorPan
 
   if (selection.kind === "message") {
     const outsideActiveContext = isOutsideActiveContext(selection.event);
-    const title =
-      selection.event.role === "user"
-        ? "User message"
-        : selection.event.role === "assistant"
-          ? "Assistant message"
-          : `${selection.event.role} message`;
 
     return (
       <div className="event-inspector">
         <div className="event-inspector__header">
-          <div className="event-inspector__title">{title}</div>
+          <div className="event-inspector__title">Transcript Focus</div>
           <div className="event-inspector__subtitle">{formatFullDate(selection.event.timestamp)}</div>
         </div>
         <div className="event-inspector__body">
-          <InspectorSection label="Content">
-            <div className="inspector-message-block">
-              {selection.event.content_text || "(empty message)"}
-            </div>
-          </InspectorSection>
+          <EmptyState
+            title="Message already visible in the transcript"
+            description="Use this pane for tool calls, raw command output, and structured event metadata."
+          />
           <InspectorSection label="Metadata">
             <div className="inspector-meta-list">
               <div className="inspector-meta-item">

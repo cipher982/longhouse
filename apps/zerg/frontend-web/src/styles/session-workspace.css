@@ -27,9 +27,14 @@
   .workspace-shell__body {
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(340px, 400px);
+    grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(320px, 360px);
     grid-template-areas: "sidebar main inspector";
     gap: var(--space-4);
+  }
+
+  .workspace-shell--inspector-collapsed .workspace-shell__body {
+    grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+    grid-template-areas: "sidebar main";
   }
 
   .workspace-shell__pane {
@@ -191,6 +196,12 @@
   }
 
   .session-pane-callout--warning {
+    color: var(--color-text-secondary);
+  }
+
+  .session-pane-callout--muted {
+    border-color: rgba(158, 124, 90, 0.18);
+    background: rgba(18, 11, 9, 0.56);
     color: var(--color-text-secondary);
   }
 
@@ -447,7 +458,7 @@
     padding: 0 var(--space-4) var(--space-4);
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: var(--space-3);
   }
 
   .timeline-row {
@@ -517,6 +528,40 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-word;
+  }
+
+  .timeline-row--message {
+    max-width: min(100%, 84ch);
+    gap: var(--space-3);
+  }
+
+  .timeline-row--message[data-message-role="assistant"] {
+    margin-right: auto;
+    background: rgba(28, 21, 16, 0.82);
+    border-color: rgba(158, 124, 90, 0.18);
+  }
+
+  .timeline-row--message[data-message-role="user"] {
+    margin-left: auto;
+    background: rgba(51, 37, 24, 0.78);
+    border-color: rgba(212, 184, 122, 0.24);
+  }
+
+  .timeline-row--message[data-message-role="system"] {
+    max-width: 100%;
+    background: rgba(22, 17, 14, 0.74);
+  }
+
+  .timeline-row__content--message {
+    display: block;
+    white-space: pre-wrap;
+    overflow: visible;
+    -webkit-line-clamp: initial;
+    -webkit-box-orient: initial;
+  }
+
+  .timeline-row--message .timeline-row__badges {
+    justify-content: flex-start;
   }
 
   .timeline-row__content--tool {
@@ -784,6 +829,12 @@
         "sidebar main"
         "inspector inspector";
     }
+
+    .workspace-shell--inspector-collapsed .workspace-shell__body {
+      grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      grid-template-areas: "sidebar main";
+    }
   }
 
   @media (max-width: 900px) {
@@ -809,6 +860,13 @@
         "inspector";
     }
 
+    .workspace-shell--inspector-collapsed .workspace-shell__body {
+      grid-template-rows: auto minmax(360px, 1fr);
+      grid-template-areas:
+        "sidebar"
+        "main";
+    }
+
     .session-workspace-header,
     .session-workspace-dock__header,
     .timeline-pane__header,
@@ -823,5 +881,9 @@
 
     .session-workspace-dock__chat {
       max-height: none;
+    }
+
+    .timeline-row--message {
+      max-width: 100%;
     }
 }
