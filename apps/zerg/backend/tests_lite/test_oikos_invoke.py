@@ -256,6 +256,15 @@ async def test_invoke_oikos_marks_run_failed_on_crash(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_task_registry_removed():
+    """The process-local task registry should not exist — cancel is DB-only."""
+    import zerg.routers.oikos_chat as chat_module
+
+    assert not hasattr(chat_module, "_oikos_tasks"), "Task registry should be deleted"
+    assert not hasattr(chat_module, "_register_oikos_task")
+    assert not hasattr(chat_module, "_cancel_oikos_task")
+
+
 def test_replay_branch_uses_create_oikos_run_not_invoke():
     """The replay branch in oikos_chat must use create_oikos_run, not invoke_oikos."""
     import inspect
