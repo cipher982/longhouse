@@ -369,7 +369,7 @@ Status (2026-03-07): Done.
 
 Notes:
 - 2026-03-07: Confirmed `apps/sauron/docker-compose.yml` was a dead path and safe to delete at the time.
-- 2026-03-08: Architecture changed again during extraction: the active standalone runtime now lives in `~/git/sauron` on `clifford`, and Longhouse is back to builtin jobs only.
+- 2026-03-08: Architecture changed again during extraction: the active standalone runtime now lives in the `~/git/sauron/` workspace (runtime repo under `runtime/`) on `clifford`, and Longhouse is back to builtin jobs only.
 
 ## [Tech Debt] Delete stale helper wrappers (size: 1)
 

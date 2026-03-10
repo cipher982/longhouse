@@ -400,7 +400,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             tool_name="Bash",
             tool_call_id="call_s3_02",
             tool_input_json={
-                "command": "ssh zerg 'date && docker exec longhouse-david010 python3 -c \"from datetime import datetime; print(datetime.now())\"'"
+                "command": "ssh clifford 'date && docker exec sauron python3 -c \"from datetime import datetime; print(datetime.now())\"'"
             },
             timestamp=t3 + timedelta(minutes=3),
         ),
@@ -429,7 +429,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "sed -n '38,50p' ~/git/sauron-jobs/jobs/daily_digest.py"},
+            tool_input_json={"command": "sed -n '38,50p' ~/git/sauron/jobs/jobs/worklog/daily_digest.py"},
             timestamp=t3 + timedelta(minutes=5),
         ),
         EventIngest(
@@ -446,7 +446,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Edit",
             tool_input_json={
-                "file_path": "~/git/sauron-jobs/jobs/daily_digest.py",
+                "file_path": "~/git/sauron/jobs/jobs/worklog/daily_digest.py",
                 "old_string": "    cutoff = datetime.now() - timedelta(days=days_back)",
                 "new_string": "    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)",
             },
@@ -456,7 +456,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "cd ~/git/sauron-jobs && uv run pytest tests/ -x -q -k digest"},
+            tool_input_json={"command": "cd ~/git/sauron/jobs && uv run pytest tests/ -x -q -k digest"},
             timestamp=t3 + timedelta(minutes=8),
         ),
         EventIngest(
