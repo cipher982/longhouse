@@ -28,7 +28,11 @@ from typing import Callable
 
 import yaml
 
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[5]
 DecisionCallable = Callable[["AutonomyContextPacket"], "AutonomyDecision | Awaitable[AutonomyDecision]"]
+DEFAULT_AUTONOMY_JOURNEY_FIXTURE_PATH = _BACKEND_ROOT / "tests_lite" / "fixtures" / "oikos_autonomy_journeys.yml"
+DEFAULT_AUTONOMY_ARTIFACT_ROOT = _REPO_ROOT / ".tmp" / "oikos-autonomy-journeys"
 
 
 def _json_default(value: Any) -> str:
@@ -39,6 +43,13 @@ def _json_default(value: Any) -> str:
 
 def _slugify(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("-") or "journey"
+
+
+def _optional_clean_str(data: dict[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    return str(value).strip()
 
 
 @dataclass(frozen=True)
@@ -82,12 +93,12 @@ class AutonomySessionSnapshot:
             provider=str(data.get("provider", "")).strip(),
             status=str(data.get("status", "")).strip(),
             resumable=bool(data.get("resumable", False)),
-            project=str(data["project"]).strip() if data.get("project") is not None else None,
-            last_user_message=(str(data["last_user_message"]).strip() if data.get("last_user_message") is not None else None),
-            last_ai_message=str(data["last_ai_message"]).strip() if data.get("last_ai_message") is not None else None,
-            summary=str(data["summary"]).strip() if data.get("summary") is not None else None,
-            presence_state=str(data["presence_state"]).strip() if data.get("presence_state") is not None else None,
-            blocked_reason=str(data["blocked_reason"]).strip() if data.get("blocked_reason") is not None else None,
+            project=_optional_clean_str(data, "project"),
+            last_user_message=_optional_clean_str(data, "last_user_message"),
+            last_ai_message=_optional_clean_str(data, "last_ai_message"),
+            summary=_optional_clean_str(data, "summary"),
+            presence_state=_optional_clean_str(data, "presence_state"),
+            blocked_reason=_optional_clean_str(data, "blocked_reason"),
         )
 
 
@@ -127,7 +138,7 @@ class AutonomyArtifactRef:
         return cls(
             label=str(data.get("label", "")).strip(),
             path=str(data.get("path", "")).strip(),
-            description=str(data["description"]).strip() if data.get("description") is not None else None,
+            description=_optional_clean_str(data, "description"),
         )
 
 
@@ -228,6 +239,65 @@ def load_autonomy_journey_cases(path: Path) -> list[AutonomyJourneyCase]:
     raw = yaml.safe_load(path.read_text()) or {}
     cases = raw.get("cases") or []
     return [AutonomyJourneyCase.from_dict(case) for case in cases]
+
+
+async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDecision:
+    """Cheap deterministic baseline used for harness validation and local dogfooding."""
+    ai_text = (packet.primary_session.last_ai_message or "").lower()
+
+    if packet.trigger.type == "session_blocked":
+        return AutonomyDecision(
+            decision="escalate",
+            rationale="The session is blocked on a real product fork and needs user input.",
+            summary="Escalate the blocker to the user instead of auto-continuing.",
+            proposed_actions=[
+                AutonomyProposedAction(
+                    kind="notify_user",
+                    target_session_id=packet.primary_session.session_id,
+                    summary="Send a concise summary of the product fork to the user.",
+                )
+            ],
+            needs_human=True,
+        )
+
+    if packet.trigger.type == "session_completed" and "tests were not run" in ai_text:
+        return AutonomyDecision(
+            decision="continue_session",
+            rationale="The session explicitly left one bounded verification step undone.",
+            summary="Continue the session to run the pending targeted tests.",
+            proposed_actions=[
+                AutonomyProposedAction(
+                    kind="continue_session",
+                    target_session_id=packet.primary_session.session_id,
+                    summary="Ask the same session to run the pending targeted tests.",
+                )
+            ],
+            needs_human=False,
+        )
+
+    return AutonomyDecision(
+        decision="ignore",
+        rationale="Nothing in the wakeup suggests a meaningful next action.",
+        summary="No follow-up action needed.",
+        proposed_actions=[],
+        needs_human=False,
+    )
+
+
+async def run_autonomy_journeys(
+    *,
+    fixture_path: Path = DEFAULT_AUTONOMY_JOURNEY_FIXTURE_PATH,
+    artifact_root: Path = DEFAULT_AUTONOMY_ARTIFACT_ROOT,
+    decider: DecisionCallable = baseline_shadow_decider,
+) -> list[AutonomyJourneyResult]:
+    """Execute a fixture file of autonomy journeys and persist artifacts."""
+    cases = load_autonomy_journey_cases(fixture_path)
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    runner = OikosAutonomyJourneyRunner(artifact_root=artifact_root, decider=decider)
+    results: list[AutonomyJourneyResult] = []
+    for case in cases:
+        results.append(await runner.run_case(case))
+    return results
 
 
 class OikosAutonomyJourneyRunner:
