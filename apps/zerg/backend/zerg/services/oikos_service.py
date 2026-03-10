@@ -1287,9 +1287,153 @@ class OikosService:
     # See commis_single_resume.py for the implementation using Runner.run_continuation()
 
 
+# ---------------------------------------------------------------------------
+# Transport-agnostic invocation (the single entry point for all callers)
+# ---------------------------------------------------------------------------
+
+
+async def invoke_oikos(
+    owner_id: int,
+    message: str,
+    message_id: str,
+    *,
+    source: str = "web",
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> int:
+    """Start an Oikos execution without any transport coupling.
+
+    Creates a Run record, publishes lifecycle events, and starts background
+    execution via the SurfaceOrchestrator. Returns the run_id immediately.
+
+    Any caller (HTTP endpoint, shepherd job, Telegram adapter, tests) can use
+    this function. SSE streaming is a separate concern — callers can subscribe
+    to the run's events via ``stream_run_events_live(run_id, owner_id)`` if
+    they need real-time output.
+
+    Args:
+        owner_id: User/owner ID.
+        message: The user message text.
+        message_id: Client-generated UUID string for deduplication.
+        source: Surface identifier ("web", "telegram", "system", etc.).
+        model: Optional model override.
+        reasoning_effort: Optional reasoning effort (none/low/medium/high).
+
+    Returns:
+        The newly created run_id.
+    """
+    from zerg.database import db_session
+    from zerg.events import EventType
+    from zerg.events.event_bus import event_bus
+    from zerg.models.enums import RunStatus
+    from zerg.models.enums import RunTrigger
+
+    trace_id = uuid.uuid4()
+
+    # --- short-lived DB session for run setup ---
+    with db_session() as db:
+        service = OikosService(db)
+        fiche = service.get_or_create_oikos_fiche(owner_id)
+        thread = service.get_or_create_oikos_thread(owner_id, fiche)
+
+        run = Run(
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.API,
+            model=model or fiche.model,
+            reasoning_effort=reasoning_effort,
+            trace_id=trace_id,
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+
+        run_id = run.id
+        fiche_id = fiche.id
+        thread_id = thread.id
+        run_status_value = run.status.value
+    # --- DB session closed ---
+
+    # Publish lifecycle events
+    await event_bus.publish(
+        EventType.RUN_CREATED,
+        {
+            "event_type": "run_created",
+            "fiche_id": fiche_id,
+            "run_id": run_id,
+            "status": run_status_value,
+            "thread_id": thread_id,
+            "owner_id": owner_id,
+        },
+    )
+    await event_bus.publish(
+        EventType.RUN_UPDATED,
+        {
+            "event_type": "run_updated",
+            "fiche_id": fiche_id,
+            "run_id": run_id,
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "thread_id": thread_id,
+            "owner_id": owner_id,
+        },
+    )
+
+    logger.info(
+        f"invoke_oikos: run {run_id} for user {owner_id}, " f"source={source}, message: {message[:50]}...",
+        extra={"tag": "OIKOS"},
+    )
+
+    # Start background execution via the surface adapter
+    conversation_id = f"{source}:main"
+
+    async def _execute():
+        from zerg.surfaces.adapters.web import WebSurfaceAdapter
+        from zerg.surfaces.base import SurfaceHandleStatus
+        from zerg.surfaces.orchestrator import SurfaceOrchestrator
+
+        try:
+            adapter = WebSurfaceAdapter(owner_id=owner_id)
+            orchestrator = SurfaceOrchestrator()
+            handle_result = await orchestrator.handle_inbound(
+                adapter,
+                raw_input={
+                    "owner_id": owner_id,
+                    "message": message,
+                    "message_id": message_id,
+                    "conversation_id": conversation_id,
+                    "run_id": run_id,
+                    "trace_id": str(trace_id),
+                    "timeout": 600,
+                    "model_override": model,
+                    "reasoning_effort": reasoning_effort,
+                    "return_on_deferred": False,
+                },
+            )
+            if handle_result.status != SurfaceHandleStatus.PROCESSED:
+                raise RuntimeError(f"surface orchestration failed: {handle_result.status}")
+        except Exception as e:
+            logger.exception(f"invoke_oikos: background execution failed for run {run_id}: {e}")
+            await event_bus.publish(
+                EventType.ERROR,
+                {
+                    "event_type": "error",
+                    "run_id": run_id,
+                    "owner_id": owner_id,
+                    "error": str(e),
+                },
+            )
+
+    asyncio.create_task(_execute())
+
+    return run_id
+
+
 __all__ = [
     "OikosService",
     "OikosRunResult",
+    "invoke_oikos",
     "OIKOS_THREAD_TYPE",
     "RECENT_COMMIS_HISTORY_LIMIT",
     "RECENT_COMMIS_HISTORY_MINUTES",
