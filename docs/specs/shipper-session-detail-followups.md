@@ -122,6 +122,13 @@ Acceptance criteria:
 - The long-term `qa-live` auth model is documented in this spec and any touched test helper comments.
 - No unresolved ambiguity remains about why session discovery and browser rendering use different auth paths today.
 
+Implementation status:
+- Completed on 2026-03-10.
+- The hosted `qa-live` model is now explicitly documented in both this spec and the live fixtures:
+  - `agentsRequest` remains device-token-authenticated for `/api/agents/*` discovery.
+  - browser rendering remains cookie-authenticated through `longhouse_session`.
+- This split is intentional until hosted browser auth can list agent sessions without returning `403`.
+
 ### Phase 4: Engine Warning Noise Reduction
 Acceptance criteria:
 - Rust engine warnings are reduced materially from the current baseline.

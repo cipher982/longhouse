@@ -210,6 +210,8 @@ test('forum route redirects to timeline without auth errors', async ({ context }
 test('session detail renders event timeline', async ({ agentsRequest, context }) => {
   test.setTimeout(20_000);
 
+  // Keep discovery on the agents API fixture for now. The smoke still validates the
+  // browser-rendered detail page through the cookie-authenticated context below.
   const sessionId = await findRecentSessionWithEvents(agentsRequest);
   if (!sessionId) {
     // No sessions at all — skip (instance may be newly provisioned)
