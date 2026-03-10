@@ -23,7 +23,7 @@ from zerg.models.models import Fiche
 from zerg.models.models import Run
 from zerg.routers.oikos_auth import _is_tool_enabled
 from zerg.routers.oikos_auth import get_current_oikos_user
-from zerg.routers.oikos_sse import stream_run_events
+from zerg.routers.stream import stream_run_events_live
 from zerg.services.oikos_context import reset_seq
 
 logger = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ async def _replay_stream_generator(
             )
 
     task_started = False
-    async for event in stream_run_events(run_id, owner_id):
+    async for event in stream_run_events_live(run_id, owner_id):
         yield event
 
         if not task_started:
@@ -218,7 +218,7 @@ async def oikos_chat(
         reasoning_effort=reasoning_effort,
     )
 
-    return EventSourceResponse(stream_run_events(run_id, current_user.id))
+    return EventSourceResponse(stream_run_events_live(run_id, current_user.id))
 
 
 # ---------------------------------------------------------------------------
