@@ -5,7 +5,7 @@
 //! Max queue size: 10,000 entries (backpressure).
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension};
 
 /// Maximum spool entries before backpressure kicks in.
@@ -28,10 +28,6 @@ pub struct SpoolEntry {
     pub file_path: String,
     pub start_offset: u64,
     pub end_offset: u64,
-    pub session_id: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub retry_count: u32,
-    pub last_error: Option<String>,
 }
 
 /// Spool operations on a shared SQLite connection.
@@ -135,7 +131,7 @@ impl<'a> Spool<'a> {
     pub fn dequeue_batch(&self, limit: usize) -> Result<Vec<SpoolEntry>> {
         let now = Utc::now().to_rfc3339();
         let mut stmt = self.conn.prepare(
-            "SELECT id, provider, file_path, start_offset, end_offset, session_id, created_at, retry_count, last_error
+            "SELECT id, provider, file_path, start_offset, end_offset
              FROM spool_queue
              WHERE status = 'pending' AND next_retry_at <= ?1
              ORDER BY created_at ASC
@@ -148,14 +144,6 @@ impl<'a> Spool<'a> {
                 file_path: row.get(2)?,
                 start_offset: row.get::<_, i64>(3)? as u64,
                 end_offset: row.get::<_, i64>(4)? as u64,
-                session_id: row.get(5)?,
-                created_at: row.get::<_, String>(6).map(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|d| d.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now())
-                })?,
-                retry_count: row.get::<_, i32>(7)? as u32,
-                last_error: row.get(8)?,
             })
         })?;
         let mut result = Vec::new();
@@ -268,6 +256,7 @@ impl<'a> Spool<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::DateTime;
     use crate::state::db::open_db;
 
     fn setup() -> (tempfile::NamedTempFile, Connection) {

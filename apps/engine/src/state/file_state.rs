@@ -7,7 +7,7 @@
 //! Gap between them means data needs recovery (re-read from spool pointers).
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rusqlite::Connection;
 
 /// A tracked session file.
@@ -18,8 +18,6 @@ pub struct TrackedFile {
     pub queued_offset: u64,
     pub acked_offset: u64,
     pub session_id: Option<String>,
-    pub provider_session_id: Option<String>,
-    pub last_updated: DateTime<Utc>,
 }
 
 /// File state operations on a shared SQLite connection.
@@ -132,7 +130,7 @@ impl<'a> FileState<'a> {
     /// Get files where queued_offset > acked_offset (need recovery on startup).
     pub fn get_unacked_files(&self) -> Result<Vec<TrackedFile>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, provider, queued_offset, acked_offset, session_id, provider_session_id, last_updated
+            "SELECT path, provider, queued_offset, acked_offset, session_id
              FROM file_state WHERE queued_offset > acked_offset",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -142,12 +140,6 @@ impl<'a> FileState<'a> {
                 queued_offset: row.get::<_, i64>(2)? as u64,
                 acked_offset: row.get::<_, i64>(3)? as u64,
                 session_id: row.get(4)?,
-                provider_session_id: row.get(5)?,
-                last_updated: row.get::<_, String>(6).map(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|d| d.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now())
-                })?,
             })
         })?;
         let mut result = Vec::new();
@@ -158,9 +150,10 @@ impl<'a> FileState<'a> {
     }
 
     /// Get full tracking info for a file.
+    #[cfg(test)]
     pub fn get_session(&self, file_path: &str) -> Result<Option<TrackedFile>> {
         let result = self.conn.query_row(
-            "SELECT path, provider, queued_offset, acked_offset, session_id, provider_session_id, last_updated
+            "SELECT path, provider, queued_offset, acked_offset, session_id
              FROM file_state WHERE path = ?",
             [file_path],
             |row| {
@@ -170,10 +163,6 @@ impl<'a> FileState<'a> {
                     queued_offset: row.get::<_, i64>(2)? as u64,
                     acked_offset: row.get::<_, i64>(3)? as u64,
                     session_id: row.get(4)?,
-                    provider_session_id: row.get(5)?,
-                    last_updated: row
-                        .get::<_, String>(6)
-                        .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()))?,
                 })
             },
         );
@@ -182,14 +171,6 @@ impl<'a> FileState<'a> {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
-    }
-
-    /// Count all tracked files.
-    pub fn count(&self) -> Result<usize> {
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM file_state", [], |row| row.get(0))?;
-        Ok(count as usize)
     }
 
     /// Remove entries for files that no longer exist on disk and haven't been updated recently.

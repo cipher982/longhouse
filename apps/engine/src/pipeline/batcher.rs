@@ -12,12 +12,6 @@ pub struct ShipRange {
     pub event_range: Range<usize>,
 }
 
-impl ShipRange {
-    pub fn byte_len(&self) -> u64 {
-        self.end_offset.saturating_sub(self.start_offset)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeadLetterRange {
     pub start_offset: u64,

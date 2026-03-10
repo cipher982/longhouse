@@ -5,5 +5,5 @@
 - [x] Phase 1: Add stable session-detail test hooks and update live harness
 - [x] Phase 2: Make session detail load progressively after session metadata
 - [x] Phase 3: Record the long-term `qa-live` auth split decision in code/spec comments
-- [ ] Phase 4: Reduce Rust engine warning noise
+- [x] Phase 4: Reduce Rust engine warning noise
 - [ ] Phase 5: Surface dead-letter counts in a human-visible output

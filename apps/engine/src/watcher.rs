@@ -7,7 +7,6 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,14 +42,13 @@ pub struct SessionWatcher {
     // Must stay alive — dropping stops the watcher.
     _watcher: RecommendedWatcher,
     rx: mpsc::Receiver<PathBuf>,
-    dropped_events: Arc<AtomicU64>,
 }
 
 impl SessionWatcher {
     /// Start watching all provider directories.
     pub fn new(providers: &[ProviderConfig]) -> Result<Self> {
         let (tx, rx) = mpsc::channel(WATCHER_CHANNEL_CAPACITY);
-        let dropped_events = Arc::new(AtomicU64::new(0));
+        let dropped_events = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let dropped_clone = dropped_events.clone();
 
         let watcher_tx = tx.clone();
@@ -120,7 +118,6 @@ impl SessionWatcher {
         Ok(Self {
             _watcher: watcher,
             rx,
-            dropped_events,
         })
     }
 

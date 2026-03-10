@@ -109,6 +109,7 @@ pub struct SourceLineIngest<'a> {
 // ---------------------------------------------------------------------------
 
 /// Build an IngestPayload from parsed events and metadata.
+#[cfg(test)]
 pub fn build_payload<'a>(
     session_id: &'a str,
     events: &'a [ParsedEvent],
@@ -232,6 +233,7 @@ pub fn build_payload_with_source_lines<'a>(
 /// This is THE key optimization: `serde_json::to_writer` writes JSON tokens
 /// directly into the compressor's write buffer. At no point is the full
 /// JSON string materialized in memory.
+#[cfg(test)]
 pub fn build_and_compress(
     session_id: &str,
     events: &[ParsedEvent],
@@ -292,6 +294,8 @@ pub fn build_and_compress_with_source_lines(
 }
 
 /// Compress an already-built payload (for benchmarking).
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn compress_payload(payload: &IngestPayload<'_>) -> anyhow::Result<Vec<u8>> {
     compress_payload_with(payload, CompressionAlgo::Gzip)
 }

@@ -135,6 +135,17 @@ Acceptance criteria:
 - Removed warnings are backed by code deletion, narrowed visibility, or targeted intentional annotations.
 - `make test-engine-fast` still passes.
 
+Implementation status:
+- Completed on 2026-03-10.
+- Reduced the `make test-engine-fast` warning baseline from 22 Rust warnings to 0.
+- Cleanup approach:
+  - removed unused benchmark wrapper functions and dead helper methods,
+  - narrowed test-only helper APIs with `#[cfg(test)]`,
+  - dropped unused runtime struct fields and stale helper functions,
+  - used narrow `#[allow(dead_code)]` only for retained test-only compatibility helpers.
+- Verification:
+  - `make test-engine-fast`
+
 ### Phase 5: Dead-Letter Visibility
 Acceptance criteria:
 - Dead-letter count is available in at least one operator-facing runtime output beyond raw SQLite inspection.

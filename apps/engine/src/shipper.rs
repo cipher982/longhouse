@@ -46,10 +46,8 @@ pub enum PreparedAction {
 
 pub struct PreparedFile {
     pub path_str: String,
-    pub provider: String,
     pub offset: u64,
     pub new_offset: u64,
-    pub session_id: String,
     pub actions: Vec<PreparedAction>,
 }
 
@@ -61,6 +59,7 @@ impl PreparedAction {
         }
     }
 
+    #[cfg(test)]
     fn offset(&self) -> u64 {
         match self {
             PreparedAction::Ship(item) => item.offset,
@@ -68,6 +67,7 @@ impl PreparedAction {
         }
     }
 
+    #[cfg(test)]
     fn new_offset(&self) -> u64 {
         match self {
             PreparedAction::Ship(item) => item.new_offset,
@@ -116,6 +116,8 @@ enum AttemptedShip {
     },
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub enum ShipAndRecordOutcome {
     Shipped { events: usize },
     Spooled { is_connect_error: bool },
@@ -125,6 +127,7 @@ pub enum ShipAndRecordOutcome {
 /// Parse and compress a single file from its current offset.
 ///
 /// Returns `None` if the file has no new content, can't be read, or has no events.
+#[cfg(test)]
 pub fn prepare_file(
     path: &Path,
     provider: &str,
@@ -213,6 +216,8 @@ pub fn prepare_file(
 ///
 /// Returns a structured outcome so callers can distinguish shipped, spooled,
 /// and skipped-client-error paths without duplicating transport logic.
+#[cfg(test)]
+#[allow(dead_code)]
 pub async fn ship_and_record(
     item: ShipItem,
     client: &ShipperClient,
@@ -223,7 +228,7 @@ pub async fn ship_and_record(
     let result = client.ship(item.compressed).await;
 
     match result {
-        ShipResult::Ok(_) => {
+        ShipResult::Ok => {
             // Emit recovery message if we were in an error state
             if let Some(t) = tracker {
                 if let Some(n) = t.record_success() {
@@ -663,10 +668,8 @@ pub fn prepare_path_range(
 
     Ok(Some(PreparedFile {
         path_str,
-        provider: provider.to_string(),
         offset,
         new_offset,
-        session_id: parse_result.metadata.session_id.clone(),
         actions,
     }))
 }
@@ -736,7 +739,7 @@ async fn attempt_ship(
     let result = client.ship(payload).await;
 
     match result {
-        ShipResult::Ok(_) => {
+        ShipResult::Ok => {
             if let Some(t) = tracker {
                 if let Some(n) = t.record_success() {
                     tracing::info!(
@@ -952,6 +955,7 @@ pub fn run_startup_recovery(conn: &Connection) -> Result<usize> {
 }
 
 /// Replay pending spool entries. Returns (entries fully resolved, entries failed/backed off).
+#[cfg(test)]
 pub async fn replay_spool_batch(
     conn: &Connection,
     client: &ShipperClient,
@@ -1119,6 +1123,8 @@ pub async fn replay_spool_batch_with_batch_bytes(
 
 /// Run a full scan: discover all provider files, prepare and ship any with new content.
 /// Returns (files_shipped, events_shipped).
+#[cfg(test)]
+#[allow(dead_code)]
 pub async fn full_scan(
     providers: &[ProviderConfig],
     conn: &Connection,
