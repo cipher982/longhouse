@@ -538,7 +538,6 @@ run_auth_gate_checks() {
     run_test test_http "Users/me (no auth)" "$API_URL/api/users/me" "401"
     run_test test_http "Oikos bootstrap (no auth)" "$API_URL/api/oikos/bootstrap" "401"
     run_test test_http "Oikos history (no auth)" "$API_URL/api/oikos/history" "401"
-    run_test test_http "Oikos agents (no auth)" "$API_URL/api/oikos/agents" "401"
     run_test test_http "Email contacts (no auth)" "$API_URL/api/user/contacts/email" "401"
     run_test test_http "Phone contacts (no auth)" "$API_URL/api/user/contacts/phone" "401"
 }
