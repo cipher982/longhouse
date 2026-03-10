@@ -465,10 +465,10 @@ async def attach_to_run_stream(
     # Check run status
     if run_status == RunStatus.RUNNING:
         # Stream live events using existing stream_run_events
-        from zerg.routers.oikos_sse import stream_run_events
+        from zerg.routers.stream import stream_run_events_live
 
         return EventSourceResponse(
-            stream_run_events(
+            stream_run_events_live(
                 run_id=run_id_val,
                 owner_id=current_user.id,
             )
