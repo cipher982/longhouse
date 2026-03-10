@@ -8,7 +8,7 @@
  * - Bottom: continuation dock
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SessionChat } from "../components/SessionChat";
@@ -31,6 +31,7 @@ export default function SessionDetailPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const continuationSectionRef = useRef<HTMLDivElement | null>(null);
+  const [continuationOpen, setContinuationOpen] = useState(false);
 
   const highlightEventId = useMemo(() => {
     const raw = searchParams.get("event_id");
@@ -101,8 +102,13 @@ export default function SessionDetailPage() {
   };
 
   useEffect(() => {
+    setContinuationOpen(false);
+  }, [sessionId]);
+
+  useEffect(() => {
     if (!shouldAutoResume || !session) return;
 
+    setContinuationOpen(supportsCloudContinuation(session.provider));
     focusContinuationComposer(supportsCloudContinuation(session.provider));
 
     const next = new URLSearchParams(searchParams);
@@ -255,6 +261,16 @@ export default function SessionDetailPage() {
       }
     : null;
 
+  const inspectorSelection =
+    selectedSelection && selectedSelection.kind !== "message" ? selectedSelection : null;
+
+  const continuationNotice = !canContinueInCloud
+    ? {
+        title: `Web continuation unavailable for ${providerLabel}`,
+        body: `This ${providerLabel} transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.`,
+      }
+    : null;
+
   return (
     <div className="session-workspace-route">
       <WorkspaceShell
@@ -276,13 +292,18 @@ export default function SessionDetailPage() {
               </div>
             </div>
             <div className="session-workspace-header__actions">
-              <Button
-                variant={canContinueInCloud ? "primary" : "secondary"}
-                size="sm"
-                onClick={() => focusContinuationComposer(canContinueInCloud)}
-              >
-                {continuationCtaLabel}
-              </Button>
+              {canContinueInCloud ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    setContinuationOpen(true);
+                    focusContinuationComposer(true);
+                  }}
+                >
+                  {continuationCtaLabel}
+                </Button>
+              ) : null}
             </div>
           </div>
         }
@@ -295,6 +316,7 @@ export default function SessionDetailPage() {
             isViewingHead={isViewingHead}
             onOpenSession={navigateToSession}
             onOpenLatest={() => headThreadSession && navigateToSession(headThreadSession.id)}
+            continuationNotice={continuationNotice}
           />
         }
         main={
@@ -324,12 +346,15 @@ export default function SessionDetailPage() {
           />
         }
         inspector={
-          <EventInspectorPane
-            selection={selectedSelection}
-            onSelectKey={selectKey}
-          />
+          inspectorSelection ? (
+            <EventInspectorPane
+              selection={inspectorSelection}
+              onSelectKey={selectKey}
+            />
+          ) : undefined
         }
         bottom={
+          continuationOpen && canContinueInCloud ? (
           <div
             ref={continuationSectionRef}
             className="session-workspace-dock"
@@ -371,6 +396,7 @@ export default function SessionDetailPage() {
               </div>
             )}
           </div>
+          ) : undefined
         }
       />
     </div>

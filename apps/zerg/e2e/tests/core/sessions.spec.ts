@@ -571,6 +571,8 @@ test.describe('Session Detail Page', () => {
     await expect(page.getByTestId('session-branch-banner')).toContainText('not the latest continuation');
     await expect(page.getByTestId('session-lineage-panel')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Branch from Here' })).toBeVisible();
+    await page.getByRole('button', { name: 'Branch from Here' }).click();
+    await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
     await expect(page.locator('.session-chat-empty')).toContainText('branch from this history');
 
     await page.getByRole('button', { name: 'Open Latest' }).focus();
@@ -644,9 +646,9 @@ test.describe('Session Detail Page', () => {
     await page.goto(`/timeline/${sessionId}`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
-    await expect(page.getByRole('button', { name: 'Latest Context' })).toBeVisible();
-    await expect(page.getByTestId('session-continuation-panel')).toContainText('not resumable from the web yet');
-    await expect(page.getByTestId('session-continuation-unavailable')).toContainText('Direct Codex cloud continuation');
+    await expect(page.getByRole('button', { name: 'Latest Context' })).toHaveCount(0);
+    await expect(page.getByTestId('session-continuation-panel')).toHaveCount(0);
+    await expect(page.getByTestId('session-continuation-unavailable')).toContainText('wired for Claude sessions only');
     await expect(page.locator('.session-chat-composer textarea')).toHaveCount(0);
   });
 
@@ -691,7 +693,8 @@ test.describe('Session Detail Page', () => {
       .poll(async () => timelineList.evaluate((el) => el.scrollTop), { timeout: 4000 })
       .toBeGreaterThan(0);
 
-    await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue in Cloud' })).toBeVisible();
+    await expect(page.getByTestId('session-continuation-panel')).toHaveCount(0);
   });
 
   test('scrolls from left and right gutters on timeline detail', async ({ page, request }) => {

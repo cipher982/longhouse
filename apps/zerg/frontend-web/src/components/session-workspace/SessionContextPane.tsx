@@ -18,6 +18,10 @@ interface SessionContextPaneProps {
   isViewingHead: boolean;
   onOpenSession: (sessionId: string) => void;
   onOpenLatest: () => void;
+  continuationNotice?: {
+    title: string;
+    body: string;
+  } | null;
 }
 
 function MetaRow({ label, value }: { label: string; value: string }) {
@@ -37,6 +41,7 @@ export function SessionContextPane({
   isViewingHead,
   onOpenSession,
   onOpenLatest,
+  continuationNotice = null,
 }: SessionContextPaneProps) {
   const turnCount = session.user_messages + session.assistant_messages;
 
@@ -90,6 +95,16 @@ export function SessionContextPane({
           {session.project ? <MetaRow label="Project" value={session.project} /> : null}
         </div>
       </div>
+
+      {continuationNotice ? (
+        <div
+          className="session-pane-callout session-pane-callout--muted"
+          data-testid="session-continuation-unavailable"
+        >
+          <div className="session-pane-callout-title">{continuationNotice.title}</div>
+          <div className="session-pane-callout-copy">{continuationNotice.body}</div>
+        </div>
+      ) : null}
 
       {session.summary ? (
         <div className="session-pane-section">

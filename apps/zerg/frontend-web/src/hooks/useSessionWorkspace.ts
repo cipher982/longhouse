@@ -163,12 +163,12 @@ export function useSessionWorkspace(
       return;
     }
 
-    const selectionIsVisible =
-      selectedKey != null && filteredItems.some((item) => timelineItemContainsSelection(item, selectedKey));
+    if (selectedKey == null) return;
+
+    const selectionIsVisible = filteredItems.some((item) => timelineItemContainsSelection(item, selectedKey));
     if (selectionIsVisible) return;
 
-    const fallbackItem = filteredItems[filteredItems.length - 1];
-    setSelectedKey(getPreferredSelectionKey(fallbackItem));
+    setSelectedKey(null);
   }, [filteredItems, selectedKey]);
 
   useEffect(() => {
@@ -195,9 +195,16 @@ export function useSessionWorkspace(
     if (highlightEventId != null) return;
     if (eventsLoading) return;
     if (autoScrolledSelectionRef.current) return;
-    if (!selectedKey) return;
+    if (filteredItems.length === 0) return;
+    if (filteredItems.length < 10) {
+      autoScrolledSelectionRef.current = true;
+      return;
+    }
+    const targetKey =
+      selectedKey || (filteredItems.length > 0 ? getPreferredSelectionKey(filteredItems[filteredItems.length - 1]) : null);
+    if (!targetKey) return;
 
-    const selection = model.selectionMap.get(selectedKey);
+    const selection = model.selectionMap.get(targetKey);
     if (!selection) return;
 
     const target = document.getElementById(selection.rowId);
@@ -205,7 +212,7 @@ export function useSessionWorkspace(
 
     target.scrollIntoView({ behavior: "auto", block: "center" });
     autoScrolledSelectionRef.current = true;
-  }, [highlightEventId, eventsLoading, selectedKey, model.selectionMap]);
+  }, [highlightEventId, eventsLoading, selectedKey, filteredItems, model.selectionMap]);
 
   const selectedSelection = useMemo(
     () => (selectedKey ? model.selectionMap.get(selectedKey) ?? null : null),

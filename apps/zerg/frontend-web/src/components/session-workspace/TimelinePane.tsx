@@ -55,6 +55,7 @@ function MessageRow({
       id={`event-${item.event.id}`}
       data-testid="session-timeline-row"
       data-row-kind="message"
+      data-message-role={item.event.role}
       className={`timeline-row timeline-row--message event-item${isSelected ? " is-selected event-highlight" : ""}`}
       onClick={onSelect}
     >
@@ -64,7 +65,7 @@ function MessageRow({
         </span>
         <span className="timeline-row__time">{formatTime(item.event.timestamp)}</span>
       </div>
-      <div className="timeline-row__content">{preview}</div>
+      <div className="timeline-row__content timeline-row__content--message">{preview}</div>
       {outsideActiveContext ? (
         <div className="timeline-row__badges">
           <span className="timeline-row__badge timeline-row__badge--warning">Outside active context</span>
