@@ -51,6 +51,8 @@ function MessageRow({
     <button
       type="button"
       id={`event-${item.event.id}`}
+      data-testid="session-timeline-row"
+      data-row-kind="message"
       className={`timeline-row timeline-row--message${isSelected ? " is-selected" : ""}`}
       onClick={onSelect}
     >
@@ -93,6 +95,8 @@ function ToolRow({
     <button
       type="button"
       id={rowId}
+      data-testid="session-timeline-row"
+      data-row-kind="tool"
       className={`timeline-row timeline-row--tool${isSelected ? " is-selected" : ""}`}
       onClick={onSelect}
     >
@@ -140,6 +144,8 @@ function ToolBatchRow({
     <button
       type="button"
       id={`event-${batch.anchorId}`}
+      data-testid="session-timeline-row"
+      data-row-kind="tool-batch"
       className={`timeline-row timeline-row--batch${isSelected ? " is-selected" : ""}`}
       onClick={onSelect}
     >
