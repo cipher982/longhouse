@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import TYPE_CHECKING
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -49,6 +50,9 @@ from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_co
 from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 from zerg.services.thread_service import ThreadService
 from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
+
+if TYPE_CHECKING:
+    from zerg.surfaces.base import SurfaceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -1381,6 +1385,8 @@ async def invoke_oikos(
     source: str = "web",
     model: str | None = None,
     reasoning_effort: str | None = None,
+    surface_adapter: SurfaceAdapter | None = None,
+    surface_payload: dict[str, Any] | None = None,
 ) -> int:
     """Start an Oikos execution without any transport coupling.
 
@@ -1391,6 +1397,17 @@ async def invoke_oikos(
     this function. SSE streaming is a separate concern — callers can subscribe
     to the run's events via ``stream_run_events_live(run_id, owner_id)`` if
     they need real-time output.
+
+    Args:
+        owner_id: Longhouse owner ID for the run.
+        message: Canonical text content of the inbound request.
+        message_id: Stable caller-generated message ID.
+        source: Fallback surface name used when no explicit adapter is provided.
+        model: Optional model override for this turn.
+        reasoning_effort: Optional reasoning effort override for this turn.
+        surface_adapter: Optional explicit surface adapter for non-web callers.
+        surface_payload: Optional adapter-specific raw payload merged with the
+            canonical invoke fields before orchestration.
     """
     setup = await create_oikos_run(
         owner_id,
@@ -1400,36 +1417,39 @@ async def invoke_oikos(
     run_id = setup.run_id
     trace_id = setup.trace_id
 
+    effective_adapter = surface_adapter
+    if effective_adapter is None:
+        from zerg.surfaces.adapters.web import WebSurfaceAdapter
+
+        effective_adapter = WebSurfaceAdapter(owner_id=owner_id)
+
+    surface_id = str(getattr(effective_adapter, "surface_id", "") or source).strip() or source
+    raw_input = dict(surface_payload or {})
+    raw_input["owner_id"] = owner_id
+    raw_input["message_id"] = message_id
+    raw_input["run_id"] = run_id
+    raw_input["trace_id"] = str(trace_id)
+    raw_input.setdefault("message", message)
+    raw_input.setdefault("conversation_id", f"{surface_id}:main")
+    raw_input.setdefault("timeout", 600)
+    raw_input.setdefault("return_on_deferred", False)
+    if model is not None:
+        raw_input.setdefault("model_override", model)
+    if reasoning_effort is not None:
+        raw_input.setdefault("reasoning_effort", reasoning_effort)
+
     logger.info(
-        f"invoke_oikos: run {run_id} for user {owner_id}, source={source}, message: {message[:50]}...",
+        f"invoke_oikos: run {run_id} for user {owner_id}, surface={surface_id}, message: {message[:50]}...",
         extra={"tag": "OIKOS"},
     )
 
-    conversation_id = f"{source}:main"
-
     async def _execute():
-        from zerg.surfaces.adapters.web import WebSurfaceAdapter
         from zerg.surfaces.base import SurfaceHandleStatus
         from zerg.surfaces.orchestrator import SurfaceOrchestrator
 
         try:
-            adapter = WebSurfaceAdapter(owner_id=owner_id)
             orchestrator = SurfaceOrchestrator()
-            handle_result = await orchestrator.handle_inbound(
-                adapter,
-                raw_input={
-                    "owner_id": owner_id,
-                    "message": message,
-                    "message_id": message_id,
-                    "conversation_id": conversation_id,
-                    "run_id": run_id,
-                    "trace_id": str(trace_id),
-                    "timeout": 600,
-                    "model_override": model,
-                    "reasoning_effort": reasoning_effort,
-                    "return_on_deferred": False,
-                },
-            )
+            handle_result = await orchestrator.handle_inbound(effective_adapter, raw_input)
             if handle_result.status != SurfaceHandleStatus.PROCESSED:
                 raise RuntimeError(f"surface orchestration failed: {handle_result.status}")
         except Exception as e:

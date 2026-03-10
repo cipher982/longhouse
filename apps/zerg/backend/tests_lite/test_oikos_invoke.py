@@ -7,6 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from zerg.models.enums import RunStatus
+from zerg.surfaces.adapters.voice import VoiceSurfaceAdapter
+from zerg.surfaces.base import SurfaceHandleResult
+from zerg.surfaces.base import SurfaceHandleStatus
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +166,61 @@ async def test_invoke_oikos_starts_background_execution(monkeypatch):
     assert run_id == 100
     await asyncio.wait_for(orchestrator_called.wait(), timeout=2.0)
     assert orchestrator_called.is_set()
+
+
+@pytest.mark.asyncio
+async def test_invoke_oikos_accepts_explicit_surface_adapter_and_payload(monkeypatch):
+    """invoke_oikos() should allow non-web callers to inject a surface adapter and raw payload."""
+    _patch_dependencies(monkeypatch)
+
+    orchestrator_called = asyncio.Event()
+    captured: dict[str, object] = {}
+
+    async def _fake_handle_inbound(self, adapter, raw_input):
+        event = await adapter.normalize_inbound(raw_input)
+        captured["adapter_surface_id"] = adapter.surface_id
+        captured["event"] = event
+        captured["raw_input"] = dict(raw_input)
+        orchestrator_called.set()
+        return SurfaceHandleResult(status=SurfaceHandleStatus.PROCESSED, surface_id=adapter.surface_id)
+
+    monkeypatch.setattr(
+        "zerg.surfaces.orchestrator.SurfaceOrchestrator.handle_inbound",
+        _fake_handle_inbound,
+    )
+
+    from zerg.services.oikos_service import invoke_oikos
+
+    voice_adapter = VoiceSurfaceAdapter(owner_id=42, conversation_id="voice:default")
+    run_id = await invoke_oikos(
+        owner_id=42,
+        message="Fallback text",
+        message_id="msg-voice",
+        source="system",
+        surface_adapter=voice_adapter,
+        surface_payload={
+            "transcript": "Investigate the latest active session.",
+            "conversation_id": "voice:operator",
+            "timeout": 45,
+        },
+    )
+
+    assert run_id == 100
+    await asyncio.wait_for(orchestrator_called.wait(), timeout=2.0)
+
+    event = captured["event"]
+    raw_input = captured["raw_input"]
+    assert captured["adapter_surface_id"] == "voice"
+    assert event.surface_id == "voice"
+    assert event.conversation_id == "voice:operator"
+    assert event.text == "Investigate the latest active session."
+    assert event.source_message_id == "msg-voice"
+    assert raw_input["owner_id"] == 42
+    assert raw_input["message_id"] == "msg-voice"
+    assert raw_input["run_id"] == 100
+    assert raw_input["timeout"] == 45
+    assert raw_input["message"] == "Fallback text"
+    assert raw_input["trace_id"]
 
 
 @pytest.mark.asyncio

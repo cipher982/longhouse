@@ -47,6 +47,8 @@ Notes:
 - 2026-03-10: "Session Shepherd" was only a working nickname. The actual product direction is broader: proactive Oikos / operator mode / Jarvis-like deputy behavior.
 - 2026-03-10: Start simple and dogfood. Favor principles, thin triggers, and bounded actions over an elaborate orchestration framework.
 - 2026-03-10: Foundation harness slice landed: deterministic shadow journeys with durable artifacts, fixture-backed coding-session wakeups, and `make test-autonomy-journeys`.
+- 2026-03-10: First runtime-adjacent follow-up should fix the `invoke_oikos()` transport seam so proactive wakeups and non-web surfaces can reuse the same execution entrypoint without hardcoding `WebSurfaceAdapter`.
+- 2026-03-10: Landed the first transport seam fix: `invoke_oikos()` now accepts an explicit surface adapter and adapter-specific raw payload, so operator-mode or non-web callers can reuse the same entrypoint without pretending everything is browser chat.
 - Spec: `docs/specs/oikos-proactive-operator.md`.
 - Roadmap: `docs/plans/oikos-autonomy-roadmap.md`.
 
