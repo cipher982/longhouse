@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Product] Proactive Oikos operator mode (size: 5)
+
+Status (2026-03-10): In progress. The immediate goal is to define the product principles and dogfood shape before building triggers, policies, or background loops that could lock us into the wrong architecture.
+
+**Goal:** Make Oikos feel like a proactive technical deputy that can notice meaningful session state changes, decide what to inspect next, and take bounded actions without collapsing into a giant brittle automation engine.
+
+- [x] Write a principles-first spec for proactive Oikos that stays future-friendly and avoids premature schema/runtime lock-in
+- [ ] Dogfood a tiny wakeup set around coding-session transitions plus a periodic sweep fallback
+- [ ] Add the thinnest possible Oikos-owned state for trigger history / policies without duplicating session logs
+- [ ] Ship one bounded autonomy slice that can inspect a session, continue it, or escalate back to the user
+
+Notes:
+- 2026-03-10: The repo already has the durable coding-agent transcript/archive layer; the new problem is mostly Oikos-owned wakeups, policies, and decision history, not rebuilding another session store.
+- 2026-03-10: "Session Shepherd" was only a working nickname. The actual product direction is broader: proactive Oikos / operator mode / Jarvis-like deputy behavior.
+- 2026-03-10: Start simple and dogfood. Favor principles, thin triggers, and bounded actions over an elaborate orchestration framework.
+- Spec: `docs/specs/oikos-proactive-operator.md`.
+
 ## [Infra][QA/Test] Longhouse engine shipper byte batching + exact replay (size: 4)
 
 Status (2026-03-10): In progress. The correctness floor is now in place; the remaining work is to make oversized session deltas actually make forward progress by splitting them into exact byte-range batches and replaying only the spooled range.
