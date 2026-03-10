@@ -220,11 +220,7 @@ fn extract_gemini_text(v: &serde_json::Value) -> Option<String> {
     match v {
         serde_json::Value::String(s) => {
             let t = s.trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
+            if t.is_empty() { None } else { Some(t) }
         }
         serde_json::Value::Array(arr) => {
             // Try to concatenate "text" fields from a parts array
@@ -973,7 +969,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
         file.seek(std::io::SeekFrom::Start(offset))?;
     }
 
-    let reader = BufReader::with_capacity(64 * 1024, file);
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
 
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
@@ -985,19 +981,35 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     let mut max_ts: Option<DateTime<Utc>> = None;
     let mut current_offset = offset;
     let mut candidate_lines: usize = 0;
+    let mut line = String::new();
 
-    for line_result in reader.lines() {
-        let line = match line_result {
-            Ok(l) => l,
+    loop {
+        line.clear();
+        let bytes_read = match reader.read_line(&mut line) {
+            Ok(n) => n,
             Err(e) => {
                 tracing::warn!(offset = current_offset, error = %e, "Failed to read line");
                 break; // IO error — stop processing
             }
         };
+        if bytes_read == 0 {
+            break;
+        }
+
+        if !line.ends_with('\n') {
+            // Partial line at EOF — do not advance offset or process it yet.
+            break;
+        }
+
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
 
         let line_offset = current_offset;
-        // BufReader.lines() strips \n, so add 1 for the newline byte
-        current_offset += line.len() as u64 + 1;
+        current_offset += bytes_read as u64;
 
         source_lines.push(ParsedSourceLine {
             source_offset: line_offset,
@@ -2093,13 +2105,14 @@ mod tests {
     fn test_partial_line_at_eof() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test-session.jsonl");
+        let complete = r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"complete"}}"#;
         {
             let mut f = std::fs::File::create(&path).unwrap();
             // Complete line + partial line (no trailing newline)
             write!(
                 f,
                 "{}\n{}",
-                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"complete"}}"#,
+                complete,
                 r#"{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:01Z","message":{"con"#
             )
             .unwrap();
@@ -2110,6 +2123,7 @@ mod tests {
         // The partial line has no \n so it's treated as incomplete
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].content_text.as_deref(), Some("complete"));
+        assert_eq!(result.last_good_offset, (complete.len() + 1) as u64);
     }
 
     // -----------------------------------------------------------------------
@@ -2589,11 +2603,13 @@ mod tests {
         assert_eq!(result.events[4].tool_call_id.as_deref(), Some("tc-write"));
         assert_eq!(result.events[5].role, Role::Tool);
         assert_eq!(result.events[5].tool_call_id.as_deref(), Some("tc-write"));
-        assert!(result.events[5]
-            .tool_output_text
-            .as_deref()
-            .unwrap_or("")
-            .contains("cancelled"));
+        assert!(
+            result.events[5]
+                .tool_output_text
+                .as_deref()
+                .unwrap_or("")
+                .contains("cancelled")
+        );
     }
 
     #[test]

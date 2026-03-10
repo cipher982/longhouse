@@ -15,6 +15,24 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Infra][QA/Test] Longhouse engine shipper correctness fixes (size: 3)
+
+Status (2026-03-09): In progress. The immediate correctness work is to stop dropping data around partial EOF lines, make dry-run truly non-mutating, and align one-shot ship/replay behavior with the daemon path before byte-based batching lands.
+
+**Goal:** Make the Rust engine shipper's current semantics safe and internally consistent before adding batching/integrity work.
+
+- [x] Use parser `last_good_offset` for shipped/spooled/acked ranges instead of raw file size
+- [x] Make `longhouse-engine ship --dry-run` and `ship --file --dry-run` non-mutating
+- [ ] Align one-shot `ship` and spool replay handling with daemon 413/backpressure semantics
+- [ ] Add regression coverage for partial-line EOF handling, dry-run non-mutation, and 413 replay behavior
+- [x] Re-run supported shipper verification targets (`make test-engine-fast`, `make test-shipper-e2e`)
+
+Notes:
+- 2026-03-09: Review found the parser already tracks `last_good_offset`, but shipper paths currently commit `file_size`, which can permanently skip incomplete trailing JSONL lines.
+- 2026-03-09: `main.rs` bulk ship path still special-cases neither 413 nor spool backpressure correctly, so it can regress the daemon fix.
+- 2026-03-09: The current dry-run paths advance offsets, which is not acceptable for a debugging command.
+- 2026-03-09: First slice shipped: buffered parser now leaves trailing partial EOF lines unacked, shipper offsets follow `last_good_offset`, `ship --dry-run` paths no longer mutate state, and `test-engine-fast` now includes engine unit tests so these regressions stay covered.
+
 ## [Launch][Product] Session continuation from timeline should feel native (size: 3)
 
 Status (2026-03-08): UX shipped for the current Claude-backed continuation path. Opening a session now lands near the latest context, the transcript and composer live on the same page, and non-Claude sessions explicitly explain the remaining provider gap instead of failing silently.

@@ -222,10 +222,10 @@ install-engine: ## Build + sign the Rust engine binary (run after any engine sou
 	codesign -s - apps/engine/target/release/longhouse-engine
 	@echo "longhouse-engine installed (symlink at ~/.local/bin/longhouse-engine)"
 
-test-engine-fast: ## Rust parser golden + adversarial tests (uses repo-local binary, included in make test)
-	@echo "🦀 Running engine golden + adversarial tests..."
+test-engine-fast: ## Rust engine unit + golden + adversarial tests (uses repo-local binary, included in make test)
+	@echo "🦀 Running engine unit + golden + adversarial tests..."
 	cd apps/engine && cargo build --release
-	cd apps/engine && cargo test --test golden_parser_contract --test adversarial_parser
+	cd apps/engine && cargo test --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
 
 test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg-ops.sh
 	@bash scripts/test-zerg-ops.sh
