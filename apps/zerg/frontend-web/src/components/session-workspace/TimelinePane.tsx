@@ -1,4 +1,4 @@
-import { Button, EmptyState } from "../ui";
+import { Button, EmptyState, Spinner } from "../ui";
 import type { TimelineItem, ToolBatch, ToolInteraction, EventFilter } from "../../lib/sessionWorkspace";
 import {
   formatTime,
@@ -31,6 +31,8 @@ interface TimelinePaneProps {
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   onFetchNextPage: () => void;
+  loading?: boolean;
+  error?: unknown;
   selectedKey: string | null;
   onSelectKey: (key: string) => void;
 }
@@ -194,10 +196,14 @@ export function TimelinePane({
   hasNextPage,
   isFetchingNextPage,
   onFetchNextPage,
+  loading = false,
+  error = null,
   selectedKey,
   onSelectKey,
 }: TimelinePaneProps) {
   const toolFilterLabel = `Tools (${toolRowCount})`;
+  const showScopedLoading = loading && filteredItems.length === 0;
+  const showScopedError = !loading && !!error && filteredItems.length === 0;
 
   return (
     <div className="timeline-pane">
@@ -272,7 +278,23 @@ export function TimelinePane({
       ) : null}
 
       <div className="timeline-pane__list">
-        {filteredItems.length === 0 ? (
+        {showScopedLoading ? (
+          <EmptyState
+            icon={<Spinner size="lg" />}
+            title="Loading timeline..."
+            description="Fetching events for this session."
+          />
+        ) : showScopedError ? (
+          <EmptyState
+            variant="error"
+            title="Timeline unavailable"
+            description={
+              error instanceof Error
+                ? error.message
+                : "Events failed to load for this session."
+            }
+          />
+        ) : filteredItems.length === 0 ? (
           <EmptyState
             title="No events"
             description={
