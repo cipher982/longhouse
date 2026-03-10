@@ -15,9 +15,33 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Infra][QA/Test] Longhouse engine shipper byte batching + exact replay (size: 4)
+
+Status (2026-03-10): In progress. The correctness floor is now in place; the remaining work is to make oversized session deltas actually make forward progress by splitting them into exact byte-range batches and replaying only the spooled range.
+
+**Goal:** Make the Rust engine shipper eventually deliver large session files without data loss, over-send, or infinite 413 retries.
+
+**Done when:**
+- Fresh shipping splits a file delta into sequential byte-range batches capped by `max_batch_bytes`
+- Replay rebuilds and ships only the exact spooled range, never newer bytes that appeared later in the file
+- Successful multi-batch shipping advances `acked_offset`/`queued_offset` monotonically batch-by-batch with no gaps or overlap
+- A single oversize source range fails loudly and deterministically instead of looping forever
+- Regression coverage proves planner invariants, partial failure recovery, exact-range replay, and the supported CLI/E2E paths
+
+- [ ] Add a pure range batch planner with deterministic contiguous-range invariants
+- [ ] Wire `max_batch_bytes` into fresh shipping and one-shot `ship`
+- [ ] Make spool replay range-exact instead of reparsing to EOF and only capping the ack
+- [ ] Define and test explicit handling for a single oversize source range
+- [ ] Re-run supported shipper verification targets (`make test-engine-fast`, `make test-shipper-e2e`)
+
+Notes:
+- 2026-03-10: The current pointer spool stores `(file_path, start_offset, end_offset)` only. That is fine, but replay must rebuild the same range exactly or it can over-send newer bytes added after the original failure.
+- 2026-03-10: The simplest correct design is to keep the existing monotonic `queued_offset`/`acked_offset` model and ship batches sequentially per file; a sparse per-range state machine is unnecessary for this slice.
+- 2026-03-10: Use source-line byte ranges as the primary planning unit, then verify compressed size as needed. Event-count batching is the wrong abstraction here.
+
 ## [Infra][QA/Test] Longhouse engine shipper correctness fixes (size: 3)
 
-Status (2026-03-09): In progress. The immediate correctness work is to stop dropping data around partial EOF lines, make dry-run truly non-mutating, and align one-shot ship/replay behavior with the daemon path before byte-based batching lands.
+Status (2026-03-10): Done. The immediate correctness work to stop dropping data around partial EOF lines, make dry-run truly non-mutating, and align one-shot ship/replay behavior with the daemon path landed before byte-based batching.
 
 **Goal:** Make the Rust engine shipper's current semantics safe and internally consistent before adding batching/integrity work.
 
