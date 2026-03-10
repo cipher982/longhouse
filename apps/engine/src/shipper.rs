@@ -214,15 +214,45 @@ pub async fn ship_and_record(
                 code,
                 &body[..body.len().min(200)]
             );
-            // Skip this file — advance offsets to avoid infinite re-processing
-            file_state.set_offset(
-                &item.path_str,
-                item.new_offset,
-                &item.session_id,
-                &item.session_id,
-                &item.provider,
-            )?;
-            Ok((0, false))
+            if code == 413 {
+                // 413 = payload too large. The data is valid but the payload
+                // exceeds a proxy/server limit. Spool for retry — a future
+                // version with byte-based batching will split it into smaller
+                // chunks. Do NOT advance offsets (that loses data).
+                let spool = Spool::new(conn);
+                let enqueued = spool.enqueue(
+                    &item.provider,
+                    &item.path_str,
+                    item.offset,
+                    item.new_offset,
+                    Some(&item.session_id),
+                )?;
+                if enqueued {
+                    file_state.set_queued_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.provider,
+                        &item.session_id,
+                        &item.session_id,
+                    )?;
+                } else {
+                    tracing::warn!(
+                        "Spool at capacity — 413 payload for {} will be retried on next startup",
+                        item.path_str
+                    );
+                }
+                Ok((0, false))
+            } else {
+                // Other 4xx (400, 401, 403, 422) — skip to avoid infinite re-processing
+                file_state.set_offset(
+                    &item.path_str,
+                    item.new_offset,
+                    &item.session_id,
+                    &item.session_id,
+                    &item.provider,
+                )?;
+                Ok((0, false))
+            }
         }
     }
 }
