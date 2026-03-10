@@ -16,9 +16,8 @@ Endpoints in this file:
 - /history: Conversation history (GET, DELETE)
 - /bootstrap: Configuration and preferences (GET)
 - /preferences: Update preferences (PATCH)
-- /session: OpenAI Realtime session tokens (GET, POST)
+- /session: OpenAI Realtime session token (GET)
 - /conversation/title: Generate conversation titles (POST)
-- /auth: Deprecated authentication endpoint (returns 410)
 """
 
 import asyncio
@@ -34,7 +33,6 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
-from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
@@ -69,40 +67,6 @@ router.include_router(oikos_internal.router, prefix="", tags=["oikos"])
 router.include_router(oikos_chat.router, prefix="", tags=["oikos"])
 router.include_router(oikos_tts.router, prefix="", tags=["oikos-tts"])
 router.include_router(oikos_voice.router, prefix="", tags=["oikos-voice"])
-
-# ---------------------------------------------------------------------------
-# Deprecated Authentication Endpoint
-# ---------------------------------------------------------------------------
-
-
-class OikosAuthRequest(BaseModel):
-    """Oikos authentication request with device secret."""
-
-    device_secret: str = Field(..., description="Device secret for Oikos authentication")
-
-
-class OikosAuthResponse(BaseModel):
-    """Oikos authentication response metadata."""
-
-    session_expires_in: int = Field(..., description="Session expiry window in seconds")
-    session_cookie_name: str = Field(..., description="Name of session cookie storing Oikos session")
-
-
-@router.post("/auth", response_model=OikosAuthResponse)
-def oikos_auth(
-    request: OikosAuthRequest,
-    response: Response,
-    db: Session = Depends(get_db),
-) -> OikosAuthResponse:
-    """Deprecated: Oikos now uses standard SaaS user authentication.
-
-    Oikos is treated as a normal client (like the dashboard). It authenticates
-    using the same JWT bearer token as other frontend clients.
-    """
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail="Deprecated: Oikos uses standard user login (JWT bearer token).",
-    )
 
 
 @router.get("/agents", response_model=List[oikos_fiches.OikosFicheSummary])
@@ -858,38 +822,14 @@ def oikos_update_preferences(
 
 
 @router.get("/session")
-async def oikos_session_get(
-    request: Request,
+async def oikos_session(
     current_user=Depends(get_current_oikos_user),
 ):
-    """Mint an ephemeral OpenAI Realtime session token.
-
-    Directly calls OpenAI's API - no separate oikos-server needed.
-    """
+    """Mint an ephemeral OpenAI Realtime session token."""
     import httpx
 
     from zerg.voice.realtime import mint_realtime_session_token
 
-    try:
-        result = await mint_realtime_session_token()
-        return result
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="OpenAI API timeout")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"OpenAI API error: {e.response.text}")
-
-
-@router.post("/session")
-async def oikos_session_post(
-    request: Request,
-    current_user=Depends(get_current_oikos_user),
-):
-    """Backwards compatibility: some clients may still POST."""
-    import httpx
-
-    from zerg.voice.realtime import mint_realtime_session_token
-
-    logger.debug("Oikos session: received POST /session; handling directly")
     try:
         result = await mint_realtime_session_token()
         return result
