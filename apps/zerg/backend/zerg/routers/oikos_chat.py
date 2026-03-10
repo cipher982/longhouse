@@ -225,19 +225,24 @@ async def oikos_chat(
     from zerg.services.replay_service import is_replay_enabled
 
     if request.replay_scenario and is_replay_enabled():
-        # Replay needs a run_id; create one via invoke but don't stream the real execution.
-        # For now, keep the legacy replay generator which manages its own run lifecycle.
-        run_id = await invoke_oikos(
-            owner_id=current_user.id,
-            message=request.message,
-            message_id=message_id,
-            source="web",
+        from zerg.services.oikos_service import create_oikos_run
+
+        setup = await create_oikos_run(
+            current_user.id,
             model=model_to_use,
             reasoning_effort=reasoning_effort,
         )
-        logger.info(f"Oikos chat: REPLAY MODE for run {run_id}, scenario={request.replay_scenario}", extra={"tag": "OIKOS"})
+        logger.info(f"Oikos chat: REPLAY MODE for run {setup.run_id}, scenario={request.replay_scenario}", extra={"tag": "OIKOS"})
         return EventSourceResponse(
-            _replay_stream_generator(run_id, current_user.id, 0, request.message, message_id, "", request.replay_scenario)
+            _replay_stream_generator(
+                setup.run_id,
+                current_user.id,
+                setup.thread_id,
+                request.message,
+                message_id,
+                str(setup.trace_id),
+                request.replay_scenario,
+            )
         )
 
     # --- normal path: invoke + SSE stream ---
