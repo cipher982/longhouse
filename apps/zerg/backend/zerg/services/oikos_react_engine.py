@@ -1,7 +1,7 @@
-"""LangGraph-free ReAct engine for oikos fiches.
+"""ReAct engine for oikos fiches.
 
-Pure async ReAct loop: messages in, messages + usage out. No checkpointer,
-no interrupt(). spawn_workspace_commis uses two-phase commit in parallel execution
+Pure async ReAct loop: messages in, messages + usage out.
+spawn_workspace_commis uses two-phase commit in parallel execution
 (returns ToolMessages + interrupt_value); single-tool calls raise FicheInterrupted.
 """
 

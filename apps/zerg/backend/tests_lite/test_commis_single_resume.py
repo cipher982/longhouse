@@ -6,7 +6,7 @@ import pytest
 
 from zerg.models.enums import RunStatus
 from zerg.models.models import Run
-from zerg.services.commis_single_resume import continue_oikos_langgraph_free
+from zerg.services.commis_single_resume import continue_oikos
 
 
 class _DummyQuery:
@@ -31,13 +31,13 @@ class _DummyDb:
 
 
 @pytest.mark.asyncio
-async def test_continue_oikos_langgraph_free_returns_none_when_run_missing():
+async def test_continue_oikos_returns_none_when_run_missing():
     db = _DummyDb(run_result=None)
 
     async def _unused_runner_factory(*_args, **_kwargs):
         raise AssertionError("runner_factory should not be called when run is missing")
 
-    result = await continue_oikos_langgraph_free(
+    result = await continue_oikos(
         db=db,
         run_id=123,
         commis_result="ok",
@@ -48,14 +48,14 @@ async def test_continue_oikos_langgraph_free_returns_none_when_run_missing():
 
 
 @pytest.mark.asyncio
-async def test_continue_oikos_langgraph_free_skips_when_run_not_waiting():
+async def test_continue_oikos_skips_when_run_not_waiting():
     run = type("RunObj", (), {"status": RunStatus.SUCCESS})()
     db = _DummyDb(run_result=run)
 
     async def _unused_runner_factory(*_args, **_kwargs):
         raise AssertionError("runner_factory should not be called when run is not WAITING")
 
-    result = await continue_oikos_langgraph_free(
+    result = await continue_oikos(
         db=db,
         run_id=456,
         commis_result="ok",

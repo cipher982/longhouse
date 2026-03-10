@@ -61,20 +61,7 @@ def list_oikos_runs(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> List[OikosRunSummary]:
-    """List recent fiche runs for Oikos Task Inbox.
-
-    Returns recent run history with summaries, filtered by fiche if specified.
-    This powers the Task Inbox UI in Oikos showing all automated activity.
-
-    Args:
-        limit: Maximum number of runs to return (default 50)
-        fiche_id: Optional filter by specific fiche
-        db: Database session
-        current_user: Authenticated user (Oikos service account)
-
-    Returns:
-        List of run summaries ordered by created_at descending
-    """
+    """List recent fiche runs for Oikos Task Inbox."""
     # Get recent runs scoped to the authenticated user.
     query = db.query(Run).options(selectinload(Run.fiche)).join(Fiche, Fiche.id == Run.fiche_id).filter(Fiche.owner_id == current_user.id)
 
@@ -93,7 +80,6 @@ def list_oikos_runs(
     for run in runs:
         fiche_name = run.fiche.name if run.fiche else f"Fiche {run.fiche_id}"
 
-        # Extract summary from run (will be populated in Phase 2.3)
         summary = getattr(run, "summary", None)
 
         last_event = last_events_by_run.get(run.id)
@@ -184,15 +170,7 @@ def _extract_text_from_message_content(content: Any) -> Optional[str]:
 
 
 def _get_last_assistant_message(db: Session, thread_id: int) -> Optional[str]:
-    """Get the last assistant message from a thread.
-
-    Args:
-        db: Database session
-        thread_id: Thread ID to query
-
-    Returns:
-        Content of the last assistant message, or None if not found
-    """
+    """Get the last assistant message from a thread."""
 
     last_msg = (
         db.query(ThreadMessage)
@@ -303,20 +281,7 @@ def get_active_run(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ):
-    """Get the user's currently running oikos run (if any).
-
-    Returns the most recent RUNNING, WAITING, or DEFERRED run for the user's oikos fiche.
-    Returns 204 No Content if no active run exists.
-
-    This endpoint enables run reconnection after page refresh.
-
-    Args:
-        db: Database session
-        current_user: Authenticated user (multi-tenant filtered)
-
-    Returns:
-        JSONResponse with run details if found, or 204 No Content
-    """
+    """Get the user's currently active oikos run (RUNNING/WAITING/DEFERRED), or 204."""
     # Import here to avoid circular dependency
     from zerg.services.oikos_service import OikosService
 
@@ -381,22 +346,7 @@ def get_run_status(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> RunStatusResponse:
-    """Get current status of a specific run.
-
-    Returns detailed status including timing, errors, and result if completed.
-    This endpoint is used for polling run status after async task submission.
-
-    Args:
-        run_id: ID of the run to query
-        db: Database session
-        current_user: Authenticated user (multi-tenant filtered)
-
-    Returns:
-        Run status with result if completed
-
-    Raises:
-        HTTPException: 404 if run not found or not owned by user
-    """
+    """Get current status of a specific run."""
     # Multi-tenant security: only return runs owned by the current user
     run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
 
@@ -423,20 +373,7 @@ async def attach_to_run_stream(
     run_id: int,
     current_user=Depends(get_current_oikos_user),
 ):
-    """Attach to an existing run's event stream.
-
-    For RUNNING runs: Streams events via SSE as they occur.
-    For completed runs: Returns a single completion event and closes.
-
-    This enables run reconnection after page refresh.
-
-    Args:
-        run_id: ID of the run to attach to
-        current_user: Authenticated user (multi-tenant filtered)
-
-    Returns:
-        EventSourceResponse for SSE streaming
-    """
+    """Attach to an existing run's SSE stream (or replay completion for finished runs)."""
     from zerg.database import db_session
 
     # CRITICAL: Use SHORT-LIVED session for security check and data retrieval
@@ -476,7 +413,7 @@ async def attach_to_run_stream(
     else:
         # Run is complete/failed - return single completion event and close
         async def completed_stream():
-            # Send completion event matching the format from oikos_sse.py
+            # Single completion event for already-finished runs
             event_type = "oikos_complete" if run_status == RunStatus.SUCCESS else "error"
             payload = {
                 "run_id": run_id_val,
@@ -525,24 +462,7 @@ def get_run_events(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> RunEventsResponse:
-    """Get events for a specific run.
-
-    Returns events stored during run execution, optionally filtered by type.
-    This endpoint is useful for E2E testing to verify tool calls and lifecycle events.
-
-    Args:
-        run_id: ID of the run to query
-        event_type: Optional filter by event type (e.g., "oikos_tool_started")
-        limit: Maximum number of events to return (default 100)
-        db: Database session
-        current_user: Authenticated user (multi-tenant filtered)
-
-    Returns:
-        List of events for the run
-
-    Raises:
-        HTTPException: 404 if run not found or not owned by user
-    """
+    """Get events for a specific run, optionally filtered by type."""
     # Multi-tenant security: only return runs owned by the current user
     run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
 
@@ -605,22 +525,7 @@ def get_run_timeline(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> TimelineResponse:
-    """Get timing timeline for a specific run.
-
-    Returns structured timing data with phase-based events and summary statistics.
-    This endpoint powers performance profiling and observability for Oikos chat.
-
-    Args:
-        run_id: ID of the run to query
-        db: Database session
-        current_user: Authenticated user (multi-tenant filtered)
-
-    Returns:
-        Timeline with events and timing summary
-
-    Raises:
-        HTTPException: 404 if run not found or not owned by user
-    """
+    """Get timing timeline for a specific run (phase events + summary stats)."""
     # Multi-tenant security: only return runs owned by the current user
     run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
 

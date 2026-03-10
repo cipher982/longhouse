@@ -1,7 +1,7 @@
 """Runner -- asynchronous one-turn execution helper.
 
 Bridges Fiche ORM row, ThreadService for DB persistence, and the
-ReAct execution loop (LangGraph-free).
+ReAct execution loop.
 """
 
 from __future__ import annotations

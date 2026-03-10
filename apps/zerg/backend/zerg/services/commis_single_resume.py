@@ -26,7 +26,7 @@ from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 logger = logging.getLogger(__name__)
 
 
-async def continue_oikos_langgraph_free(
+async def continue_oikos(
     db: Session,
     run_id: int,
     commis_result: str,
@@ -34,7 +34,7 @@ async def continue_oikos_langgraph_free(
     *,
     runner_factory: RunnerFactory,
 ) -> dict[str, Any] | None:
-    """Resume oikos using a generic continuation runner (LangGraph-free)."""
+    """Resume oikos using a generic continuation runner."""
     from zerg.callbacks.token_stream import current_user_id_var
     from zerg.callbacks.token_stream import set_current_user_id
     from zerg.events import OikosEmitter
@@ -150,7 +150,7 @@ async def continue_oikos_langgraph_free(
         return {"status": "error", "error": error_msg}
 
     logger.info(
-        "Resuming oikos run %s (thread=%s) with tool_call_id=%s [LangGraph-free]",
+        "Resuming oikos run %s (thread=%s) with tool_call_id=%s",
         run_id,
         thread.id,
         tool_call_id,
@@ -312,14 +312,14 @@ async def continue_oikos_langgraph_free(
         )
 
         logger.info(
-            "Oikos run %s interrupted again (WAITING for commis job %s) [LangGraph-free]",
+            "Oikos run %s interrupted again (WAITING for commis job %s)",
             run_id,
             job_id,
         )
         return {"status": "waiting", "run_id": run_id, "job_id": job_id, "message": interrupt_message}
 
     except Exception as e:
-        logger.exception("Failed to resume oikos run %s [LangGraph-free]: %s", run_id, e)
+        logger.exception("Failed to resume oikos run %s: %s", run_id, e)
 
         end_time = datetime.now(timezone.utc)
         duration_ms = compute_duration_ms(run.started_at, end_time=end_time)
@@ -369,7 +369,7 @@ async def resume_oikos_with_commis_result(
     runner_factory: RunnerFactory,
 ) -> dict[str, Any] | None:
     """Resume an interrupted oikos run with a commis result."""
-    return await continue_oikos_langgraph_free(
+    return await continue_oikos(
         db=db,
         run_id=run_id,
         commis_result=commis_result,

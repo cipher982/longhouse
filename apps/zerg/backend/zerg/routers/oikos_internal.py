@@ -1,13 +1,9 @@
-"""Oikos internal endpoints for run resume and background completion.
+"""Oikos internal endpoints for run resume.
 
-These endpoints are called internally by the backend (not exposed to public API)
-to handle run resume when a oikos is interrupted and commis complete.
-
-Uses the LangGraph-free oikos resume pattern:
-- Oikos calls spawn_workspace_commis() and the loop raises FicheInterrupted
-- Run status becomes WAITING
-- Commis completes, calls resume endpoint
-- FicheRunner.run_continuation() continues execution
+Called internally when a commis completes while an oikos run is WAITING:
+1. spawn_workspace_commis() raises FicheInterrupted → run becomes WAITING
+2. Commis completes → calls POST /internal/runs/{id}/resume
+3. FicheRunner.run_continuation() continues execution
 """
 
 import logging
@@ -50,24 +46,7 @@ async def resume_run(
     payload: CommisCompletionPayload,
     db: Session = Depends(get_db),
 ):
-    """Resume a WAITING run when a commis completes.
-
-    Called internally when a commis completes while the oikos run was
-    WAITING (interrupted by spawn_workspace_commis). Uses FicheRunner.run_continuation()
-    to continue the oikos loop from persisted history.
-
-    Args:
-        run_id: ID of the WAITING oikos run
-        payload: Commis completion data
-        db: Database session
-
-    Returns:
-        Dict with resumed run info
-
-    Raises:
-        404: Run not found
-        500: Error resuming run
-    """
+    """Resume a WAITING run when its commis completes."""
     run = db.query(Run).filter(Run.id == run_id).first()
 
     if not run:
