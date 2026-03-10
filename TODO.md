@@ -51,6 +51,7 @@ Notes:
 - 2026-03-10: Landed the first transport seam fix: `invoke_oikos()` now accepts an explicit surface adapter and adapter-specific raw payload, so operator-mode or non-web callers can reuse the same entrypoint without pretending everything is browser chat.
 - 2026-03-10: The autonomy harness is no longer pytest-only. `make run-autonomy-journeys` now runs the shared baseline decider against the fixture set and writes durable artifacts plus `summary.json` under `.tmp/oikos-autonomy-journeys/`.
 - 2026-03-10: Tightened the journey evidence contract. Each run now writes `assertions.json`, tracks `assertion_count`/`assertions_passed` in `manifest.json`, fixtures can assert `needs_human`, and `make run-autonomy-journeys` exits non-zero on any drift instead of silently printing mismatches.
+- 2026-03-10: Landed the first live wakeup seam on the existing presence hook path. With `OIKOS_OPERATOR_MODE_ENABLED=1`, `blocked` and `needs_user` transitions now wake Oikos through a dedicated `operator` surface adapter, repeated identical pause-state signals are deduped, and `idle`/`Stop` still does not trigger because transcript shipping/completion ordering is not reliable there.
 - Spec: `docs/specs/oikos-proactive-operator.md`.
 - Roadmap: `docs/plans/oikos-autonomy-roadmap.md`.
 

@@ -27,6 +27,7 @@ import os
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -40,7 +41,10 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
+from zerg.models.user import User
 from zerg.routers.agents import verify_agents_token
+from zerg.services.oikos_service import invoke_oikos
+from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,9 @@ _STATES_WITH_TOOL = {"running", "blocked"}
 # States that trigger auto-resume of snoozed sessions (genuine work restart)
 _AUTO_RESUME_STATES = {"thinking", "running"}
 
+# States worth waking proactive Oikos for immediately.
+_OPERATOR_WAKE_STATES = {"blocked", "needs_user"}
+
 
 class PresenceIn(BaseModel):
     """Payload from a Claude Code hook."""
@@ -63,6 +70,111 @@ class PresenceIn(BaseModel):
     tool_name: Optional[str] = None
     cwd: Optional[str] = None
     provider: Optional[str] = "claude"
+
+
+def _operator_mode_enabled() -> bool:
+    return os.getenv("OIKOS_OPERATOR_MODE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _effective_tool_name(payload: PresenceIn, previous: SessionPresence | None) -> str | None:
+    if payload.state not in _STATES_WITH_TOOL:
+        return None
+    if payload.state == "blocked" and payload.tool_name is None:
+        return previous.tool_name if previous is not None else None
+    return payload.tool_name
+
+
+def _should_wake_operator(
+    *,
+    previous: SessionPresence | None,
+    state: str,
+    tool_name: str | None,
+) -> bool:
+    if state not in _OPERATOR_WAKE_STATES or not _operator_mode_enabled():
+        return False
+    if previous is None:
+        return True
+    if previous.state != state:
+        return True
+    return (previous.tool_name or None) != (tool_name or None)
+
+
+def _resolve_owner_id(db: Session, token: object | None) -> int | None:
+    owner_id = getattr(token, "owner_id", None)
+    if owner_id is not None:
+        return int(owner_id)
+
+    owner = db.query(User.id).order_by(User.id).first()
+    if owner is None:
+        return None
+    return int(owner[0])
+
+
+def _build_operator_message(
+    *,
+    payload: PresenceIn,
+    project: str | None,
+    tool_name: str | None,
+) -> str:
+    lines = [
+        "System/operator wakeup: a coding session may need attention.",
+        "",
+        f"Trigger: presence.{payload.state}",
+        f"Session ID: {payload.session_id}",
+    ]
+    if payload.provider:
+        lines.append(f"Provider: {payload.provider}")
+    if project:
+        lines.append(f"Project: {project}")
+    if tool_name:
+        lines.append(f"Tool: {tool_name}")
+    if payload.cwd:
+        lines.append(f"CWD: {payload.cwd}")
+    lines.extend(
+        [
+            "",
+            "Inspect the relevant session history, then decide whether to wait, " "continue the work, or escalate to the user.",
+            "Do nothing if no action is warranted.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+async def _maybe_invoke_operator_wakeup(
+    *,
+    db: Session,
+    token: object | None,
+    payload: PresenceIn,
+    project: str | None,
+    tool_name: str | None,
+) -> None:
+    owner_id = _resolve_owner_id(db, token)
+    if owner_id is None:
+        logger.debug("Skipping operator wakeup for session %s: no owner resolved", payload.session_id)
+        return
+
+    message = _build_operator_message(payload=payload, project=project, tool_name=tool_name)
+    message_id = f"operator-presence-{payload.session_id}-{payload.state}-{uuid4()}"
+    surface_payload = {
+        "trigger_type": f"presence.{payload.state}",
+        "session_id": payload.session_id,
+        "provider": payload.provider or "claude",
+        "project": project,
+        "tool_name": tool_name,
+        "cwd": payload.cwd,
+    }
+
+    try:
+        await invoke_oikos(
+            owner_id,
+            message,
+            message_id,
+            source="operator",
+            surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
+            surface_payload=surface_payload,
+        )
+    except Exception:
+        logger.exception("Failed to invoke operator wakeup for session %s", payload.session_id)
 
 
 @router.post("/presence", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
@@ -81,6 +193,8 @@ async def upsert_presence(
     if payload.cwd:
         project = os.path.basename(payload.cwd.rstrip("/"))
 
+    previous = db.query(SessionPresence).filter(SessionPresence.session_id == payload.session_id).first()
+
     now = datetime.now(timezone.utc)
 
     insert_tool_name = payload.tool_name if payload.state in _STATES_WITH_TOOL else None
@@ -95,6 +209,13 @@ async def upsert_presence(
         update_tool_name = payload.tool_name
     else:
         update_tool_name = None
+
+    effective_tool_name = _effective_tool_name(payload, previous)
+    should_wake_operator = _should_wake_operator(
+        previous=previous,
+        state=payload.state,
+        tool_name=effective_tool_name,
+    )
 
     stmt = (
         sqlite_insert(SessionPresence)
@@ -138,4 +259,12 @@ async def upsert_presence(
             pass  # session_id not a valid UUID — skip silently
 
     db.commit()
+    if should_wake_operator:
+        await _maybe_invoke_operator_wakeup(
+            db=db,
+            token=_token,
+            payload=payload,
+            project=project,
+            tool_name=effective_tool_name,
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

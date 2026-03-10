@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -38,12 +39,14 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import get_db, make_engine, make_sessionmaker  # noqa: E402
-from zerg.main import api_app  # noqa: E402
-from zerg.models.agents import AgentSession  # noqa: E402
-from zerg.models.agents import AgentsBase  # noqa: E402
-from zerg.models.agents import SessionPresence  # noqa: E402
-
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.main import api_app
+from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPresence
+from zerg.routers.agents import verify_agents_token
 
 # ---------------------------------------------------------------------------
 # DB + client fixtures (same pattern as other tests_lite tests)
@@ -429,3 +432,142 @@ def test_blocked_notification_then_permission_request_sets_tool_name(client, tmp
         db.close()
     api_app.dependency_overrides.clear()
     engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# 5. Backend: operator-mode wakeups for actionable pause states
+# ---------------------------------------------------------------------------
+
+
+def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
+    """blocked transitions wake proactive Oikos when operator mode is enabled."""
+    engine, SessionLocal = _make_db(tmp_path, "operator_wakeup.db")
+    calls = []
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(owner_id=42)
+
+    async def fake_invoke_oikos(owner_id, message, message_id, **kwargs):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "message": message,
+                "message_id": message_id,
+                **kwargs,
+            }
+        )
+        return 123
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    monkeypatch.setattr("zerg.routers.presence.invoke_oikos", fake_invoke_oikos)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    with TestClient(api_app) as c:
+        sid = str(uuid4())
+        response = c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "tool_name": "Bash", "cwd": "/tmp/test"},
+            headers=_auth_headers(),
+        )
+        assert response.status_code == 204
+
+    api_app.dependency_overrides.clear()
+    engine.dispose()
+
+    assert len(calls) == 1
+    assert calls[0]["owner_id"] == 42
+    assert calls[0]["source"] == "operator"
+    assert f"Session ID: {sid}" in calls[0]["message"]
+    assert "Trigger: presence.blocked" in calls[0]["message"]
+    assert "Tool: Bash" in calls[0]["message"]
+    assert calls[0]["surface_adapter"].surface_id == "operator"
+    assert calls[0]["surface_payload"]["session_id"] == sid
+    assert calls[0]["surface_payload"]["trigger_type"] == "presence.blocked"
+
+
+def test_repeated_blocked_state_does_not_rewake_operator(monkeypatch, tmp_path):
+    """The same blocked state should not wake operator mode twice without a real transition."""
+    engine, SessionLocal = _make_db(tmp_path, "operator_dedupe.db")
+    calls = []
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(owner_id=42)
+
+    async def fake_invoke_oikos(owner_id, message, message_id, **kwargs):
+        calls.append((owner_id, message, message_id, kwargs))
+        return 123
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    monkeypatch.setattr("zerg.routers.presence.invoke_oikos", fake_invoke_oikos)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    with TestClient(api_app) as c:
+        sid = str(uuid4())
+        first = c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "tool_name": "Bash", "cwd": "/tmp/test"},
+            headers=_auth_headers(),
+        )
+        second = c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "cwd": "/tmp/test"},
+            headers=_auth_headers(),
+        )
+        assert first.status_code == 204
+        assert second.status_code == 204
+
+    api_app.dependency_overrides.clear()
+    engine.dispose()
+
+    assert len(calls) == 1
+
+
+def test_needs_user_does_not_wake_operator_when_disabled(monkeypatch, tmp_path):
+    """Operator wakeups stay dormant until explicitly enabled."""
+    engine, SessionLocal = _make_db(tmp_path, "operator_disabled.db")
+    calls = []
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    async def fake_invoke_oikos(owner_id, message, message_id, **kwargs):
+        calls.append((owner_id, message, message_id, kwargs))
+        return 123
+
+    monkeypatch.delenv("OIKOS_OPERATOR_MODE_ENABLED", raising=False)
+    monkeypatch.setattr("zerg.routers.presence.invoke_oikos", fake_invoke_oikos)
+
+    api_app.dependency_overrides[get_db] = override_db
+    with TestClient(api_app) as c:
+        sid = str(uuid4())
+        response = c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "needs_user", "cwd": "/tmp/test"},
+            headers=_auth_headers(),
+        )
+        assert response.status_code == 204
+
+    api_app.dependency_overrides.clear()
+    engine.dispose()
+
+    assert calls == []
