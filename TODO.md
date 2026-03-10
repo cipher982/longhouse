@@ -17,18 +17,19 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Product][Tech Debt] Refactor session detail into a pane-based workspace (size: 4)
 
-Status (2026-03-10): In progress. The current session detail route is still a centered document-style stack; the immediate goal is to split it into a pane-ready workspace shell plus shared state so we can iterate on IDE-style layouts without rewriting the page each time.
+Status (2026-03-10): Done. Session detail now renders as a pane-based workspace with a left context rail, center timeline navigator, right inspector, and a docked continuation surface that uses width on desktop instead of wasting it.
 
 **Goal:** Turn timeline session detail into a real workspace with reusable panes and first-class event selection, while preserving current continuation/thread capabilities.
 
-- [ ] Extract session detail data/state into a headless workspace hook
-- [ ] Introduce a workspace shell with left context, center timeline, and right inspector panes
-- [ ] Move event detail out of inline expansion and into inspector-driven components
-- [ ] Keep continuation/thread behavior working during the layout transition
+- [x] Extract session detail data/state into a headless workspace hook
+- [x] Introduce a workspace shell with left context, center timeline, and right inspector panes
+- [x] Move event detail out of inline expansion and into inspector-driven components
+- [x] Keep continuation/thread behavior working during the layout transition
 
 Notes:
 - 2026-03-10: The route currently mixes fetching, derived timeline shaping, deep-link handling, continuation logic, and rendering in one file. Refactor first; visual polish can follow once pane responsibilities feel right.
 - 2026-03-10: There is no existing resizable pane primitive in the frontend. Start with fixed panes and clean component seams first.
+- 2026-03-10: Live local capture confirmed the new layout uses the width much better than the old centered transcript. The next iteration, if needed, is resizable panes or a collapsible continuation dock, not another full route rewrite.
 
 ## [Product] Proactive Oikos operator mode (size: 5)
 
@@ -74,6 +75,10 @@ Notes:
 - 2026-03-10: Use source-line byte ranges as the primary planning unit, then verify compressed size as needed. Event-count batching is the wrong abstraction here.
 - 2026-03-10: Shipped the batching slice. Claude/Codex JSONL sessions now batch on exact source-line byte ranges for fresh shipping and replay; whole-document Gemini sessions fall back to a single payload and dead-letter deterministically if they exceed `max_batch_bytes`, because they do not expose line-addressable replay boundaries.
 - 2026-03-10: Live verification in progress. Goal: install the new local engine build, restart the LaunchAgent, run hosted QA, and prove forced multi-batch shipping against the real `david010.longhouse.ai` instance using a temporary engine DB plus an existing large local session file.
+- 2026-03-10: Live verification result: `make install-engine` succeeded and the local LaunchAgent restarted onto a new PID. Hosted API health and agents API were healthy, but `make qa-live` finished `7/8` with one unrelated prod UI failure: session detail for the latest live session stayed stuck on "Loading session..." even though the underlying session/event APIs were fast.
+- 2026-03-10: Forced live batching succeeded against the real instance. A 51 MB Codex session proved the multi-batch path with 8 successful ~1 MiB POSTs before the manual interruption; the temp DB advanced `acked_offset`/`queued_offset` to `8302957`.
+- 2026-03-10: Clean completion run used a 7.6 MB Codex session at `max_batch_bytes=1048576`. Result: `410` events shipped live, temp DB reached EOF (`8015424`), and exactly one dead-letter row was recorded for a single oversize source range `758780..2519193` (1.76 MB raw line > 1 MiB cap). That is expected under the current design.
+- 2026-03-10: After returning to stable Wi-Fi, the real daemon spool backlog moved from `33` pending entries to `28` over one replay interval, so installed replay is making forward progress, but the backlog is not yet fully drained.
 
 ## [Infra][QA/Test] Longhouse engine shipper correctness fixes (size: 3)
 
