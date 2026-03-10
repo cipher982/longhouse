@@ -1,0 +1,133 @@
+# Oikos Autonomy Roadmap
+
+Status: active
+Owner: David / Oikos
+Started: 2026-03-10
+Last Updated: 2026-03-10
+
+## Goal
+
+Build a realistic harness for proactive Oikos so we can dogfood, evaluate, and improve autonomy behavior without making David the manual QA loop for every change.
+
+This roadmap tracks both:
+
+- long-term product/harness phases
+- near-term concrete steps that should move in small commits
+
+Keep this document current as the work evolves.
+
+## Guiding Constraints
+
+- Start simple and dogfood.
+- Prefer realistic journeys over isolated prompt trivia.
+- Reuse existing Longhouse session history and artifacts instead of duplicating them.
+- Build shadow mode before broad autonomous action.
+- Favor comparable results and saved artifacts over ad hoc screenshots or anecdotes.
+- Keep implementation future-friendly: better models should simplify the system, not invalidate it.
+
+## Long-Term Phases
+
+## Phase 1: Shadow Journey Harness
+
+Objective: let Oikos wake on synthetic/recorded journey inputs, decide what it would do, and save that decision without taking real action.
+
+Success looks like:
+
+- journey cases are defined as durable fixtures
+- a runner can execute them repeatably
+- results include trigger, context packet, decision, rationale, and artifacts
+- assertions can check both hard invariants and behavior quality
+
+## Phase 2: Bounded Local Actions
+
+Objective: allow one or two safe actions from the same harness, likely inspect/continue/escalate.
+
+Success looks like:
+
+- shadow mode and act mode share the same journey structure
+- bounded actions are auditable
+- regressions show up in hermetic tests before live dogfood
+
+## Phase 3: Browser and Hosted Smokes
+
+Objective: prove the real app wiring around autonomy journeys works outside hermetic backend evals.
+
+Success looks like:
+
+- local/browser smoke for one or two canonical journeys
+- hosted smoke against david010
+- clear artifacts for failure triage
+
+## Phase 4: Dogfood Feedback Loop
+
+Objective: convert real-world Oikos wins/failures into reusable eval fixtures and acceptance cases.
+
+Success looks like:
+
+- real autonomy decisions are logged and reviewable
+- good/bad cases become eval fixtures
+- changes can be judged against prior behavior, not memory
+
+## Phase 5: Broader Trigger Surface
+
+Objective: expand beyond the first coding-session triggers only after the loop is trustworthy.
+
+Possible later additions:
+
+- CI/deploy wakeups
+- runner availability changes
+- project-level sweeps
+- multi-session coordination
+
+## Near-Term Ring
+
+These are the active next steps. Keep this list short and current.
+
+- [ ] Add roadmap/spec links to the main task tracker without clobbering unrelated work
+- [ ] Implement a backend autonomy shadow runner that can execute journey cases without taking real actions
+- [ ] Define the first journey dataset around coding-session wakeups
+- [ ] Add autonomy-specific assertions for decision class, action count, forbidden actions, and artifact/log presence
+- [ ] Add a make target or documented command for the autonomy eval ring
+- [ ] Convert the first real dogfood observations into new journey fixtures
+
+## First Journey Set
+
+The initial cases should stay small and high-signal:
+
+- [ ] session completed, nothing to do
+- [ ] session completed, obvious next step
+- [ ] session blocked on real human fork
+- [ ] session blocked on small bounded follow-up
+- [ ] session needs user, low priority
+- [ ] periodic sweep with no meaningful work
+- [ ] trigger storm / duplicate wakeups
+- [ ] two sessions competing for attention
+
+## Evidence Contract
+
+Every journey run should leave enough evidence to answer:
+
+- what woke Oikos up
+- what context packet it saw
+- what it decided
+- what it would have done or actually did
+- why the test passed or failed
+
+At minimum, save:
+
+- case id
+- trigger payload
+- compact context packet
+- decision payload/result
+- assertion outcomes
+- any generated artifacts/log files
+
+## Notes
+
+- Existing repo surfaces to reuse:
+  - backend eval harness under `apps/zerg/backend/evals/`
+  - targeted backend tests under `apps/zerg/backend/tests_lite/`
+  - local/browser E2E and smoke flows under `apps/zerg/e2e/`
+  - hosted smoke via `scripts/qa-live.sh`
+- Keep the harness independent enough that it can start before the full proactive runtime exists.
+- The first slice is about learning whether Oikos makes sensible decisions, not shipping a full autonomy control plane.
