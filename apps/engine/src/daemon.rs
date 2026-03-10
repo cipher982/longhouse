@@ -112,8 +112,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     // 6. Initial full scan (catch up on anything missed while stopped)
     tracing::info!("Running initial full scan...");
-    let (files, events) =
-        shipper::full_scan(&providers, &conn, &client, config.algo, Some(&tracker)).await?;
+    let (files, events) = shipper::full_scan_with_batch_bytes(
+        &providers,
+        &conn,
+        &client,
+        config.algo,
+        config.shipper_config.max_batch_bytes,
+        Some(&tracker),
+    )
+    .await?;
     tracing::info!(
         "Initial scan: shipped {} files, {} events in {:.1}s",
         files,
@@ -122,8 +129,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
 
     // 7. Replay any pending spool entries
-    let (spool_ok, spool_fail) =
-        shipper::replay_spool_batch(&conn, &client, config.algo, 100).await?;
+    let (spool_ok, spool_fail) = shipper::replay_spool_batch_with_batch_bytes(
+        &conn,
+        &client,
+        config.algo,
+        100,
+        config.shipper_config.max_batch_bytes,
+    )
+    .await?;
     if spool_ok > 0 || spool_fail > 0 {
         tracing::info!("Spool replay: {} shipped, {} failed", spool_ok, spool_fail);
     }
@@ -204,7 +217,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             batch = watcher.next_batch(config.flush_interval), if !offline.is_offline => {
                 match batch {
                     Some(paths) if !paths.is_empty() => {
-                        let (had_connect_error, shipped_events) = ship_batch(&paths, &providers, &conn, &client, config.algo, &tracker).await;
+                        let (had_connect_error, shipped_events) = ship_batch(
+                            &paths,
+                            &providers,
+                            &conn,
+                            &client,
+                            config.algo,
+                            config.shipper_config.max_batch_bytes,
+                            &tracker,
+                        ).await;
                         if had_connect_error {
                             offline.mark_offline();
                             tracing::warn!(
@@ -225,7 +246,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Periodic full scan (catch missed events) — skip when offline
             _ = fallback_timer.tick(), if !offline.is_offline => {
                 tracing::debug!("Running fallback full scan...");
-                match shipper::full_scan(&providers, &conn, &client, config.algo, Some(&tracker)).await {
+                match shipper::full_scan_with_batch_bytes(
+                    &providers,
+                    &conn,
+                    &client,
+                    config.algo,
+                    config.shipper_config.max_batch_bytes,
+                    Some(&tracker),
+                ).await {
                     Ok((f, e)) => {
                         if f > 0 {
                             tracing::info!("Fallback scan: shipped {} files, {} events", f, e);
@@ -246,7 +274,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Spool replay (retry failed shipments) — skip when offline
             _ = spool_timer.tick(), if !offline.is_offline => {
-                match shipper::replay_spool_batch(&conn, &client, config.algo, 50).await {
+                match shipper::replay_spool_batch_with_batch_bytes(
+                    &conn,
+                    &client,
+                    config.algo,
+                    50,
+                    config.shipper_config.max_batch_bytes,
+                ).await {
                     Ok((ok, fail)) => {
                         if ok > 0 || fail > 0 {
                             tracing::info!("Spool replay: {} shipped, {} failed", ok, fail);
@@ -306,6 +340,7 @@ async fn ship_batch(
     conn: &rusqlite::Connection,
     client: &ShipperClient,
     algo: CompressionAlgo,
+    max_batch_bytes: u64,
     tracker: &ConsecutiveErrorTracker,
 ) -> (bool, usize) {
     let batch_start = Instant::now();
@@ -322,21 +357,19 @@ async fn ship_batch(
             }
         };
 
-        match shipper::prepare_file(path, provider, algo, conn) {
-            Ok(Some(item)) => {
-                match shipper::ship_and_record(item, client, conn, Some(tracker)).await {
-                    Ok(shipper::ShipAndRecordOutcome::Shipped { events: e }) => {
-                        shipped += 1;
-                        events += e;
-                    }
-                    Ok(shipper::ShipAndRecordOutcome::Spooled { is_connect_error }) => {
-                        if is_connect_error {
+        match shipper::prepare_file_batches(path, provider, algo, conn, max_batch_bytes) {
+            Ok(Some(prepared)) => {
+                match shipper::ship_prepared_file(prepared, client, conn, Some(tracker)).await {
+                    Ok(outcome) => {
+                        if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
+                            shipped += 1;
+                            events += outcome.events_shipped;
+                        }
+                        if outcome.had_connect_error {
                             had_connect_error = true;
                         }
                     }
-                    Ok(shipper::ShipAndRecordOutcome::SkippedClientError { .. }) => {}
                     Err(e) => {
-                        // Unexpected error (not a ShipResult variant)
                         if tracker.record_error() {
                             tracing::warn!("Error shipping {}: {}", path.display(), e);
                         }

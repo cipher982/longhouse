@@ -117,6 +117,10 @@ enum Commands {
         #[arg(long, default_value = "30")]
         spool_replay_secs: u64,
 
+        /// Maximum compressed batch size in bytes before splitting/dead-lettering
+        #[arg(long)]
+        max_batch_bytes: Option<u64>,
+
         /// Log directory for rolling log files (default: ~/.claude/logs, or LONGHOUSE_LOG_DIR env)
         #[arg(long)]
         log_dir: Option<PathBuf>,
@@ -163,6 +167,10 @@ enum Commands {
         /// Compression algorithm: gzip (default) or zstd
         #[arg(long, default_value = "gzip")]
         compression: String,
+
+        /// Maximum compressed batch size in bytes before splitting/dead-lettering
+        #[arg(long)]
+        max_batch_bytes: Option<u64>,
 
         /// Human-readable name for this machine (default: from ~/.claude/longhouse-machine-name or hostname)
         #[arg(long)]
@@ -254,6 +262,7 @@ fn main() -> anyhow::Result<()> {
             flush_ms,
             fallback_scan_secs,
             spool_replay_secs,
+            max_batch_bytes,
             log_dir: _,
             machine_name,
         } => {
@@ -264,6 +273,7 @@ fn main() -> anyhow::Result<()> {
                 db.as_deref(),
                 None,
                 machine_name.as_deref(),
+                max_batch_bytes,
             );
             pipeline::compressor::set_machine_name(&shipper_config.machine_name);
 
@@ -309,6 +319,7 @@ fn main() -> anyhow::Result<()> {
             dry_run,
             json,
             compression,
+            max_batch_bytes,
             machine_name,
         } => {
             let algo = parse_compression_algo(&compression)?;
@@ -332,6 +343,7 @@ fn main() -> anyhow::Result<()> {
                     dry_run,
                     json,
                     algo,
+                    max_batch_bytes,
                 ))?;
             } else {
                 rt.block_on(cmd_ship(
@@ -342,6 +354,7 @@ fn main() -> anyhow::Result<()> {
                     dry_run,
                     json,
                     algo,
+                    max_batch_bytes,
                 ))?;
             }
         }
@@ -362,6 +375,7 @@ async fn cmd_ship(
     dry_run: bool,
     json_output: bool,
     algo: CompressionAlgo,
+    max_batch_bytes: Option<u64>,
 ) -> anyhow::Result<()> {
     let start = Instant::now();
 
@@ -372,6 +386,7 @@ async fn cmd_ship(
         db_path,
         if workers > 0 { Some(workers) } else { None },
         None,
+        max_batch_bytes,
     );
     pipeline::compressor::set_machine_name(&config.machine_name);
 
@@ -498,7 +513,7 @@ async fn cmd_ship(
     let events_done = AtomicUsize::new(0);
     let total_files = files_to_ship.len();
 
-    let ship_items: Vec<Option<shipper::ShipItem>> = files_to_ship
+    let prepared_files: Vec<Option<shipper::PreparedFile>> = files_to_ship
         .par_iter()
         .map(|(path, offset)| {
             let path_str = path.to_string_lossy().to_string();
@@ -506,46 +521,26 @@ async fn cmd_ship(
                 return None;
             }
 
-            let parse_result = match pipeline::parser::parse_session_file(path, *offset) {
-                Ok(r) => r,
+            let prepared = match shipper::prepare_path_from_offset(
+                path,
+                "claude",
+                *offset,
+                algo,
+                config.max_batch_bytes,
+            ) {
+                Ok(result) => result,
                 Err(e) => {
                     tracing::warn!("Skip {}: {}", path_str, e);
                     return None;
                 }
             };
 
-            if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
-                return None;
-            }
-
-            let event_count = parse_result.events.len();
-            let new_offset = parse_result.last_good_offset;
-
-            // Always compress (this is the real work we're benchmarking).
-            // For dry-run, drop the result immediately to save memory.
-            let compressed = match pipeline::compressor::build_and_compress_with_source_lines(
-                &parse_result.metadata.session_id,
-                &parse_result.events,
-                &parse_result.metadata,
-                &path_str,
-                "claude",
-                Some(&parse_result.source_lines),
-                algo,
-            ) {
-                Ok(c) => {
-                    if dry_run {
-                        Vec::new()
-                    } else {
-                        c
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Compress failed {}: {}", path_str, e);
-                    return None;
-                }
+            let prepared = match prepared {
+                Some(prepared) => prepared,
+                None => return None,
             };
-
-            let session_id = parse_result.metadata.session_id.clone();
+            let event_count = prepared.total_event_count();
+            let new_offset = prepared.new_offset;
 
             // Progress reporting
             let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
@@ -566,15 +561,7 @@ async fn cmd_ship(
                 );
             }
 
-            Some(shipper::ShipItem {
-                path_str,
-                provider: "claude".to_string(),
-                offset: *offset,
-                new_offset,
-                event_count,
-                session_id,
-                compressed,
-            })
+            Some(prepared)
         })
         .collect();
 
@@ -594,12 +581,12 @@ async fn cmd_ship(
     let mut files_skipped = 0usize;
 
     if dry_run {
-        for item in &ship_items {
-            match item {
-                Some(item) => {
+        for prepared in &prepared_files {
+            match prepared {
+                Some(prepared) => {
                     files_shipped += 1;
-                    events_shipped += item.event_count;
-                    bytes_shipped += item.new_offset - item.offset;
+                    events_shipped += prepared.total_event_count();
+                    bytes_shipped += prepared.new_offset - prepared.offset;
                 }
                 None => {
                     files_skipped += 1;
@@ -610,9 +597,9 @@ async fn cmd_ship(
 
     // Live HTTP shipping (skip if dry run — already handled above)
     if !dry_run {
-        for item in ship_items {
-            let item = match item {
-                Some(item) => item,
+        for prepared in prepared_files {
+            let prepared = match prepared {
+                Some(prepared) => prepared,
                 None => {
                     files_skipped += 1;
                     continue;
@@ -620,19 +607,14 @@ async fn cmd_ship(
             };
 
             let client = client.as_ref().unwrap();
-            let byte_count = item.new_offset - item.offset;
-            match shipper::ship_and_record(item, client, &conn, None).await? {
-                shipper::ShipAndRecordOutcome::Shipped { events } => {
-                    files_shipped += 1;
-                    events_shipped += events;
-                    bytes_shipped += byte_count;
-                }
-                shipper::ShipAndRecordOutcome::Spooled { .. } => {
-                    files_failed += 1;
-                }
-                shipper::ShipAndRecordOutcome::SkippedClientError { .. } => {
-                    files_skipped += 1;
-                }
+            let outcome = shipper::ship_prepared_file(prepared, client, &conn, None).await?;
+            if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
+                files_shipped += 1;
+            }
+            events_shipped += outcome.events_shipped;
+            bytes_shipped += outcome.bytes_shipped;
+            if !outcome.fully_processed {
+                files_failed += 1;
             }
         }
     } // end if !dry_run
@@ -641,7 +623,14 @@ async fn cmd_ship(
     let mut spool_replayed = 0usize;
     if !dry_run {
         let client = client.as_ref().unwrap();
-        let (ok, _failed) = shipper::replay_spool_batch(&conn, client, algo, 100).await?;
+        let (ok, _failed) = shipper::replay_spool_batch_with_batch_bytes(
+            &conn,
+            client,
+            algo,
+            100,
+            config.max_batch_bytes,
+        )
+        .await?;
         spool_replayed = ok;
     }
 
@@ -727,6 +716,7 @@ async fn cmd_ship_file(
     dry_run: bool,
     json_output: bool,
     algo: CompressionAlgo,
+    max_batch_bytes: Option<u64>,
 ) -> anyhow::Result<()> {
     if !path.exists() {
         anyhow::bail!("File not found: {}", path.display());
@@ -734,7 +724,8 @@ async fn cmd_ship_file(
 
     let provider = detect_provider_for_file(path, provider_override)?;
 
-    let config = ShipperConfig::from_env()?.with_overrides(url, token, db_path, None, None);
+    let config =
+        ShipperConfig::from_env()?.with_overrides(url, token, db_path, None, None, max_batch_bytes);
     pipeline::compressor::set_machine_name(&config.machine_name);
 
     if !json_output {
@@ -747,9 +738,10 @@ async fn cmd_ship_file(
 
     let conn = open_db(config.db_path.as_deref())?;
 
-    let prepared = shipper::prepare_file(path, &provider, algo, &conn)?;
-    let item = match prepared {
-        Some(item) => item,
+    let prepared =
+        shipper::prepare_file_batches(path, &provider, algo, &conn, config.max_batch_bytes)?;
+    let prepared = match prepared {
+        Some(prepared) => prepared,
         None => {
             println!("No new events");
             return Ok(());
@@ -760,23 +752,20 @@ async fn cmd_ship_file(
         if json_output {
             let summary = serde_json::json!({
                 "status": "ok",
-                "file": item.path_str,
-                "events_shipped": item.event_count,
+                "file": prepared.path_str,
+                "events_shipped": prepared.total_event_count(),
                 "dry_run": true,
             });
             println!("{}", serde_json::to_string_pretty(&summary)?);
         } else {
-            println!("Would ship {} events", item.event_count);
+            println!("Would ship {} events", prepared.total_event_count());
         }
         return Ok(());
     }
 
     let client = ShipperClient::with_compression(&config, algo)?;
-    let events_shipped = match shipper::ship_and_record(item, &client, &conn, None).await? {
-        shipper::ShipAndRecordOutcome::Shipped { events } => events,
-        shipper::ShipAndRecordOutcome::Spooled { .. }
-        | shipper::ShipAndRecordOutcome::SkippedClientError { .. } => 0,
-    };
+    let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None).await?;
+    let events_shipped = outcome.events_shipped;
 
     if json_output {
         let summary = serde_json::json!({
@@ -945,6 +934,7 @@ mod tests {
             true,
             true,
             CompressionAlgo::Gzip,
+            None,
         ))
         .unwrap();
 

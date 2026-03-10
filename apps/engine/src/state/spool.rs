@@ -77,6 +77,33 @@ impl<'a> Spool<'a> {
         Ok(true)
     }
 
+    /// Record a dead-lettered byte range for later inspection.
+    pub fn record_dead(
+        &self,
+        provider: &str,
+        file_path: &str,
+        start_offset: u64,
+        end_offset: u64,
+        session_id: Option<&str>,
+        error: &str,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, session_id, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7, 'dead')",
+            rusqlite::params![
+                provider,
+                file_path,
+                start_offset as i64,
+                end_offset as i64,
+                session_id,
+                now,
+                error,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Get pending entries ready for retry (next_retry_at <= now).
     pub fn dequeue_batch(&self, limit: usize) -> Result<Vec<SpoolEntry>> {
         let now = Utc::now().to_rfc3339();
@@ -115,6 +142,15 @@ impl<'a> Spool<'a> {
     pub fn mark_shipped(&self, entry_id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM spool_queue WHERE id = ?", [entry_id])?;
+        Ok(())
+    }
+
+    /// Advance the start offset for a pending entry after partial replay progress.
+    pub fn advance_start(&self, entry_id: i64, new_start_offset: u64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE spool_queue SET start_offset = ?1 WHERE id = ?2",
+            rusqlite::params![new_start_offset as i64, entry_id],
+        )?;
         Ok(())
     }
 
@@ -241,6 +277,65 @@ mod tests {
         spool.mark_shipped(batch[0].id).unwrap();
         assert_eq!(spool.pending_count().unwrap(), 0);
         assert_eq!(spool.total_size().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_advance_start_updates_pending_entry_range() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        spool.enqueue("claude", "/f", 0, 500, Some("s1")).unwrap();
+        let batch = spool.dequeue_batch(10).unwrap();
+        let entry_id = batch[0].id;
+
+        spool.advance_start(entry_id, 200).unwrap();
+
+        let updated = spool.dequeue_batch(10).unwrap();
+        assert_eq!(updated[0].start_offset, 200);
+        assert_eq!(updated[0].end_offset, 500);
+    }
+
+    #[test]
+    fn test_record_dead_persists_dead_letter_entry() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        spool
+            .record_dead(
+                "claude",
+                "/dead.jsonl",
+                100,
+                220,
+                Some("dead-session"),
+                "oversize source range",
+            )
+            .unwrap();
+
+        let row: (String, String, i64, i64, String, String) = conn
+            .query_row(
+                "SELECT provider, file_path, start_offset, end_offset, status, last_error
+                 FROM spool_queue
+                 WHERE file_path = '/dead.jsonl'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "claude");
+        assert_eq!(row.1, "/dead.jsonl");
+        assert_eq!(row.2, 100);
+        assert_eq!(row.3, 220);
+        assert_eq!(row.4, "dead");
+        assert!(row.5.contains("oversize"));
     }
 
     #[test]

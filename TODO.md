@@ -45,16 +45,17 @@ Status (2026-03-10): In progress. The correctness floor is now in place; the rem
 - A single oversize source range fails loudly and deterministically instead of looping forever
 - Regression coverage proves planner invariants, partial failure recovery, exact-range replay, and the supported CLI/E2E paths
 
-- [ ] Add a pure range batch planner with deterministic contiguous-range invariants
-- [ ] Wire `max_batch_bytes` into fresh shipping and one-shot `ship`
-- [ ] Make spool replay range-exact instead of reparsing to EOF and only capping the ack
-- [ ] Define and test explicit handling for a single oversize source range
-- [ ] Re-run supported shipper verification targets (`make test-engine-fast`, `make test-shipper-e2e`)
+- [x] Add a pure range batch planner with deterministic contiguous-range invariants
+- [x] Wire `max_batch_bytes` into fresh shipping and one-shot `ship`
+- [x] Make spool replay range-exact instead of reparsing to EOF and only capping the ack
+- [x] Define and test explicit handling for a single oversize source range
+- [x] Re-run supported shipper verification targets (`make test-engine-fast`, `make test-shipper-e2e`)
 
 Notes:
 - 2026-03-10: The current pointer spool stores `(file_path, start_offset, end_offset)` only. That is fine, but replay must rebuild the same range exactly or it can over-send newer bytes added after the original failure.
 - 2026-03-10: The simplest correct design is to keep the existing monotonic `queued_offset`/`acked_offset` model and ship batches sequentially per file; a sparse per-range state machine is unnecessary for this slice.
 - 2026-03-10: Use source-line byte ranges as the primary planning unit, then verify compressed size as needed. Event-count batching is the wrong abstraction here.
+- 2026-03-10: Shipped the batching slice. Claude/Codex JSONL sessions now batch on exact source-line byte ranges for fresh shipping and replay; whole-document Gemini sessions fall back to a single payload and dead-letter deterministically if they exceed `max_batch_bytes`, because they do not expose line-addressable replay boundaries.
 
 ## [Infra][QA/Test] Longhouse engine shipper correctness fixes (size: 3)
 
