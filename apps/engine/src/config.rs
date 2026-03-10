@@ -98,6 +98,7 @@ impl ShipperConfig {
         db_path: Option<&Path>,
         workers: Option<usize>,
         machine_name: Option<&str>,
+        max_batch_bytes: Option<u64>,
     ) -> Self {
         if let Some(u) = url {
             self.api_url = u.to_string();
@@ -116,6 +117,11 @@ impl ShipperConfig {
         if let Some(m) = machine_name {
             if !m.is_empty() {
                 self.machine_name = m.to_string();
+            }
+        }
+        if let Some(bytes) = max_batch_bytes {
+            if bytes > 0 {
+                self.max_batch_bytes = bytes;
             }
         }
         self
@@ -188,8 +194,14 @@ mod tests {
 
     #[test]
     fn test_with_overrides_sets_machine_name() {
-        let config =
-            ShipperConfig::default().with_overrides(None, None, None, None, Some("home-server"));
+        let config = ShipperConfig::default().with_overrides(
+            None,
+            None,
+            None,
+            None,
+            Some("home-server"),
+            None,
+        );
         assert_eq!(config.machine_name, "home-server");
     }
 
@@ -197,7 +209,7 @@ mod tests {
     fn test_with_overrides_empty_machine_name_ignored() {
         let original = ShipperConfig::default();
         let original_name = original.machine_name.clone();
-        let config = original.with_overrides(None, None, None, None, Some(""));
+        let config = original.with_overrides(None, None, None, None, Some(""), None);
         // Empty string override is ignored — keeps existing name
         assert_eq!(config.machine_name, original_name);
     }
@@ -206,8 +218,15 @@ mod tests {
     fn test_with_overrides_none_machine_name_keeps_existing() {
         let mut config = ShipperConfig::default();
         config.machine_name = "my-machine".to_string();
-        let config = config.with_overrides(None, None, None, None, None);
+        let config = config.with_overrides(None, None, None, None, None, None);
         assert_eq!(config.machine_name, "my-machine");
+    }
+
+    #[test]
+    fn test_with_overrides_sets_max_batch_bytes() {
+        let config =
+            ShipperConfig::default().with_overrides(None, None, None, None, None, Some(1234));
+        assert_eq!(config.max_batch_bytes, 1234);
     }
 }
 

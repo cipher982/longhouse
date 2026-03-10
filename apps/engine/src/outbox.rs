@@ -347,7 +347,7 @@ mod tests {
         let f = write_hook_style(dir.path(), "OK1234", "sess-ok", "thinking");
 
         let url = format!("http://{}", addr);
-        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
         let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
 
         let (sent, kept) = drain_outbox(dir.path(), &client).await;
@@ -383,7 +383,7 @@ mod tests {
         });
 
         let url = format!("http://{}", addr);
-        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
         let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
 
         let dir = tempfile::tempdir().unwrap();
@@ -423,7 +423,7 @@ mod tests {
         let real = write_hook_style(dir.path(), "REAL01", "sess-real", "idle");
 
         let url = format!("http://{}", addr);
-        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
         let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
 
         let (sent, kept) = drain_outbox(dir.path(), &client).await;
@@ -463,7 +463,7 @@ mod tests {
         let latest = write_hook_style(dir.path(), "S1C", "sess-multi", "idle");
 
         let url = format!("http://{}", addr);
-        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
         let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
 
         let (sent, kept) = drain_outbox(dir.path(), &client).await;
@@ -503,7 +503,7 @@ mod tests {
         fs::write(&bad, b"not valid json!!!").unwrap();
 
         let url = format!("http://{}", addr);
-        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
         let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
 
         let (sent, kept) = drain_outbox(dir.path(), &client).await;

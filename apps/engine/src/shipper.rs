@@ -11,8 +11,9 @@ use rusqlite::Connection;
 
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::ConsecutiveErrorTracker;
+use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
-use crate::pipeline::parser;
+use crate::pipeline::parser::{self, ParseResult};
 use crate::shipping::client::{ShipResult, ShipperClient};
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
@@ -26,6 +27,93 @@ pub struct ShipItem {
     pub event_count: usize,
     pub session_id: String,
     pub compressed: Vec<u8>,
+}
+
+pub struct DeadLetterItem {
+    pub path_str: String,
+    pub provider: String,
+    pub offset: u64,
+    pub new_offset: u64,
+    pub event_count: usize,
+    pub session_id: String,
+    pub reason: String,
+}
+
+pub enum PreparedAction {
+    Ship(ShipItem),
+    DeadLetter(DeadLetterItem),
+}
+
+pub struct PreparedFile {
+    pub path_str: String,
+    pub provider: String,
+    pub offset: u64,
+    pub new_offset: u64,
+    pub session_id: String,
+    pub actions: Vec<PreparedAction>,
+}
+
+impl PreparedAction {
+    fn event_count(&self) -> usize {
+        match self {
+            PreparedAction::Ship(item) => item.event_count,
+            PreparedAction::DeadLetter(item) => item.event_count,
+        }
+    }
+
+    fn offset(&self) -> u64 {
+        match self {
+            PreparedAction::Ship(item) => item.offset,
+            PreparedAction::DeadLetter(item) => item.offset,
+        }
+    }
+
+    fn new_offset(&self) -> u64 {
+        match self {
+            PreparedAction::Ship(item) => item.new_offset,
+            PreparedAction::DeadLetter(item) => item.new_offset,
+        }
+    }
+}
+
+impl PreparedFile {
+    pub fn total_event_count(&self) -> usize {
+        self.actions.iter().map(PreparedAction::event_count).sum()
+    }
+}
+
+pub struct ShipPreparedOutcome {
+    pub events_shipped: usize,
+    pub bytes_shipped: u64,
+    pub dead_lettered: usize,
+    pub fully_processed: bool,
+    pub had_connect_error: bool,
+}
+
+impl Default for ShipPreparedOutcome {
+    fn default() -> Self {
+        Self {
+            events_shipped: 0,
+            bytes_shipped: 0,
+            dead_lettered: 0,
+            fully_processed: true,
+            had_connect_error: false,
+        }
+    }
+}
+
+enum AttemptedShip {
+    Shipped(ShipItem),
+    Transient {
+        item: ShipItem,
+        error: String,
+        is_connect_error: bool,
+    },
+    ClientError {
+        item: ShipItem,
+        status_code: u16,
+        body: String,
+    },
 }
 
 pub enum ShipAndRecordOutcome {
@@ -267,6 +355,565 @@ pub async fn ship_and_record(
     }
 }
 
+fn log_suspicious_empty_parse(path_str: &str, file_size: u64, candidate_records: usize) {
+    if candidate_records > 0 && file_size >= 128 {
+        tracing::warn!(
+            path = %path_str,
+            file_size,
+            candidate_records,
+            "Suspicious: file has {} candidate records but produced 0 events and 0 source lines — \
+             possible parser bug or format drift",
+            candidate_records
+        );
+    }
+}
+
+fn event_range_for_offsets(
+    events: &[parser::ParsedEvent],
+    start_offset: u64,
+    end_offset: u64,
+) -> std::ops::Range<usize> {
+    let start = events.partition_point(|event| event.source_offset < start_offset);
+    let end = events.partition_point(|event| event.source_offset < end_offset);
+    start..end
+}
+
+fn dead_letter_from_raw_range(
+    path_str: &str,
+    provider: &str,
+    session_id: &str,
+    range: batcher::DeadLetterRange,
+    max_batch_bytes: u64,
+) -> DeadLetterItem {
+    DeadLetterItem {
+        path_str: path_str.to_string(),
+        provider: provider.to_string(),
+        offset: range.start_offset,
+        new_offset: range.end_offset,
+        event_count: range
+            .event_range
+            .end
+            .saturating_sub(range.event_range.start),
+        session_id: session_id.to_string(),
+        reason: format!(
+            "source range {}..{} is {} bytes which exceeds max_batch_bytes {}",
+            range.start_offset, range.end_offset, range.byte_len, max_batch_bytes
+        ),
+    }
+}
+
+fn dead_letter_from_compressed_range(
+    path_str: &str,
+    provider: &str,
+    session_id: &str,
+    range: &ShipRange,
+    max_batch_bytes: u64,
+    compressed_len: usize,
+) -> DeadLetterItem {
+    DeadLetterItem {
+        path_str: path_str.to_string(),
+        provider: provider.to_string(),
+        offset: range.start_offset,
+        new_offset: range.end_offset,
+        event_count: range.event_range.end.saturating_sub(range.event_range.start),
+        session_id: session_id.to_string(),
+        reason: format!(
+            "compressed payload for source range {}..{} is {} bytes which exceeds max_batch_bytes {}",
+            range.start_offset, range.end_offset, compressed_len, max_batch_bytes
+        ),
+    }
+}
+
+fn prepare_whole_document_action(
+    parse_result: &ParseResult,
+    path_str: &str,
+    provider: &str,
+    start_offset: u64,
+    end_offset: u64,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+) -> Result<Vec<PreparedAction>> {
+    let compressed = compressor::build_and_compress_with(
+        &parse_result.metadata.session_id,
+        &parse_result.events,
+        &parse_result.metadata,
+        path_str,
+        provider,
+        algo,
+    )?;
+
+    if compressed.len() as u64 <= max_batch_bytes {
+        return Ok(vec![PreparedAction::Ship(ShipItem {
+            path_str: path_str.to_string(),
+            provider: provider.to_string(),
+            offset: start_offset,
+            new_offset: end_offset,
+            event_count: parse_result.events.len(),
+            session_id: parse_result.metadata.session_id.clone(),
+            compressed,
+        })]);
+    }
+
+    Ok(vec![PreparedAction::DeadLetter(DeadLetterItem {
+        path_str: path_str.to_string(),
+        provider: provider.to_string(),
+        offset: start_offset,
+        new_offset: end_offset,
+        event_count: parse_result.events.len(),
+        session_id: parse_result.metadata.session_id.clone(),
+        reason: format!(
+            "compressed whole-document payload is {} bytes which exceeds max_batch_bytes {} and has no source-line boundaries for further splitting",
+            compressed.len(),
+            max_batch_bytes
+        ),
+    })])
+}
+
+fn materialize_ship_range(
+    parse_result: &ParseResult,
+    path_str: &str,
+    provider: &str,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    range: ShipRange,
+) -> Result<Vec<PreparedAction>> {
+    let compressed = compressor::build_and_compress_with_source_lines(
+        &parse_result.metadata.session_id,
+        &parse_result.events[range.event_range.clone()],
+        &parse_result.metadata,
+        path_str,
+        provider,
+        Some(&parse_result.source_lines[range.source_line_range.clone()]),
+        algo,
+    )?;
+
+    if compressed.len() as u64 <= max_batch_bytes {
+        return Ok(vec![PreparedAction::Ship(ShipItem {
+            path_str: path_str.to_string(),
+            provider: provider.to_string(),
+            offset: range.start_offset,
+            new_offset: range.end_offset,
+            event_count: range
+                .event_range
+                .end
+                .saturating_sub(range.event_range.start),
+            session_id: parse_result.metadata.session_id.clone(),
+            compressed,
+        })]);
+    }
+
+    let line_count = range
+        .source_line_range
+        .end
+        .saturating_sub(range.source_line_range.start);
+    if line_count <= 1 {
+        return Ok(vec![PreparedAction::DeadLetter(
+            dead_letter_from_compressed_range(
+                path_str,
+                provider,
+                &parse_result.metadata.session_id,
+                &range,
+                max_batch_bytes,
+                compressed.len(),
+            ),
+        )]);
+    }
+
+    let mid_line_idx = range.source_line_range.start + line_count / 2;
+    let mid_offset = parse_result.source_lines[mid_line_idx].source_offset;
+    let left = ShipRange {
+        start_offset: range.start_offset,
+        end_offset: mid_offset,
+        source_line_range: range.source_line_range.start..mid_line_idx,
+        event_range: event_range_for_offsets(&parse_result.events, range.start_offset, mid_offset),
+    };
+    let right = ShipRange {
+        start_offset: mid_offset,
+        end_offset: range.end_offset,
+        source_line_range: mid_line_idx..range.source_line_range.end,
+        event_range: event_range_for_offsets(&parse_result.events, mid_offset, range.end_offset),
+    };
+
+    let mut actions = materialize_ship_range(
+        parse_result,
+        path_str,
+        provider,
+        algo,
+        max_batch_bytes,
+        left,
+    )?;
+    actions.extend(materialize_ship_range(
+        parse_result,
+        path_str,
+        provider,
+        algo,
+        max_batch_bytes,
+        right,
+    )?);
+    Ok(actions)
+}
+
+fn build_prepared_actions(
+    parse_result: &ParseResult,
+    path_str: &str,
+    provider: &str,
+    start_offset: u64,
+    end_offset: u64,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+) -> Result<Vec<PreparedAction>> {
+    if parse_result.source_lines.is_empty() {
+        if parse_result.events.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        return prepare_whole_document_action(
+            parse_result,
+            path_str,
+            provider,
+            start_offset,
+            end_offset,
+            algo,
+            max_batch_bytes,
+        );
+    }
+
+    let mut actions = Vec::new();
+    for planned in batcher::plan_range_actions(
+        &parse_result.source_lines,
+        &parse_result.events,
+        start_offset,
+        end_offset,
+        max_batch_bytes,
+    )? {
+        match planned {
+            PlannedRangeAction::Ship(range) => actions.extend(materialize_ship_range(
+                parse_result,
+                path_str,
+                provider,
+                algo,
+                max_batch_bytes,
+                range,
+            )?),
+            PlannedRangeAction::DeadLetter(range) => {
+                actions.push(PreparedAction::DeadLetter(dead_letter_from_raw_range(
+                    path_str,
+                    provider,
+                    &parse_result.metadata.session_id,
+                    range,
+                    max_batch_bytes,
+                )))
+            }
+        }
+    }
+    Ok(actions)
+}
+
+pub fn prepare_path_range(
+    path: &Path,
+    provider: &str,
+    offset: u64,
+    end_offset_cap: Option<u64>,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+) -> Result<Option<PreparedFile>> {
+    let path_str = path.to_string_lossy().to_string();
+    let file_size = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            tracing::warn!("Cannot stat {}: {}", path_str, e);
+            return Ok(None);
+        }
+    };
+
+    let parse_result = match parser::parse_session_file(path, offset) {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::warn!("Skip {}: {}", path_str, e);
+            return Ok(None);
+        }
+    };
+
+    if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
+        log_suspicious_empty_parse(&path_str, file_size, parse_result.candidate_records);
+        return Ok(None);
+    }
+
+    let new_offset = end_offset_cap
+        .map(|cap| parse_result.last_good_offset.min(cap))
+        .unwrap_or(parse_result.last_good_offset);
+
+    if new_offset <= offset {
+        return Ok(None);
+    }
+
+    let actions = build_prepared_actions(
+        &parse_result,
+        &path_str,
+        provider,
+        offset,
+        new_offset,
+        algo,
+        max_batch_bytes,
+    )?;
+
+    if actions.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(PreparedFile {
+        path_str,
+        provider: provider.to_string(),
+        offset,
+        new_offset,
+        session_id: parse_result.metadata.session_id.clone(),
+        actions,
+    }))
+}
+
+pub fn prepare_path_from_offset(
+    path: &Path,
+    provider: &str,
+    offset: u64,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+) -> Result<Option<PreparedFile>> {
+    prepare_path_range(path, provider, offset, None, algo, max_batch_bytes)
+}
+
+pub fn prepare_file_batches(
+    path: &Path,
+    provider: &str,
+    algo: CompressionAlgo,
+    conn: &Connection,
+    max_batch_bytes: u64,
+) -> Result<Option<PreparedFile>> {
+    let path_str = path.to_string_lossy().to_string();
+    let file_state = FileState::new(conn);
+
+    let current_offset = file_state.get_offset(&path_str)?;
+    let file_size = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            tracing::warn!("Cannot stat {}: {}", path_str, e);
+            return Ok(None);
+        }
+    };
+
+    let offset = if file_size < current_offset {
+        tracing::warn!(
+            "File truncated: {} (was {}, now {}), resetting",
+            path_str,
+            current_offset,
+            file_size
+        );
+        file_state.reset_offsets(&path_str)?;
+        0
+    } else if file_size == current_offset {
+        return Ok(None);
+    } else {
+        current_offset
+    };
+
+    prepare_path_range(path, provider, offset, None, algo, max_batch_bytes)
+}
+
+async fn attempt_ship(
+    mut item: ShipItem,
+    client: &ShipperClient,
+    tracker: Option<&ConsecutiveErrorTracker>,
+) -> AttemptedShip {
+    let payload = std::mem::take(&mut item.compressed);
+    let result = client.ship(payload).await;
+
+    match result {
+        ShipResult::Ok(_) => {
+            if let Some(t) = tracker {
+                if let Some(n) = t.record_success() {
+                    tracing::info!(
+                        "Recovered after {} ship failure(s), now shipping normally",
+                        n
+                    );
+                }
+            }
+            tracing::debug!(
+                "Shipped {} ({} events, {} bytes)",
+                item.path_str,
+                item.event_count,
+                item.new_offset - item.offset
+            );
+            AttemptedShip::Shipped(item)
+        }
+        ShipResult::RateLimited | ShipResult::ServerError(_, _) | ShipResult::ConnectError(_) => {
+            let error = match &result {
+                ShipResult::RateLimited => "rate limited".to_string(),
+                ShipResult::ServerError(code, body) => {
+                    format!("{}:{}", code, &body[..body.len().min(200)])
+                }
+                ShipResult::ConnectError(error) => error.clone(),
+                _ => unreachable!(),
+            };
+            let should_log = tracker.map_or(true, |t| t.record_error());
+            if should_log {
+                let count = tracker.map_or(1, |t| t.consecutive_count());
+                if count > 1 {
+                    tracing::warn!(
+                        "Ship still failing after {} attempts, latest: {}",
+                        count,
+                        error
+                    );
+                } else {
+                    tracing::warn!("Spooled {}: {}", item.path_str, error);
+                }
+            }
+
+            AttemptedShip::Transient {
+                item,
+                error,
+                is_connect_error: matches!(result, ShipResult::ConnectError(_)),
+            }
+        }
+        ShipResult::ClientError(status_code, body) => {
+            tracing::error!(
+                "Client error shipping {}: {} {}",
+                item.path_str,
+                status_code,
+                &body[..body.len().min(200)]
+            );
+            AttemptedShip::ClientError {
+                item,
+                status_code,
+                body,
+            }
+        }
+    }
+}
+
+pub async fn ship_prepared_file(
+    prepared: PreparedFile,
+    client: &ShipperClient,
+    conn: &Connection,
+    tracker: Option<&ConsecutiveErrorTracker>,
+) -> Result<ShipPreparedOutcome> {
+    let file_state = FileState::new(conn);
+    let spool = Spool::new(conn);
+    let mut outcome = ShipPreparedOutcome::default();
+
+    for action in prepared.actions {
+        match action {
+            PreparedAction::DeadLetter(item) => {
+                tracing::error!(
+                    "Dead-lettering {} range {}..{}: {}",
+                    item.path_str,
+                    item.offset,
+                    item.new_offset,
+                    item.reason
+                );
+                spool.record_dead(
+                    &item.provider,
+                    &item.path_str,
+                    item.offset,
+                    item.new_offset,
+                    Some(&item.session_id),
+                    &item.reason,
+                )?;
+                file_state.set_offset(
+                    &item.path_str,
+                    item.new_offset,
+                    &item.session_id,
+                    &item.session_id,
+                    &item.provider,
+                )?;
+                outcome.dead_lettered += 1;
+            }
+            PreparedAction::Ship(item) => match attempt_ship(item, client, tracker).await {
+                AttemptedShip::Shipped(item) => {
+                    file_state.set_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.session_id,
+                        &item.session_id,
+                        &item.provider,
+                    )?;
+                    outcome.events_shipped += item.event_count;
+                    outcome.bytes_shipped += item.new_offset - item.offset;
+                }
+                AttemptedShip::Transient {
+                    item,
+                    error: _,
+                    is_connect_error,
+                } => {
+                    let enqueued = spool.enqueue(
+                        &item.provider,
+                        &item.path_str,
+                        item.offset,
+                        prepared.new_offset,
+                        Some(&item.session_id),
+                    )?;
+                    if enqueued {
+                        file_state.set_queued_offset(
+                            &item.path_str,
+                            prepared.new_offset,
+                            &item.provider,
+                            &item.session_id,
+                            &item.session_id,
+                        )?;
+                    } else {
+                        tracing::warn!(
+                            "Spool at capacity — {} will be retried on next startup",
+                            item.path_str
+                        );
+                    }
+                    outcome.fully_processed = false;
+                    outcome.had_connect_error = is_connect_error;
+                    return Ok(outcome);
+                }
+                AttemptedShip::ClientError {
+                    item,
+                    status_code,
+                    body: _,
+                } => {
+                    if status_code == 413 {
+                        let enqueued = spool.enqueue(
+                            &item.provider,
+                            &item.path_str,
+                            item.offset,
+                            prepared.new_offset,
+                            Some(&item.session_id),
+                        )?;
+                        if enqueued {
+                            file_state.set_queued_offset(
+                                &item.path_str,
+                                prepared.new_offset,
+                                &item.provider,
+                                &item.session_id,
+                                &item.session_id,
+                            )?;
+                        } else {
+                            tracing::warn!(
+                                "Spool at capacity — 413 payload for {} will be retried on next startup",
+                                item.path_str
+                            );
+                        }
+                        outcome.fully_processed = false;
+                        return Ok(outcome);
+                    }
+
+                    file_state.set_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.session_id,
+                        &item.session_id,
+                        &item.provider,
+                    )?;
+                }
+            },
+        }
+    }
+
+    Ok(outcome)
+}
+
 /// Startup recovery: find files where queued_offset > acked_offset
 /// and re-enqueue their gaps into the spool.
 pub fn run_startup_recovery(conn: &Connection) -> Result<usize> {
@@ -294,12 +941,22 @@ pub fn run_startup_recovery(conn: &Connection) -> Result<usize> {
     Ok(count)
 }
 
-/// Replay pending spool entries. Returns (shipped, failed).
+/// Replay pending spool entries. Returns (entries fully resolved, entries failed/backed off).
 pub async fn replay_spool_batch(
     conn: &Connection,
     client: &ShipperClient,
     algo: CompressionAlgo,
     limit: usize,
+) -> Result<(usize, usize)> {
+    replay_spool_batch_with_batch_bytes(conn, client, algo, limit, u64::MAX).await
+}
+
+pub async fn replay_spool_batch_with_batch_bytes(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    limit: usize,
+    max_batch_bytes: u64,
 ) -> Result<(usize, usize)> {
     let spool = Spool::new(conn);
     let file_state = FileState::new(conn);
@@ -308,7 +965,7 @@ pub async fn replay_spool_batch(
     let mut shipped = 0usize;
     let mut failed = 0usize;
 
-    for entry in &pending {
+    'entry_loop: for entry in &pending {
         let path = PathBuf::from(&entry.file_path);
         if !path.exists() {
             tracing::warn!("Spool file missing: {}", entry.file_path);
@@ -317,61 +974,127 @@ pub async fn replay_spool_batch(
             continue;
         }
 
-        let parse_result = match parser::parse_session_file(&path, entry.start_offset) {
-            Ok(r) => r,
+        let prepared = match prepare_path_range(
+            &path,
+            &entry.provider,
+            entry.start_offset,
+            Some(entry.end_offset),
+            algo,
+            max_batch_bytes,
+        ) {
+            Ok(Some(prepared)) => prepared,
+            Ok(None) => {
+                if entry.start_offset >= entry.end_offset {
+                    spool.mark_shipped(entry.id)?;
+                    shipped += 1;
+                } else {
+                    spool.mark_failed(entry.id, "no complete lines ready for replay")?;
+                    failed += 1;
+                }
+                continue;
+            }
             Err(e) => {
                 spool.mark_failed(entry.id, &e.to_string())?;
                 failed += 1;
                 continue;
             }
         };
-        let acked_end = parse_result.last_good_offset.min(entry.end_offset);
 
-        if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
-            if acked_end > entry.start_offset {
-                spool.mark_shipped(entry.id)?;
-                file_state.set_acked_offset(&entry.file_path, acked_end)?;
-                shipped += 1;
+        let mut entry_done = false;
+        for action in prepared.actions {
+            match action {
+                PreparedAction::DeadLetter(item) => {
+                    tracing::error!(
+                        "Dead-lettering replay range {} {}..{}: {}",
+                        item.path_str,
+                        item.offset,
+                        item.new_offset,
+                        item.reason
+                    );
+                    spool.record_dead(
+                        &item.provider,
+                        &item.path_str,
+                        item.offset,
+                        item.new_offset,
+                        Some(&item.session_id),
+                        &item.reason,
+                    )?;
+                    file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
+                    if item.new_offset >= entry.end_offset {
+                        spool.mark_shipped(entry.id)?;
+                        entry_done = true;
+                    } else {
+                        spool.advance_start(entry.id, item.new_offset)?;
+                    }
+                }
+                PreparedAction::Ship(item) => match attempt_ship(item, client, None).await {
+                    AttemptedShip::Shipped(item) => {
+                        file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
+                        if item.new_offset >= entry.end_offset {
+                            spool.mark_shipped(entry.id)?;
+                            entry_done = true;
+                        } else {
+                            spool.advance_start(entry.id, item.new_offset)?;
+                        }
+                    }
+                    AttemptedShip::Transient {
+                        item: _,
+                        error,
+                        is_connect_error,
+                    } => {
+                        if is_connect_error {
+                            break 'entry_loop;
+                        }
+                        spool.mark_failed(entry.id, &error)?;
+                        failed += 1;
+                        continue 'entry_loop;
+                    }
+                    AttemptedShip::ClientError {
+                        item,
+                        status_code,
+                        body,
+                    } => {
+                        if status_code == 413 {
+                            spool.mark_failed_with_max(
+                                entry.id,
+                                "413 payload too large during replay",
+                                u32::MAX,
+                            )?;
+                            failed += 1;
+                            continue 'entry_loop;
+                        }
+
+                        let error = format!(
+                            "client error {}:{}",
+                            status_code,
+                            &body[..body.len().min(200)]
+                        );
+                        spool.record_dead(
+                            &item.provider,
+                            &item.path_str,
+                            item.offset,
+                            item.new_offset,
+                            Some(&item.session_id),
+                            &error,
+                        )?;
+                        file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
+                        if item.new_offset >= entry.end_offset {
+                            spool.mark_shipped(entry.id)?;
+                            entry_done = true;
+                        } else {
+                            spool.advance_start(entry.id, item.new_offset)?;
+                        }
+                    }
+                },
             }
-            continue;
-        }
 
-        let compressed = compressor::build_and_compress_with_source_lines(
-            &parse_result.metadata.session_id,
-            &parse_result.events,
-            &parse_result.metadata,
-            &entry.file_path,
-            &entry.provider,
-            Some(&parse_result.source_lines),
-            algo,
-        )?;
-
-        match client.ship(compressed).await {
-            ShipResult::Ok(_) => {
-                spool.mark_shipped(entry.id)?;
-                file_state.set_acked_offset(&entry.file_path, acked_end)?;
-                shipped += 1;
-            }
-            ShipResult::ConnectError(_) => {
-                // Don't mark failed — will retry next cycle
+            if entry_done {
                 break;
             }
-            ShipResult::RateLimited | ShipResult::ServerError(_, _) => {
-                spool.mark_failed(entry.id, "server error during replay")?;
-                failed += 1;
-            }
-            ShipResult::ClientError(413, _) => {
-                spool.mark_failed_with_max(
-                    entry.id,
-                    "413 payload too large during replay",
-                    u32::MAX,
-                )?;
-                failed += 1;
-            }
-            ShipResult::ClientError(code, _) => {
-                spool.mark_failed_with_max(entry.id, &format!("client error {}", code), 0)?;
-                failed += 1;
-            }
+        }
+
+        if entry_done {
+            shipped += 1;
         }
     }
 
@@ -393,18 +1116,28 @@ pub async fn full_scan(
     algo: CompressionAlgo,
     tracker: Option<&ConsecutiveErrorTracker>,
 ) -> Result<(usize, usize)> {
+    full_scan_with_batch_bytes(providers, conn, client, algo, u64::MAX, tracker).await
+}
+
+pub async fn full_scan_with_batch_bytes(
+    providers: &[ProviderConfig],
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    tracker: Option<&ConsecutiveErrorTracker>,
+) -> Result<(usize, usize)> {
     let all_files = discovery::discover_all_files(providers);
     let mut files_shipped = 0usize;
     let mut events_shipped = 0usize;
 
     for (path, provider_name) in &all_files {
-        match prepare_file(path, provider_name, algo, conn) {
-            Ok(Some(item)) => {
-                if let ShipAndRecordOutcome::Shipped { events } =
-                    ship_and_record(item, client, conn, tracker).await?
-                {
+        match prepare_file_batches(path, provider_name, algo, conn, max_batch_bytes) {
+            Ok(Some(prepared)) => {
+                let outcome = ship_prepared_file(prepared, client, conn, tracker).await?;
+                if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
                     files_shipped += 1;
-                    events_shipped += events;
+                    events_shipped += outcome.events_shipped;
 
                     if files_shipped % 100 == 0 {
                         tracing::info!(
@@ -430,8 +1163,10 @@ mod tests {
     use super::*;
     use crate::config::ShipperConfig;
     use crate::state::db::open_db;
+    use flate2::read::GzDecoder;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
 
     fn make_db() -> (tempfile::NamedTempFile, Connection) {
         let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -488,6 +1223,106 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         (format!("http://{}", addr), handle)
+    }
+
+    fn find_header_end(buf: &[u8]) -> Option<usize> {
+        buf.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
+    fn parse_content_length(headers: &[u8]) -> usize {
+        let header_text = String::from_utf8_lossy(headers);
+        header_text
+            .lines()
+            .find_map(|line| {
+                let mut parts = line.splitn(2, ':');
+                let name = parts.next()?.trim();
+                let value = parts.next()?.trim();
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    fn read_request_body(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut chunk = [0_u8; 4096];
+
+        loop {
+            let n = stream.read(&mut chunk).unwrap();
+            if n == 0 {
+                return Vec::new();
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(header_end) = find_header_end(&buf) {
+                let body_start = header_end + 4;
+                let content_length = parse_content_length(&buf[..body_start]);
+                while buf.len() < body_start + content_length {
+                    let n = stream.read(&mut chunk).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                return buf[body_start..body_start + content_length].to_vec();
+            }
+        }
+    }
+
+    fn spawn_http_sequence_server(
+        responses: &[(&str, &str)],
+    ) -> (
+        String,
+        Arc<Mutex<Vec<Vec<u8>>>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses: Vec<(String, String)> = responses
+            .iter()
+            .map(|(status, body)| ((*status).to_string(), (*body).to_string()))
+            .collect();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let captured_clone = Arc::clone(&captured);
+
+        let handle = std::thread::spawn(move || {
+            for (status_line, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request_body = read_request_body(&mut stream);
+                captured_clone.lock().unwrap().push(request_body);
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body,
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+
+        (format!("http://{}", addr), captured, handle)
+    }
+
+    fn decode_payload_source_offsets(compressed: &[u8]) -> Vec<u64> {
+        let mut decoder = GzDecoder::new(compressed);
+        let mut json_str = String::new();
+        decoder.read_to_string(&mut json_str).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        payload["source_lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line["source_offset"].as_u64().unwrap())
+            .collect()
+    }
+
+    fn make_line(uuid: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"user","uuid":"{}","timestamp":"2026-02-15T10:00:00Z","message":{{"content":"{}"}}}}"#,
+            uuid, text
+        )
     }
 
     fn make_test_client(url: &str) -> ShipperClient {
@@ -784,6 +1619,240 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_prepare_file_batches_split_small_batch_limit() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("batch1111-2222-3333-4444-555566667777.jsonl");
+        let lines = vec![
+            make_line("batch-1", &"a".repeat(64)),
+            make_line("batch-2", &"b".repeat(64)),
+            make_line("batch-3", &"c".repeat(64)),
+        ];
+        std::fs::write(&path, format!("{}\n{}\n{}\n", lines[0], lines[1], lines[2])).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 400).unwrap();
+        let prepared = prepared.expect("file should prepare into batched actions");
+
+        assert!(
+            prepared.actions.len() >= 2,
+            "small batch limit should split the file into multiple actions"
+        );
+
+        let covered: Vec<(u64, u64)> = prepared
+            .actions
+            .iter()
+            .map(|action| (action.offset(), action.new_offset()))
+            .collect();
+        assert_eq!(covered.first().copied(), Some((0, covered[0].1)));
+        assert_eq!(
+            covered.last().map(|(_, end)| *end),
+            Some(prepared.new_offset),
+            "last batch must end at the prepared file end offset"
+        );
+        for pair in covered.windows(2) {
+            assert_eq!(
+                pair[0].1, pair[1].0,
+                "prepared batches must be contiguous with no gaps or overlap"
+            );
+        }
+    }
+
+    #[test]
+    fn test_prepare_gemini_file_without_source_lines_uses_whole_document_fallback() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-gemini.json");
+        let gemini = serde_json::json!({
+            "sessionId": "5053c934-f66d-4fea-96af-f95181de5986",
+            "startTime": "2026-02-20T15:59:12.296Z",
+            "messages": [
+                {
+                    "id": "msg-1",
+                    "timestamp": "2026-02-20T15:59:12.296Z",
+                    "type": "user",
+                    "content": "Reply with exactly: \"gemini ok\""
+                },
+                {
+                    "id": "msg-2",
+                    "timestamp": "2026-02-20T15:59:15.853Z",
+                    "type": "gemini",
+                    "content": "gemini ok"
+                }
+            ]
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&gemini).unwrap()).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "gemini", CompressionAlgo::Gzip, &conn, 32).unwrap();
+        let prepared = prepared.expect("gemini file should still prepare without source lines");
+
+        assert_eq!(prepared.actions.len(), 1);
+        let action = prepared.actions.into_iter().next().unwrap();
+        match action {
+            PreparedAction::DeadLetter(item) => {
+                assert_eq!(item.offset, 0);
+                assert_eq!(item.new_offset, std::fs::metadata(&path).unwrap().len());
+                assert_eq!(item.event_count, 2);
+                assert!(
+                    item.reason.contains("whole-document payload"),
+                    "reason should explain why batching could not split the file"
+                );
+            }
+            PreparedAction::Ship(_) => panic!("tiny batch limit should dead-letter whole doc"),
+        }
+
+        let prepared = prepare_file_batches(
+            &path,
+            "gemini",
+            CompressionAlgo::Gzip,
+            &conn,
+            5 * 1024 * 1024,
+        )
+        .unwrap();
+        let prepared = prepared.expect("gemini file should prepare at normal batch limit");
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::Ship(item) => {
+                assert_eq!(item.offset, 0);
+                assert_eq!(item.new_offset, std::fs::metadata(&path).unwrap().len());
+                assert_eq!(item.event_count, 2);
+            }
+            PreparedAction::DeadLetter(_) => {
+                panic!("normal batch limit should ship whole-document gemini payload")
+            }
+        }
+    }
+
+    #[test]
+    fn test_ship_prepared_file_spools_remaining_tail_after_midstream_failure() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("shiptail1111-2222-3333-4444-555566667777.jsonl");
+        let lines = vec![
+            make_line("tail-1", &"x".repeat(64)),
+            make_line("tail-2", &"y".repeat(64)),
+            make_line("tail-3", &"z".repeat(64)),
+            make_line("tail-4", &"q".repeat(64)),
+            make_line("tail-5", &"r".repeat(64)),
+            make_line("tail-6", &"s".repeat(64)),
+        ];
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n{}\n",
+                lines[0], lines[1], lines[2], lines[3], lines[4], lines[5]
+            ),
+        )
+        .unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 800).unwrap();
+        let prepared = prepared.expect("file should prepare");
+        assert!(
+            prepared.actions.len() >= 2,
+            "test requires multiple prepared ship actions"
+        );
+        let ship_offsets: Vec<(u64, u64)> = prepared
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                PreparedAction::Ship(item) => Some((item.offset, item.new_offset)),
+                PreparedAction::DeadLetter(_) => None,
+            })
+            .collect();
+        assert!(
+            ship_offsets.len() >= 2,
+            "test requires at least two ship batches after any dead letters"
+        );
+        let first_batch_end = ship_offsets[0].1;
+        let second_batch_start = ship_offsets[1].0;
+        let final_end = prepared.new_offset;
+
+        let (url, _captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", "{}"), ("500 Internal Server Error", "oops")]);
+        let client = make_test_client(&url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let outcome = rt
+            .block_on(ship_prepared_file(prepared, &client, &conn, None))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert!(!outcome.fully_processed);
+        assert!(outcome.events_shipped > 0);
+
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        assert_eq!(fs.get_offset(&path_str).unwrap(), first_batch_end);
+        assert_eq!(fs.get_queued_offset(&path_str).unwrap(), final_end);
+
+        let pending = spool.dequeue_batch(10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].start_offset, second_batch_start);
+        assert_eq!(pending[0].end_offset, final_end);
+    }
+
+    #[test]
+    fn test_ship_prepared_file_dead_letters_oversize_range_and_keeps_tail_moving() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("deadletter1111-2222-3333-4444-555566667777.jsonl");
+        let huge = make_line("dead-1", &"h".repeat(800));
+        let tail = make_line("dead-2", "small-tail");
+        std::fs::write(&path, format!("{}\n{}\n", huge, tail)).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 600).unwrap();
+        let prepared = prepared.expect("file should prepare with dead-letter + tail");
+        let ship_batches = prepared
+            .actions
+            .iter()
+            .filter(|action| matches!(action, PreparedAction::Ship(_)))
+            .count();
+        assert_eq!(
+            ship_batches, 1,
+            "expected only the small tail to remain shippable"
+        );
+
+        let (url, _captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let outcome = rt
+            .block_on(ship_prepared_file(prepared, &client, &conn, None))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(outcome.dead_lettered, 1);
+        assert_eq!(outcome.events_shipped, 1);
+        assert!(outcome.fully_processed);
+
+        let path_str = path.to_string_lossy().to_string();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let file_end = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(fs.get_offset(&path_str).unwrap(), file_end);
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM spool_queue WHERE file_path = ?1 ORDER BY id ASC LIMIT 1",
+                [&path_str],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "dead");
+        assert_eq!(spool.total_size().unwrap(), 1);
+    }
+
     // ---------------------------------------------------------------
     // Startup recovery enqueues gaps correctly
     // ---------------------------------------------------------------
@@ -887,7 +1956,12 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let (shipped, failed) = rt
-            .block_on(replay_spool_batch(&conn, &client, CompressionAlgo::Gzip, 10))
+            .block_on(replay_spool_batch(
+                &conn,
+                &client,
+                CompressionAlgo::Gzip,
+                10,
+            ))
             .unwrap();
         handle.join().unwrap();
 
@@ -914,10 +1988,8 @@ mod tests {
         let path = dir
             .path()
             .join("88881111-2222-3333-4444-555566667777.jsonl");
-        let complete =
-            r#"{"type":"user","uuid":"replay-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"complete"}}"#;
-        let partial =
-            r#"{"type":"assistant","uuid":"replay-2","timestamp":"2026-02-15T10:00:01Z","message":{"con"#;
+        let complete = r#"{"type":"user","uuid":"replay-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"complete"}}"#;
+        let partial = r#"{"type":"assistant","uuid":"replay-2","timestamp":"2026-02-15T10:00:01Z","message":{"con"#;
         std::fs::write(&path, format!("{}\n{}", complete, partial)).unwrap();
 
         let path_str = path.to_string_lossy().to_string();
@@ -947,14 +2019,197 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let (shipped, failed) = rt
-            .block_on(replay_spool_batch(&conn, &client, CompressionAlgo::Gzip, 10))
+            .block_on(replay_spool_batch(
+                &conn,
+                &client,
+                CompressionAlgo::Gzip,
+                10,
+            ))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(shipped, 0);
+        assert_eq!(failed, 0);
+        assert_eq!(
+            fs.get_offset(&path_str).unwrap(),
+            (complete.len() + 1) as u64
+        );
+        assert_eq!(fs.get_queued_offset(&path_str).unwrap(), file_size);
+        let row: (i64, i64, String) = conn
+            .query_row(
+                "SELECT start_offset, end_offset, status FROM spool_queue WHERE file_path = ?1",
+                [&path_str],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0 as u64, (complete.len() + 1) as u64);
+        assert_eq!(row.1 as u64, file_size);
+        assert_eq!(row.2, "pending");
+    }
+
+    #[test]
+    fn test_replay_ships_only_exact_spooled_range_not_newer_bytes() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replaycap1111-2222-3333-4444-555566667777.jsonl");
+        let line1 = make_line("cap-1", "one");
+        let line2 = make_line("cap-2", "two");
+        let line3 = make_line("cap-3", "three-newer");
+        std::fs::write(&path, format!("{}\n{}\n{}\n", line1, line2, line3)).unwrap();
+
+        let line2_offset = (line1.len() + 1) as u64;
+        let line3_offset = (line1.len() + 1 + line2.len() + 1) as u64;
+        let replay_end = line3_offset;
+        let path_str = path.to_string_lossy().to_string();
+
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        fs.set_queued_offset(
+            &path_str,
+            replay_end,
+            "claude",
+            "replaycap1111-2222-3333-4444-555566667777",
+            "replaycap1111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                replay_end,
+                Some("replaycap1111-2222-3333-4444-555566667777"),
+            )
+            .unwrap();
+
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let (shipped, failed) = rt
+            .block_on(replay_spool_batch_with_batch_bytes(
+                &conn,
+                &client,
+                CompressionAlgo::Gzip,
+                10,
+                10_000,
+            ))
             .unwrap();
         handle.join().unwrap();
 
         assert_eq!(shipped, 1);
         assert_eq!(failed, 0);
-        assert_eq!(fs.get_offset(&path_str).unwrap(), (complete.len() + 1) as u64);
-        assert_eq!(fs.get_queued_offset(&path_str).unwrap(), file_size);
-        assert_eq!(spool.total_size().unwrap(), 0);
+
+        let bodies = captured.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 1);
+        let offsets = decode_payload_source_offsets(&bodies[0]);
+        assert_eq!(offsets, vec![0, line2_offset]);
+        assert!(!offsets.contains(&line3_offset));
+    }
+
+    #[test]
+    fn test_replay_advances_spool_entry_after_partial_success() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replayprogress1111-2222-3333-4444-555566667777.jsonl");
+        let lines = vec![
+            make_line("progress-1", &"a".repeat(64)),
+            make_line("progress-2", &"b".repeat(64)),
+            make_line("progress-3", &"c".repeat(64)),
+            make_line("progress-4", &"d".repeat(64)),
+            make_line("progress-5", &"e".repeat(64)),
+            make_line("progress-6", &"f".repeat(64)),
+        ];
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n{}\n",
+                lines[0], lines[1], lines[2], lines[3], lines[4], lines[5]
+            ),
+        )
+        .unwrap();
+
+        let full_end = std::fs::metadata(&path).unwrap().len();
+        let path_str = path.to_string_lossy().to_string();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        fs.set_queued_offset(
+            &path_str,
+            full_end,
+            "claude",
+            "replayprogress1111-2222-3333-4444-555566667777",
+            "replayprogress1111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                full_end,
+                Some("replayprogress1111-2222-3333-4444-555566667777"),
+            )
+            .unwrap();
+
+        let prepared = prepare_path_range(
+            &path,
+            "claude",
+            0,
+            Some(full_end),
+            CompressionAlgo::Gzip,
+            800,
+        )
+        .unwrap()
+        .expect("replay range should prepare into multiple batches");
+        let ship_offsets: Vec<(u64, u64)> = prepared
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                PreparedAction::Ship(item) => Some((item.offset, item.new_offset)),
+                PreparedAction::DeadLetter(_) => None,
+            })
+            .collect();
+        assert!(
+            ship_offsets.len() >= 2,
+            "replay progress test requires at least two ship batches"
+        );
+        let first_batch_end = ship_offsets[0].1;
+        let second_batch_start = ship_offsets[1].0;
+
+        let (url, _captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", "{}"), ("500 Internal Server Error", "oops")]);
+        let client = make_test_client(&url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let (shipped, failed) = rt
+            .block_on(replay_spool_batch_with_batch_bytes(
+                &conn,
+                &client,
+                CompressionAlgo::Gzip,
+                10,
+                800,
+            ))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(shipped, 0);
+        assert_eq!(failed, 1);
+        assert_eq!(fs.get_offset(&path_str).unwrap(), first_batch_end);
+
+        let row: (i64, i64, i64, String) = conn
+            .query_row(
+                "SELECT start_offset, end_offset, retry_count, status FROM spool_queue WHERE file_path = ?1",
+                [&path_str],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0 as u64, second_batch_start);
+        assert_eq!(row.1 as u64, full_end);
+        assert_eq!(row.2, 1);
+        assert_eq!(row.3, "pending");
     }
 }
