@@ -127,7 +127,7 @@ export default function SessionDetailPage() {
     };
   }, [sessionLoading, eventsLoading]);
 
-  if (sessionLoading || eventsLoading) {
+  if (sessionLoading) {
     return (
       <div className="session-workspace-route session-workspace-route--empty">
         <EmptyState
@@ -139,15 +139,16 @@ export default function SessionDetailPage() {
     );
   }
 
-  const error = sessionError || eventsError;
-  if (error || !session) {
+  if (sessionError || !session) {
     return (
       <div className="session-workspace-route session-workspace-route--empty">
         <EmptyState
           variant="error"
           title="Error loading session"
           description={
-            error instanceof Error ? error.message : "Session not found or failed to load."
+            sessionError instanceof Error
+              ? sessionError.message
+              : "Session not found or failed to load."
           }
           action={
             <Button variant="primary" onClick={handleBack}>
@@ -316,6 +317,8 @@ export default function SessionDetailPage() {
             hasNextPage={hasNextPage ?? false}
             isFetchingNextPage={isFetchingNextPage}
             onFetchNextPage={() => void fetchNextPage()}
+            loading={eventsLoading}
+            error={eventsError}
             selectedKey={selectedKey}
             onSelectKey={selectKey}
           />

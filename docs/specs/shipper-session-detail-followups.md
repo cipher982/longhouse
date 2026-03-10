@@ -109,6 +109,14 @@ Acceptance criteria:
 - Existing session-detail live QA still passes.
 - No auth/session fetch regressions are introduced.
 
+Implementation status:
+- Completed on 2026-03-10.
+- `SessionDetailPage` now renders the route shell once session metadata is loaded instead of waiting on the initial timeline events query.
+- `TimelinePane` now owns scoped loading and event-fetch error empty states when there are no rows to render yet.
+- Verification:
+  - `make test-frontend-unit MINIMAL=1`
+  - `make qa-live`
+
 ### Phase 3: Auth Split Decision Capture
 Acceptance criteria:
 - The long-term `qa-live` auth model is documented in this spec and any touched test helper comments.
