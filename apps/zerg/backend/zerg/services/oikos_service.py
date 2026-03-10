@@ -1283,9 +1283,6 @@ class OikosService:
         except Exception as e:
             logger.exception(f"Failed to trigger immediate barrier check for run {run_id}: {e}")
 
-    # NOTE: run_continuation() removed - replaced by LangGraph-free continuation
-    # See commis_single_resume.py for the implementation using Runner.run_continuation()
-
 
 # ---------------------------------------------------------------------------
 # Transport-agnostic invocation (the single entry point for all callers)

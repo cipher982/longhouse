@@ -1,13 +1,8 @@
-"""Resumable SSE streaming endpoints (Phase 3).
+"""Resumable SSE streaming.
 
-This module implements the new /api/stream/runs/{run_id} endpoint that supports
-replay + live streaming. It enables clients to reconnect and catch up on missed
-events by replaying from the database event store, then continuing with live events.
-
-Key features:
-- Replay historical events from RunEvent table
-- Continue with live events via EventBus subscription
-- Handle DEFERRED runs correctly (streamable, not treated as complete)
+Supports replay (historical events from RunEvent) + live streaming (EventBus).
+Clients reconnect and catch up on missed events, then continue live.
+Handles DEFERRED runs (streamable, not treated as complete).
 - SSE format with id: field for client resumption
 - Token filtering support
 - SHORT-LIVED DB sessions for replay (critical for test isolation)
@@ -225,9 +220,8 @@ async def _replay_and_stream(
             return
 
         if event_type == "oikos_deferred":
-            # v2.2: Timeout migration default is to close the stream, but some
-            # DEFERRED states (e.g., waiting for commis continuations) should
-            # keep the stream open so the connected client receives the final answer.
+            # DEFERRED states waiting for commis continuations may keep the
+            # stream open so the connected client receives the final answer.
             if event.get("close_stream", True):
                 complete = True
             return
@@ -238,11 +232,8 @@ async def _replay_and_stream(
     def _is_continuation_of_run(candidate_run_id: int) -> bool:
         """Return True if candidate_run_id is a continuation of run_id (including chains).
 
-        This allows a single client SSE stream to receive the follow-up oikos
-        synthesis that happens in a new run (durable runs v2.2).
-
-        Uses root_run_id for chain traversal - a continuation-of-continuation will
-        have root_run_id pointing to the original run, enabling deep chain aliasing.
+        Uses root_run_id for chain traversal so continuation-of-continuation
+        chains alias back to the original run's SSE stream.
         """
         if candidate_run_id in continuation_cache:
             return continuation_cache[candidate_run_id]

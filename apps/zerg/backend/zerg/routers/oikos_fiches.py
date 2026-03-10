@@ -35,18 +35,7 @@ def list_oikos_fiches(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> List[OikosFicheSummary]:
-    """List available fiches for Oikos UI.
-
-    Returns a minimal summary of all active fiches including their schedules
-    and next run times. This powers the fiche selection UI in Oikos.
-
-    Args:
-        db: Database session
-        current_user: Authenticated user (Oikos service account)
-
-    Returns:
-        List of fiche summaries
-    """
+    """List the current user's fiches with schedule and status summaries."""
     # Multi-tenant SaaS: Oikos shows only the logged-in user's fiches.
     fiches = crud.get_fiches(db, owner_id=current_user.id)
 
