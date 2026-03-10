@@ -7,7 +7,6 @@ Sub-routers:
 - oikos_auth: Authentication helpers
 - oikos_fiches: Fiche listing
 - oikos_runs: Run history
-- oikos_dispatch: Manual fiche dispatch
 - oikos_internal: Oikos dispatch, events, cancel
 - oikos_chat: Text chat with streaming
 - oikos_tts: Text-to-speech for voice responses
@@ -47,7 +46,6 @@ from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import ThreadMessage
 from zerg.routers import oikos_chat
-from zerg.routers import oikos_dispatch
 
 # Import sub-routers
 from zerg.routers import oikos_fiches
@@ -68,7 +66,6 @@ router = APIRouter(prefix="/oikos", tags=["oikos"])
 # Include sub-routers (they all have /api/oikos prefix already, so we strip it here)
 router.include_router(oikos_fiches.router, prefix="", tags=["oikos"])
 router.include_router(oikos_runs.router, prefix="", tags=["oikos"])
-router.include_router(oikos_dispatch.router, prefix="", tags=["oikos"])
 router.include_router(oikos_run_dispatch.router, prefix="", tags=["oikos"])
 router.include_router(oikos_internal.router, prefix="", tags=["oikos"])
 router.include_router(oikos_chat.router, prefix="", tags=["oikos"])
