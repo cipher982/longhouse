@@ -84,10 +84,10 @@ Possible later additions:
 These are the active next steps. Keep this list short and current.
 
 - [ ] Add roadmap/spec links to the main task tracker without clobbering unrelated work
-- [ ] Implement a backend autonomy shadow runner that can execute journey cases without taking real actions
-- [ ] Define the first journey dataset around coding-session wakeups
-- [ ] Add autonomy-specific assertions for decision class, action count, forbidden actions, and artifact/log presence
-- [ ] Add a make target or documented command for the autonomy eval ring
+- [x] Implement a backend autonomy shadow runner that can execute journey cases without taking real actions
+- [x] Define the first journey dataset around coding-session wakeups
+- [x] Add autonomy-specific assertions for decision class, action count, forbidden actions, and artifact/log presence
+- [x] Add a make target or documented command for the autonomy eval ring
 - [ ] Convert the first real dogfood observations into new journey fixtures
 
 ## First Journey Set
@@ -131,3 +131,8 @@ At minimum, save:
   - hosted smoke via `scripts/qa-live.sh`
 - Keep the harness independent enough that it can start before the full proactive runtime exists.
 - The first slice is about learning whether Oikos makes sensible decisions, not shipping a full autonomy control plane.
+- 2026-03-10: Foundation slice landed as a deterministic shadow harness:
+  - `apps/zerg/backend/zerg/services/oikos_autonomy_journeys.py`
+  - `apps/zerg/backend/tests_lite/fixtures/oikos_autonomy_journeys.yml`
+  - `apps/zerg/backend/tests_lite/test_oikos_autonomy_journeys.py`
+  - `make test-autonomy-journeys`

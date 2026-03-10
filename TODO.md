@@ -45,6 +45,7 @@ Notes:
 - 2026-03-10: The repo already has the durable coding-agent transcript/archive layer; the new problem is mostly Oikos-owned wakeups, policies, and decision history, not rebuilding another session store.
 - 2026-03-10: "Session Shepherd" was only a working nickname. The actual product direction is broader: proactive Oikos / operator mode / Jarvis-like deputy behavior.
 - 2026-03-10: Start simple and dogfood. Favor principles, thin triggers, and bounded actions over an elaborate orchestration framework.
+- 2026-03-10: Foundation harness slice landed: deterministic shadow journeys with durable artifacts, fixture-backed coding-session wakeups, and `make test-autonomy-journeys`.
 - Spec: `docs/specs/oikos-proactive-operator.md`.
 - Roadmap: `docs/plans/oikos-autonomy-roadmap.md`.
 
