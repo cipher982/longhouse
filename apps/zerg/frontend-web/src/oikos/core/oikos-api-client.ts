@@ -9,15 +9,6 @@
  * - SSE event streaming
  */
 
-export interface OikosAuthRequest {
-  device_secret: string;
-}
-
-export interface OikosAuthResponse {
-  session_expires_in: number;
-  session_cookie_name: string;
-}
-
 export interface OikosFicheSummary {
   id: number;
   name: string;
@@ -44,18 +35,6 @@ export interface OikosRunSummary {
   created_at: string;
   updated_at: string;
   completed_at?: string;
-}
-
-export interface OikosDispatchRequest {
-  fiche_id: number;
-  task_override?: string;
-}
-
-export interface OikosDispatchResponse {
-  run_id: number;
-  thread_id: number;
-  status: string;
-  fiche_name: string;
 }
 
 export interface OikosEventData {
@@ -156,33 +135,6 @@ export class OikosAPIClient {
 
     return response.json();
   }
-
-  /**
-   * Dispatch fiche task
-   */
-  async dispatch(request: OikosDispatchRequest): Promise<OikosDispatchResponse> {
-    const response = await this.authenticatedFetch(
-      `${this._baseURL}/api/oikos/dispatch`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(request),
-      },
-    );
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(`Failed to dispatch fiche: ${error.detail}`);
-    }
-
-    return response.json();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Oikos Methods
-  // ---------------------------------------------------------------------------
 
   /**
    * Cancel a running oikos run
