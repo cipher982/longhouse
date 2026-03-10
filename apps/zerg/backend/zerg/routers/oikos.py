@@ -32,7 +32,6 @@ from typing import Optional
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
-from fastapi import Request
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
@@ -49,7 +48,6 @@ from zerg.routers import oikos_chat
 from zerg.routers import oikos_fiches
 from zerg.routers import oikos_internal
 from zerg.routers import oikos_runs
-from zerg.routers import oikos_tts
 from zerg.routers.oikos_auth import _is_tool_enabled
 from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.utils.time import UTCBaseModel
@@ -65,17 +63,7 @@ router.include_router(oikos_fiches.router, prefix="", tags=["oikos"])
 router.include_router(oikos_runs.router, prefix="", tags=["oikos"])
 router.include_router(oikos_internal.router, prefix="", tags=["oikos"])
 router.include_router(oikos_chat.router, prefix="", tags=["oikos"])
-router.include_router(oikos_tts.router, prefix="", tags=["oikos-tts"])
 router.include_router(oikos_voice.router, prefix="", tags=["oikos-voice"])
-
-
-@router.get("/agents", response_model=List[oikos_fiches.OikosFicheSummary])
-def list_oikos_agents(
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_oikos_user),
-) -> List[oikos_fiches.OikosFicheSummary]:
-    """Compatibility alias for fiche listing (historical /agents path)."""
-    return oikos_fiches.list_oikos_fiches(db=db, current_user=current_user)
 
 
 # ---------------------------------------------------------------------------
@@ -833,34 +821,6 @@ async def oikos_session(
     try:
         result = await mint_realtime_session_token()
         return result
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="OpenAI API timeout")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"OpenAI API error: {e.response.text}")
-
-
-@router.post("/conversation/title")
-async def oikos_conversation_title(
-    request: Request,
-    current_user=Depends(get_current_oikos_user),
-):
-    """Generate a conversation title using OpenAI.
-
-    Directly calls OpenAI's API - no separate oikos-server needed.
-    """
-    import httpx
-
-    from zerg.services.title_generator import generate_conversation_title
-
-    try:
-        body = await request.json()
-        messages = body.get("messages", [])
-
-        title = await generate_conversation_title(messages)
-        if title:
-            return {"title": title}
-        else:
-            return {"title": None, "error": "Could not generate title"}
     except httpx.TimeoutException:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="OpenAI API timeout")
     except httpx.HTTPStatusError as e:
