@@ -65,8 +65,11 @@ export function SessionContextPane({
       </div>
 
       {!isViewingHead && headThreadSession ? (
-        <div className="session-pane-callout session-pane-callout--warning">
-          <div className="session-pane-callout-title">Viewing an older continuation</div>
+        <div
+          className="session-pane-callout session-pane-callout--warning session-branch-banner"
+          data-testid="session-branch-banner"
+        >
+          <div className="session-pane-callout-title">This is not the latest continuation</div>
           <div className="session-pane-callout-copy">
             Latest head: {getSessionOriginLabel(headThreadSession)} from{" "}
             {formatContinuationStamp(headThreadSession.started_at)}.
@@ -96,7 +99,10 @@ export function SessionContextPane({
       ) : null}
 
       {threadSessions.length > 1 ? (
-        <div className="session-pane-section session-pane-section--grow">
+        <div
+          className="session-pane-section session-pane-section--grow session-lineage-panel"
+          data-testid="session-lineage-panel"
+        >
           <div className="session-pane-section-title">Continuations</div>
           <div className="session-context-thread-list">
             {threadSessions.map((threadSession) => {

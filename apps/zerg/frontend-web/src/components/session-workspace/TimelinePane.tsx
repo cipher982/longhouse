@@ -55,7 +55,7 @@ function MessageRow({
       id={`event-${item.event.id}`}
       data-testid="session-timeline-row"
       data-row-kind="message"
-      className={`timeline-row timeline-row--message${isSelected ? " is-selected" : ""}`}
+      className={`timeline-row timeline-row--message event-item${isSelected ? " is-selected event-highlight" : ""}`}
       onClick={onSelect}
     >
       <div className="timeline-row__meta">
@@ -99,7 +99,7 @@ function ToolRow({
       id={rowId}
       data-testid="session-timeline-row"
       data-row-kind="tool"
-      className={`timeline-row timeline-row--tool${isSelected ? " is-selected" : ""}`}
+      className={`timeline-row timeline-row--tool event-item${isSelected ? " is-selected event-highlight" : ""}`}
       onClick={onSelect}
     >
       <div className="timeline-row__meta">
@@ -148,7 +148,7 @@ function ToolBatchRow({
       id={`event-${batch.anchorId}`}
       data-testid="session-timeline-row"
       data-row-kind="tool-batch"
-      className={`timeline-row timeline-row--batch${isSelected ? " is-selected" : ""}`}
+      className={`timeline-row timeline-row--batch event-item${isSelected ? " is-selected event-highlight" : ""}`}
       onClick={onSelect}
     >
       <div className="timeline-row__meta">
@@ -206,10 +206,10 @@ export function TimelinePane({
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
   return (
-    <div className="timeline-pane">
-      <div className="timeline-pane__header">
+    <div className="timeline-pane" data-testid="session-timeline-pane">
+      <div className="timeline-pane__header timeline-header" data-testid="session-timeline-header">
         <div>
-          <div className="timeline-pane__title">Timeline</div>
+          <div className="timeline-pane__title">Event Timeline</div>
           <div className="timeline-pane__subtitle">
             {loadedEvents >= totalEvents
               ? `${totalEvents} events`
@@ -277,7 +277,7 @@ export function TimelinePane({
         </div>
       ) : null}
 
-      <div className="timeline-pane__list">
+      <div className="timeline-pane__list timeline-events" data-testid="session-timeline-list">
         {showScopedLoading ? (
           <EmptyState
             icon={<Spinner size="lg" />}

@@ -24,6 +24,9 @@ from fastapi import Request
 from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import db_session
+from zerg.database import get_test_commis_id
+from zerg.database import reset_test_commis_id
+from zerg.database import set_test_commis_id
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
@@ -54,6 +57,7 @@ def _load_historical_events(
     run_id: int,
     after_event_id: int,
     include_tokens: bool,
+    test_commis_id: str | None = None,
 ) -> List[Tuple[int, str, dict, str]]:
     """Load historical events from DB using a SHORT-LIVED session.
 
@@ -71,23 +75,28 @@ def _load_historical_events(
     """
     events: List[Tuple[int, str, dict, str]] = []
 
-    with db_session() as db:
-        historical = EventStore.get_events_after(
-            db=db,
-            run_id=run_id,
-            after_id=after_event_id,
-            include_tokens=include_tokens,
-        )
-        # Load all events into memory before closing session
-        for event in historical:
-            events.append(
-                (
-                    event.id,
-                    event.event_type,
-                    event.payload,
-                    event.created_at.isoformat().replace("+00:00", "Z"),
-                )
+    commis_token = set_test_commis_id(test_commis_id) if test_commis_id else None
+    try:
+        with db_session() as db:
+            historical = EventStore.get_events_after(
+                db=db,
+                run_id=run_id,
+                after_id=after_event_id,
+                include_tokens=include_tokens,
             )
+            # Load all events into memory before closing session
+            for event in historical:
+                events.append(
+                    (
+                        event.id,
+                        event.event_type,
+                        event.payload,
+                        event.created_at.isoformat().replace("+00:00", "Z"),
+                    )
+                )
+    finally:
+        if commis_token is not None:
+            reset_test_commis_id(commis_token)
     # Session is now closed - no DB connection held during streaming
 
     return events
@@ -110,6 +119,7 @@ async def _replay_and_stream(
     *,
     include_replay: bool = True,
     allow_continuation_runs: bool = False,
+    test_commis_id: str | None = None,
 ):
     """Generator that optionally replays historical events, then streams live.
 
@@ -242,15 +252,20 @@ async def _replay_and_stream(
             from zerg.database import db_session
             from zerg.models.models import Run
 
-            with db_session() as db:
-                candidate = db.query(Run).filter(Run.id == candidate_run_id).first()
-                if not candidate:
-                    continuation_cache[candidate_run_id] = False
-                    return False
-                # Check root_run_id first (handles chains), fall back to continuation_of_run_id
-                is_cont = bool(candidate.root_run_id == run_id or candidate.continuation_of_run_id == run_id)
-                continuation_cache[candidate_run_id] = is_cont
-                return is_cont
+            commis_token = set_test_commis_id(test_commis_id) if test_commis_id else None
+            try:
+                with db_session() as db:
+                    candidate = db.query(Run).filter(Run.id == candidate_run_id).first()
+                    if not candidate:
+                        continuation_cache[candidate_run_id] = False
+                        return False
+                    # Check root_run_id first (handles chains), fall back to continuation_of_run_id
+                    is_cont = bool(candidate.root_run_id == run_id or candidate.continuation_of_run_id == run_id)
+                    continuation_cache[candidate_run_id] = is_cont
+                    return is_cont
+            finally:
+                if commis_token is not None:
+                    reset_test_commis_id(commis_token)
         except Exception:
             # Best-effort only; if lookup fails, do not leak events across runs.
             continuation_cache[candidate_run_id] = False
@@ -323,7 +338,12 @@ async def _replay_and_stream(
         if include_replay:
             # Load historical events using a SHORT-LIVED DB session
             # This ensures we don't hold a DB connection during streaming
-            historical_events = _load_historical_events(run_id, after_event_id, include_tokens)
+            historical_events = _load_historical_events(
+                run_id,
+                after_event_id,
+                include_tokens,
+                test_commis_id=test_commis_id,
+            )
 
             # Yield historical events with SSE id: field
             for event_id, event_type, payload, timestamp_str in historical_events:
@@ -518,14 +538,22 @@ async def _replay_and_stream(
 async def stream_run_events_live(
     run_id: int,
     owner_id: int,
+    *,
+    test_commis_id: str | None = None,
 ):
-    """Stream live run events without replay (for Oikos chat).
+    """Stream run events for Oikos chat with a replay-first bootstrap.
 
     This is a convenience wrapper around _replay_and_stream for the Oikos chat
     use case. It:
-    - Streams live events only (no replay from DB)
+    - Emits an initial ``connected`` event so the client knows the stream is open
+    - Replays durable lifecycle events already persisted for the run
     - Supports continuation run aliasing (follow-up oikos runs)
-    - Emits a "connected" event on start
+    - Continues with live events after replay
+
+    Replay matters here because ``invoke_oikos()`` can persist ``oikos_started``
+    before the browser finishes subscribing to SSE. Without replay the first
+    lifecycle event races the connection and disappears, which breaks the
+    frontend's stable ``message_id`` contract.
 
     Args:
         run_id: Run identifier
@@ -534,16 +562,31 @@ async def stream_run_events_live(
     Yields:
         SSE events in format: {"event": str, "data": str}
     """
-    # For live-only, we use RUNNING status to allow streaming
-    # The status check happens later if the run completes during streaming
+    effective_test_commis_id = test_commis_id if test_commis_id is not None else get_test_commis_id()
+
+    yield {
+        "event": "connected",
+        "data": json.dumps(
+            {
+                "type": "connected",
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            },
+            default=_json_default,
+        ),
+    }
+
+    # Use RUNNING status to allow the helper to stream replay + live events.
+    # The helper closes once the run reaches a terminal state.
     async for event in _replay_and_stream(
         run_id=run_id,
         owner_id=owner_id,
-        status=RunStatus.RUNNING,  # Assume running for live streaming
+        status=RunStatus.RUNNING,
         after_event_id=0,
         include_tokens=True,
-        include_replay=False,
+        include_replay=True,
         allow_continuation_runs=True,
+        test_commis_id=effective_test_commis_id,
     ):
         yield event
 
@@ -631,5 +674,6 @@ async def stream_run_replay(
             status=run_status,
             after_event_id=after_event_id,
             include_tokens=include_tokens,
+            test_commis_id=get_test_commis_id(),
         )
     )

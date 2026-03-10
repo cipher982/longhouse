@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import get_db
+from zerg.database import get_test_commis_id
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import Fiche
@@ -53,6 +54,7 @@ async def _replay_stream_generator(
     message_id: str,
     trace_id: str,
     replay_scenario: str,
+    test_commis_id: str | None = None,
 ):
     """Generate SSE events for replay mode (deterministic video recording).
 
@@ -126,7 +128,7 @@ async def _replay_stream_generator(
             )
 
     task_started = False
-    async for event in stream_run_events_live(run_id, owner_id):
+    async for event in stream_run_events_live(run_id, owner_id, test_commis_id=test_commis_id):
         yield event
 
         if not task_started:
@@ -177,6 +179,7 @@ async def oikos_chat(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid reasoning_effort: {reasoning_effort}")
 
     message_id = str(request.message_id)
+    test_commis_id = get_test_commis_id()
 
     # --- quota check (short-lived DB) ---
     from zerg.database import db_session
@@ -205,6 +208,7 @@ async def oikos_chat(
                 message_id,
                 str(setup.trace_id),
                 request.replay_scenario,
+                test_commis_id=test_commis_id,
             )
         )
 
@@ -218,7 +222,7 @@ async def oikos_chat(
         reasoning_effort=reasoning_effort,
     )
 
-    return EventSourceResponse(stream_run_events_live(run_id, current_user.id))
+    return EventSourceResponse(stream_run_events_live(run_id, current_user.id, test_commis_id=test_commis_id))
 
 
 # ---------------------------------------------------------------------------
