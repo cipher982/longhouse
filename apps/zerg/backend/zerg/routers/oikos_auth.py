@@ -47,14 +47,3 @@ def _is_tool_enabled(ctx: dict, tool_key: str) -> bool:
     """Check if a tool is enabled in user context."""
     tool_config = (ctx or {}).get("tools", {}) or {}
     return bool(tool_config.get(tool_key, True))
-
-
-def _tool_key_from_mcp_call(name: str) -> str | None:
-    """Extract tool key from MCP call name."""
-    if name.startswith("location."):
-        return "location"
-    if name.startswith("whoop."):
-        return "whoop"
-    if name.startswith("obsidian."):
-        return "obsidian"
-    return None
