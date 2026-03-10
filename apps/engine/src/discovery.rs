@@ -39,10 +39,7 @@ pub fn get_providers() -> Vec<ProviderConfig> {
         },
     ];
 
-    candidates
-        .into_iter()
-        .filter(|p| p.root.exists())
-        .collect()
+    candidates.into_iter().filter(|p| p.root.exists()).collect()
 }
 
 /// Discover all session files across all providers.
@@ -58,7 +55,10 @@ pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'stati
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == provider.extension) {
+            if path
+                .extension()
+                .map_or(false, |ext| ext == provider.extension)
+            {
                 if let Ok(meta) = path.metadata() {
                     if meta.len() > 0 {
                         files.push((path.to_path_buf(), provider.name));
@@ -86,7 +86,10 @@ pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'stati
 ///
 /// Uses `Path::starts_with` for correct component-level matching
 /// (avoids false positives like `projects2/` matching `projects/`).
-pub fn provider_for_path(path: &std::path::Path, providers: &[ProviderConfig]) -> Option<&'static str> {
+pub fn provider_for_path(
+    path: &std::path::Path,
+    providers: &[ProviderConfig],
+) -> Option<&'static str> {
     for provider in providers {
         if path.starts_with(&provider.root) {
             return Some(provider.name);

@@ -71,7 +71,10 @@ pub fn write_status_file(payload: &HeartbeatPayload, claude_dir: &std::path::Pat
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let status = StatusFile { payload, last_updated: now };
+    let status = StatusFile {
+        payload,
+        last_updated: now,
+    };
 
     let path = claude_dir.join("engine-status.json");
     if let Ok(json) = serde_json::to_string_pretty(&status) {

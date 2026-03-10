@@ -54,57 +54,66 @@ impl SessionWatcher {
         let dropped_clone = dropped_events.clone();
 
         let watcher_tx = tx.clone();
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            let event = match res {
-                Ok(e) => e,
-                Err(_) => return,
-            };
+        let mut watcher = notify::recommended_watcher(
+            move |res: notify::Result<notify::Event>| {
+                let event = match res {
+                    Ok(e) => e,
+                    Err(_) => return,
+                };
 
-            // Filter to content-change events only
-            match event.kind {
-                EventKind::Modify(ModifyKind::Data(DataChange::Content | DataChange::Size | DataChange::Any))
-                | EventKind::Modify(ModifyKind::Data(_))
-                | EventKind::Create(CreateKind::File | CreateKind::Any)
-                | EventKind::Modify(ModifyKind::Name(_)) => {}
-                // Accept Any (some backends don't differentiate)
-                EventKind::Modify(ModifyKind::Any) => {}
-                _ => return,
-            }
-
-            for path in event.paths {
-                // Filter by extension
-                let ext_ok = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map_or(false, |e| SESSION_EXTENSIONS.contains(&e));
-                if !ext_ok {
-                    continue;
+                // Filter to content-change events only
+                match event.kind {
+                    EventKind::Modify(ModifyKind::Data(
+                        DataChange::Content | DataChange::Size | DataChange::Any,
+                    ))
+                    | EventKind::Modify(ModifyKind::Data(_))
+                    | EventKind::Create(CreateKind::File | CreateKind::Any)
+                    | EventKind::Modify(ModifyKind::Name(_)) => {}
+                    // Accept Any (some backends don't differentiate)
+                    EventKind::Modify(ModifyKind::Any) => {}
+                    _ => return,
                 }
 
-                // Skip temp files
-                if is_temp_file(&path) {
-                    continue;
-                }
+                for path in event.paths {
+                    // Filter by extension
+                    let ext_ok = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map_or(false, |e| SESSION_EXTENSIONS.contains(&e));
+                    if !ext_ok {
+                        continue;
+                    }
 
-                // Bounded send — silently drop if channel full (fallback scan will catch it)
-                if watcher_tx.try_send(path).is_err() {
-                    let n = dropped_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    // Warn once per 1000 drops
-                    if n % 1000 == 0 {
-                        eprintln!(
+                    // Skip temp files
+                    if is_temp_file(&path) {
+                        continue;
+                    }
+
+                    // Bounded send — silently drop if channel full (fallback scan will catch it)
+                    if watcher_tx.try_send(path).is_err() {
+                        let n =
+                            dropped_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        // Warn once per 1000 drops
+                        if n % 1000 == 0 {
+                            eprintln!(
                             "[engine] WARNING: watcher channel full, {} events dropped (fallback scan will recover)",
                             n
                         );
+                        }
                     }
                 }
-            }
-        })?;
+            },
+        )?;
 
         // Watch all provider root directories recursively
         for provider in providers {
             if provider.root.exists() {
                 watcher.watch(&provider.root, RecursiveMode::Recursive)?;
-                tracing::info!("Watching {} for {} sessions", provider.root.display(), provider.name);
+                tracing::info!(
+                    "Watching {} for {} sessions",
+                    provider.root.display(),
+                    provider.name
+                );
             }
         }
 
@@ -178,6 +187,9 @@ mod tests {
         // Drain to verify first two got through
         assert_eq!(rx.try_recv().unwrap(), PathBuf::from("/a"));
         assert_eq!(rx.try_recv().unwrap(), PathBuf::from("/b"));
-        assert!(rx.try_recv().is_err(), "Channel should be empty after drain");
+        assert!(
+            rx.try_recv().is_err(),
+            "Channel should be empty after drain"
+        );
     }
 }

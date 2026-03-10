@@ -143,9 +143,11 @@ impl<'a> FileState<'a> {
                 acked_offset: row.get::<_, i64>(3)? as u64,
                 session_id: row.get(4)?,
                 provider_session_id: row.get(5)?,
-                last_updated: row
-                    .get::<_, String>(6)
-                    .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()))?,
+                last_updated: row.get::<_, String>(6).map(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now())
+                })?,
             })
         })?;
         let mut result = Vec::new();
@@ -196,9 +198,9 @@ impl<'a> FileState<'a> {
     /// Returns the number of rows removed.
     pub fn prune_stale(&self, days: u64) -> Result<usize> {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
-        let mut stmt = self.conn.prepare(
-            "SELECT path FROM file_state WHERE last_updated < ?",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM file_state WHERE last_updated < ?")?;
         let paths: Vec<String> = stmt
             .query_map([&cutoff], |row| row.get(0))?
             .filter_map(|r| r.ok())
@@ -207,7 +209,8 @@ impl<'a> FileState<'a> {
         let mut pruned = 0usize;
         for path in &paths {
             if !std::path::Path::new(path).exists() {
-                self.conn.execute("DELETE FROM file_state WHERE path = ?", [path])?;
+                self.conn
+                    .execute("DELETE FROM file_state WHERE path = ?", [path])?;
                 pruned += 1;
             }
         }
@@ -322,7 +325,8 @@ mod tests {
         ).unwrap();
 
         // Insert a recent file state entry
-        fs.set_offset("/recent/new.jsonl", 100, "s2", "ps2", "claude").unwrap();
+        fs.set_offset("/recent/new.jsonl", 100, "s2", "ps2", "claude")
+            .unwrap();
 
         // Prune entries >30 days where path doesn't exist on disk
         // Both paths don't exist on disk, but only the old one is outside the window
@@ -330,9 +334,17 @@ mod tests {
         assert_eq!(pruned, 1, "Should prune exactly 1 stale entry");
 
         // Old entry is gone
-        assert_eq!(fs.get_offset("/vanished/old.jsonl").unwrap(), 0, "Pruned entry should return default 0");
+        assert_eq!(
+            fs.get_offset("/vanished/old.jsonl").unwrap(),
+            0,
+            "Pruned entry should return default 0"
+        );
 
         // Recent entry is kept
-        assert_eq!(fs.get_offset("/recent/new.jsonl").unwrap(), 100, "Recent entry should survive pruning");
+        assert_eq!(
+            fs.get_offset("/recent/new.jsonl").unwrap(),
+            100,
+            "Recent entry should survive pruning"
+        );
     }
 }

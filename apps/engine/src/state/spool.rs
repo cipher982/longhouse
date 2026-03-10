@@ -54,7 +54,10 @@ impl<'a> Spool<'a> {
         session_id: Option<&str>,
     ) -> Result<bool> {
         if self.total_size()? >= MAX_QUEUE_SIZE {
-            tracing::warn!("Spool at capacity ({} entries), rejecting enqueue", MAX_QUEUE_SIZE);
+            tracing::warn!(
+                "Spool at capacity ({} entries), rejecting enqueue",
+                MAX_QUEUE_SIZE
+            );
             return Ok(false);
         }
 
@@ -92,13 +95,11 @@ impl<'a> Spool<'a> {
                 start_offset: row.get::<_, i64>(3)? as u64,
                 end_offset: row.get::<_, i64>(4)? as u64,
                 session_id: row.get(5)?,
-                created_at: row
-                    .get::<_, String>(6)
-                    .map(|s| {
-                        DateTime::parse_from_rfc3339(&s)
-                            .map(|d| d.with_timezone(&Utc))
-                            .unwrap_or_else(|_| Utc::now())
-                    })?,
+                created_at: row.get::<_, String>(6).map(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now())
+                })?,
                 retry_count: row.get::<_, i32>(7)? as u32,
                 last_error: row.get(8)?,
             })
@@ -123,7 +124,12 @@ impl<'a> Spool<'a> {
     }
 
     /// Mark failed with custom max retries.
-    pub fn mark_failed_with_max(&self, entry_id: i64, error: &str, max_retries: u32) -> Result<bool> {
+    pub fn mark_failed_with_max(
+        &self,
+        entry_id: i64,
+        error: &str,
+        max_retries: u32,
+    ) -> Result<bool> {
         // Get current retry count
         let retry_count: i32 = self.conn.query_row(
             "SELECT retry_count FROM spool_queue WHERE id = ?",
@@ -166,11 +172,9 @@ impl<'a> Spool<'a> {
 
     /// Total entries (for backpressure check).
     pub fn total_size(&self) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM spool_queue",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM spool_queue", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -355,7 +359,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(status, "dead", "Old pending entry should be marked dead, not deleted");
+        assert_eq!(
+            status, "dead",
+            "Old pending entry should be marked dead, not deleted"
+        );
 
         // Now simulate it being dead for >30 days and verify hard-delete
         conn.execute(
@@ -366,6 +373,10 @@ mod tests {
 
         let deleted = spool.cleanup().unwrap();
         assert_eq!(deleted, 1, "Dead entry >30 days should be hard-deleted");
-        assert_eq!(spool.total_size().unwrap(), 0, "Spool should be empty after hard-delete");
+        assert_eq!(
+            spool.total_size().unwrap(),
+            0,
+            "Spool should be empty after hard-delete"
+        );
     }
 }
