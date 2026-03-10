@@ -50,7 +50,6 @@ from zerg.routers import oikos_chat
 # Import sub-routers
 from zerg.routers import oikos_fiches
 from zerg.routers import oikos_internal
-from zerg.routers import oikos_run_dispatch
 from zerg.routers import oikos_runs
 from zerg.routers import oikos_tts
 from zerg.routers.oikos_auth import _is_tool_enabled
@@ -66,7 +65,6 @@ router = APIRouter(prefix="/oikos", tags=["oikos"])
 # Include sub-routers (they all have /api/oikos prefix already, so we strip it here)
 router.include_router(oikos_fiches.router, prefix="", tags=["oikos"])
 router.include_router(oikos_runs.router, prefix="", tags=["oikos"])
-router.include_router(oikos_run_dispatch.router, prefix="", tags=["oikos"])
 router.include_router(oikos_internal.router, prefix="", tags=["oikos"])
 router.include_router(oikos_chat.router, prefix="", tags=["oikos"])
 router.include_router(oikos_tts.router, prefix="", tags=["oikos-tts"])

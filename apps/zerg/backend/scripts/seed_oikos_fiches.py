@@ -187,7 +187,7 @@ def seed_fiches():
     print(f"   Created: {created_count} fiches")
     print(f"   Updated: {updated_count} fiches")
     print(f"   Total: {created_count + updated_count} Oikos fiches")
-    print("\nThese fiches can now be dispatched via /api/oikos/dispatch")
+    print("\nThese fiches can now be dispatched via /api/oikos/chat")
     print("Scheduled fiches will run automatically via APScheduler")
 
 
