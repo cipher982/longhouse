@@ -152,6 +152,19 @@ Acceptance criteria:
 - Regression coverage validates the new visibility surface.
 - `make test-engine-fast` and `make test-shipper-e2e` pass.
 
+Implementation status:
+- Completed on 2026-03-10.
+- Added `Spool::dead_count()` and surfaced that count in operator-visible outputs that already exist:
+  - daemon heartbeat payloads and `engine-status.json` now include `spool_dead_count`,
+  - `ship` command JSON/text summaries now include the current dead-letter count.
+- Regression coverage:
+  - `state::spool::tests::test_record_dead_persists_dead_letter_entry`
+  - `heartbeat::tests::test_heartbeat_payload_fields`
+  - `heartbeat::tests::test_write_status_file_includes_dead_count`
+- Verification:
+  - `make test-engine-fast`
+  - `make test-shipper-e2e`
+
 ## Verification Commands
 
 - `make qa-live`

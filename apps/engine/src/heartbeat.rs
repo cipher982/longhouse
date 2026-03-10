@@ -22,6 +22,7 @@ pub struct HeartbeatPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_ship_at: Option<String>,
     pub spool_pending_count: usize,
+    pub spool_dead_count: usize,
     pub parse_error_count_1h: u32,
     pub consecutive_ship_failures: u32,
     pub disk_free_bytes: u64,
@@ -39,6 +40,7 @@ pub struct HeartbeatStats<'a> {
 impl HeartbeatPayload {
     pub fn build(stats: &HeartbeatStats<'_>) -> Self {
         let spool_pending_count = stats.spool.pending_count().unwrap_or(0);
+        let spool_dead_count = stats.spool.dead_count().unwrap_or(0);
         let consecutive_ship_failures = stats.tracker.consecutive_count();
         let disk_free_bytes = get_disk_free();
 
@@ -47,6 +49,7 @@ impl HeartbeatPayload {
             daemon_pid: std::process::id(),
             last_ship_at: stats.last_ship_at.clone(),
             spool_pending_count,
+            spool_dead_count,
             parse_error_count_1h: 0, // placeholder — not tracked per-hour yet
             consecutive_ship_failures,
             disk_free_bytes,
@@ -126,6 +129,7 @@ mod tests {
             daemon_pid: 12345,
             last_ship_at: Some("2026-02-18T10:00:00Z".to_string()),
             spool_pending_count: 5,
+            spool_dead_count: 1,
             parse_error_count_1h: 0,
             consecutive_ship_failures: 2,
             disk_free_bytes: 1_000_000_000,
@@ -139,6 +143,7 @@ mod tests {
         assert_eq!(parsed["version"], "0.1.0");
         assert_eq!(parsed["daemon_pid"], 12345);
         assert_eq!(parsed["spool_pending_count"], 5);
+        assert_eq!(parsed["spool_dead_count"], 1);
         assert_eq!(parsed["consecutive_ship_failures"], 2);
         assert_eq!(parsed["is_offline"], false);
         assert!(parsed["last_ship_at"].is_string());
@@ -151,6 +156,7 @@ mod tests {
             daemon_pid: 1,
             last_ship_at: None,
             spool_pending_count: 0,
+            spool_dead_count: 0,
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             disk_free_bytes: 0,
@@ -162,5 +168,27 @@ mod tests {
 
         // last_ship_at should be omitted when None
         assert!(parsed.get("last_ship_at").is_none() || parsed["last_ship_at"].is_null());
+    }
+
+    #[test]
+    fn test_write_status_file_includes_dead_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = HeartbeatPayload {
+            version: "0.1.0".to_string(),
+            daemon_pid: 42,
+            last_ship_at: Some("2026-03-10T00:00:00Z".to_string()),
+            spool_pending_count: 2,
+            spool_dead_count: 3,
+            parse_error_count_1h: 0,
+            consecutive_ship_failures: 0,
+            disk_free_bytes: 10,
+            is_offline: false,
+        };
+
+        write_status_file(&payload, dir.path());
+
+        let json = std::fs::read_to_string(dir.path().join("engine-status.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["spool_dead_count"], 3);
     }
 }
