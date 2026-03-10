@@ -10,7 +10,7 @@ use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
 
 use crate::config::ShipperConfig;
-use crate::pipeline::compressor::{CompressionAlgo, content_encoding};
+use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 
 /// Result of a shipping attempt.
 #[derive(Debug)]
@@ -66,10 +66,7 @@ impl ShipperClient {
             .build()
             .context("building HTTP client")?;
 
-        let ingest_url = format!(
-            "{}/api/agents/ingest",
-            config.api_url.trim_end_matches('/')
-        );
+        let ingest_url = format!("{}/api/agents/ingest", config.api_url.trim_end_matches('/'));
 
         Ok(Self {
             client,
@@ -116,10 +113,7 @@ impl ShipperClient {
                         }
                         429 => {
                             if retries >= self.max_retries_429 {
-                                tracing::warn!(
-                                    "Rate limited after {} retries, giving up",
-                                    retries
-                                );
+                                tracing::warn!("Rate limited after {} retries, giving up", retries);
                                 return ShipResult::RateLimited;
                             }
 
@@ -172,9 +166,7 @@ impl ShipperClient {
     /// Returns Err on network errors AND on non-2xx HTTP status codes, so callers
     /// can distinguish success from server-side rejection.
     pub async fn post_json(&self, path_suffix: &str, body: Vec<u8>) -> Result<()> {
-        let url = self
-            .ingest_url
-            .replace("/api/agents/ingest", path_suffix);
+        let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let resp = self
             .client
             .post(&url)
@@ -185,8 +177,7 @@ impl ShipperClient {
             .send()
             .await
             .context("POST failed")?;
-        resp.error_for_status()
-            .context("POST returned non-2xx")?;
+        resp.error_for_status().context("POST returned non-2xx")?;
         Ok(())
     }
 
@@ -197,9 +188,7 @@ impl ShipperClient {
 
     /// Check if the API is reachable (health check).
     pub async fn health_check(&self) -> Result<bool> {
-        let health_url = self
-            .ingest_url
-            .replace("/api/agents/ingest", "/api/health");
+        let health_url = self.ingest_url.replace("/api/agents/ingest", "/api/health");
         match self.client.get(&health_url).send().await {
             Ok(resp) => Ok(resp.status().is_success()),
             Err(_) => Ok(false),
@@ -216,9 +205,7 @@ pub fn read_api_url() -> Result<String> {
 /// Check if the shipper has valid config (URL + token).
 pub fn has_valid_config() -> bool {
     match ShipperConfig::from_env() {
-        Ok(config) => {
-            !config.api_url.is_empty() && config.api_token.is_some()
-        }
+        Ok(config) => !config.api_url.is_empty() && config.api_token.is_some(),
         Err(_) => false,
     }
 }
@@ -243,11 +230,7 @@ mod tests {
                 wait,
                 base_wait * 0.5
             );
-            assert!(
-                wait <= 30.0,
-                "wait {:.2} should be capped at 30s",
-                wait
-            );
+            assert!(wait <= 30.0, "wait {:.2} should be capped at 30s", wait);
         }
 
         // Also verify cap works for large base_wait

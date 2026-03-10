@@ -188,8 +188,8 @@ mod tests {
 
     #[test]
     fn test_with_overrides_sets_machine_name() {
-        let config = ShipperConfig::default()
-            .with_overrides(None, None, None, None, Some("home-server"));
+        let config =
+            ShipperConfig::default().with_overrides(None, None, None, None, Some("home-server"));
         assert_eq!(config.machine_name, "home-server");
     }
 

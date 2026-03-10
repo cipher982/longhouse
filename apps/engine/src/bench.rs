@@ -48,7 +48,10 @@ impl BenchResult {
         }
         eprintln!("Total:      {:.3}s", self.total_seconds);
         eprintln!("Throughput: {:.1} MB/s", mb / self.total_seconds);
-        eprintln!("Events/s:   {:.0}", self.total_events as f64 / self.total_seconds);
+        eprintln!(
+            "Events/s:   {:.0}",
+            self.total_events as f64 / self.total_seconds
+        );
         eprintln!("Peak RSS:   {:.1} MB", self.peak_rss_mb);
     }
 }
@@ -144,7 +147,12 @@ pub fn run_benchmark_parallel(files: &[PathBuf], compress: bool, workers: usize)
 }
 
 /// Run benchmark with rayon parallel file processing and specified compression.
-pub fn run_benchmark_parallel_with(files: &[PathBuf], compress: bool, workers: usize, algo: CompressionAlgo) -> BenchResult {
+pub fn run_benchmark_parallel_with(
+    files: &[PathBuf],
+    compress: bool,
+    workers: usize,
+    algo: CompressionAlgo,
+) -> BenchResult {
     // Configure rayon thread pool
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -204,7 +212,11 @@ pub fn run_benchmark_parallel_with(files: &[PathBuf], compress: bool, workers: u
                 let evts = events_done.load(Ordering::Relaxed);
                 eprintln!(
                     "  [{}/{}] {:.1} MB, {} events, {:.1} MB/s",
-                    done, total_files, mb, evts, mb / elapsed,
+                    done,
+                    total_files,
+                    mb,
+                    evts,
+                    mb / elapsed,
                 );
             }
 

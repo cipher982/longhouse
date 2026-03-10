@@ -182,8 +182,15 @@ mod tests {
         write_presence(dir.path(), "prs.ABC123.json", "sess-1", "thinking");
 
         let ready = filter_ready(dir.path());
-        assert_eq!(ready.len(), 1, "only prs.*.json should be ready, not .tmp.* files");
-        assert_eq!(ready[0].file_name().unwrap().to_str().unwrap(), "prs.ABC123.json");
+        assert_eq!(
+            ready.len(),
+            1,
+            "only prs.*.json should be ready, not .tmp.* files"
+        );
+        assert_eq!(
+            ready[0].file_name().unwrap().to_str().unwrap(),
+            "prs.ABC123.json"
+        );
     }
 
     #[test]
@@ -196,11 +203,18 @@ mod tests {
         // Simulate the bash rename: replace /.tmp. with /prs. then append .json
         let final_name = tmp_name.replace(".tmp.", "prs.").to_owned() + ".json";
         assert_eq!(final_name, "prs.Zakvof.json");
-        assert!(!final_name.starts_with('.'), "final name must not start with dot");
+        assert!(
+            !final_name.starts_with('.'),
+            "final name must not start with dot"
+        );
 
         write_presence(dir.path(), &final_name, "sess-hook", "idle");
         let ready = filter_ready(dir.path());
-        assert_eq!(ready.len(), 1, "hook-produced filename must be picked up by drain");
+        assert_eq!(
+            ready.len(),
+            1,
+            "hook-produced filename must be picked up by drain"
+        );
     }
 
     #[test]
@@ -219,7 +233,12 @@ mod tests {
     ///   mktemp .tmp.XXXXXX  →  mv to prs.XXXXXX.json
     /// This is the producer-consumer contract. If the naming convention drifts
     /// on either side, this test catches it.
-    fn write_hook_style(dir: &std::path::Path, suffix: &str, session_id: &str, state: &str) -> std::path::PathBuf {
+    fn write_hook_style(
+        dir: &std::path::Path,
+        suffix: &str,
+        session_id: &str,
+        state: &str,
+    ) -> std::path::PathBuf {
         let tmp = dir.join(format!(".tmp.{}", suffix));
         let final_path = dir.join(format!("prs.{}.json", suffix));
         let json = serde_json::json!({
@@ -238,7 +257,11 @@ mod tests {
     /// Uses Arc<Mutex> for paths so the test can inspect them without awaiting the server task.
     async fn spawn_http_server(
         status: u16,
-    ) -> (std::net::SocketAddr, std::sync::Arc<std::sync::Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
         use std::sync::{Arc, Mutex};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
@@ -250,37 +273,52 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             loop {
-                let Ok((mut socket, _)) = listener.accept().await else { break };
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
 
                 // Read until end of HTTP headers
                 let mut buf = vec![0u8; 4096];
                 let mut total = 0;
                 loop {
                     let n = socket.read(&mut buf[total..]).await.unwrap_or(0);
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
                 }
 
                 // Extract path from request line
                 let head = String::from_utf8_lossy(&buf[..total]).into_owned();
-                let path = head.lines().next()
+                let path = head
+                    .lines()
+                    .next()
                     .and_then(|l| l.split_whitespace().nth(1))
                     .unwrap_or("/")
                     .to_string();
                 paths_clone.lock().unwrap().push(path);
 
                 // Drain body so reqwest doesn't hang waiting for it to be consumed
-                let content_len = head.lines()
+                let content_len = head
+                    .lines()
                     .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
                     .and_then(|l| l.split(':').nth(1))
                     .and_then(|v| v.trim().parse::<usize>().ok())
                     .unwrap_or(0);
-                let header_end = buf[..total].windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                let header_end = buf[..total]
+                    .windows(4)
+                    .position(|w| w == b"\r\n\r\n")
+                    .unwrap()
+                    + 4;
                 let mut body_read = total - header_end;
                 while body_read < content_len {
                     let n = socket.read(&mut buf).await.unwrap_or(0);
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     body_read += n;
                 }
 
@@ -372,9 +410,14 @@ mod tests {
         let tmp_in_progress = dir.path().join(".tmp.ABC123");
         let old_bad_pattern = dir.path().join(".tmp.ABC123.json"); // the bug we fixed
         fs::write(&tmp_in_progress, b"{}").unwrap();
-        fs::write(&old_bad_pattern, serde_json::to_vec(&serde_json::json!({
-            "session_id": "sess-dot", "state": "thinking"
-        })).unwrap()).unwrap();
+        fs::write(
+            &old_bad_pattern,
+            serde_json::to_vec(&serde_json::json!({
+                "session_id": "sess-dot", "state": "thinking"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         // One real file using correct hook pattern
         let real = write_hook_style(dir.path(), "REAL01", "sess-real", "idle");
@@ -389,11 +432,18 @@ mod tests {
         assert_eq!(kept, 0);
         assert!(!real.exists(), "real file deleted");
         assert!(tmp_in_progress.exists(), ".tmp file must not be touched");
-        assert!(old_bad_pattern.exists(), "old .tmp.*.json pattern must be skipped (the bug we fixed)");
+        assert!(
+            old_bad_pattern.exists(),
+            "old .tmp.*.json pattern must be skipped (the bug we fixed)"
+        );
 
         server.abort();
         let logged = paths.lock().unwrap().clone();
-        assert_eq!(logged.len(), 1, "only 1 POST — dot files must not be POSTed");
+        assert_eq!(
+            logged.len(),
+            1,
+            "only 1 POST — dot files must not be POSTed"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -424,8 +474,14 @@ mod tests {
         assert_eq!(sent, 1, "3 files for same session → 1 POST");
         assert_eq!(kept, 0);
         assert!(!latest.exists(), "latest file deleted after send");
-        assert!(!older_a.exists(), "older file S1A deleted during coalescing");
-        assert!(!older_b.exists(), "older file S1B deleted during coalescing");
+        assert!(
+            !older_a.exists(),
+            "older file S1A deleted during coalescing"
+        );
+        assert!(
+            !older_b.exists(),
+            "older file S1B deleted during coalescing"
+        );
 
         server.abort();
         let logged = paths.lock().unwrap().clone();
