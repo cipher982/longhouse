@@ -29,7 +29,7 @@ class ConnectorType(str, Enum):
     LINEAR = "linear"
     NOTION = "notion"
     IMESSAGE = "imessage"
-    # Personal integrations (Phase 4 v2.1)
+    # Personal integrations
     TRACCAR = "traccar"
     WHOOP = "whoop"
     OBSIDIAN = "obsidian"
@@ -294,7 +294,7 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
             }
         ],
     },
-    # Personal integrations (Phase 4 v2.1)
+    # Personal integrations
     ConnectorType.TRACCAR: {
         "type": ConnectorType.TRACCAR,
         "name": "Traccar",
