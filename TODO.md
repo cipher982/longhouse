@@ -15,6 +15,21 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Product][Tech Debt] Refactor session detail into a pane-based workspace (size: 4)
+
+Status (2026-03-10): In progress. The current session detail route is still a centered document-style stack; the immediate goal is to split it into a pane-ready workspace shell plus shared state so we can iterate on IDE-style layouts without rewriting the page each time.
+
+**Goal:** Turn timeline session detail into a real workspace with reusable panes and first-class event selection, while preserving current continuation/thread capabilities.
+
+- [ ] Extract session detail data/state into a headless workspace hook
+- [ ] Introduce a workspace shell with left context, center timeline, and right inspector panes
+- [ ] Move event detail out of inline expansion and into inspector-driven components
+- [ ] Keep continuation/thread behavior working during the layout transition
+
+Notes:
+- 2026-03-10: The route currently mixes fetching, derived timeline shaping, deep-link handling, continuation logic, and rendering in one file. Refactor first; visual polish can follow once pane responsibilities feel right.
+- 2026-03-10: There is no existing resizable pane primitive in the frontend. Start with fixed panes and clean component seams first.
+
 ## [Product] Proactive Oikos operator mode (size: 5)
 
 Status (2026-03-10): In progress. The immediate goal is to define the product principles and dogfood shape before building triggers, policies, or background loops that could lock us into the wrong architecture.
@@ -31,6 +46,7 @@ Notes:
 - 2026-03-10: "Session Shepherd" was only a working nickname. The actual product direction is broader: proactive Oikos / operator mode / Jarvis-like deputy behavior.
 - 2026-03-10: Start simple and dogfood. Favor principles, thin triggers, and bounded actions over an elaborate orchestration framework.
 - Spec: `docs/specs/oikos-proactive-operator.md`.
+- Roadmap: `docs/plans/oikos-autonomy-roadmap.md`.
 
 ## [Infra][QA/Test] Longhouse engine shipper byte batching + exact replay (size: 4)
 
@@ -56,6 +72,7 @@ Notes:
 - 2026-03-10: The simplest correct design is to keep the existing monotonic `queued_offset`/`acked_offset` model and ship batches sequentially per file; a sparse per-range state machine is unnecessary for this slice.
 - 2026-03-10: Use source-line byte ranges as the primary planning unit, then verify compressed size as needed. Event-count batching is the wrong abstraction here.
 - 2026-03-10: Shipped the batching slice. Claude/Codex JSONL sessions now batch on exact source-line byte ranges for fresh shipping and replay; whole-document Gemini sessions fall back to a single payload and dead-letter deterministically if they exceed `max_batch_bytes`, because they do not expose line-addressable replay boundaries.
+- 2026-03-10: Live verification in progress. Goal: install the new local engine build, restart the LaunchAgent, run hosted QA, and prove forced multi-batch shipping against the real `david010.longhouse.ai` instance using a temporary engine DB plus an existing large local session file.
 
 ## [Infra][QA/Test] Longhouse engine shipper correctness fixes (size: 3)
 
