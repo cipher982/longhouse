@@ -183,12 +183,27 @@ export function useSessionWorkspace(
       setSelectedKey(selectionKey);
     }
 
+    let frameId: number | null = null;
+
     if (rowId) {
-      const target = document.getElementById(rowId);
-      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const scrollToRow = () => {
+        const target = document.getElementById(rowId);
+        target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      };
+
+      if (document.getElementById(rowId)) {
+        scrollToRow();
+      } else {
+        frameId = window.requestAnimationFrame(scrollToRow);
+      }
     }
 
     highlightedEventRef.current = highlightEventId;
+    return () => {
+      if (frameId != null) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
   }, [highlightEventId, hasHighlightEvent, model.eventIdToRowId, model.eventIdToSelectionKey]);
 
   useEffect(() => {
@@ -196,10 +211,6 @@ export function useSessionWorkspace(
     if (eventsLoading) return;
     if (autoScrolledSelectionRef.current) return;
     if (filteredItems.length === 0) return;
-    if (filteredItems.length < 10) {
-      autoScrolledSelectionRef.current = true;
-      return;
-    }
     const targetKey =
       selectedKey || (filteredItems.length > 0 ? getPreferredSelectionKey(filteredItems[filteredItems.length - 1]) : null);
     if (!targetKey) return;
@@ -207,11 +218,21 @@ export function useSessionWorkspace(
     const selection = model.selectionMap.get(targetKey);
     if (!selection) return;
 
-    const target = document.getElementById(selection.rowId);
-    if (!target) return;
+    const scrollToSelection = () => {
+      const target = document.getElementById(selection.rowId);
+      if (!target) return;
 
-    target.scrollIntoView({ behavior: "auto", block: "center" });
-    autoScrolledSelectionRef.current = true;
+      target.scrollIntoView({ behavior: "auto", block: selectedKey ? "center" : "end" });
+      autoScrolledSelectionRef.current = true;
+    };
+
+    if (document.getElementById(selection.rowId)) {
+      scrollToSelection();
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(scrollToSelection);
+    return () => window.cancelAnimationFrame(frameId);
   }, [highlightEventId, eventsLoading, selectedKey, filteredItems, model.selectionMap]);
 
   const selectedSelection = useMemo(

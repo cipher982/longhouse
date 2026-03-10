@@ -106,6 +106,19 @@ export default function SessionDetailPage() {
   }, [sessionId]);
 
   useEffect(() => {
+    if (!continuationOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContinuationOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [continuationOpen]);
+
+  useEffect(() => {
     if (!shouldAutoResume || !session) return;
 
     setContinuationOpen(supportsCloudContinuation(session.provider));
@@ -353,52 +366,58 @@ export default function SessionDetailPage() {
             />
           ) : undefined
         }
-        bottom={
-          continuationOpen && canContinueInCloud ? (
+      />
+
+      {continuationOpen && canContinueInCloud && activeSessionForChat ? (
+        <div
+          className="modal-overlay session-workspace-modal-overlay"
+          data-testid="session-continuation-panel"
+          onClick={() => setContinuationOpen(false)}
+        >
           <div
             ref={continuationSectionRef}
-            className="session-workspace-dock"
-            data-testid="session-continuation-panel"
+            className="modal-container session-workspace-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="session-continuation-title"
+            onClick={(event) => event.stopPropagation()}
           >
-            <div className="session-workspace-dock__header">
-              <div className="session-workspace-dock__copy">
-                <div className="session-workspace-dock__eyebrow">Cloud Continuation</div>
-                <h2 className="session-workspace-dock__title">{continuationTitle}</h2>
-                <p className="session-workspace-dock__description">
-                  {continuationDescription}
-                </p>
+            <div className="session-workspace-modal__header">
+              <div className="session-workspace-modal__copy">
+                <div className="session-workspace-modal__eyebrow">Cloud Continuation</div>
+                <h2 id="session-continuation-title" className="session-workspace-modal__title">
+                  {continuationTitle}
+                </h2>
+                <p className="session-workspace-modal__description">{continuationDescription}</p>
               </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Close continuation"
+                onClick={() => setContinuationOpen(false)}
+              >
+                Close
+              </Button>
             </div>
 
-            {canContinueInCloud && activeSessionForChat ? (
-              <div className="session-workspace-dock__chat">
-                <SessionChat
-                  session={activeSessionForChat}
-                  emptyStateTitle={continuationEmptyTitle}
-                  hintText={continuationHint}
-                  composerPlaceholder={continuationPlaceholder}
-                  onSessionChanged={(nextSessionId) => {
-                    if (!nextSessionId || nextSessionId === session.id) return;
-                    navigate(`/timeline/${nextSessionId}`, {
-                      replace: true,
-                      state: { from: returnTo ?? "/timeline" },
-                    });
-                  }}
-                />
-              </div>
-            ) : (
-              <div
-                className="session-workspace-dock__status"
-                data-testid="session-continuation-unavailable"
-              >
-                Review the latest context here for now. Direct {providerLabel} cloud
-                continuation is the next piece still missing.
-              </div>
-            )}
+            <div className="session-workspace-modal__chat">
+              <SessionChat
+                session={activeSessionForChat}
+                emptyStateTitle={continuationEmptyTitle}
+                hintText={continuationHint}
+                composerPlaceholder={continuationPlaceholder}
+                onSessionChanged={(nextSessionId) => {
+                  if (!nextSessionId || nextSessionId === session.id) return;
+                  navigate(`/timeline/${nextSessionId}`, {
+                    replace: true,
+                    state: { from: returnTo ?? "/timeline" },
+                  });
+                }}
+              />
+            </div>
           </div>
-          ) : undefined
-        }
-      />
+        </div>
+      ) : null}
     </div>
   );
 }

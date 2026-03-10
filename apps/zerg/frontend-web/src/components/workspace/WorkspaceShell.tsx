@@ -16,9 +16,12 @@ export function WorkspaceShell({
   bottom,
 }: WorkspaceShellProps) {
   const hasInspector = Boolean(inspector);
+  const hasBottom = Boolean(bottom);
 
   return (
-    <div className={`workspace-shell${hasInspector ? "" : " workspace-shell--inspector-collapsed"}`}>
+    <div
+      className={`workspace-shell${hasInspector ? "" : " workspace-shell--inspector-collapsed"}${hasBottom ? " workspace-shell--with-bottom" : ""}`}
+    >
       <div className="workspace-shell__header">{header}</div>
       <div className="workspace-shell__body">
         <aside className="workspace-shell__pane workspace-shell__pane--sidebar">{sidebar}</aside>

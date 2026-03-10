@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Product][Tech Debt] Refactor session detail into a pane-based workspace (size: 4)
 
-Status (2026-03-10): Done. Session detail now renders as a pane-based workspace with a left context rail, center timeline navigator, right inspector, and a docked continuation surface that uses width on desktop instead of wasting it.
+Status (2026-03-10): Done. The pane-based workspace landed, and the follow-up pass moved continuation into a modal so the transcript remains dominant while still keeping the pane architecture intact.
 
 **Goal:** Turn timeline session detail into a real workspace with reusable panes and first-class event selection, while preserving current continuation/thread capabilities.
 
@@ -25,11 +25,14 @@ Status (2026-03-10): Done. Session detail now renders as a pane-based workspace 
 - [x] Introduce a workspace shell with left context, center timeline, and right inspector panes
 - [x] Move event detail out of inline expansion and into inspector-driven components
 - [x] Keep continuation/thread behavior working during the layout transition
+- [x] Rebalance the workspace so the transcript stays dominant even when continuation is available
 
 Notes:
 - 2026-03-10: The route currently mixes fetching, derived timeline shaping, deep-link handling, continuation logic, and rendering in one file. Refactor first; visual polish can follow once pane responsibilities feel right.
 - 2026-03-10: There is no existing resizable pane primitive in the frontend. Start with fixed panes and clean component seams first.
 - 2026-03-10: Live local capture confirmed the new layout uses the width much better than the old centered transcript. The next iteration, if needed, is resizable panes or a collapsible continuation dock, not another full route rewrite.
+- 2026-03-10: User review of the hosted page showed the real miss: the bottom continuation dock still steals the transcript viewport, and centering the latest item means a fullscreen browser can still show only about one message. The next pass should move continuation out of layout flow and let the transcript fill the page again.
+- 2026-03-10: Follow-up landed: continuation now opens in a modal, the workspace shell only reserves a bottom row when it actually needs one, and long transcripts scroll to the latest item without centering it into a cramped viewport.
 
 ## [Product] Proactive Oikos operator mode (size: 5)
 
@@ -53,6 +56,7 @@ Notes:
 - 2026-03-10: Tightened the journey evidence contract. Each run now writes `assertions.json`, tracks `assertion_count`/`assertions_passed` in `manifest.json`, fixtures can assert `needs_human`, and `make run-autonomy-journeys` exits non-zero on any drift instead of silently printing mismatches.
 - 2026-03-10: Landed the first live wakeup seam on the existing presence hook path. With `OIKOS_OPERATOR_MODE_ENABLED=1`, `blocked` and `needs_user` transitions now wake Oikos through a dedicated `operator` surface adapter, repeated identical pause-state signals are deduped, and `idle`/`Stop` still does not trigger because transcript shipping/completion ordering is not reliable there.
 - 2026-03-10: Landed the periodic sweep fallback on the existing jobs stack. The builtin `oikos-operator-sweep` job now registers with the normal Longhouse scheduler, stays dormant unless `OIKOS_OPERATOR_MODE_ENABLED=1`, and wakes Oikos through the dedicated `operator` surface with a `periodic_sweep` trigger instead of inventing another scheduler path.
+- 2026-03-10: Folded the new live operator triggers back into the shadow journey harness. The durable fixture set now covers low-priority `needs_user` pauses, duplicate blocked wakeups, and the current periodic sweep noop behavior so those operator-mode decisions stay regression-testable instead of living only in route/job code.
 - Spec: `docs/specs/oikos-proactive-operator.md`.
 - Roadmap: `docs/plans/oikos-autonomy-roadmap.md`.
 
