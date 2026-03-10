@@ -182,6 +182,7 @@ class ExpectedJourneyOutcome:
 
     decision: str
     action_count: int = 0
+    needs_human: bool | None = None
     forbidden_actions: list[str] = field(default_factory=list)
 
     @classmethod
@@ -190,6 +191,7 @@ class ExpectedJourneyOutcome:
         return cls(
             decision=str(payload.get("decision", "")).strip(),
             action_count=int(payload.get("action_count", 0)),
+            needs_human=bool(payload["needs_human"]) if "needs_human" in payload else None,
             forbidden_actions=[str(item).strip() for item in payload.get("forbidden_actions", [])],
         )
 
@@ -228,10 +230,23 @@ class AutonomyJourneyResult:
     case_id: str
     context_packet: AutonomyContextPacket
     decision: AutonomyDecision
+    assertions: list["AutonomyAssertionResult"]
     run_dir: Path
     manifest_path: Path
     context_path: Path
     decision_path: Path
+    assertions_path: Path
+
+
+@dataclass(frozen=True)
+class AutonomyAssertionResult:
+    """One deterministic check against the expected journey outcome."""
+
+    name: str
+    passed: bool
+    message: str
+    expected: Any | None = None
+    actual: Any | None = None
 
 
 def load_autonomy_journey_cases(path: Path) -> list[AutonomyJourneyCase]:
@@ -300,6 +315,53 @@ async def run_autonomy_journeys(
     return results
 
 
+def evaluate_journey_assertions(
+    case: AutonomyJourneyCase,
+    decision: AutonomyDecision,
+) -> list[AutonomyAssertionResult]:
+    """Evaluate a decision against the fixture's expected outcome."""
+    assertions = [
+        AutonomyAssertionResult(
+            name="decision",
+            passed=decision.decision == case.expected.decision,
+            message=f"decision={decision.decision} expected={case.expected.decision}",
+            expected=case.expected.decision,
+            actual=decision.decision,
+        ),
+        AutonomyAssertionResult(
+            name="action_count",
+            passed=len(decision.proposed_actions) == case.expected.action_count,
+            message=f"action_count={len(decision.proposed_actions)} expected={case.expected.action_count}",
+            expected=case.expected.action_count,
+            actual=len(decision.proposed_actions),
+        ),
+    ]
+
+    if case.expected.needs_human is not None:
+        assertions.append(
+            AutonomyAssertionResult(
+                name="needs_human",
+                passed=decision.needs_human == case.expected.needs_human,
+                message=f"needs_human={decision.needs_human} expected={case.expected.needs_human}",
+                expected=case.expected.needs_human,
+                actual=decision.needs_human,
+            )
+        )
+
+    proposed_action_kinds = {action.kind for action in decision.proposed_actions}
+    for forbidden_action in case.expected.forbidden_actions:
+        assertions.append(
+            AutonomyAssertionResult(
+                name=f"forbidden_action:{forbidden_action}",
+                passed=forbidden_action not in proposed_action_kinds,
+                message=f"forbidden_action={forbidden_action} present={forbidden_action in proposed_action_kinds}",
+                expected=False,
+                actual=forbidden_action in proposed_action_kinds,
+            )
+        )
+    return assertions
+
+
 class OikosAutonomyJourneyRunner:
     """Run autonomy journey cases and persist their artifacts."""
 
@@ -329,21 +391,25 @@ class OikosAutonomyJourneyRunner:
         if not isinstance(decision, AutonomyDecision):
             raise TypeError("decider must return AutonomyDecision")
 
+        assertions = evaluate_journey_assertions(case, decision)
         run_dir = self._prepare_run_dir(case.id)
-        manifest_path, context_path, decision_path = self._persist_artifacts(
+        manifest_path, context_path, decision_path, assertions_path = self._persist_artifacts(
             run_dir=run_dir,
             case=case,
             context_packet=context_packet,
             decision=decision,
+            assertions=assertions,
         )
         return AutonomyJourneyResult(
             case_id=case.id,
             context_packet=context_packet,
             decision=decision,
+            assertions=assertions,
             run_dir=run_dir,
             manifest_path=manifest_path,
             context_path=context_path,
             decision_path=decision_path,
+            assertions_path=assertions_path,
         )
 
     def _prepare_run_dir(self, case_id: str) -> Path:
@@ -359,10 +425,12 @@ class OikosAutonomyJourneyRunner:
         case: AutonomyJourneyCase,
         context_packet: AutonomyContextPacket,
         decision: AutonomyDecision,
-    ) -> tuple[Path, Path, Path]:
+        assertions: list[AutonomyAssertionResult],
+    ) -> tuple[Path, Path, Path, Path]:
         manifest_path = run_dir / "manifest.json"
         context_path = run_dir / "context.json"
         decision_path = run_dir / "decision.json"
+        assertions_path = run_dir / "assertions.json"
 
         manifest = {
             "case_id": case.id,
@@ -371,9 +439,13 @@ class OikosAutonomyJourneyRunner:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "decision": decision.decision,
             "proposed_action_count": len(decision.proposed_actions),
+            "assertion_count": len(assertions),
+            "assertions_passed": all(assertion.passed for assertion in assertions),
         }
 
         manifest_path.write_text(json.dumps(manifest, indent=2, default=_json_default) + "\n")
         context_path.write_text(json.dumps(asdict(context_packet), indent=2, default=_json_default) + "\n")
         decision_path.write_text(json.dumps(asdict(decision), indent=2, default=_json_default) + "\n")
-        return manifest_path, context_path, decision_path
+        assertions_payload = [asdict(assertion) for assertion in assertions]
+        assertions_path.write_text(json.dumps(assertions_payload, indent=2, default=_json_default) + "\n")
+        return manifest_path, context_path, decision_path, assertions_path
