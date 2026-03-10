@@ -1,10 +1,11 @@
-"""Oikos text chat endpoint with streaming responses."""
+"""Oikos chat endpoint and run lifecycle (cancel, task registry)."""
 
 import asyncio
 import logging
 import uuid
 from datetime import datetime
 from datetime import timezone
+from typing import Dict
 from typing import Optional
 
 from fastapi import APIRouter
@@ -13,18 +14,57 @@ from fastapi import HTTPException
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
+from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
+from zerg.models.models import Fiche
 from zerg.models.models import Run
 from zerg.routers.oikos_auth import _is_tool_enabled
 from zerg.routers.oikos_auth import get_current_oikos_user
-from zerg.routers.oikos_run_dispatch import _pop_oikos_task
-from zerg.routers.oikos_run_dispatch import _register_oikos_task
 from zerg.routers.oikos_sse import stream_run_events
+from zerg.services.oikos_context import reset_seq
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Background task registry (process-local, for cancellation)
+# ---------------------------------------------------------------------------
+
+_oikos_tasks: Dict[int, asyncio.Task] = {}
+_oikos_tasks_lock = asyncio.Lock()
+
+
+async def _register_oikos_task(run_id: int, task: asyncio.Task) -> None:
+    """Store the running oikos task for cancellation."""
+    async with _oikos_tasks_lock:
+        _oikos_tasks[run_id] = task
+
+
+async def _pop_oikos_task(run_id: int) -> Optional[asyncio.Task]:
+    """Remove and return the oikos task for a run."""
+    async with _oikos_tasks_lock:
+        return _oikos_tasks.pop(run_id, None)
+
+
+async def _cancel_oikos_task(run_id: int) -> bool:
+    """Attempt to cancel a running oikos task."""
+    async with _oikos_tasks_lock:
+        task = _oikos_tasks.get(run_id)
+
+    if not task or task.done():
+        return False
+
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=1.0)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        pass
+
+    return True
+
 
 router = APIRouter(prefix="", tags=["oikos"])
 
@@ -387,4 +427,71 @@ async def oikos_chat(
             model=model_to_use,
             reasoning_effort=reasoning_effort,
         )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Run cancellation
+# ---------------------------------------------------------------------------
+
+
+class OikosRunCancelResponse(BaseModel):
+    """Response from oikos cancellation."""
+
+    run_id: int = Field(..., description="The cancelled run ID")
+    status: str = Field(..., description="Run status after cancellation")
+    message: str = Field(..., description="Human-readable status message")
+
+
+@router.post("/run/{run_id}/cancel", response_model=OikosRunCancelResponse)
+async def oikos_run_cancel(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> OikosRunCancelResponse:
+    """Cancel a running oikos investigation."""
+    from zerg.models.enums import RunStatus
+
+    run = db.query(Run).filter(Run.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} not found")
+
+    fiche = db.query(Fiche).filter(Fiche.id == run.fiche_id).first()
+    if not fiche or fiche.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} not found")
+
+    terminal_statuses = {RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED}
+    if run.status in terminal_statuses:
+        return OikosRunCancelResponse(
+            run_id=run_id,
+            status=run.status.value if hasattr(run.status, "value") else str(run.status),
+            message="Run already completed",
+        )
+
+    run.status = RunStatus.CANCELLED
+    run.finished_at = datetime.now(timezone.utc)
+    db.add(run)
+    db.commit()
+
+    await _cancel_oikos_task(run_id)
+
+    logger.info(f"Oikos run {run_id} cancelled by user {current_user.id}")
+
+    await event_bus.publish(
+        EventType.OIKOS_COMPLETE,
+        {
+            "event_type": "oikos_complete",
+            "run_id": run_id,
+            "owner_id": current_user.id,
+            "status": "cancelled",
+            "message": "Investigation cancelled by user",
+        },
+    )
+
+    reset_seq(run_id)
+
+    return OikosRunCancelResponse(
+        run_id=run_id,
+        status="cancelled",
+        message="Investigation cancelled",
     )
