@@ -1,11 +1,10 @@
-"""Oikos chat endpoint and run lifecycle (cancel, task registry)."""
+"""Oikos chat endpoint and run lifecycle (cancel)."""
 
 import asyncio
 import logging
 import uuid
 from datetime import datetime
 from datetime import timezone
-from typing import Dict
 from typing import Optional
 
 from fastapi import APIRouter
@@ -28,42 +27,6 @@ from zerg.routers.oikos_sse import stream_run_events
 from zerg.services.oikos_context import reset_seq
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Background task registry (process-local, for cancellation)
-# ---------------------------------------------------------------------------
-
-_oikos_tasks: Dict[int, asyncio.Task] = {}
-_oikos_tasks_lock = asyncio.Lock()
-
-
-async def _register_oikos_task(run_id: int, task: asyncio.Task) -> None:
-    """Store the running oikos task for cancellation."""
-    async with _oikos_tasks_lock:
-        _oikos_tasks[run_id] = task
-
-
-async def _pop_oikos_task(run_id: int) -> Optional[asyncio.Task]:
-    """Remove and return the oikos task for a run."""
-    async with _oikos_tasks_lock:
-        return _oikos_tasks.pop(run_id, None)
-
-
-async def _cancel_oikos_task(run_id: int) -> bool:
-    """Attempt to cancel a running oikos task."""
-    async with _oikos_tasks_lock:
-        task = _oikos_tasks.get(run_id)
-
-    if not task or task.done():
-        return False
-
-    task.cancel()
-    try:
-        await asyncio.wait_for(task, timeout=1.0)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
-
-    return True
 
 
 router = APIRouter(prefix="", tags=["oikos"])
@@ -300,8 +263,6 @@ async def oikos_run_cancel(
     run.finished_at = datetime.now(timezone.utc)
     db.add(run)
     db.commit()
-
-    await _cancel_oikos_task(run_id)
 
     logger.info(f"Oikos run {run_id} cancelled by user {current_user.id}")
 
