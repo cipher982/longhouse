@@ -259,6 +259,7 @@ def load_autonomy_journey_cases(path: Path) -> list[AutonomyJourneyCase]:
 async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDecision:
     """Cheap deterministic baseline used for harness validation and local dogfooding."""
     ai_text = (packet.primary_session.last_ai_message or "").lower()
+    trigger_summary = (packet.trigger.summary or "").lower()
 
     if packet.trigger.type == "session_blocked":
         return AutonomyDecision(
@@ -273,6 +274,24 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                 )
             ],
             needs_human=True,
+        )
+
+    if packet.trigger.type == "session_needs_user":
+        return AutonomyDecision(
+            decision="ignore",
+            rationale="The session is paused for user input, with no reason for Oikos to re-prompt yet.",
+            summary="Leave the session parked until the user comes back.",
+            proposed_actions=[],
+            needs_human=False,
+        )
+
+    if packet.trigger.type == "duplicate_wakeup" or "duplicate wakeup" in trigger_summary:
+        return AutonomyDecision(
+            decision="ignore",
+            rationale="The wakeup repeats an existing blocked or needs_user state and would only create churn.",
+            summary="Ignore the duplicate wakeup and avoid busywork.",
+            proposed_actions=[],
+            needs_human=False,
         )
 
     if packet.trigger.type == "session_completed" and "tests were not run" in ai_text:

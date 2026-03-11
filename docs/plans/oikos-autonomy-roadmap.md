@@ -88,19 +88,19 @@ These are the active next steps. Keep this list short and current.
 - [x] Define the first journey dataset around coding-session wakeups
 - [x] Add autonomy-specific assertions for decision class, action count, forbidden actions, and artifact/log presence
 - [x] Add a make target or documented command for the autonomy eval ring
-- [ ] Convert the first real dogfood observations into new journey fixtures
+- [x] Convert the first real dogfood observations into new journey fixtures
 
 ## First Journey Set
 
 The initial cases should stay small and high-signal:
 
-- [ ] session completed, nothing to do
-- [ ] session completed, obvious next step
-- [ ] session blocked on real human fork
+- [x] session completed, nothing to do
+- [x] session completed, obvious next step
+- [x] session blocked on real human fork
 - [ ] session blocked on small bounded follow-up
-- [ ] session needs user, low priority
-- [ ] periodic sweep with no meaningful work
-- [ ] trigger storm / duplicate wakeups
+- [x] session needs user, low priority
+- [x] periodic sweep with no meaningful work
+- [x] trigger storm / duplicate wakeups
 - [ ] two sessions competing for attention
 
 ## Evidence Contract
@@ -136,3 +136,6 @@ At minimum, save:
   - `apps/zerg/backend/tests_lite/fixtures/oikos_autonomy_journeys.yml`
   - `apps/zerg/backend/tests_lite/test_oikos_autonomy_journeys.py`
   - `make test-autonomy-journeys`
+- 2026-03-10: Journey fixtures now cover the first live operator-mode trigger observations too:
+  - `needs_user` low-priority pauses stay parked
+  - duplicate blocked wakeups are ignored instead of creating churn

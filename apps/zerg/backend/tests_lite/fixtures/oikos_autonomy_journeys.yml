@@ -140,3 +140,68 @@ cases:
       forbidden_actions:
         - continue_session
         - notify_user
+
+  - id: needs_user_low_priority
+    description: Session is waiting on user input, but the blocker is low priority and should not trigger another ping.
+    trigger:
+      type: session_needs_user
+      source_session_id: sess-needs-user-1
+      summary: Claude is waiting on user input, but nothing urgent changed.
+      payload:
+        state: needs_user
+    primary_session:
+      session_id: sess-needs-user-1
+      provider: claude
+      status: paused
+      resumable: true
+      project: zerg
+      last_user_message: Circle back later if there is still something obvious to do.
+      last_ai_message: I am waiting for the user to answer a non-urgent follow-up before continuing.
+      summary: Session is paused for a later user reply.
+      presence_state: needs_user
+      blocked_reason: Waiting for a later user reply about nice-to-have polish.
+    active_sessions: []
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    expected:
+      decision: ignore
+      action_count: 0
+      needs_human: false
+      forbidden_actions:
+        - continue_session
+        - notify_user
+
+  - id: duplicate_blocked_wakeup_noop
+    description: Repeated blocked wakeup for the same session should not create another intervention.
+    trigger:
+      type: duplicate_wakeup
+      source_session_id: sess-blocked-dup-1
+      summary: Duplicate wakeup for a session already known to be blocked.
+      payload:
+        state: blocked
+        repeat_count: 2
+    primary_session:
+      session_id: sess-blocked-dup-1
+      provider: claude
+      status: blocked
+      resumable: true
+      project: zerg
+      last_user_message: Keep going if this turns into something real.
+      last_ai_message: Still waiting on permission to run the same Bash command as before.
+      summary: Session remains paused on the same permission gate.
+      presence_state: blocked
+      blocked_reason: Waiting on permission to run the same Bash command.
+    active_sessions: []
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    expected:
+      decision: ignore
+      action_count: 0
+      needs_human: false
+      forbidden_actions:
+        - continue_session
+        - notify_user
