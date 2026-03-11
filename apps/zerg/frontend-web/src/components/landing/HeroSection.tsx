@@ -32,7 +32,7 @@ export function HeroSection({
         <div className="landing-hero-text">
           <div className="landing-hero-badge">
             <span className="landing-hero-badge-dot" />
-            Free during beta
+            Self-host free forever
           </div>
 
           <h1 className="landing-hero-headline">
