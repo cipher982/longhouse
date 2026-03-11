@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Product][Tech Debt] Refactor session detail into a pane-based workspace (size: 4)
 
-Status (2026-03-10): Done. The pane-based workspace landed, and the follow-up pass moved continuation into a modal so the transcript remains dominant while still keeping the pane architecture intact.
+Status (2026-03-11): Done. The pane-based workspace now has draggable desktop gutters with persisted sidebar and inspector widths, so users can give the transcript more room without another route redesign.
 
 **Goal:** Turn timeline session detail into a real workspace with reusable panes and first-class event selection, while preserving current continuation/thread capabilities.
 
@@ -26,6 +26,7 @@ Status (2026-03-10): Done. The pane-based workspace landed, and the follow-up pa
 - [x] Move event detail out of inline expansion and into inspector-driven components
 - [x] Keep continuation/thread behavior working during the layout transition
 - [x] Rebalance the workspace so the transcript stays dominant even when continuation is available
+- [x] Add draggable desktop pane resizing with persisted widths for the left rail and inspector
 
 Notes:
 - 2026-03-10: The route currently mixes fetching, derived timeline shaping, deep-link handling, continuation logic, and rendering in one file. Refactor first; visual polish can follow once pane responsibilities feel right.
@@ -33,6 +34,8 @@ Notes:
 - 2026-03-10: Live local capture confirmed the new layout uses the width much better than the old centered transcript. The next iteration, if needed, is resizable panes or a collapsible continuation dock, not another full route rewrite.
 - 2026-03-10: User review of the hosted page showed the real miss: the bottom continuation dock still steals the transcript viewport, and centering the latest item means a fullscreen browser can still show only about one message. The next pass should move continuation out of layout flow and let the transcript fill the page again.
 - 2026-03-10: Follow-up landed: continuation now opens in a modal, the workspace shell only reserves a bottom row when it actually needs one, and long transcripts scroll to the latest item without centering it into a cramped viewport.
+- 2026-03-11: User asked for IDE-style adjustment, not just better defaults. Keep the scope to draggable gutters and persisted widths first; do not turn this into a full docking/window-manager project.
+- 2026-03-11: Desktop workspace panes are now user-adjustable. The left rail and inspector both support pointer drag, keyboard resizing, and reset-to-default behavior, with widths persisted in local storage across reloads.
 
 ## [Product] Proactive Oikos operator mode (size: 5)
 
