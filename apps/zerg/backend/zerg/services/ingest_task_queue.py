@@ -30,6 +30,11 @@ from datetime import timezone
 from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
 from zerg.services.oikos_operator_policy import get_operator_policy
+from zerg.services.oikos_operator_policy import operator_master_switch_enabled
+from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
+from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
+from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
+from zerg.services.oikos_wakeup_ledger import append_wakeup
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,7 @@ BATCH_SIZE = 5
 STALE_RUNNING_MINUTES = 30
 _OPERATOR_COMPLETION_FRESH_WINDOW = timedelta(minutes=10)
 _OPERATOR_COMPLETION_SKIP_STATES = {"thinking", "running", "needs_user", "blocked"}
+_OPERATOR_COMPLETION_CONVERSATION_ID = "operator:main"
 
 
 # ---------------------------------------------------------------------------
@@ -195,21 +201,96 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
     from zerg.models.agents import SessionPresence
     from zerg.models.user import User
 
+    if not operator_master_switch_enabled():
+        return
+
+    trigger_type = "session_completed"
+    wakeup_key = f"session_completed:{session_id}:{task_id}"
     factory = get_session_factory()
     db = factory()
     try:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if session is None:
+            append_wakeup(
+                db,
+                owner_id=None,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_SUPPRESSED,
+                reason="session_missing",
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                payload={
+                    "trigger_type": trigger_type,
+                    "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
+                    "session_id": session_id,
+                },
+            )
+            db.commit()
             return
         if session.user_state in {"archived", "snoozed"}:
+            append_wakeup(
+                db,
+                owner_id=None,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_SUPPRESSED,
+                reason=f"user_state_{session.user_state}",
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                payload={
+                    "trigger_type": trigger_type,
+                    "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
+                    "session_id": session_id,
+                    "user_state": session.user_state,
+                },
+            )
+            db.commit()
             return
 
         ended_at = _normalize_utc(session.ended_at)
         if ended_at is None:
+            append_wakeup(
+                db,
+                owner_id=None,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_SUPPRESSED,
+                reason="missing_ended_at",
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                payload={
+                    "trigger_type": trigger_type,
+                    "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
+                    "session_id": session_id,
+                },
+            )
+            db.commit()
             return
 
         now = datetime.now(timezone.utc)
         if now - ended_at > _OPERATOR_COMPLETION_FRESH_WINDOW:
+            append_wakeup(
+                db,
+                owner_id=None,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_SUPPRESSED,
+                reason="stale_completion",
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                payload={
+                    "trigger_type": trigger_type,
+                    "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
+                    "session_id": session_id,
+                    "ended_at": ended_at.isoformat(),
+                },
+            )
+            db.commit()
             return
 
         presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
@@ -219,21 +300,72 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
             if updated_at is not None and (now - updated_at) < _OPERATOR_COMPLETION_FRESH_WINDOW:
                 presence_state = presence.state
 
-        if presence_state in _OPERATOR_COMPLETION_SKIP_STATES:
-            return
-
-        owner = db.query(User.id).order_by(User.id).first()
-        if owner is None:
-            return
-        owner_id = int(owner[0])
-        if not get_operator_policy(db, owner_id).enabled:
-            return
-
         provider = session.provider
         project = session.project
         cwd = session.cwd
         summary_title = session.summary_title
         summary = session.summary
+        wakeup_payload = {
+            "trigger_type": trigger_type,
+            "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
+            "session_id": session_id,
+            "provider": provider,
+            "project": project,
+            "cwd": cwd,
+            "ended_at": ended_at.isoformat(),
+            "presence_state": presence_state,
+            "summary_title": summary_title,
+            "summary": summary,
+        }
+
+        if presence_state in _OPERATOR_COMPLETION_SKIP_STATES:
+            append_wakeup(
+                db,
+                owner_id=None,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_SUPPRESSED,
+                reason=f"fresh_presence_{presence_state}",
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                payload=wakeup_payload,
+            )
+            db.commit()
+            return
+
+        owner = db.query(User.id).order_by(User.id).first()
+        if owner is None:
+            append_wakeup(
+                db,
+                owner_id=None,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_SUPPRESSED,
+                reason="no_owner",
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                payload=wakeup_payload,
+            )
+            db.commit()
+            return
+        owner_id = int(owner[0])
+        if not get_operator_policy(db, owner_id).enabled:
+            append_wakeup(
+                db,
+                owner_id=owner_id,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_SUPPRESSED,
+                reason="user_policy_disabled",
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                payload=wakeup_payload,
+            )
+            db.commit()
+            return
     finally:
         db.close()
 
@@ -251,27 +383,51 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
         presence_state=presence_state,
     )
     message_id = f"operator-session-completed-{session_id}-{task_id}"
-    surface_payload = {
-        "trigger_type": "session_completed",
-        "session_id": session_id,
-        "provider": provider,
-        "project": project,
-        "cwd": cwd,
-        "ended_at": ended_at.isoformat(),
-        "presence_state": presence_state,
-        "summary_title": summary_title,
-    }
 
     try:
-        await invoke_oikos(
+        run_id = await invoke_oikos(
             owner_id,
             message,
             message_id,
             source="operator",
             surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
-            surface_payload=surface_payload,
+            surface_payload=wakeup_payload,
         )
+        log_db = factory()
+        try:
+            append_wakeup(
+                log_db,
+                owner_id=owner_id,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_ENQUEUED,
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                run_id=run_id,
+                payload=wakeup_payload,
+            )
+            log_db.commit()
+        finally:
+            log_db.close()
     except Exception:
+        log_db = factory()
+        try:
+            append_wakeup(
+                log_db,
+                owner_id=owner_id,
+                source="session_completed",
+                trigger_type=trigger_type,
+                status=WAKEUP_STATUS_FAILED,
+                reason="invoke_failed",
+                session_id=session_id,
+                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
+                wakeup_key=wakeup_key,
+                payload=wakeup_payload,
+            )
+            log_db.commit()
+        finally:
+            log_db.close()
         logger.exception("Failed to invoke operator completion wakeup for session %s", session_id)
 
 

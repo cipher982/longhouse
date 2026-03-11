@@ -32,6 +32,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTask
 from zerg.models.user import User
+from zerg.models.work import OikosWakeup
 from zerg.services.ingest_task_queue import _claim_pending
 from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 from zerg.services.ingest_task_queue import reset_stale_running_tasks
@@ -57,6 +58,13 @@ def _get_tasks(factory, *, status=None):
     tasks = q.all()
     db.close()
     return tasks
+
+
+def _get_wakeups(factory):
+    db = factory()
+    wakeups = db.query(OikosWakeup).order_by(OikosWakeup.id).all()
+    db.close()
+    return wakeups
 
 
 def _seed_completion_summary_task(
@@ -292,6 +300,7 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
             with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
+                invoke_oikos.return_value = 123
                 await _execute_task(task_id, session_id, "summary")
 
     invoke_oikos.assert_awaited_once()
@@ -305,7 +314,13 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     assert kwargs["surface_payload"]["session_id"] == session_id
 
     tasks = _get_tasks(factory, status="done")
+    wakeups = _get_wakeups(factory)
     assert len(tasks) == 1
+    assert len(wakeups) == 1
+    assert wakeups[0].status == "enqueued"
+    assert wakeups[0].run_id == 123
+    assert wakeups[0].trigger_type == "session_completed"
+    assert wakeups[0].payload["presence_state"] == "idle"
 
 
 @pytest.mark.asyncio
@@ -332,7 +347,11 @@ async def test_summary_task_skips_operator_when_session_is_still_active(tmp_path
     invoke_oikos.assert_not_awaited()
 
     tasks = _get_tasks(factory, status="done")
+    wakeups = _get_wakeups(factory)
     assert len(tasks) == 1
+    assert len(wakeups) == 1
+    assert wakeups[0].status == "suppressed"
+    assert wakeups[0].reason == f"fresh_presence_{presence_state}"
 
 
 @pytest.mark.asyncio
@@ -357,7 +376,11 @@ async def test_summary_task_skips_operator_for_historical_completed_session(tmp_
     invoke_oikos.assert_not_awaited()
 
     tasks = _get_tasks(factory, status="done")
+    wakeups = _get_wakeups(factory)
     assert len(tasks) == 1
+    assert len(wakeups) == 1
+    assert wakeups[0].status == "suppressed"
+    assert wakeups[0].reason == "stale_completion"
 
 
 @pytest.mark.asyncio
@@ -384,7 +407,11 @@ async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path
     invoke_oikos.assert_not_awaited()
 
     tasks = _get_tasks(factory, status="done")
+    wakeups = _get_wakeups(factory)
     assert len(tasks) == 1
+    assert len(wakeups) == 1
+    assert wakeups[0].status == "suppressed"
+    assert wakeups[0].reason == "user_policy_disabled"
 
 
 @pytest.mark.asyncio

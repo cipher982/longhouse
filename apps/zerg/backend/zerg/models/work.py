@@ -1,8 +1,8 @@
-"""Work tracking models — insights, action proposals, and file reservations.
+"""Work tracking models — insights, proposals, wakeups, and file reservations.
 
 These models support agent infrastructure: tracking learnings across sessions,
-surfacing actionable proposals for human review, and preventing file edit
-conflicts in multi-agent workflows.
+surfacing actionable proposals for human review, recording proactive Oikos
+wakeups, and preventing file edit conflicts in multi-agent workflows.
 """
 
 from uuid import uuid4
@@ -93,6 +93,30 @@ class ReflectionRun(AgentsBase):
 
     # Error tracking
     error = Column(Text, nullable=True)
+
+
+class OikosWakeup(AgentsBase):
+    """Durable record of a proactive Oikos wakeup opportunity."""
+
+    __tablename__ = "oikos_wakeups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    source = Column(String(64), nullable=False, index=True)
+    trigger_type = Column(String(64), nullable=False, index=True)
+    status = Column(String(32), nullable=False, index=True)  # suppressed, enqueued, failed
+    reason = Column(String(100), nullable=True)
+    session_id = Column(String(255), nullable=True, index=True)
+    conversation_id = Column(String(255), nullable=True)
+    wakeup_key = Column(String(255), nullable=True, index=True)
+    run_id = Column(Integer, nullable=True, index=True)
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("ix_oikos_wakeups_owner_created", "owner_id", "created_at"),
+        Index("ix_oikos_wakeups_trigger_status", "trigger_type", "status"),
+    )
 
 
 class FileReservation(AgentsBase):
