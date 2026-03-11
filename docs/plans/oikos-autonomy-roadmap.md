@@ -91,7 +91,8 @@ These are the active next steps. Keep this list short and current.
 - [x] Convert the first real dogfood observations into new journey fixtures
 - [x] Wire the first live operator wakeup set around coding-session transitions plus a periodic sweep fallback
 - [x] Add the thinnest user-backed operator policy surface
-- [ ] Spec and land a thin wakeup-history ledger for suppressed / ignored / acted decisions
+- [x] Spec and land a phase-1 wakeup-history ledger for suppressed / enqueued / failed wakeups
+- [ ] Attach post-run ignored / acted outcome classification to the wakeup ledger
 - [ ] Ship the first bounded local action behind the same policy surface
 
 ## Current Runtime Ring
@@ -109,6 +110,11 @@ Current guardrails:
 - no historical backfill completion wakeups
 - no completion wakeup if fresh presence already shows resumed or paused work
 - all live wakeups respect both the env master switch and user-backed `preferences.operator_mode`
+
+Current durable evidence outside runs:
+
+- a phase-1 wakeup ledger should capture `suppressed`, `enqueued`, and enqueue-time `failed` outcomes
+- post-run `ignored` / `acted` classification is still the next slice, not something to infer prematurely
 
 ## First Journey Set
 
@@ -132,6 +138,12 @@ Every journey run should leave enough evidence to answer:
 - what it decided
 - what it would have done or actually did
 - why the test passed or failed
+
+The live runtime should leave enough evidence to answer:
+
+- which wakeups were suppressed before a run existed
+- which wakeups produced a run
+- which wakeups failed at enqueue / transport time
 
 At minimum, save:
 
@@ -168,5 +180,7 @@ At minimum, save:
   - live wakeups now respect `User.context["preferences"]["operator_mode"]`
   - `OIKOS_OPERATOR_MODE_ENABLED` remains the global master switch
 - 2026-03-11: The next spec slice is no longer "more triggers." It is wakeup history:
-  - we need a tiny durable ledger for suppressed / ignored / acted wakeups
-  - that is the missing evidence layer before broader actions or UI
+  - we need a tiny durable ledger for wakeup handling before broader actions or UI
+- 2026-03-11: Phase 1 of the wakeup ledger is intentionally narrower than the end state:
+  - persist `suppressed`, `enqueued`, and enqueue-time `failed`
+  - defer `ignored` / `acted` until the first bounded action path exists
