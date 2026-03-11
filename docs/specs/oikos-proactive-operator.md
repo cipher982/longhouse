@@ -36,8 +36,7 @@ As of 2026-03-11, the first dogfood ring is no longer hypothetical. The repo now
 
 What is still missing:
 
-- durable wakeup / no-op history separate from full Oikos runs
-- the first bounded autonomous action path
+- broader proactive action types beyond session continuation
 - browser / hosted smokes for the live operator loop
 
 That means the current state is best described as:
@@ -45,8 +44,8 @@ That means the current state is best described as:
 - real trigger wiring exists
 - real policy gating exists
 - evaluation coverage exists
-- decision history is still too implicit
-- action-taking is still mostly future work
+- wakeup history is now explicit enough to review suppressed / ignored / acted / failed outcomes
+- the first bounded continuation action path exists, but broader actions are still future work
 
 ## Product Principles
 

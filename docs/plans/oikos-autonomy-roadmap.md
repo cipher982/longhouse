@@ -92,8 +92,8 @@ These are the active next steps. Keep this list short and current.
 - [x] Wire the first live operator wakeup set around coding-session transitions plus a periodic sweep fallback
 - [x] Add the thinnest user-backed operator policy surface
 - [x] Spec and land a phase-1 wakeup-history ledger for suppressed / enqueued / failed wakeups
-- [ ] Attach post-run ignored / acted outcome classification to the wakeup ledger
-- [ ] Ship the first bounded local action behind the same policy surface
+- [x] Attach post-run ignored / acted outcome classification to the wakeup ledger
+- [x] Ship the first bounded local action behind the same policy surface
 
 ## Current Runtime Ring
 
@@ -113,8 +113,8 @@ Current guardrails:
 
 Current durable evidence outside runs:
 
-- a phase-1 wakeup ledger should capture `suppressed`, `enqueued`, and enqueue-time `failed` outcomes
-- post-run `ignored` / `acted` classification is still the next slice, not something to infer prematurely
+- the wakeup ledger now captures `suppressed`, `enqueued`, `ignored`, `acted`, and enqueue/run-time `failed` outcomes
+- `acted` currently means Oikos launched a follow-up path, with `continue_session` as the first bounded sanctioned action
 
 ## First Journey Set
 
@@ -184,3 +184,7 @@ At minimum, save:
 - 2026-03-11: Phase 1 of the wakeup ledger is intentionally narrower than the end state:
   - persist `suppressed`, `enqueued`, and enqueue-time `failed`
   - defer `ignored` / `acted` until the first bounded action path exists
+- 2026-03-11: The first bounded operator action path is now live:
+  - Oikos is taught to continue the same coding session via `spawn_workspace_commis(..., resume_session_id=...)`
+  - operator-surface continuation is hard-gated by `preferences.operator_mode.allow_continue`
+  - wakeup rows now finalize to `ignored`, `acted`, or `failed` after the run outcome is known

@@ -48,6 +48,9 @@ from zerg.services.oikos_run_lifecycle import emit_oikos_complete_success
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
 from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 from zerg.services.oikos_run_lifecycle import emit_success_run_updated
+from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
+from zerg.services.oikos_wakeup_ledger import classify_wakeup_outcome_for_run
+from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
 from zerg.services.thread_service import ThreadService
 from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
 
@@ -313,13 +316,15 @@ class OikosService:
         # Use centralized tool list from oikos_tools.py (single source of truth)
         oikos_tools = get_oikos_allowed_tools()
 
+        task_instructions = "You are helping the user accomplish their goals. " "Analyze their request and decide how to handle it."
+
         fiche = crud.create_fiche(
             db=self.db,
             owner_id=owner_id,
             name="Oikos",
             model=DEFAULT_MODEL_ID,
             system_instructions=build_oikos_prompt(user),
-            task_instructions=("You are helping the user accomplish their goals. " "Analyze their request and decide how to handle it."),
+            task_instructions=task_instructions,
             config=oikos_config,
         )
         # Set allowed_tools (not supported in crud.create_fiche)
@@ -715,7 +720,8 @@ class OikosService:
                     },
                 )
 
-                logger.info(f"Oikos run {run.id} deferred after {timeout}s timeout " "(continuing in background until completion)")
+                deferred_message = f"Oikos run {run.id} deferred after {timeout}s timeout " "(continuing in background until completion)"
+                logger.info(deferred_message)
 
                 if return_on_deferred:
                     # Return deferred result - NOT an error.
@@ -847,7 +853,8 @@ class OikosService:
                             )
 
                     if already_completed:
-                        logger.info(f"{already_completed}/{len(job_ids)} commiss already completed " "- scheduled barrier checks")
+                        completed_message = f"{already_completed}/{len(job_ids)} commiss already completed " "- scheduled barrier checks"
+                        logger.info(completed_message)
 
                 else:
                     # SINGLE-COMMIS PATH (wait_for_commis or single-commis interrupt)
@@ -888,6 +895,9 @@ class OikosService:
                                 ),
                                 context=contextvars.Context(),
                             )
+
+                if classify_wakeup_outcome_for_run(self.db, run_id=run.id):
+                    self.db.commit()
 
                 await emit_oikos_waiting_and_run_updated(
                     db=self.db,
@@ -943,6 +953,9 @@ class OikosService:
             if runner.usage_total_tokens is not None:
                 run.total_tokens = runner.usage_total_tokens
             self.db.commit()
+
+            if classify_wakeup_outcome_for_run(self.db, run_id=run.id):
+                self.db.commit()
 
             # Emit completion event with OikosResult-aligned schema
             # Note: summary/recommendations/caveats would require parsing fiche response
@@ -1055,6 +1068,15 @@ class OikosService:
                 duration_ms=duration_ms,
             )
 
+            if finalize_wakeups_for_run(
+                self.db,
+                run_id=run.id,
+                status=WAKEUP_STATUS_FAILED,
+                reason="run_cancelled",
+                payload_updates={"outcome": "failed"},
+            ):
+                self.db.commit()
+
         except Exception as e:
             # Calculate duration
             end_time = datetime.now(timezone.utc)
@@ -1074,6 +1096,15 @@ class OikosService:
                 barrier.status = "failed"
 
             self.db.commit()
+
+            if finalize_wakeups_for_run(
+                self.db,
+                run_id=run.id,
+                status=WAKEUP_STATUS_FAILED,
+                reason="run_failed",
+                payload_updates={"outcome": "failed", "error": str(e)},
+            ):
+                self.db.commit()
 
             await emit_error_event_and_close_stream(
                 db=self.db,
@@ -1279,9 +1310,10 @@ class OikosService:
                         commis_results=barrier_result["commis_results"],
                     )
                 elif barrier_result["status"] == "waiting":
-                    logger.info(
+                    waiting_status = (
                         f"Immediate barrier check for run {run_id}: " f"{barrier_result['completed']}/{barrier_result['expected']} complete"
                     )
+                    logger.info(waiting_status)
                 else:
                     logger.debug(f"Immediate barrier check skipped for run {run_id}: {barrier_result.get('reason')}")
 
