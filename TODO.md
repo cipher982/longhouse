@@ -41,7 +41,7 @@ Status (2026-03-10): In progress. The immediate goal is to define the product pr
 **Goal:** Make Oikos feel like a proactive technical deputy that can notice meaningful session state changes, decide what to inspect next, and take bounded actions without collapsing into a giant brittle automation engine.
 
 - [x] Write a principles-first spec for proactive Oikos that stays future-friendly and avoids premature schema/runtime lock-in
-- [ ] Dogfood a tiny wakeup set around coding-session transitions plus a periodic sweep fallback
+- [x] Dogfood a tiny wakeup set around coding-session transitions plus a periodic sweep fallback
 - [ ] Add the thinnest possible Oikos-owned state for trigger history / policies without duplicating session logs
 - [ ] Ship one bounded autonomy slice that can inspect a session, continue it, or escalate back to the user
 
@@ -57,6 +57,7 @@ Notes:
 - 2026-03-10: Landed the first live wakeup seam on the existing presence hook path. With `OIKOS_OPERATOR_MODE_ENABLED=1`, `blocked` and `needs_user` transitions now wake Oikos through a dedicated `operator` surface adapter, repeated identical pause-state signals are deduped, and `idle`/`Stop` still does not trigger because transcript shipping/completion ordering is not reliable there.
 - 2026-03-10: Landed the periodic sweep fallback on the existing jobs stack. The builtin `oikos-operator-sweep` job now registers with the normal Longhouse scheduler, stays dormant unless `OIKOS_OPERATOR_MODE_ENABLED=1`, and wakes Oikos through the dedicated `operator` surface with a `periodic_sweep` trigger instead of inventing another scheduler path.
 - 2026-03-10: Folded the new live operator triggers back into the shadow journey harness. The durable fixture set now covers low-priority `needs_user` pauses, duplicate blocked wakeups, and the current periodic sweep noop behavior so those operator-mode decisions stay regression-testable instead of living only in route/job code.
+- 2026-03-10: Landed the first post-ingest `session_completed` wakeup seam on the durable ingest task worker. Successful summary tasks now wake Oikos through the `operator` surface only for recent completed turns, while freshness guards suppress historical backfill and sessions that already resumed into `thinking`/`running` or another dedicated pause-state trigger.
 - Spec: `docs/specs/oikos-proactive-operator.md`.
 - Roadmap: `docs/plans/oikos-autonomy-roadmap.md`.
 
