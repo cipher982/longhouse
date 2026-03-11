@@ -20,13 +20,9 @@ NC='\033[0m'
 pass() { echo -e "  ${GREEN}✓${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1"; }
 
-# --- Resolve CF token ---
+# --- Require an explicit CF token ---
 if [[ -z "${CF_API_TOKEN:-}" ]]; then
-    # Try macOS Keychain when running locally
-    CF_API_TOKEN=$(security find-generic-password -a cloudflare -s cloudflare-api-token -w 2>/dev/null || true)
-fi
-if [[ -z "${CF_API_TOKEN:-}" ]]; then
-    echo "Error: CF_API_TOKEN not set and not found in Keychain" >&2
+    echo "Error: CF_API_TOKEN must be set explicitly; no implicit Keychain fallback." >&2
     exit 1
 fi
 
