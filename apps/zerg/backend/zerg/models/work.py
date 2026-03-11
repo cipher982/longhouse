@@ -104,7 +104,7 @@ class OikosWakeup(AgentsBase):
     owner_id = Column(Integer, nullable=True, index=True)
     source = Column(String(64), nullable=False, index=True)
     trigger_type = Column(String(64), nullable=False, index=True)
-    status = Column(String(32), nullable=False, index=True)  # suppressed, enqueued, failed
+    status = Column(String(32), nullable=False, index=True)  # suppressed, enqueued, ignored, acted, failed
     reason = Column(String(100), nullable=True)
     session_id = Column(String(255), nullable=True, index=True)
     conversation_id = Column(String(255), nullable=True)
