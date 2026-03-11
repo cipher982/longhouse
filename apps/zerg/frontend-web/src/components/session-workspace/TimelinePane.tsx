@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Button, EmptyState, Spinner } from "../ui";
 import type { TimelineItem, ToolBatch, ToolInteraction, EventFilter } from "../../lib/sessionWorkspace";
 import {
@@ -35,6 +36,7 @@ interface TimelinePaneProps {
   error?: unknown;
   selectedKey: string | null;
   onSelectKey: (key: string) => void;
+  dock?: ReactNode;
 }
 
 function MessageRow({
@@ -201,13 +203,17 @@ export function TimelinePane({
   error = null,
   selectedKey,
   onSelectKey,
+  dock = null,
 }: TimelinePaneProps) {
   const toolFilterLabel = `Tools (${toolRowCount})`;
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
   return (
-    <div className="timeline-pane" data-testid="session-timeline-pane">
+    <div
+      className={`timeline-pane${dock ? " timeline-pane--with-dock" : ""}`}
+      data-testid="session-timeline-pane"
+    >
       <div className="timeline-pane__header timeline-header" data-testid="session-timeline-header">
         <div className="timeline-pane__header-main">
           <div className="timeline-pane__title-group">
@@ -352,6 +358,8 @@ export function TimelinePane({
           </Button>
         </div>
       ) : null}
+
+      {dock ? <div className="timeline-pane__dock">{dock}</div> : null}
     </div>
   );
 }
