@@ -43,6 +43,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.user import User
 from zerg.routers.agents import verify_agents_token
+from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.oikos_service import invoke_oikos
 from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
 
@@ -72,10 +73,6 @@ class PresenceIn(BaseModel):
     provider: Optional[str] = "claude"
 
 
-def _operator_mode_enabled() -> bool:
-    return os.getenv("OIKOS_OPERATOR_MODE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _effective_tool_name(payload: PresenceIn, previous: SessionPresence | None) -> str | None:
     if payload.state not in _STATES_WITH_TOOL:
         return None
@@ -90,7 +87,7 @@ def _should_wake_operator(
     state: str,
     tool_name: str | None,
 ) -> bool:
-    if state not in _OPERATOR_WAKE_STATES or not _operator_mode_enabled():
+    if state not in _OPERATOR_WAKE_STATES:
         return False
     if previous is None:
         return True
@@ -133,7 +130,7 @@ def _build_operator_message(
     lines.extend(
         [
             "",
-            "Inspect the relevant session history, then decide whether to wait, " "continue the work, or escalate to the user.",
+            "Inspect the relevant session history, then decide whether to wait, continue, or escalate.",
             "Do nothing if no action is warranted.",
         ]
     )
@@ -151,6 +148,13 @@ async def _maybe_invoke_operator_wakeup(
     owner_id = _resolve_owner_id(db, token)
     if owner_id is None:
         logger.debug("Skipping operator wakeup for session %s: no owner resolved", payload.session_id)
+        return
+    if not get_operator_policy(db, owner_id).enabled:
+        logger.debug(
+            "Skipping operator wakeup for session %s: operator mode disabled for owner %s",
+            payload.session_id,
+            owner_id,
+        )
         return
 
     message = _build_operator_message(payload=payload, project=project, tool_name=tool_name)

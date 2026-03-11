@@ -138,3 +138,43 @@ async def test_operator_sweep_invokes_oikos_when_enabled(monkeypatch, tmp_path):
     assert calls[0]["surface_payload"]["trigger_type"] == "periodic_sweep"
     assert calls[0]["surface_payload"]["conversation_id"] == "operator:sweep"
     assert "Trigger: periodic_sweep" in calls[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_operator_sweep_skips_when_user_policy_disables_it(monkeypatch, tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "operator_sweep_policy_disabled.db")
+    calls = []
+
+    with SessionLocal() as db:
+        db.add(
+            User(
+                id=7,
+                email="owner@test.local",
+                role="ADMIN",
+                context={"preferences": {"operator_mode": {"enabled": False}}},
+            )
+        )
+        db.commit()
+
+    @contextmanager
+    def override_db_session():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    async def fake_invoke_oikos(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 123
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    monkeypatch.setattr("zerg.jobs.oikos_operator_sweep.db_session", override_db_session)
+    monkeypatch.setattr("zerg.jobs.oikos_operator_sweep.invoke_oikos", fake_invoke_oikos)
+
+    result = await run()
+
+    engine.dispose()
+
+    assert result == {"status": "skipped", "reason": "operator mode disabled"}
+    assert calls == []

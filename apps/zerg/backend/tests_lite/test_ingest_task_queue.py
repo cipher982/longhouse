@@ -65,9 +65,10 @@ def _seed_completion_summary_task(
     ended_at: datetime,
     presence_state: str | None,
     presence_updated_at: datetime | None = None,
+    user_context: dict | None = None,
 ):
     db = factory()
-    user = User(email="owner@example.com")
+    user = User(email="owner@example.com", context=user_context or {})
     db.add(user)
     db.flush()
 
@@ -346,6 +347,33 @@ async def test_summary_task_skips_operator_for_historical_completed_session(tmp_
         factory,
         ended_at=ended_at,
         presence_state=None,
+    )
+
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
+            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
+                await _execute_task(task_id, session_id, "summary")
+
+    invoke_oikos.assert_not_awaited()
+
+    tasks = _get_tasks(factory, status="done")
+    assert len(tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path, monkeypatch):
+    """User-backed operator prefs can disable post-ingest completion wakeups."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    factory = _make_db(tmp_path, "worker_operator_skip_policy.db")
+    ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    session_id, task_id, _owner_id = _seed_completion_summary_task(
+        factory,
+        ended_at=ended_at,
+        presence_state="idle",
+        presence_updated_at=ended_at,
+        user_context={"preferences": {"operator_mode": {"enabled": False}}},
     )
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):

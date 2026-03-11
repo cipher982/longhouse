@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
 from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
+from zerg.services.oikos_operator_policy import get_operator_policy
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +142,6 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
     return claimed
 
 
-def _operator_mode_enabled() -> bool:
-    return os.getenv("OIKOS_OPERATOR_MODE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _normalize_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -195,9 +191,6 @@ def _build_operator_completion_message(
 
 
 async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str) -> None:
-    if not _operator_mode_enabled():
-        return
-
     from zerg.models.agents import AgentSession
     from zerg.models.agents import SessionPresence
     from zerg.models.user import User
@@ -233,6 +226,8 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
         if owner is None:
             return
         owner_id = int(owner[0])
+        if not get_operator_policy(db, owner_id).enabled:
+            return
 
         provider = session.provider
         project = session.project
