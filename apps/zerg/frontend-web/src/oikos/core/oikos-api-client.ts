@@ -57,7 +57,7 @@ export class OikosAPIClient {
   private _baseURL: string;
   private eventSource: EventSource | null = null;
 
-  constructor(baseURL: string = 'http://localhost:47300') {
+  constructor(baseURL: string = '') {
     this._baseURL = baseURL;
   }
 
