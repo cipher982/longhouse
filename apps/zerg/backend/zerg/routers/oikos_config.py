@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.routers.oikos_auth import _is_tool_enabled
 from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.services.oikos_operator_policy import policy_from_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,16 @@ class OikosModelInfo(BaseModel):
 class OikosPreferences(BaseModel):
     """User preferences for Oikos chat."""
 
+    class OperatorMode(BaseModel):
+        enabled: bool
+        shadow_mode: bool
+        allow_continue: bool
+        allow_notify: bool
+        allow_small_repairs: bool
+
     chat_model: str
     reasoning_effort: str
+    operator_mode: OperatorMode
 
 
 class OikosBootstrapResponse(BaseModel):
@@ -63,8 +72,16 @@ class OikosThreadInfo(BaseModel):
 class OikosPreferencesUpdate(BaseModel):
     """Request to update user preferences."""
 
+    class OperatorModeUpdate(BaseModel):
+        enabled: Optional[bool] = None
+        shadow_mode: Optional[bool] = None
+        allow_continue: Optional[bool] = None
+        allow_notify: Optional[bool] = None
+        allow_small_repairs: Optional[bool] = None
+
     chat_model: Optional[str] = None
     reasoning_effort: Optional[str] = None
+    operator_mode: Optional[OperatorModeUpdate] = None
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +93,17 @@ AVAILABLE_TOOLS = {
     "whoop": {"name": "get_whoop_data", "description": "Get WHOOP health metrics"},
     "obsidian": {"name": "search_notes", "description": "Search Obsidian vault via Runner"},
 }
+
+
+def _build_operator_mode_preferences(context: dict | None) -> OikosPreferences.OperatorMode:
+    policy = policy_from_user_context(context)
+    return OikosPreferences.OperatorMode(
+        enabled=policy.enabled,
+        shadow_mode=policy.shadow_mode,
+        allow_continue=policy.allow_continue,
+        allow_notify=policy.allow_notify,
+        allow_small_repairs=policy.allow_small_repairs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +156,12 @@ def oikos_bootstrap(
     prefs = ctx.get("preferences", {}) or {}
     model = prefs.get("chat_model") or default_id
     if model not in available_ids:
-        model = default_id if default_id in available_ids else (available_models[0].id if available_models else default_id)
+        if default_id in available_ids:
+            model = default_id
+        elif available_models:
+            model = available_models[0].id
+        else:
+            model = default_id
 
     effort = (prefs.get("reasoning_effort") or "none").lower()
     if effort not in {"none", "low", "medium", "high"}:
@@ -139,7 +172,11 @@ def oikos_bootstrap(
         enabled_tools=enabled_tools,
         user_context=user_context,
         available_models=available_models,
-        preferences=OikosPreferences(chat_model=model, reasoning_effort=effort),
+        preferences=OikosPreferences(
+            chat_model=model,
+            reasoning_effort=effort,
+            operator_mode=_build_operator_mode_preferences(ctx),
+        ),
     )
 
 
@@ -205,6 +242,14 @@ def oikos_update_preferences(
             )
         prefs["reasoning_effort"] = update.reasoning_effort.lower()
 
+    if update.operator_mode is not None:
+        operator_mode = dict(prefs.get("operator_mode", {}) or {})
+        for field_name in ("enabled", "shadow_mode", "allow_continue", "allow_notify", "allow_small_repairs"):
+            value = getattr(update.operator_mode, field_name)
+            if value is not None:
+                operator_mode[field_name] = value
+        prefs["operator_mode"] = operator_mode
+
     ctx["preferences"] = prefs
     current_user.context = ctx
     db.commit()
@@ -214,7 +259,11 @@ def oikos_update_preferences(
     if effort not in {"none", "low", "medium", "high"}:
         effort = "none"
 
-    return OikosPreferences(chat_model=chat_model, reasoning_effort=effort)
+    return OikosPreferences(
+        chat_model=chat_model,
+        reasoning_effort=effort,
+        operator_mode=_build_operator_mode_preferences(ctx),
+    )
 
 
 @router.get("/session")

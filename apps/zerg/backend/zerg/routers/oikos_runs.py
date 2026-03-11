@@ -25,6 +25,7 @@ from zerg.models.models import Fiche
 from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
 from zerg.models.run_event import RunEvent
+from zerg.models.work import OikosWakeup
 from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.utils.time import UTCBaseModel
 
@@ -54,6 +55,29 @@ class OikosRunSummary(UTCBaseModel):
     completed_at: Optional[datetime] = None
 
 
+class OikosWakeupSummary(UTCBaseModel):
+    """Minimal proactive wakeup summary for operator-mode review."""
+
+    id: int
+    source: str
+    trigger_type: str
+    status: str
+    reason: Optional[str] = None
+    session_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    wakeup_key: Optional[str] = None
+    run_id: Optional[int] = None
+    payload: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+
+def _get_owned_run(db: Session, *, run_id: int, owner_id: int) -> Run | None:
+    query = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id)
+    query = query.filter(Run.id == run_id)
+    query = query.filter(Fiche.owner_id == owner_id)
+    return query.first()
+
+
 @router.get("/runs", response_model=List[OikosRunSummary])
 def list_oikos_runs(
     limit: int = 50,
@@ -63,7 +87,9 @@ def list_oikos_runs(
 ) -> List[OikosRunSummary]:
     """List recent fiche runs for Oikos Task Inbox."""
     # Get recent runs scoped to the authenticated user.
-    query = db.query(Run).options(selectinload(Run.fiche)).join(Fiche, Fiche.id == Run.fiche_id).filter(Fiche.owner_id == current_user.id)
+    query = db.query(Run).options(selectinload(Run.fiche))
+    query = query.join(Fiche, Fiche.id == Run.fiche_id)
+    query = query.filter(Fiche.owner_id == current_user.id)
 
     if fiche_id:
         query = query.filter(Run.fiche_id == fiche_id)
@@ -130,6 +156,44 @@ def list_oikos_runs(
         )
 
     return summaries
+
+
+@router.get("/wakeups", response_model=List[OikosWakeupSummary])
+def list_oikos_wakeups(
+    limit: int = 50,
+    status: Optional[str] = None,
+    trigger_type: Optional[str] = None,
+    session_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> List[OikosWakeupSummary]:
+    """List recent proactive Oikos wakeups for the authenticated owner."""
+    query = db.query(OikosWakeup).filter(OikosWakeup.owner_id == current_user.id)
+
+    if status:
+        query = query.filter(OikosWakeup.status == status)
+    if trigger_type:
+        query = query.filter(OikosWakeup.trigger_type == trigger_type)
+    if session_id:
+        query = query.filter(OikosWakeup.session_id == session_id)
+
+    rows = query.order_by(OikosWakeup.created_at.desc(), OikosWakeup.id.desc()).limit(limit).all()
+    return [
+        OikosWakeupSummary(
+            id=row.id,
+            source=row.source,
+            trigger_type=row.trigger_type,
+            status=row.status,
+            reason=row.reason,
+            session_id=row.session_id,
+            conversation_id=row.conversation_id,
+            wakeup_key=row.wakeup_key,
+            run_id=row.run_id,
+            payload=row.payload,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
 
 
 def _extract_text_from_message_content(content: Any) -> Optional[str]:
@@ -290,9 +354,8 @@ def get_active_run(
 
     # Prefer RUNNING runs. DEFERRED runs are "in-flight" only if they have not
     # already produced a successful continuation.
-    active_run = (
-        db.query(Run).filter(Run.fiche_id == oikos_fiche.id).filter(Run.status == RunStatus.RUNNING).order_by(Run.created_at.desc()).first()
-    )
+    active_run_query = db.query(Run).filter(Run.fiche_id == oikos_fiche.id)
+    active_run = active_run_query.filter(Run.status == RunStatus.RUNNING).order_by(Run.created_at.desc()).first()
 
     if not active_run:
         # WAITING runs are interrupted via spawn_commis (oikos resume).
@@ -348,7 +411,7 @@ def get_run_status(
 ) -> RunStatusResponse:
     """Get current status of a specific run."""
     # Multi-tenant security: only return runs owned by the current user
-    run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
+    run = _get_owned_run(db, run_id=run_id, owner_id=current_user.id)
 
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -381,7 +444,7 @@ async def attach_to_run_stream(
     # SSE stream duration, blocking TRUNCATE during E2E resets.
     with db_session() as db:
         # Multi-tenant security: only return runs owned by the current user
-        run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
+        run = _get_owned_run(db, run_id=run_id, owner_id=current_user.id)
 
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -464,7 +527,7 @@ def get_run_events(
 ) -> RunEventsResponse:
     """Get events for a specific run, optionally filtered by type."""
     # Multi-tenant security: only return runs owned by the current user
-    run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
+    run = _get_owned_run(db, run_id=run_id, owner_id=current_user.id)
 
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -527,7 +590,7 @@ def get_run_timeline(
 ) -> TimelineResponse:
     """Get timing timeline for a specific run (phase events + summary stats)."""
     # Multi-tenant security: only return runs owned by the current user
-    run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
+    run = _get_owned_run(db, run_id=run_id, owner_id=current_user.id)
 
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
