@@ -697,6 +697,164 @@ test.describe('Session Detail Page', () => {
     await expect(page.getByTestId('session-continuation-panel')).toHaveCount(0);
   });
 
+  test('desktop workspace panes can be resized and persisted', async ({ page, request }) => {
+    const sessionId = randomUUID();
+    const now = Date.now();
+    const ingest = await request.post('/api/agents/ingest', {
+      data: {
+        id: sessionId,
+        provider: 'claude',
+        environment: 'development',
+        project: 'workspace-resize-e2e',
+        device_id: 'e2e-device',
+        cwd: '/tmp',
+        git_repo: null,
+        git_branch: null,
+        started_at: new Date(now).toISOString(),
+        ended_at: new Date(now + 3000).toISOString(),
+        events: [
+          {
+            role: 'user',
+            content_text: 'Show me a resizable workspace.',
+            timestamp: new Date(now).toISOString(),
+            source_path: '/tmp/session.jsonl',
+            source_offset: 0,
+          },
+          {
+            role: 'assistant',
+            content_text: 'I will inspect the repo and report back.',
+            timestamp: new Date(now + 1000).toISOString(),
+            source_path: '/tmp/session.jsonl',
+            source_offset: 1,
+          },
+          {
+            role: 'assistant',
+            tool_name: 'Bash',
+            tool_input_json: { command: 'ls -la' },
+            tool_call_id: 'toolu_resize_workspace',
+            timestamp: new Date(now + 2000).toISOString(),
+            source_path: '/tmp/session.jsonl',
+            source_offset: 2,
+          },
+          {
+            role: 'tool',
+            tool_name: 'Bash',
+            tool_output_text: 'README.md\nsrc/\npackage.json',
+            tool_call_id: 'toolu_resize_workspace',
+            timestamp: new Date(now + 3000).toISOString(),
+            source_path: '/tmp/session.jsonl',
+            source_offset: 3,
+          },
+        ],
+      },
+    });
+
+    expect(ingest.ok()).toBe(true);
+
+    await page.goto('/timeline');
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+    await page.evaluate(() => {
+      window.localStorage.removeItem('zerg:session-workspace-layout:v1');
+    });
+
+    await page.goto(`/timeline/${sessionId}`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+
+    const sidebarPane = page.locator('.workspace-shell__pane--sidebar');
+    const mainPane = page.locator('.workspace-shell__pane--main');
+    const sidebarHandle = page.getByTestId('session-workspace-sidebar-resize');
+
+    const sidebarBefore = await sidebarPane.boundingBox();
+    const mainBefore = await mainPane.boundingBox();
+    const sidebarHandleBox = await sidebarHandle.boundingBox();
+    expect(sidebarBefore).toBeTruthy();
+    expect(mainBefore).toBeTruthy();
+    expect(sidebarHandleBox).toBeTruthy();
+
+    await page.mouse.move(
+      (sidebarHandleBox?.x ?? 0) + (sidebarHandleBox?.width ?? 0) / 2,
+      (sidebarHandleBox?.y ?? 0) + (sidebarHandleBox?.height ?? 0) / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      (sidebarHandleBox?.x ?? 0) + (sidebarHandleBox?.width ?? 0) / 2 + 80,
+      (sidebarHandleBox?.y ?? 0) + (sidebarHandleBox?.height ?? 0) / 2,
+      { steps: 12 },
+    );
+    await page.mouse.up();
+
+    await expect
+      .poll(async () => (await sidebarPane.boundingBox())?.width ?? 0, { timeout: 4000 })
+      .toBeGreaterThan((sidebarBefore?.width ?? 0) + 40);
+    await expect
+      .poll(async () => (await mainPane.boundingBox())?.width ?? 0, { timeout: 4000 })
+      .toBeLessThan((mainBefore?.width ?? 0) - 20);
+
+    const storedLayout = await page.evaluate(() =>
+      JSON.parse(window.localStorage.getItem('zerg:session-workspace-layout:v1') || '{}'),
+    );
+    expect(storedLayout.sidebarWidth).toBeGreaterThan(280);
+
+    await page.reload();
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+    await expect
+      .poll(async () => (await page.locator('.workspace-shell__pane--sidebar').boundingBox())?.width ?? 0, {
+        timeout: 4000,
+      })
+      .toBeGreaterThan((sidebarBefore?.width ?? 0) + 40);
+
+    await page.getByTestId('session-workspace-sidebar-resize').focus();
+    await page.keyboard.press('Enter');
+
+    await expect
+      .poll(async () => (await page.locator('.workspace-shell__pane--sidebar').boundingBox())?.width ?? 0, {
+        timeout: 4000,
+      })
+      .toBeLessThan(storedLayout.sidebarWidth - 20);
+
+    await page.locator('[data-row-kind="tool"]').first().click();
+
+    const inspectorPane = page.locator('.workspace-shell__pane--inspector');
+    const inspectorHandle = page.getByTestId('session-workspace-inspector-resize');
+    await expect(inspectorPane).toBeVisible();
+
+    const inspectorBefore = await inspectorPane.boundingBox();
+    const inspectorHandleBox = await inspectorHandle.boundingBox();
+    expect(inspectorBefore).toBeTruthy();
+    expect(inspectorHandleBox).toBeTruthy();
+
+    await page.mouse.move(
+      (inspectorHandleBox?.x ?? 0) + (inspectorHandleBox?.width ?? 0) / 2,
+      (inspectorHandleBox?.y ?? 0) + (inspectorHandleBox?.height ?? 0) / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      (inspectorHandleBox?.x ?? 0) + (inspectorHandleBox?.width ?? 0) / 2 - 80,
+      (inspectorHandleBox?.y ?? 0) + (inspectorHandleBox?.height ?? 0) / 2,
+      { steps: 12 },
+    );
+    await page.mouse.up();
+
+    await expect
+      .poll(async () => (await inspectorPane.boundingBox())?.width ?? 0, { timeout: 4000 })
+      .toBeGreaterThan((inspectorBefore?.width ?? 0) + 40);
+
+    const storedInspectorLayout = await page.evaluate(() =>
+      JSON.parse(window.localStorage.getItem('zerg:session-workspace-layout:v1') || '{}'),
+    );
+    expect(storedInspectorLayout.inspectorWidth).toBeGreaterThan(360);
+
+    await page.reload();
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+    await page.locator('[data-row-kind="tool"]').first().click();
+
+    await expect
+      .poll(async () => (await page.locator('.workspace-shell__pane--inspector').boundingBox())?.width ?? 0, {
+        timeout: 4000,
+      })
+      .toBeGreaterThan((inspectorBefore?.width ?? 0) + 40);
+  });
+
   test('scrolls from left and right gutters on timeline detail', async ({ page, request }) => {
     const sessionId = randomUUID();
     const now = Date.now();
