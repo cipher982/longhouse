@@ -22,10 +22,9 @@ import type { ConversationTurn } from '../../data'
 // Import controllers (keep these - they're pure business logic)
 import { voiceController, type VoiceEvent } from '../../lib/voice-controller'
 import { audioController } from '../../lib/audio-controller'
-import { sessionHandler } from '../../lib/session-handler'
 import { feedbackSystem } from '../../lib/feedback-system'
 import { OikosChatController } from '../../lib/oikos-chat-controller'
-import { bootstrapSession, type BootstrapResult } from '../../lib/session-bootstrap'
+import type { BootstrapResult } from '../../lib/session-bootstrap'
 import { contextLoader } from '../../contexts/context-loader'
 import { commisProgressStore } from '../../lib/commis-progress-store'
 import { oikosToolStore, type OikosToolCall } from '../../lib/oikos-tool-store'
@@ -39,6 +38,14 @@ import { eventBus } from '../../lib/event-bus'
 import { timelineLogger } from '../../lib/timeline-logger'
 
 const VOICE_INPUT_MODE: 'turn-based' | 'realtime' = 'turn-based'
+
+async function loadRealtimeBootstrap() {
+  return import('../../lib/session-bootstrap')
+}
+
+async function loadRealtimeSessionHandler() {
+  return import('../../lib/session-handler')
+}
 
 // Types (previously in state-manager.ts)
 export interface ModelInfo {
@@ -620,6 +627,9 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
       }
 
       // 4. Bootstrap session
+      // Realtime voice is a legacy lane. Keep the WebRTC SDK out of the normal
+      // turn-based chat bundle so public web visits never load it by default.
+      const { bootstrapSession } = await loadRealtimeBootstrap()
       const bootstrapResult = await bootstrapSession({
         context: state.currentContext,
         conversationId: null,
@@ -685,6 +695,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
 
     try {
       oikosChatRef.current?.cancel()
+      const { sessionHandler } = await loadRealtimeSessionHandler()
       await sessionHandler.disconnect()
 
       voiceController.setSession(null)
