@@ -36,6 +36,7 @@ Notes:
 - 2026-03-10: Follow-up landed: continuation now opens in a modal, the workspace shell only reserves a bottom row when it actually needs one, and long transcripts scroll to the latest item without centering it into a cramped viewport.
 - 2026-03-11: User asked for IDE-style adjustment, not just better defaults. Keep the scope to draggable gutters and persisted widths first; do not turn this into a full docking/window-manager project.
 - 2026-03-11: Desktop workspace panes are now user-adjustable. The left rail and inspector both support pointer drag, keyboard resizing, and reset-to-default behavior, with widths persisted in local storage across reloads.
+- 2026-03-11: Follow-up landed: legacy `?resume=1` links now strip back to the transcript-first detail view, first-party timeline/session-picker links no longer append that query, and the continuation modal portals above the app shell with a more opaque surface so header chrome cannot bleed through it.
 
 ## [Product] Proactive Oikos operator mode (size: 5)
 

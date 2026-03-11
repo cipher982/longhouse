@@ -182,8 +182,6 @@ function buildSessionDetailPath(
   const params = new URLSearchParams();
   if (matchEventId != null) {
     params.set("event_id", String(matchEventId));
-  } else if (supportsCloudContinuation(session.provider)) {
-    params.set("resume", "1");
   }
   const search = params.toString();
   return `/timeline/${session.id}${search ? `?${search}` : ""}`;
