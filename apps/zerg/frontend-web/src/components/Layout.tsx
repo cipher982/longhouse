@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, getAuthMethods, type AuthMethods } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
-import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
+import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
 import { useConfirm } from "./confirm";
 import { fetchRunnerStatus } from "../services/api";
@@ -429,41 +429,28 @@ function RunnerStatusIndicator() {
   );
 }
 
-function ApiHealthIndicator() {
+function InstanceHealthIndicator() {
   const apiError = useApiHealth();
-  if (!apiError) return null;
+  const connectionStatus = apiError ? ConnectionStatus.ERROR : ConnectionStatus.CONNECTED;
+  const label = apiError ? "API degraded" : "API healthy";
+  const title = apiError ? apiError.message : "API responding normally";
 
   return (
     <span
-      style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", opacity: 0.85 }}
-      title={apiError.message}
+      style={{ display: "flex", alignItems: "center", gap: "4px", opacity: 0.85 }}
+      title={title}
     >
-      <span
-        style={{
-          width: "6px",
-          height: "6px",
-          borderRadius: "50%",
-          backgroundColor: "#D4A843", // warm amber — degraded, not fatal
-        }}
-      />
-      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>API degraded</span>
+      <ConnectionStatusIndicator status={connectionStatus} showText={false} />
+      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>{label}</span>
     </span>
   );
 }
 
 function StatusFooter() {
-  // Use a background WebSocket connection for general status monitoring
-  const { connectionStatus } = useWebSocket(true, {
-    includeAuth: true,
-    // Don't invalidate any queries from the layout level
-    invalidateQueries: [],
-  });
-
   return (
     <footer className="status-bar" data-testid="status-footer" aria-live="polite">
       <div className="packet-counter" style={{ display: "flex", alignItems: "center" }}>
-        <ConnectionStatusIndicator status={connectionStatus} />
-        <ApiHealthIndicator />
+        <InstanceHealthIndicator />
         <RunnerStatusIndicator />
       </div>
     </footer>
