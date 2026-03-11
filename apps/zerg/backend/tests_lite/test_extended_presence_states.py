@@ -39,6 +39,7 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -46,6 +47,7 @@ from zerg.main import api_app
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
+from zerg.models.user import User
 from zerg.routers.agents import verify_agents_token
 
 # ---------------------------------------------------------------------------
@@ -55,6 +57,7 @@ from zerg.routers.agents import verify_agents_token
 
 def _make_db(tmp_path, name="test.db"):
     engine = make_engine(f"sqlite:///{tmp_path}/{name}")
+    Base.metadata.create_all(bind=engine)
     AgentsBase.metadata.create_all(bind=engine)
     return engine, make_sessionmaker(engine)
 
@@ -563,6 +566,56 @@ def test_needs_user_does_not_wake_operator_when_disabled(monkeypatch, tmp_path):
         response = c.post(
             "/agents/presence",
             json={"session_id": sid, "state": "needs_user", "cwd": "/tmp/test"},
+            headers=_auth_headers(),
+        )
+        assert response.status_code == 204
+
+    api_app.dependency_overrides.clear()
+    engine.dispose()
+
+    assert calls == []
+
+
+def test_blocked_does_not_wake_operator_when_user_policy_disables_it(monkeypatch, tmp_path):
+    """User-backed operator prefs can disable wakeups even when the env master switch is on."""
+    engine, SessionLocal = _make_db(tmp_path, "operator_policy_disabled.db")
+    calls = []
+
+    with SessionLocal() as db:
+        db.add(
+            User(
+                id=42,
+                email="owner@test.local",
+                role="ADMIN",
+                context={"preferences": {"operator_mode": {"enabled": False}}},
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(owner_id=42)
+
+    async def fake_invoke_oikos(owner_id, message, message_id, **kwargs):
+        calls.append((owner_id, message, message_id, kwargs))
+        return 123
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    monkeypatch.setattr("zerg.routers.presence.invoke_oikos", fake_invoke_oikos)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    with TestClient(api_app) as c:
+        sid = str(uuid4())
+        response = c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "blocked", "tool_name": "Bash", "cwd": "/tmp/test"},
             headers=_auth_headers(),
         )
         assert response.status_code == 204
