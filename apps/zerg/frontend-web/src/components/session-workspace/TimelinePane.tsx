@@ -209,54 +209,55 @@ export function TimelinePane({
   return (
     <div className="timeline-pane" data-testid="session-timeline-pane">
       <div className="timeline-pane__header timeline-header" data-testid="session-timeline-header">
-        <div>
-          <div className="timeline-pane__title">Event Timeline</div>
-          <div className="timeline-pane__subtitle">
-            {loadedEvents >= totalEvents
-              ? `${totalEvents} events`
-              : `${loadedEvents}/${totalEvents} events loaded`}
+        <div className="timeline-pane__header-main">
+          <div className="timeline-pane__title-group">
+            <div className="timeline-pane__title">Event Timeline</div>
+            <div className="timeline-pane__summary">
+              {loadedEvents >= totalEvents
+                ? `${totalEvents} events`
+                : `${loadedEvents}/${totalEvents} events loaded`}
+            </div>
+          </div>
+          <div className="timeline-pane__filters">
+            <button
+              type="button"
+              className={`timeline-pane__filter${eventFilter === "all" ? " is-active" : ""}`}
+              onClick={() => onEventFilterChange("all")}
+            >
+              All ({items.length})
+            </button>
+            <button
+              type="button"
+              className={`timeline-pane__filter${eventFilter === "messages" ? " is-active" : ""}`}
+              onClick={() => onEventFilterChange("messages")}
+            >
+              Messages ({messageCount})
+            </button>
+            <button
+              type="button"
+              className={`timeline-pane__filter${eventFilter === "tools" ? " is-active" : ""}`}
+              onClick={() => onEventFilterChange("tools")}
+            >
+              {toolFilterLabel}
+            </button>
           </div>
         </div>
-        <div className="timeline-pane__search">
-          <input
-            type="text"
-            className="timeline-pane__search-input"
-            placeholder="Search events..."
-            value={searchQuery}
-            onChange={(event) => onSearchQueryChange(event.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="timeline-pane__toolbar">
-        <div className="timeline-pane__filters">
-          <button
-            type="button"
-            className={`timeline-pane__filter${eventFilter === "all" ? " is-active" : ""}`}
-            onClick={() => onEventFilterChange("all")}
-          >
-            All ({items.length})
-          </button>
-          <button
-            type="button"
-            className={`timeline-pane__filter${eventFilter === "messages" ? " is-active" : ""}`}
-            onClick={() => onEventFilterChange("messages")}
-          >
-            Messages ({messageCount})
-          </button>
-          <button
-            type="button"
-            className={`timeline-pane__filter${eventFilter === "tools" ? " is-active" : ""}`}
-            onClick={() => onEventFilterChange("tools")}
-          >
-            {toolFilterLabel}
-          </button>
-        </div>
-        {debouncedSearch.trim() ? (
-          <div className="timeline-pane__match-count">
-            {filteredItems.length} match{filteredItems.length === 1 ? "" : "es"}
+        <div className="timeline-pane__header-actions">
+          {debouncedSearch.trim() ? (
+            <div className="timeline-pane__match-count">
+              {filteredItems.length} match{filteredItems.length === 1 ? "" : "es"}
+            </div>
+          ) : null}
+          <div className="timeline-pane__search">
+            <input
+              type="text"
+              className="timeline-pane__search-input"
+              placeholder="Search events..."
+              value={searchQuery}
+              onChange={(event) => onSearchQueryChange(event.target.value)}
+            />
           </div>
-        ) : null}
+        </div>
       </div>
 
       {outsideActiveCount > 0 || abandonedEvents > 0 ? (

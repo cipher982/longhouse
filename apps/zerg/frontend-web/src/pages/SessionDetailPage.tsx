@@ -357,18 +357,16 @@ export default function SessionDetailPage() {
         header={
           <div className="session-workspace-header">
             <div className="session-workspace-header__left">
-              <Button variant="ghost" onClick={handleBack}>
+              <Button variant="ghost" size="sm" onClick={handleBack}>
                 &larr; Timeline
               </Button>
-              <div className="session-workspace-header__titles">
-                <div className="session-workspace-header__eyebrow">Session Workspace</div>
-                <h1 className="session-workspace-header__title">{title}</h1>
-                <div className="session-workspace-header__subtitle">
+              <div className="session-workspace-header__context">
+                <span className="session-workspace-header__name">{title}</span>
+                <span className="session-workspace-header__meta">
                   {threadSessions.length > 1
                     ? `${threadSessions.length} continuations`
-                    : "Single continuation"}{" "}
-                  · {totalEvents} events
-                </div>
+                    : "Single continuation"}
+                </span>
               </div>
             </div>
             <div className="session-workspace-header__actions">
