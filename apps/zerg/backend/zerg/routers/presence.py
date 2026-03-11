@@ -44,7 +44,12 @@ from zerg.models.agents import SessionPresence
 from zerg.models.user import User
 from zerg.routers.agents import verify_agents_token
 from zerg.services.oikos_operator_policy import get_operator_policy
+from zerg.services.oikos_operator_policy import operator_master_switch_enabled
 from zerg.services.oikos_service import invoke_oikos
+from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
+from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
+from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
+from zerg.services.oikos_wakeup_ledger import append_wakeup
 from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
 
 logger = logging.getLogger(__name__)
@@ -61,6 +66,7 @@ _AUTO_RESUME_STATES = {"thinking", "running"}
 
 # States worth waking proactive Oikos for immediately.
 _OPERATOR_WAKE_STATES = {"blocked", "needs_user"}
+_OPERATOR_CONVERSATION_ID = "operator:main"
 
 
 class PresenceIn(BaseModel):
@@ -137,6 +143,28 @@ def _build_operator_message(
     return "\n".join(lines)
 
 
+def _build_operator_surface_payload(
+    *,
+    payload: PresenceIn,
+    project: str | None,
+    tool_name: str | None,
+) -> dict[str, str | None]:
+    return {
+        "trigger_type": f"presence.{payload.state}",
+        "conversation_id": _OPERATOR_CONVERSATION_ID,
+        "session_id": payload.session_id,
+        "provider": payload.provider or "claude",
+        "project": project,
+        "tool_name": tool_name,
+        "cwd": payload.cwd,
+    }
+
+
+def _build_presence_wakeup_key(payload: PresenceIn, tool_name: str | None) -> str:
+    normalized_tool = tool_name or "-"
+    return f"presence:{payload.session_id}:{payload.state}:{normalized_tool}"
+
+
 async def _maybe_invoke_operator_wakeup(
     *,
     db: Session,
@@ -145,11 +173,43 @@ async def _maybe_invoke_operator_wakeup(
     project: str | None,
     tool_name: str | None,
 ) -> None:
+    if not operator_master_switch_enabled():
+        return
+
+    trigger_type = f"presence.{payload.state}"
+    wakeup_payload = _build_operator_surface_payload(payload=payload, project=project, tool_name=tool_name)
+    wakeup_key = _build_presence_wakeup_key(payload, tool_name)
     owner_id = _resolve_owner_id(db, token)
     if owner_id is None:
+        append_wakeup(
+            db,
+            owner_id=None,
+            source="presence",
+            trigger_type=trigger_type,
+            status=WAKEUP_STATUS_SUPPRESSED,
+            reason="no_owner",
+            session_id=payload.session_id,
+            conversation_id=_OPERATOR_CONVERSATION_ID,
+            wakeup_key=wakeup_key,
+            payload=wakeup_payload,
+        )
+        db.commit()
         logger.debug("Skipping operator wakeup for session %s: no owner resolved", payload.session_id)
         return
     if not get_operator_policy(db, owner_id).enabled:
+        append_wakeup(
+            db,
+            owner_id=owner_id,
+            source="presence",
+            trigger_type=trigger_type,
+            status=WAKEUP_STATUS_SUPPRESSED,
+            reason="user_policy_disabled",
+            session_id=payload.session_id,
+            conversation_id=_OPERATOR_CONVERSATION_ID,
+            wakeup_key=wakeup_key,
+            payload=wakeup_payload,
+        )
+        db.commit()
         logger.debug(
             "Skipping operator wakeup for session %s: operator mode disabled for owner %s",
             payload.session_id,
@@ -159,25 +219,43 @@ async def _maybe_invoke_operator_wakeup(
 
     message = _build_operator_message(payload=payload, project=project, tool_name=tool_name)
     message_id = f"operator-presence-{payload.session_id}-{payload.state}-{uuid4()}"
-    surface_payload = {
-        "trigger_type": f"presence.{payload.state}",
-        "session_id": payload.session_id,
-        "provider": payload.provider or "claude",
-        "project": project,
-        "tool_name": tool_name,
-        "cwd": payload.cwd,
-    }
 
     try:
-        await invoke_oikos(
+        run_id = await invoke_oikos(
             owner_id,
             message,
             message_id,
             source="operator",
             surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
-            surface_payload=surface_payload,
+            surface_payload=wakeup_payload,
         )
+        append_wakeup(
+            db,
+            owner_id=owner_id,
+            source="presence",
+            trigger_type=trigger_type,
+            status=WAKEUP_STATUS_ENQUEUED,
+            session_id=payload.session_id,
+            conversation_id=_OPERATOR_CONVERSATION_ID,
+            wakeup_key=wakeup_key,
+            run_id=run_id,
+            payload=wakeup_payload,
+        )
+        db.commit()
     except Exception:
+        append_wakeup(
+            db,
+            owner_id=owner_id,
+            source="presence",
+            trigger_type=trigger_type,
+            status=WAKEUP_STATUS_FAILED,
+            reason="invoke_failed",
+            session_id=payload.session_id,
+            conversation_id=_OPERATOR_CONVERSATION_ID,
+            wakeup_key=wakeup_key,
+            payload=wakeup_payload,
+        )
+        db.commit()
         logger.exception("Failed to invoke operator wakeup for session %s", payload.session_id)
 
 
@@ -263,6 +341,27 @@ async def upsert_presence(
             pass  # session_id not a valid UUID — skip silently
 
     db.commit()
+    if payload.state in _OPERATOR_WAKE_STATES and not should_wake_operator and operator_master_switch_enabled():
+        owner_id = _resolve_owner_id(db, _token)
+        if owner_id is not None and get_operator_policy(db, owner_id).enabled:
+            wakeup_payload = _build_operator_surface_payload(
+                payload=payload,
+                project=project,
+                tool_name=effective_tool_name,
+            )
+            append_wakeup(
+                db,
+                owner_id=owner_id,
+                source="presence",
+                trigger_type=f"presence.{payload.state}",
+                status=WAKEUP_STATUS_SUPPRESSED,
+                reason="duplicate_state",
+                session_id=payload.session_id,
+                conversation_id=_OPERATOR_CONVERSATION_ID,
+                wakeup_key=_build_presence_wakeup_key(payload, effective_tool_name),
+                payload=wakeup_payload,
+            )
+            db.commit()
     if should_wake_operator:
         await _maybe_invoke_operator_wakeup(
             db=db,

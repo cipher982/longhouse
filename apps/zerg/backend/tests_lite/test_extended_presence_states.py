@@ -48,6 +48,7 @@ from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.user import User
+from zerg.models.work import OikosWakeup
 from zerg.routers.agents import verify_agents_token
 
 # ---------------------------------------------------------------------------
@@ -483,6 +484,10 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
         assert response.status_code == 204
 
     api_app.dependency_overrides.clear()
+
+    with SessionLocal() as db:
+        wakeups = db.query(OikosWakeup).order_by(OikosWakeup.id).all()
+
     engine.dispose()
 
     assert len(calls) == 1
@@ -494,6 +499,13 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
     assert calls[0]["surface_adapter"].surface_id == "operator"
     assert calls[0]["surface_payload"]["session_id"] == sid
     assert calls[0]["surface_payload"]["trigger_type"] == "presence.blocked"
+    assert len(wakeups) == 1
+    assert wakeups[0].status == "enqueued"
+    assert wakeups[0].run_id == 123
+    assert wakeups[0].source == "presence"
+    assert wakeups[0].trigger_type == "presence.blocked"
+    assert wakeups[0].session_id == sid
+    assert wakeups[0].payload["tool_name"] == "Bash"
 
 
 def test_repeated_blocked_state_does_not_rewake_operator(monkeypatch, tmp_path):
@@ -536,9 +548,16 @@ def test_repeated_blocked_state_does_not_rewake_operator(monkeypatch, tmp_path):
         assert second.status_code == 204
 
     api_app.dependency_overrides.clear()
+
+    with SessionLocal() as db:
+        wakeups = db.query(OikosWakeup).order_by(OikosWakeup.id).all()
+
     engine.dispose()
 
     assert len(calls) == 1
+    assert [w.status for w in wakeups] == ["enqueued", "suppressed"]
+    assert wakeups[1].reason == "duplicate_state"
+    assert wakeups[1].wakeup_key == wakeups[0].wakeup_key
 
 
 def test_needs_user_does_not_wake_operator_when_disabled(monkeypatch, tmp_path):
@@ -571,9 +590,14 @@ def test_needs_user_does_not_wake_operator_when_disabled(monkeypatch, tmp_path):
         assert response.status_code == 204
 
     api_app.dependency_overrides.clear()
+
+    with SessionLocal() as db:
+        wakeups = db.query(OikosWakeup).all()
+
     engine.dispose()
 
     assert calls == []
+    assert wakeups == []
 
 
 def test_blocked_does_not_wake_operator_when_user_policy_disables_it(monkeypatch, tmp_path):
@@ -621,6 +645,14 @@ def test_blocked_does_not_wake_operator_when_user_policy_disables_it(monkeypatch
         assert response.status_code == 204
 
     api_app.dependency_overrides.clear()
+
+    with SessionLocal() as db:
+        wakeups = db.query(OikosWakeup).order_by(OikosWakeup.id).all()
+
     engine.dispose()
 
     assert calls == []
+    assert len(wakeups) == 1
+    assert wakeups[0].status == "suppressed"
+    assert wakeups[0].reason == "user_policy_disabled"
+    assert wakeups[0].trigger_type == "presence.blocked"
