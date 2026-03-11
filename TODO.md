@@ -59,6 +59,7 @@ Notes:
 - 2026-03-10: Folded the new live operator triggers back into the shadow journey harness. The durable fixture set now covers low-priority `needs_user` pauses, duplicate blocked wakeups, and the current periodic sweep noop behavior so those operator-mode decisions stay regression-testable instead of living only in route/job code.
 - 2026-03-10: Landed the first post-ingest `session_completed` wakeup seam on the durable ingest task worker. Successful summary tasks now wake Oikos through the `operator` surface only for recent completed turns, while freshness guards suppress historical backfill and sessions that already resumed into `thinking`/`running` or another dedicated pause-state trigger.
 - 2026-03-10: Started the thinnest Oikos-owned policy state without adding a new table. Presence, post-ingest completion, and sweep wakeups now respect `User.context["preferences"]["operator_mode"]`, so a user-scoped disable/override exists even while the broader trigger-history half of this task is still open.
+- 2026-03-11: Spec recap landed in `docs/specs/oikos-proactive-operator.md` and `docs/plans/oikos-autonomy-roadmap.md`. The current dogfood shape is now explicit: runtime wakeups are `presence.blocked`, `presence.needs_user`, `periodic_sweep`, and recent post-ingest `session_completed`; the next thin state to add is a wakeup ledger for suppressed / ignored / acted decisions.
 - Spec: `docs/specs/oikos-proactive-operator.md`.
 - Roadmap: `docs/plans/oikos-autonomy-roadmap.md`.
 

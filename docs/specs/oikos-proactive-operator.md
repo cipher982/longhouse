@@ -1,8 +1,8 @@
 # Oikos Proactive Operator
 
-Status: proposed
+Status: active dogfood
 Owner: David / Oikos product direction
-Updated: 2026-03-10
+Updated: 2026-03-11
 
 ## Problem
 
@@ -20,6 +20,33 @@ The durable idea is:
 - it can wake up from meaningful triggers or periodic sweeps
 - it can inspect durable state, decide what matters, and take bounded actions
 - it can escalate when the right move is to involve the user
+
+## Current State
+
+As of 2026-03-11, the first dogfood ring is no longer hypothetical. The repo now has:
+
+- a transport-agnostic `invoke_oikos()` seam plus a dedicated `operator` surface
+- a deterministic shadow journey harness with durable artifacts
+- live wakeups for:
+  - `presence.blocked`
+  - `presence.needs_user`
+  - `periodic_sweep`
+  - recent `session_completed` after post-ingest summary succeeds
+- thin user-backed operator policy in `User.context["preferences"]["operator_mode"]`
+
+What is still missing:
+
+- durable wakeup / no-op history separate from full Oikos runs
+- the first bounded autonomous action path
+- browser / hosted smokes for the live operator loop
+
+That means the current state is best described as:
+
+- real trigger wiring exists
+- real policy gating exists
+- evaluation coverage exists
+- decision history is still too implicit
+- action-taking is still mostly future work
 
 ## Product Principles
 
@@ -139,6 +166,83 @@ The default mental model is:
 3. Oikos inspects durable state
 4. Oikos decides whether to act, wait, or escalate
 
+## V0 Runtime Contract
+
+The current v0 dogfood runtime should be thought of as a narrow, explicit contract rather than a vague "autonomy layer."
+
+### Current wake sources
+
+The wakeup set should stay intentionally small for now:
+
+- `presence.blocked`
+  - generated from Claude Code permission / blocked states
+  - deduped when the state and blocked tool have not materially changed
+- `presence.needs_user`
+  - generated from user-attention notifications
+  - used as a decision opportunity, not an automatic ping
+- `periodic_sweep`
+  - builtin fallback job
+  - meant to catch anything the event-driven paths miss
+- `session_completed`
+  - emitted only after transcript ingest succeeded and the durable summary worker finished
+  - only for recent completions, not historical backfill
+
+### Current guardrails
+
+The current runtime intentionally avoids several tempting but unsafe triggers:
+
+- do not wake directly on raw `idle` / Stop hooks
+  - those can arrive before transcript ship / ingest / summary work settles
+- do not treat every ingest with `ended_at` as a meaningful completion
+  - `ended_at` advances on every shipped turn, not only on a final close
+- do not wake on stale historical sessions
+  - post-ingest completion is freshness-gated
+- do not wake if fresh presence already says the session resumed or is paused in a more specific state
+  - `thinking`, `running`, `blocked`, and `needs_user` suppress the completion wakeup
+
+### Current execution path
+
+The current end-to-end flow is:
+
+1. a trigger occurs
+2. the trigger builds a small operator wakeup message plus structured payload
+3. the `operator` surface feeds the normal `invoke_oikos()` path
+4. Oikos runs inside the existing run / event lifecycle
+5. Oikos may still decide to do nothing
+
+This is important: wakeups are not actions. They are invitations to inspect and decide.
+
+## V0 Policy Surface
+
+The thinnest current policy contract is:
+
+- global master switch: `OIKOS_OPERATOR_MODE_ENABLED`
+- per-user override: `User.context["preferences"]["operator_mode"]`
+
+Current shape:
+
+```json
+{
+  "preferences": {
+    "operator_mode": {
+      "enabled": true,
+      "shadow_mode": true,
+      "allow_continue": false,
+      "allow_notify": true,
+      "allow_small_repairs": false
+    }
+  }
+}
+```
+
+Interpretation:
+
+- the env var is the coarse operator kill switch
+- the user preference is the fine-grained owner policy
+- the additional booleans define the intended bounded action envelope even when some actions are not wired yet
+
+This is enough policy for dogfood without inventing a dedicated autonomy settings table.
+
 ## Context Model
 
 Oikos should not require the full raw transcript for every wakeup.
@@ -153,6 +257,19 @@ Its default operating context should be compact and reconstructable:
 - pointers to richer artifacts when needed
 
 When Oikos needs more, it should drill in deliberately rather than hauling everything into every call.
+
+## V0 Context Contract
+
+The current wakeup payload should stay compact and reconstructable. At a minimum it should carry:
+
+- trigger type
+- session id when a session is implicated
+- provider / project / cwd when available
+- fresh presence state when relevant
+- recent completion metadata such as `ended_at`
+- summary title or compact summary when available
+
+The prompt message can be human-readable, but the payload should remain structured enough that future tooling can log, dedupe, and inspect it without reparsing prose.
 
 ## Dogfood Direction
 
@@ -179,6 +296,57 @@ The initial bounded action surface should stay small:
 
 Anything more complex should be earned by dogfood evidence, not assumed upfront.
 
+## Next Thin State
+
+The next Oikos-owned state should not be another transcript store or a giant autonomy schema. It should be a tiny wakeup ledger.
+
+Purpose:
+
+- make wakeups reviewable even when Oikos decides to do nothing
+- make duplicate / suppressed / ignored cases visible
+- support regression comparison without inferring everything from full Oikos runs
+
+Recommended shape:
+
+- `owner_id`
+- `trigger_type`
+- `session_id` nullable
+- `dedupe_key`
+- `status`
+  - `suppressed`
+  - `enqueued`
+  - `ignored`
+  - `acted`
+  - `failed`
+- `run_id` nullable
+- compact reason / rationale snippet
+- `created_at`
+
+Important constraint:
+
+- this ledger should track wakeup handling, not become a second run log
+- full execution detail still belongs in existing Oikos runs / events
+- this table exists because "Oikos chose to do nothing" is still product-relevant history
+
+## First Bounded Action Slice
+
+The first live action should stay narrower than the full vision.
+
+Recommended first action:
+
+- continue one resumable coding session when:
+  - the session is clearly resumable
+  - the transcript or summary points to one bounded next step
+  - policy allows continuation
+  - no stronger pause-state signal supersedes it
+
+Not yet for the first slice:
+
+- multi-session arbitration
+- automatic user notifications as the default path
+- free-form repairs with broad scope
+- anything that requires inventing a larger orchestration framework first
+
 ## What Must Stay Visible
 
 If Oikos wakes and acts, the user should be able to answer:
@@ -194,9 +362,9 @@ The product should feel agentic, not mysterious.
 ## Open Questions
 
 - Is there one long-lived Oikos operator thread per user, or one main thread plus lightweight side threads for specific interventions?
-- Which session transitions are valuable enough to wake Oikos in v1?
+- Which additional transitions beyond the current wakeup set are worth adding next?
 - When Oikos sees a completion, should the default be inspect-and-wait or inspect-and-continue?
-- How much autonomy should be policy-driven vs implicit from user behavior?
+- How much autonomy should be policy-driven vs implicit from user behavior once the thin explicit policy surface exists?
 - When does Oikos directly act on a coding session vs spawn/delegate a separate worker flow?
 
 ## Acceptance For The Spec Phase

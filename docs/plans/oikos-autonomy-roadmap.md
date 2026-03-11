@@ -3,7 +3,7 @@
 Status: active
 Owner: David / Oikos
 Started: 2026-03-10
-Last Updated: 2026-03-10
+Last Updated: 2026-03-11
 
 ## Goal
 
@@ -83,12 +83,32 @@ Possible later additions:
 
 These are the active next steps. Keep this list short and current.
 
-- [ ] Add roadmap/spec links to the main task tracker without clobbering unrelated work
+- [x] Add roadmap/spec links to the main task tracker without clobbering unrelated work
 - [x] Implement a backend autonomy shadow runner that can execute journey cases without taking real actions
 - [x] Define the first journey dataset around coding-session wakeups
 - [x] Add autonomy-specific assertions for decision class, action count, forbidden actions, and artifact/log presence
 - [x] Add a make target or documented command for the autonomy eval ring
 - [x] Convert the first real dogfood observations into new journey fixtures
+- [x] Wire the first live operator wakeup set around coding-session transitions plus a periodic sweep fallback
+- [x] Add the thinnest user-backed operator policy surface
+- [ ] Spec and land a thin wakeup-history ledger for suppressed / ignored / acted decisions
+- [ ] Ship the first bounded local action behind the same policy surface
+
+## Current Runtime Ring
+
+What is live today:
+
+- `presence.blocked`
+- `presence.needs_user`
+- `periodic_sweep`
+- recent post-ingest `session_completed`
+
+Current guardrails:
+
+- no raw `idle` / Stop wakeups
+- no historical backfill completion wakeups
+- no completion wakeup if fresh presence already shows resumed or paused work
+- all live wakeups respect both the env master switch and user-backed `preferences.operator_mode`
 
 ## First Journey Set
 
@@ -139,3 +159,14 @@ At minimum, save:
 - 2026-03-10: Journey fixtures now cover the first live operator-mode trigger observations too:
   - `needs_user` low-priority pauses stay parked
   - duplicate blocked wakeups are ignored instead of creating churn
+- 2026-03-10: The first live runtime wakeup set landed:
+  - `presence.blocked`
+  - `presence.needs_user`
+  - builtin `periodic_sweep`
+  - post-ingest recent `session_completed`
+- 2026-03-10: The first thin policy state landed without a new table:
+  - live wakeups now respect `User.context["preferences"]["operator_mode"]`
+  - `OIKOS_OPERATOR_MODE_ENABLED` remains the global master switch
+- 2026-03-11: The next spec slice is no longer "more triggers." It is wakeup history:
+  - we need a tiny durable ledger for suppressed / ignored / acted wakeups
+  - that is the missing evidence layer before broader actions or UI
