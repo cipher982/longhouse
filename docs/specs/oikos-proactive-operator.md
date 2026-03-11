@@ -302,31 +302,49 @@ The next Oikos-owned state should not be another transcript store or a giant aut
 
 Purpose:
 
-- make wakeups reviewable even when Oikos decides to do nothing
-- make duplicate / suppressed / ignored cases visible
-- support regression comparison without inferring everything from full Oikos runs
+- make wakeups reviewable even when no run is started
+- make duplicate / suppressed / failed wakeups visible without mining full runs
+- give us a stable place to attach later decision outcomes once bounded actions exist
 
-Recommended shape:
+Phase 1 shape:
 
-- `owner_id`
+- `owner_id` nullable
+- `source`
 - `trigger_type`
 - `session_id` nullable
-- `dedupe_key`
+- `conversation_id` nullable
+- `wakeup_key` nullable
 - `status`
   - `suppressed`
   - `enqueued`
-  - `ignored`
-  - `acted`
   - `failed`
+- `reason` nullable
 - `run_id` nullable
-- compact reason / rationale snippet
+- compact structured `payload`
 - `created_at`
+
+Phase 1 scope:
+
+- record trigger handling only
+- persist why a wakeup was skipped, accepted, or failed before the run could be trusted
+- link successful wakeups to the created `run_id`
+
+Explicitly out of scope for phase 1:
+
+- inferring `ignored` or `acted` from live runs before the first bounded action path exists
+- turning the ledger into a second copy of run events or transcripts
+
+Phase 2 can extend the same ledger with post-run decision outcomes such as:
+
+- `ignored`
+- `acted`
+- `escalated`
 
 Important constraint:
 
 - this ledger should track wakeup handling, not become a second run log
 - full execution detail still belongs in existing Oikos runs / events
-- this table exists because "Oikos chose to do nothing" is still product-relevant history
+- this table exists because "no run happened" is still product-relevant history
 
 ## First Bounded Action Slice
 
