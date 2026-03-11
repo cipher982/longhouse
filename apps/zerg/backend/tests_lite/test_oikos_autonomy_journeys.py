@@ -23,7 +23,7 @@ def _load_cases():
 def test_load_autonomy_journey_cases_reads_expected_fixture():
     cases = _load_cases()
 
-    assert len(cases) == 6
+    assert len(cases) == 8
     assert [case.id for case in cases] == [
         "completed_nothing_left",
         "completed_obvious_follow_up",
@@ -31,6 +31,8 @@ def test_load_autonomy_journey_cases_reads_expected_fixture():
         "periodic_sweep_idle_noop",
         "needs_user_low_priority",
         "duplicate_blocked_wakeup_noop",
+        "blocked_bounded_follow_up",
+        "competing_sessions_prioritize_human_fork",
     ]
     assert cases[1].artifacts[0].path == "/tmp/failing-tests.log"
 
@@ -106,6 +108,8 @@ async def test_run_autonomy_journeys_executes_fixture_file_into_stable_root(tmp_
         "periodic_sweep_idle_noop",
         "needs_user_low_priority",
         "duplicate_blocked_wakeup_noop",
+        "blocked_bounded_follow_up",
+        "competing_sessions_prioritize_human_fork",
     ]
     assert all(result.run_dir.parent == tmp_path for result in results)
     assert all(result.context_path.exists() for result in results)

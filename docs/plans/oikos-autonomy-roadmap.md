@@ -123,11 +123,11 @@ The initial cases should stay small and high-signal:
 - [x] session completed, nothing to do
 - [x] session completed, obvious next step
 - [x] session blocked on real human fork
-- [ ] session blocked on small bounded follow-up
+- [x] session blocked on small bounded follow-up
 - [x] session needs user, low priority
 - [x] periodic sweep with no meaningful work
 - [x] trigger storm / duplicate wakeups
-- [ ] two sessions competing for attention
+- [x] two sessions competing for attention
 
 ## Evidence Contract
 
@@ -188,3 +188,6 @@ At minimum, save:
   - Oikos is taught to continue the same coding session via `spawn_workspace_commis(..., resume_session_id=...)`
   - operator-surface continuation is hard-gated by `preferences.operator_mode.allow_continue`
   - wakeup rows now finalize to `ignored`, `acted`, or `failed` after the run outcome is known
+- 2026-03-11: The shadow journey set now covers the first prioritization edge cases:
+  - blocked-but-bounded follow-ups can continue without escalating
+  - a real human fork can outrank a routine follow-up when multiple sessions compete for attention

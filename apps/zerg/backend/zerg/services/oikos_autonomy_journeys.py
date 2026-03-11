@@ -258,22 +258,53 @@ def load_autonomy_journey_cases(path: Path) -> list[AutonomyJourneyCase]:
 
 async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDecision:
     """Cheap deterministic baseline used for harness validation and local dogfooding."""
-    ai_text = (packet.primary_session.last_ai_message or "").lower()
     trigger_summary = (packet.trigger.summary or "").lower()
 
-    if packet.trigger.type == "session_blocked":
-        return AutonomyDecision(
-            decision="escalate",
-            rationale="The session is blocked on a real product fork and needs user input.",
-            summary="Escalate the blocker to the user instead of auto-continuing.",
-            proposed_actions=[
-                AutonomyProposedAction(
-                    kind="notify_user",
-                    target_session_id=packet.primary_session.session_id,
-                    summary="Send a concise summary of the product fork to the user.",
+    def _find_human_fork_session() -> AutonomySessionSnapshot | None:
+        sessions = [packet.primary_session, *packet.active_sessions]
+        for session in sessions:
+            combined = " ".join(
+                part.lower()
+                for part in (
+                    session.blocked_reason,
+                    session.last_ai_message,
+                    session.summary,
                 )
-            ],
-            needs_human=True,
+                if part
+            )
+            if any(
+                phrase in combined
+                for phrase in (
+                    "product decision",
+                    "product fork",
+                    "autonomy strategy",
+                    "direction choice",
+                )
+            ):
+                return session
+        return None
+
+    def _has_bounded_follow_up() -> bool:
+        combined = " ".join(
+            part.lower()
+            for part in (
+                packet.trigger.summary,
+                packet.primary_session.last_ai_message,
+                packet.primary_session.summary,
+                packet.primary_session.blocked_reason,
+            )
+            if part
+        )
+        return any(
+            phrase in combined
+            for phrase in (
+                "tests were not run",
+                "pending targeted tests",
+                "targeted session-detail tests",
+                "next step is only",
+                "only targeted verification remains",
+                "permission to rerun",
+            )
         )
 
     if packet.trigger.type == "session_needs_user":
@@ -294,16 +325,32 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
             needs_human=False,
         )
 
-    if packet.trigger.type == "session_completed" and "tests were not run" in ai_text:
+    human_fork_session = _find_human_fork_session()
+    if human_fork_session is not None:
+        return AutonomyDecision(
+            decision="escalate",
+            rationale="A real human decision fork should take priority over routine autonomous follow-up.",
+            summary="Escalate the product decision blocker to the user.",
+            proposed_actions=[
+                AutonomyProposedAction(
+                    kind="notify_user",
+                    target_session_id=human_fork_session.session_id,
+                    summary="Send the user a concise summary of the product fork that needs input.",
+                )
+            ],
+            needs_human=True,
+        )
+
+    if packet.policy.allow_continue and packet.primary_session.resumable and _has_bounded_follow_up():
         return AutonomyDecision(
             decision="continue_session",
-            rationale="The session explicitly left one bounded verification step undone.",
-            summary="Continue the session to run the pending targeted tests.",
+            rationale="The session explicitly left one bounded follow-up step undone.",
+            summary="Continue the session to execute the remaining bounded follow-up.",
             proposed_actions=[
                 AutonomyProposedAction(
                     kind="continue_session",
                     target_session_id=packet.primary_session.session_id,
-                    summary="Ask the same session to run the pending targeted tests.",
+                    summary="Ask the same session to execute the remaining bounded follow-up.",
                 )
             ],
             needs_human=False,

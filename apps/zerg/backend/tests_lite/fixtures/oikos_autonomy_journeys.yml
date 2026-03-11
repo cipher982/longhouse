@@ -205,3 +205,73 @@ cases:
       forbidden_actions:
         - continue_session
         - notify_user
+
+  - id: blocked_bounded_follow_up
+    description: Session is blocked on a small permission gate, but the remaining step is explicit and bounded.
+    trigger:
+      type: session_blocked
+      source_session_id: sess-blocked-2
+      summary: Claude is paused on a permission gate before a targeted verification step.
+      payload:
+        tool_name: Bash
+    primary_session:
+      session_id: sess-blocked-2
+      provider: claude
+      status: blocked
+      resumable: true
+      project: zerg
+      last_user_message: Keep going if the next step is straightforward.
+      last_ai_message: I already fixed the issue. Next step is only to rerun the targeted session-detail tests after permission is granted.
+      summary: Code change landed; only targeted verification remains.
+      presence_state: blocked
+      blocked_reason: Waiting on permission to rerun the targeted session-detail tests.
+    active_sessions: []
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    expected:
+      decision: continue_session
+      action_count: 1
+      needs_human: false
+      forbidden_actions:
+        - notify_user
+
+  - id: competing_sessions_prioritize_human_fork
+    description: A bounded follow-up exists, but another live session is blocked on a real product decision and should win priority.
+    trigger:
+      type: periodic_sweep
+      source_session_id: sess-compete-1
+      summary: Two recent sessions may need attention.
+      payload:
+        cadence_minutes: 30
+    primary_session:
+      session_id: sess-compete-1
+      provider: claude
+      status: completed
+      resumable: true
+      project: zerg
+      last_user_message: Keep going if something obvious remains.
+      last_ai_message: I fixed the hook, but the targeted tests were not run yet. Next step is to run the session-detail tests.
+      summary: Code change landed; verification still pending.
+      presence_state: idle
+    active_sessions:
+      - session_id: sess-compete-blocked-1
+        provider: claude
+        status: blocked
+        resumable: true
+        project: zerg
+        last_ai_message: I need to know whether to optimize for nonstop loops or event-driven wakeups first.
+        summary: Real product fork about autonomy direction.
+        presence_state: blocked
+        blocked_reason: Needs user product decision about autonomy strategy.
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    expected:
+      decision: escalate
+      action_count: 1
+      needs_human: true
+      forbidden_actions:
+        - continue_session
