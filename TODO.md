@@ -136,6 +136,7 @@ Notes:
 - 2026-03-08: `POST /sessions/{id}/chat` exists today, but only for Claude-backed sessions; the main product issue on web/mobile was UX, not total backend absence.
 - 2026-03-08: Timeline cards and live rows now route Claude sessions through `?resume=1`, detail pages auto-jump to the latest continuation point, and the inline composer lives below the full transcript instead of replacing it.
 - 2026-03-08: Codex/Gemini sessions now show an explicit “not resumable from the web yet” state. That is honest, but it is still a real product gap for launch.
+- 2026-03-11: Follow-up landed. The standalone continuation modal is gone. Claude sessions now keep the thread visible and mount continuation as an inline dock in the main pane, with explicit `Start in Cloud` / `Branch in Cloud` first-send copy instead of dropping users into an empty mini-chat.
 
 ---
 

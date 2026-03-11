@@ -71,6 +71,13 @@ interface SessionChatProps {
   hintText?: string;
   composerPlaceholder?: string;
   onSessionChanged?: (nextSessionId: string, createdContinuation: boolean) => void;
+  layout?: "panel" | "dock";
+  introEyebrow?: string;
+  introTitle?: string;
+  introDescription?: string;
+  submitLabel?: string;
+  requireClickForFirstSend?: boolean;
+  keyboardHintText?: string;
 }
 
 export function SessionChat({
@@ -80,11 +87,20 @@ export function SessionChat({
   hintText,
   composerPlaceholder,
   onSessionChanged,
+  layout = "panel",
+  introEyebrow,
+  introTitle,
+  introDescription,
+  submitLabel = "Send",
+  requireClickForFirstSend = false,
+  keyboardHintText,
 }: SessionChatProps) {
+  const isDock = layout === "dock";
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
   const [lockInfo, setLockInfo] = useState<{
     locked: boolean;
     holder?: string;
@@ -98,6 +114,22 @@ export function SessionChat({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setMessages([]);
+    setDraft("");
+    setIsStreaming(false);
+    setError(null);
+    setBlockedKeyboardSubmit(false);
+    setLockInfo(null);
+  }, [session.id]);
+
+  useEffect(() => {
+    if (draft.trim()) return;
+    setBlockedKeyboardSubmit(false);
+  }, [draft]);
 
   // Check lock status on mount
   useEffect(() => {
@@ -134,6 +166,7 @@ export function SessionChat({
 
       setDraft("");
       setError(null);
+      setBlockedKeyboardSubmit(false);
 
       // Add user message
       const userMessage: ChatMessage = {
@@ -305,41 +338,85 @@ export function SessionChat({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (requireClickForFirstSend && messages.length === 0) {
+        setBlockedKeyboardSubmit(true);
+        return;
+      }
       handleSend(e as unknown as FormEvent);
     }
   };
 
-  return (
-    <div className="session-chat">
-      <div className="session-chat-header">
-        <div className="session-chat-info">
-          {onClose && (
-            <button
-              type="button"
-              className="session-chat-back"
-              onClick={onClose}
-              title="Back to details"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M19 12H5M12 19l-7-7 7-7" />
-              </svg>
-            </button>
-          )}
-          <div className="session-chat-titles">
-            <span className="session-chat-title">{session.project || "Session"}</span>
-            <span className="session-chat-provider">{session.provider}</span>
-          </div>
-        </div>
-        <div className="session-chat-status">
-          {isStreaming ? (
-            <Badge variant="success">Streaming</Badge>
-          ) : lockInfo?.locked ? (
-            <Badge variant="warning">Locked</Badge>
-          ) : (
-            <Badge variant="neutral">Ready</Badge>
-          )}
+  const statusBadge = isStreaming
+    ? { variant: "success" as const, label: "Streaming" }
+    : lockInfo?.locked
+      ? { variant: "warning" as const, label: "Locked" }
+      : { variant: "neutral" as const, label: "Ready" };
+
+  const renderMessages = () =>
+    messages.map((msg) => (
+      <div key={msg.id} className={`session-chat-message session-chat-message--${msg.role}`}>
+        <div className="session-chat-message-role">{msg.role}</div>
+        <div className="session-chat-message-content">
+          {msg.content || (msg.isStreaming ? <Spinner size="sm" /> : null)}
         </div>
       </div>
+    ));
+
+  return (
+    <div
+      className={`session-chat${isDock ? " session-chat--dock" : ""}`}
+      data-testid={isDock ? "session-continuation-panel" : undefined}
+    >
+      {isDock ? (
+        <div
+          className={`session-chat-callout${requireClickForFirstSend ? " session-chat-callout--branching" : ""}`}
+        >
+          <div className="session-chat-callout__copy">
+            {introEyebrow ? (
+              <div className="session-chat-callout__eyebrow">{introEyebrow}</div>
+            ) : null}
+            {introTitle ? <div className="session-chat-callout__title">{introTitle}</div> : null}
+            {introDescription ? (
+              <p className="session-chat-callout__description">{introDescription}</p>
+            ) : null}
+            {hintText ? <p className="session-chat-callout__hint">{hintText}</p> : null}
+          </div>
+          <div className="session-chat-status">
+            <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+          </div>
+        </div>
+      ) : (
+        <div className="session-chat-header">
+          <div className="session-chat-info">
+            {onClose && (
+              <button
+                type="button"
+                className="session-chat-back"
+                onClick={onClose}
+                title="Back to details"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path d="M19 12H5M12 19l-7-7 7-7" />
+                </svg>
+              </button>
+            )}
+            <div className="session-chat-titles">
+              <span className="session-chat-title">{session.project || "Session"}</span>
+              <span className="session-chat-provider">{session.provider}</span>
+            </div>
+          </div>
+          <div className="session-chat-status">
+            <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="session-chat-error">
@@ -359,35 +436,47 @@ export function SessionChat({
         </div>
       )}
 
-      <div className="session-chat-messages">
-        {messages.length === 0 ? (
-          <div className="session-chat-empty">
-            <p>{emptyStateTitle || "Start a conversation with this session."}</p>
-            <p className="session-chat-hint">
-              {hintText || "Context from previous turns will be preserved via --resume."}
-            </p>
+      {isDock ? (
+        messages.length > 0 ? (
+          <div className="session-chat-messages session-chat-messages--dock">
+            {renderMessages()}
+            <div ref={messagesEndRef} />
+          </div>
+        ) : null
+      ) : (
+        <div className="session-chat-messages">
+          {messages.length === 0 ? (
+            <div className="session-chat-empty">
+              <p>{emptyStateTitle || "Start a conversation with this session."}</p>
+              <p className="session-chat-hint">
+                {hintText || "Context from previous turns will be preserved via --resume."}
+              </p>
+            </div>
+          ) : (
+            renderMessages()
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      )}
+
+      <form
+        className={`session-chat-composer${isDock ? " session-chat-composer--dock" : ""}`}
+        onSubmit={handleSend}
+      >
+        {blockedKeyboardSubmit ? (
+          <div className="session-chat-confirmation" data-testid="session-chat-explicit-submit-hint">
+            {keyboardHintText || `Click "${submitLabel}" to confirm the first cloud message.`}
           </div>
         ) : (
-          messages.map((msg) => (
-            <div key={msg.id} className={`session-chat-message session-chat-message--${msg.role}`}>
-              <div className="session-chat-message-role">{msg.role}</div>
-              <div className="session-chat-message-content">
-                {msg.content || (msg.isStreaming ? <Spinner size="sm" /> : null)}
-              </div>
-            </div>
-          ))
+          <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />
         )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      <form className="session-chat-composer" onSubmit={handleSend}>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={composerPlaceholder || "Type a message..."}
           disabled={isStreaming || lockInfo?.locked}
-          rows={2}
+          rows={isDock ? 3 : 2}
         />
         <div className="session-chat-actions">
           {isStreaming ? (
@@ -401,7 +490,7 @@ export function SessionChat({
               size="sm"
               disabled={!draft.trim() || lockInfo?.locked}
             >
-              Send
+              {submitLabel}
             </Button>
           )}
         </div>

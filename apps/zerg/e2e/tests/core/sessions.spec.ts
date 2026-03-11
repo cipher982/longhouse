@@ -414,8 +414,11 @@ test.describe('Session Detail Page', () => {
 
     await expect(page).toHaveURL(`/timeline/${sessionId}`);
     await expect(page.getByTestId('session-timeline-header')).toContainText('Event Timeline');
-    await expect(page.getByRole('button', { name: 'Continue in Cloud' })).toBeVisible();
-    await expect(page.getByTestId('session-continuation-panel')).toHaveCount(0);
+    await expect(page.getByTestId('session-continuation-panel')).toContainText(
+      'Start a cloud continuation for this thread',
+    );
+    await expect(page.getByRole('button', { name: 'Start in Cloud' })).toBeVisible();
+    await expect(page.locator('.session-chat-composer textarea')).toBeVisible();
     await expect(page.getByTestId('session-timeline-list')).toBeVisible();
   });
 
@@ -441,10 +444,9 @@ test.describe('Session Detail Page', () => {
     await page.goto(`/timeline/${rootId}?resume=1`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
-    await page.getByRole('button', { name: 'Continue in Cloud' }).click();
     const composer = page.locator('.session-chat-composer textarea');
     await composer.fill('anything else?');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: 'Start in Cloud' }).click();
 
     await expect(page.locator('.session-chat-error')).toHaveCount(0);
     await expect(page.locator('.session-chat-message--user')).toContainText('anything else?');
@@ -570,10 +572,10 @@ test.describe('Session Detail Page', () => {
 
     await expect(page.getByTestId('session-branch-banner')).toContainText('not the latest continuation');
     await expect(page.getByTestId('session-lineage-panel')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Branch from Here' })).toBeVisible();
-    await page.getByRole('button', { name: 'Branch from Here' }).click();
-    await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
-    await expect(page.locator('.session-chat-empty')).toContainText('branch from this history');
+    await expect(page.getByTestId('session-continuation-panel')).toContainText(
+      'Branch from this point in cloud',
+    );
+    await expect(page.getByRole('button', { name: 'Branch in Cloud' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Open Latest' }).focus();
     await page.keyboard.press('Enter');
@@ -693,8 +695,8 @@ test.describe('Session Detail Page', () => {
       .poll(async () => timelineList.evaluate((el) => el.scrollTop), { timeout: 4000 })
       .toBeGreaterThan(0);
 
-    await expect(page.getByRole('button', { name: 'Continue in Cloud' })).toBeVisible();
-    await expect(page.getByTestId('session-continuation-panel')).toHaveCount(0);
+    await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start in Cloud' })).toBeVisible();
   });
 
   test('desktop workspace panes can be resized and persisted', async ({ page, request }) => {
