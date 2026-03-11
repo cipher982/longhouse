@@ -14,8 +14,8 @@ export const CONFIG = {
   // Oikos-specific API endpoints (BFF layer in zerg-backend)
   OIKOS_API_BASE: '/api/oikos',
 
-  // Default API URL for local development
-  DEFAULT_API_URL: 'http://localhost:47300',
+  // Default to same-origin; explicit runtime config handles split deployments.
+  DEFAULT_API_URL: '',
 
   // Voice interaction settings
   VOICE: {
