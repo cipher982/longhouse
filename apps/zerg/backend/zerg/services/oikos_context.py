@@ -23,6 +23,7 @@ class OikosContext:
     trace_id: Optional[str] = None  # End-to-end trace ID for debugging (UUID as string)
     model: Optional[str] = None  # Model ID for commis to inherit
     reasoning_effort: Optional[str] = None  # Reasoning effort for commis to inherit
+    source_surface_id: Optional[str] = None  # Origin surface for policy-gated operator actions
 
 
 # Context variable holding the current oikos context
@@ -49,6 +50,7 @@ def set_oikos_context(
     trace_id: Optional[str] = None,
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
+    source_surface_id: Optional[str] = None,
 ) -> contextvars.Token:
     """Set the oikos context before invoking a fiche. Returns token for reset."""
     ctx = OikosContext(
@@ -58,6 +60,7 @@ def set_oikos_context(
         trace_id=trace_id,
         model=model,
         reasoning_effort=reasoning_effort,
+        source_surface_id=source_surface_id,
     )
     return _oikos_context_var.set(ctx)
 

@@ -498,14 +498,23 @@ async def _execute_tool(
                     job_id=tool_args.get("job_id", ""),
                     _tool_call_id=tool_call_id,
                 )
-                result_content = json.dumps(observation, default=_json_default) if isinstance(observation, dict) else str(observation)
+                if isinstance(observation, dict):
+                    result_content = json.dumps(observation, default=_json_default)
+                else:
+                    result_content = str(observation)
 
             elif getattr(tool_to_call, "coroutine", None):
                 observation = await tool_to_call.ainvoke(tool_args)
-                result_content = json.dumps(observation, default=_json_default) if isinstance(observation, dict) else str(observation)
+                if isinstance(observation, dict):
+                    result_content = json.dumps(observation, default=_json_default)
+                else:
+                    result_content = str(observation)
             else:
                 observation = await asyncio.to_thread(tool_to_call.invoke, tool_args)
-                result_content = json.dumps(observation, default=_json_default) if isinstance(observation, dict) else str(observation)
+                if isinstance(observation, dict):
+                    result_content = json.dumps(observation, default=_json_default)
+                else:
+                    result_content = str(observation)
 
         except FicheInterrupted:
             raise
@@ -695,6 +704,7 @@ async def _handle_spawn_calls(
     from zerg.events.oikos_emitter import OikosEmitter
     from zerg.models.models import CommisJob
     from zerg.services.oikos_context import get_oikos_context
+    from zerg.tools.builtin.oikos_commis_job_tools import operator_resume_permission_error
 
     resolver = get_credential_resolver()
     ctx = get_oikos_context()
@@ -737,17 +747,37 @@ async def _handle_spawn_calls(
         tool_call_id = tc.get("id", "")
         start = time.time()
 
+        policy_error = operator_resume_permission_error(
+            db=db,
+            owner_id=resolver.owner_id,
+            ctx=ctx,
+            resume_session_id=resume_session_id,
+        )
+        if policy_error:
+            logger.info("Blocked operator continuation for run %s: %s", oikos_run_id, policy_error)
+            if emitter:
+                await emitter.emit_tool_failed(
+                    tool_name="spawn_workspace_commis",
+                    tool_call_id=tool_call_id,
+                    duration_ms=int((time.time() - start) * 1000),
+                    error=policy_error,
+                )
+            tool_results.append(
+                ToolMessage(
+                    content=f"<tool-error>{policy_error}</tool-error>",
+                    tool_call_id=tool_call_id,
+                    name="spawn_workspace_commis",
+                )
+            )
+            continue
+
         # Build workspace config
-        job_config: dict | None = None
+        job_config: dict = {"execution_mode": "workspace"}
         if git_repo:
-            job_config = {"execution_mode": "workspace", "git_repo": git_repo}
-            if resume_session_id:
-                job_config["resume_session_id"] = resume_session_id
-        elif resume_session_id:
-            job_config = {"resume_session_id": resume_session_id}
+            job_config["git_repo"] = git_repo
+        if resume_session_id:
+            job_config["resume_session_id"] = resume_session_id
         if backend_override:
-            if job_config is None:
-                job_config = {}
             job_config["backend"] = backend_override
 
         if emitter:
@@ -755,7 +785,13 @@ async def _handle_spawn_calls(
                 tool_name="spawn_workspace_commis",
                 tool_call_id=tool_call_id,
                 tool_args_preview=task[:100],
-                tool_args={"task": task, "model": model_override, "backend": backend_override},
+                tool_args={
+                    "task": task,
+                    "model": model_override,
+                    "backend": backend_override,
+                    "git_repo": git_repo,
+                    "resume_session_id": resume_session_id,
+                },
             )
 
         try:
@@ -791,7 +827,12 @@ async def _handle_spawn_calls(
                             tool_call_id=tool_call_id,
                             duration_ms=int((time.time() - start) * 1000),
                             result_preview=f"Cached result for job {existing_job.id}",
-                            result={"job_id": existing_job.id, "status": "success", "cached": True},
+                            result={
+                                "job_id": existing_job.id,
+                                "status": "success",
+                                "cached": True,
+                                "resume_session_id": resume_session_id,
+                            },
                         )
                     continue
                 except FileNotFoundError:
@@ -805,7 +846,12 @@ async def _handle_spawn_calls(
                         tool_call_id=tool_call_id,
                         duration_ms=int((time.time() - start) * 1000),
                         result_preview=f"Reusing existing job {existing_job.id}",
-                        result={"job_id": existing_job.id, "status": existing_job.status, "task": task[:100]},
+                        result={
+                            "job_id": existing_job.id,
+                            "status": existing_job.status,
+                            "task": task[:100],
+                            "resume_session_id": resume_session_id,
+                        },
                     )
                 continue
 
@@ -825,9 +871,8 @@ async def _handle_spawn_calls(
             db.commit()
             db.refresh(commis_job)
 
-            logger.info(
-                f"[PARALLEL-SPAWN] Created commis job {commis_job.id} status='created'" + (f", config={job_config}" if job_config else "")
-            )
+            config_suffix = f", config={job_config}" if job_config else ""
+            logger.info(f"[PARALLEL-SPAWN] Created commis job {commis_job.id} " f"status='created'{config_suffix}")
 
             created_jobs.append({"job": commis_job, "tool_call_id": tool_call_id, "task": task[:100]})
 
@@ -837,7 +882,12 @@ async def _handle_spawn_calls(
                     tool_call_id=tool_call_id,
                     duration_ms=int((time.time() - start) * 1000),
                     result_preview=f"Created job {commis_job.id}",
-                    result={"job_id": commis_job.id, "status": "created", "task": task[:100]},
+                    result={
+                        "job_id": commis_job.id,
+                        "status": "created",
+                        "task": task[:100],
+                        "resume_session_id": resume_session_id,
+                    },
                 )
 
         except Exception as exc:
@@ -1034,7 +1084,10 @@ async def run_oikos_loop(
         llm_response = await _call_llm(current_messages, llm_with_tools, phase=phase, **llm_kwargs)
 
         # Empty response recovery: retry once with tool_choice=required
-        if isinstance(llm_response, AIMessage) and not llm_response.tool_calls and not _extract_text_content(llm_response).strip():
+        response_is_empty = (
+            isinstance(llm_response, AIMessage) and not llm_response.tool_calls and not _extract_text_content(llm_response).strip()
+        )
+        if response_is_empty:
             logger.warning("Fiche produced empty response; retrying once")
             current_messages.append(
                 SystemMessage(
@@ -1056,7 +1109,10 @@ async def run_oikos_loop(
                 phase="empty_retry",
                 **llm_kwargs,
             )
-            if isinstance(llm_response, AIMessage) and not llm_response.tool_calls and not _extract_text_content(llm_response).strip():
+            retry_is_empty = (
+                isinstance(llm_response, AIMessage) and not llm_response.tool_calls and not _extract_text_content(llm_response).strip()
+            )
+            if retry_is_empty:
                 logger.error("Fiche produced empty response after retry")
                 llm_response = AIMessage(content="Error: LLM returned an empty response twice. This is a provider/model issue.")
 

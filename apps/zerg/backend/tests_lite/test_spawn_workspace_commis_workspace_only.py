@@ -79,3 +79,83 @@ async def test_spawn_workspace_commis_keeps_workspace_mode_and_repo_config(tmp_p
         assert job.config.get("git_repo") == "https://github.com/org/repo.git"
         assert job.config.get("resume_session_id") == "session-123"
         assert job.config.get("backend") == "codex"
+
+
+@pytest.mark.asyncio
+async def test_spawn_workspace_commis_rejects_operator_resume_when_continue_disabled(tmp_path, monkeypatch):
+    """Operator-triggered resume is blocked unless allow_continue is enabled."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(
+            email="operator-denied@example.com",
+            context={"preferences": {"operator_mode": {"enabled": True, "allow_continue": False}}},
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        resolver = SimpleNamespace(db=db, owner_id=user.id)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_credential_resolver", lambda: resolver)
+        monkeypatch.setattr(
+            oikos_commis_job_tools,
+            "get_oikos_context",
+            lambda: SimpleNamespace(
+                run_id=None,
+                trace_id=None,
+                reasoning_effort="none",
+                source_surface_id="operator",
+            ),
+        )
+        monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+
+        result = await oikos_tools.spawn_workspace_commis_async(
+            task="Run the pending targeted tests",
+            resume_session_id="session-123",
+            _return_structured=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["ok"] is False
+        assert result["error_type"] == "permission_denied"
+        assert db.query(CommisJob).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_spawn_workspace_commis_allows_operator_resume_when_continue_enabled(tmp_path, monkeypatch):
+    """Operator-triggered resume works when allow_continue is enabled."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(
+            email="operator-allowed@example.com",
+            context={"preferences": {"operator_mode": {"enabled": True, "allow_continue": True}}},
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        resolver = SimpleNamespace(db=db, owner_id=user.id)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_credential_resolver", lambda: resolver)
+        monkeypatch.setattr(
+            oikos_commis_job_tools,
+            "get_oikos_context",
+            lambda: SimpleNamespace(
+                run_id=None,
+                trace_id=None,
+                reasoning_effort="none",
+                source_surface_id="operator",
+            ),
+        )
+        monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+
+        result = await oikos_tools.spawn_workspace_commis_async(
+            task="Run the pending targeted tests",
+            resume_session_id="session-abc",
+            _return_structured=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["status"] == "queued"
+        job = db.query(CommisJob).filter(CommisJob.id == result["job_id"]).one()
+        assert job.config is not None
+        assert job.config.get("execution_mode") == "workspace"
+        assert job.config.get("resume_session_id") == "session-abc"

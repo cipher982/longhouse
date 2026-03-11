@@ -211,7 +211,10 @@ class OikosService:
         for row in created_messages:
             if getattr(row, "role", None) != "assistant":
                 continue
-            row.message_metadata = self._merge_surface_metadata(getattr(row, "message_metadata", None), surface_metadata)
+            row.message_metadata = self._merge_surface_metadata(
+                getattr(row, "message_metadata", None),
+                surface_metadata,
+            )
             updated = True
         if updated:
             self.db.commit()
@@ -316,7 +319,7 @@ class OikosService:
             name="Oikos",
             model=DEFAULT_MODEL_ID,
             system_instructions=build_oikos_prompt(user),
-            task_instructions="You are helping the user accomplish their goals. " "Analyze their request and decide how to handle it.",
+            task_instructions=("You are helping the user accomplish their goals. " "Analyze their request and decide how to handle it."),
             config=oikos_config,
         )
         # Set allowed_tools (not supported in crud.create_fiche)
@@ -637,6 +640,7 @@ class OikosService:
                 trace_id=effective_trace_id,
                 model=model_override or fiche.model,
                 reasoning_effort=reasoning_effort,
+                source_surface_id=source_surface_id,
             )
 
             # Set up injected emitter for event emission (Phase 2 of emitter refactor)
@@ -711,7 +715,7 @@ class OikosService:
                     },
                 )
 
-                logger.info(f"Oikos run {run.id} deferred after {timeout}s timeout (continuing in background until completion)")
+                logger.info(f"Oikos run {run.id} deferred after {timeout}s timeout " "(continuing in background until completion)")
 
                 if return_on_deferred:
                     # Return deferred result - NOT an error.
@@ -843,7 +847,7 @@ class OikosService:
                             )
 
                     if already_completed:
-                        logger.info(f"{already_completed}/{len(job_ids)} commiss already completed - scheduled barrier checks")
+                        logger.info(f"{already_completed}/{len(job_ids)} commiss already completed " "- scheduled barrier checks")
 
                 else:
                     # SINGLE-COMMIS PATH (wait_for_commis or single-commis interrupt)
