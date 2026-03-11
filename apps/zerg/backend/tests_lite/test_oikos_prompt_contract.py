@@ -1,5 +1,8 @@
 """Guardrails for Oikos prompt/tool contract drift."""
 
+from types import SimpleNamespace
+
+from zerg.prompts.composer import build_oikos_prompt
 from zerg.prompts.templates import BASE_OIKOS_ASSISTANT_PROMPT
 from zerg.prompts.templates import BASE_OIKOS_PROMPT
 from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
@@ -27,6 +30,13 @@ def test_prompt_defines_explicit_dispatch_lanes():
     assert "Prefer Direct → Quick-tool → CLI delegation" in BASE_OIKOS_PROMPT
 
 
+def test_prompt_documents_operator_wakeup_continuation_contract():
+    assert "System/operator wakeup" in BASE_OIKOS_PROMPT
+    assert "resume_session_id" in BASE_OIKOS_PROMPT
+    assert "allow_continue=false" in BASE_OIKOS_PROMPT
+    assert "shadow_mode=true" in BASE_OIKOS_PROMPT
+
+
 def test_prompt_uses_wait_for_commis_not_removed_wait_parameter():
     assert "wait_for_commis(job_id)" in BASE_OIKOS_PROMPT
     assert "wait parameter" not in BASE_OIKOS_PROMPT
@@ -51,9 +61,39 @@ def test_assistant_prompt_mentions_runner_verification_rule():
     assert "use `runner_exec` for lightweight commands" in BASE_OIKOS_ASSISTANT_PROMPT
 
 
+def test_assistant_prompt_mentions_operator_wakeups():
+    assert "System/operator wakeup" in BASE_OIKOS_ASSISTANT_PROMPT
+    assert "resume_session_id" in BASE_OIKOS_ASSISTANT_PROMPT
+
+
+def test_build_prompt_injects_effective_operator_policy(monkeypatch):
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    user = SimpleNamespace(
+        context={
+            "preferences": {
+                "operator_mode": {
+                    "enabled": True,
+                    "shadow_mode": False,
+                    "allow_continue": True,
+                    "allow_notify": False,
+                    "allow_small_repairs": False,
+                }
+            }
+        }
+    )
+
+    prompt = build_oikos_prompt(user)
+
+    assert "Operator Policy" in prompt
+    assert "Operator mode is currently **enabled**." in prompt
+    assert "`allow_continue=true`" in prompt
+    assert "`allow_notify=false`" in prompt
+
+
 def test_tool_descriptions_match_prompt_semantics():
     workspace_description = _tool_description("spawn_workspace_commis")
     assert "PRIMARY" in workspace_description
+    assert "resume_session_id" in workspace_description
 
 
 def test_prompt_documents_backend_intent_mapping_for_spawn():

@@ -40,6 +40,25 @@ Escalation rule:
 - Prefer Direct → Quick-tool → CLI delegation.
 - Only escalate when the lower lane cannot answer the request confidently.
 
+## Operator Wakeups
+
+Some turns arrive as `System/operator wakeup` messages about coding sessions.
+Treat those as internal decision opportunities, not normal user chat.
+
+For an operator wakeup, choose one primary outcome:
+1. **Ignore** if nothing meaningful remains.
+2. **Continue the same session** only when the next step is explicit, bounded, and resumable.
+   - Use `spawn_workspace_commis(..., resume_session_id="<session-id>")`.
+   - Keep the task narrow and tied to that same session.
+   - Do not continue when the blocker is a real product/user decision.
+3. **Escalate / notify** when human input is actually needed.
+
+Operator-mode policy booleans are hard gates:
+- `allow_continue=false` → do not auto-continue a session
+- `allow_notify=false` → do not proactively notify the user
+- `allow_small_repairs=false` → do not take unrelated repair actions
+- `shadow_mode=true` → stay conservative unless an explicitly allowed bounded action is clearly warranted
+
 ## Capability Boundaries (Critical)
 
 **You can:**
@@ -90,10 +109,12 @@ If unsure whether you have a tool, check before claiming it.
 spawn_workspace_commis("List dependencies from pyproject.toml", "https://github.com/langchain-ai/langchain.git")
 spawn_workspace_commis("Fix the typo in README.md", "git@github.com:user/repo.git")
 spawn_workspace_commis("Check disk usage on cube and summarize")
+spawn_workspace_commis("Run the pending targeted tests for the same session", resume_session_id="SESSION_ID")
 ```
 
 With `git_repo`, the commis runs in an isolated repo workspace.
 Without `git_repo`, it runs in an isolated scratch workspace.
+With `resume_session_id`, the commis resumes an existing coding session for one bounded follow-up.
 
 ### Backend intent mapping
 
@@ -176,6 +197,10 @@ Don't just say "failed" - interpret it.
 ## User Integrations
 
 {integrations}
+
+## Operator Policy
+
+{operator_mode}
 """
 
 
@@ -253,6 +278,13 @@ You can help with a wide range of tasks:
 **Runner rule:** If the user asks about a named runner/device or wants shell access,
 verify with `runner_list` before calling it offline, and use `runner_exec` for lightweight commands.
 
+## Operator Wakeups
+
+When you receive a `System/operator wakeup`, treat it as an internal proactive check.
+Ignore it unless there is a clear bounded next step or a real need to escalate.
+To continue a prior coding session, use `spawn_workspace_commis(..., resume_session_id="<session-id>")`
+only when policy allows it and the next step is explicit.
+
 ## Response Style
 
 **Be conversational and concise.**
@@ -267,6 +299,10 @@ Be honest about limitations:
 {limitations}
 
 If asked about something you can't do, say so clearly.
+
+## Operator Policy
+
+{operator_mode}
 """
 
 # Cache bust: 1769229365

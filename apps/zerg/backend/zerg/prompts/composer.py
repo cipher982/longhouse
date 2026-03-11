@@ -9,6 +9,7 @@ from zerg.database import get_db
 from zerg.prompts.templates import BASE_COMMIS_PROMPT
 from zerg.prompts.templates import BASE_OIKOS_ASSISTANT_PROMPT
 from zerg.prompts.templates import BASE_OIKOS_PROMPT
+from zerg.services.oikos_operator_policy import policy_from_user_context
 
 
 def format_user_context(ctx: dict) -> str:
@@ -144,6 +145,24 @@ If runner_exec fails, report the error with details."""
 then use runner_exec for command execution."""
 
 
+def format_operator_mode(ctx: dict) -> str:
+    """Format effective proactive-operator policy for prompt injection."""
+    policy = policy_from_user_context(ctx)
+    enabled = "enabled" if policy.enabled else "disabled"
+    return "\n".join(
+        [
+            f"- Operator mode is currently **{enabled}**.",
+            (
+                "- Hard gates: "
+                f"`shadow_mode={str(policy.shadow_mode).lower()}`, "
+                f"`allow_continue={str(policy.allow_continue).lower()}`, "
+                f"`allow_notify={str(policy.allow_notify).lower()}`, "
+                f"`allow_small_repairs={str(policy.allow_small_repairs).lower()}`"
+            ),
+        ]
+    )
+
+
 def build_commis_prompt(user) -> str:
     """Build complete commis prompt with user context.
 
@@ -180,6 +199,7 @@ def build_oikos_prompt(user, enabled_tools: list[dict] | None = None) -> str:
             user_context=format_user_context(ctx),
             servers=format_servers(ctx.get("servers", [])),
             integrations=format_integrations(ctx.get("integrations", {})),
+            operator_mode=format_operator_mode(ctx),
         )
 
     enabled_tools = enabled_tools or []
@@ -205,4 +225,5 @@ def build_oikos_prompt(user, enabled_tools: list[dict] | None = None) -> str:
         direct_tools=direct_tools,
         server_names=format_server_names(ctx.get("servers", [])),
         limitations=limitations_str,
+        operator_mode=format_operator_mode(ctx),
     )
