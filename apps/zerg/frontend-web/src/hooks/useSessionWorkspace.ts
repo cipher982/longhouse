@@ -219,10 +219,19 @@ export function useSessionWorkspace(
     if (!selection) return;
 
     const scrollToSelection = () => {
+      if (!selectedKey) {
+        const list = document.querySelector('[data-testid="session-timeline-list"]');
+        if (list instanceof HTMLElement) {
+          list.scrollTop = list.scrollHeight;
+          autoScrolledSelectionRef.current = true;
+          return;
+        }
+      }
+
       const target = document.getElementById(selection.rowId);
       if (!target) return;
 
-      target.scrollIntoView({ behavior: "auto", block: selectedKey ? "center" : "end" });
+      target.scrollIntoView({ behavior: "auto", block: selectedKey ? "center" : "nearest" });
       autoScrolledSelectionRef.current = true;
     };
 

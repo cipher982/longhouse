@@ -37,6 +37,7 @@ Notes:
 - 2026-03-11: User asked for IDE-style adjustment, not just better defaults. Keep the scope to draggable gutters and persisted widths first; do not turn this into a full docking/window-manager project.
 - 2026-03-11: Desktop workspace panes are now user-adjustable. The left rail and inspector both support pointer drag, keyboard resizing, and reset-to-default behavior, with widths persisted in local storage across reloads.
 - 2026-03-11: Follow-up landed: legacy `?resume=1` links now strip back to the transcript-first detail view, first-party timeline/session-picker links no longer append that query, and the continuation modal portals above the app shell with a more opaque surface so header chrome cannot bleed through it.
+- 2026-03-11: Follow-up compaction landed: the workspace title block is now a thin strip, the timeline title/search/filters share one control rail instead of stacked bands, and initial load scroll targets the list container directly so the transcript starts with more useful rows in view.
 
 ## [Product] Proactive Oikos operator mode (size: 5)
 
