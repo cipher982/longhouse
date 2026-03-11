@@ -402,7 +402,7 @@ test.describe('Session Detail Page', () => {
     await expect(page).toHaveURL('/timeline');
   });
 
-  test('Claude sessions keep the transcript and inline continuation on one page', async ({ page, request }) => {
+  test('Claude legacy resume links still land on the transcript first', async ({ page, request }) => {
     const sessionId = await ingestSession(request, {
       provider: 'claude',
       project: 'resume-e2e',
@@ -412,12 +412,11 @@ test.describe('Session Detail Page', () => {
     await page.goto(`/timeline/${sessionId}?resume=1`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
+    await expect(page).toHaveURL(`/timeline/${sessionId}`);
     await expect(page.getByTestId('session-timeline-header')).toContainText('Event Timeline');
     await expect(page.getByRole('button', { name: 'Continue in Cloud' })).toBeVisible();
-    await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
-    await expect(page.locator('.session-chat')).toBeVisible();
-    await expect(page.locator('.session-chat-empty')).toContainText('Send the first cloud message for this thread');
-    await expect(page.locator('.session-chat-composer textarea')).toBeFocused();
+    await expect(page.getByTestId('session-continuation-panel')).toHaveCount(0);
+    await expect(page.getByTestId('session-timeline-list')).toBeVisible();
   });
 
 
@@ -442,6 +441,7 @@ test.describe('Session Detail Page', () => {
     await page.goto(`/timeline/${rootId}?resume=1`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
+    await page.getByRole('button', { name: 'Continue in Cloud' }).click();
     const composer = page.locator('.session-chat-composer textarea');
     await composer.fill('anything else?');
     await page.getByRole('button', { name: 'Send' }).click();
@@ -521,7 +521,7 @@ test.describe('Session Detail Page', () => {
     await expect(card).toContainText('2 continuations');
 
     await card.click();
-    await expect(page).toHaveURL(new RegExp(`/timeline/${childId}(?:\\?resume=1)?`));
+    await expect(page).toHaveURL(`/timeline/${childId}`);
     await expect(page.getByTestId('session-lineage-panel')).toBeVisible();
     await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
   });
@@ -577,7 +577,7 @@ test.describe('Session Detail Page', () => {
 
     await page.getByRole('button', { name: 'Open Latest' }).focus();
     await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(new RegExp(`/timeline/${childId}(?:\\?resume=1)?`));
+    await expect(page).toHaveURL(`/timeline/${childId}`);
     await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
   });
 

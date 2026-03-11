@@ -156,13 +156,15 @@ test('live thread card groups continuations and stale branch stays explicit', as
   await expect(card).toContainText('2 continuations');
 
   await card.click();
-  await expect(page).toHaveURL(new RegExp(`/timeline/${childId}(?:\\?resume=1)?`));
+  await expect(page).toHaveURL(`/timeline/${childId}`);
   await expect(page.getByTestId('session-lineage-panel')).toBeVisible();
   await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
 
   await page.goto(`/timeline/${rootId}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('session-branch-banner')).toContainText('not the latest continuation');
   await expect(page.getByRole('button', { name: 'Branch from Here' })).toBeVisible();
+  await page.getByRole('button', { name: 'Branch from Here' }).click();
+  await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
   await expect(page.locator('.session-chat-empty')).toContainText('branch from this history');
 
   await assertNoRuntimeErrors(page, 'live lineage detail', consoleErrors, serverErrors);

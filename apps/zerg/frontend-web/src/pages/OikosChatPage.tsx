@@ -93,8 +93,8 @@ export default function OikosChatPage() {
       });
 
       if (result.sessionId) {
-        // Forum is temporarily disabled; route directly to session detail resume mode.
-        navigate(`/timeline/${result.sessionId}?resume=1`);
+        // Forum is temporarily disabled; route directly to session detail.
+        navigate(`/timeline/${result.sessionId}`);
       }
     },
     [showSessionPicker, navigate]

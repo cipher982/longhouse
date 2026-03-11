@@ -813,6 +813,11 @@
   .session-workspace-modal-overlay {
     padding: var(--space-6);
     align-items: stretch;
+    z-index: calc(var(--z-modal) + 1);
+    background:
+      linear-gradient(180deg, rgba(10, 7, 6, 0.9), rgba(10, 7, 6, 0.84)),
+      rgba(10, 7, 6, 0.88);
+    backdrop-filter: blur(10px);
   }
 
   .session-workspace-modal {
@@ -821,8 +826,9 @@
     height: min(80vh, 780px);
     max-height: calc(100vh - 48px);
     border-color: rgba(158, 124, 90, 0.2);
-    background: linear-gradient(180deg, rgba(23, 16, 12, 0.96), rgba(15, 10, 8, 0.98));
-    box-shadow: 0 32px 56px rgba(0, 0, 0, 0.34);
+    background: linear-gradient(180deg, rgba(24, 17, 13, 0.995), rgba(15, 10, 8, 0.995));
+    box-shadow: 0 32px 56px rgba(0, 0, 0, 0.42);
+    isolation: isolate;
   }
 
   .session-workspace-modal__header {
@@ -863,7 +869,36 @@
   .session-workspace-modal__chat {
     min-height: 0;
     flex: 1;
-    background: rgba(18, 11, 9, 0.22);
+    background:
+      linear-gradient(180deg, rgba(18, 11, 9, 0.98), rgba(14, 9, 7, 0.98));
+  }
+
+  .session-workspace-modal__chat .session-chat-header {
+    background: rgba(18, 11, 9, 0.96);
+  }
+
+  .session-workspace-modal__chat .session-chat-messages {
+    background: rgba(14, 9, 7, 0.9);
+  }
+
+  .session-workspace-modal__chat .session-chat-empty {
+    background: rgba(14, 9, 7, 0.78);
+  }
+
+  .session-workspace-modal__chat .session-chat-message--assistant .session-chat-message-content {
+    background: rgba(32, 25, 20, 0.9);
+  }
+
+  .session-workspace-modal__chat .session-chat-message--user .session-chat-message-content {
+    background: rgba(201, 166, 107, 0.3);
+  }
+
+  .session-workspace-modal__chat .session-chat-composer {
+    background: rgba(17, 12, 9, 0.96);
+  }
+
+  .session-workspace-modal__chat .session-chat-composer textarea {
+    background: rgba(25, 18, 14, 0.94);
   }
 
   .session-workspace-modal__chat .session-chat {
