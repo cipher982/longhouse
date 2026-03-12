@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][QA/Test][Docs/Drift] Harden Gmail connector watch bootstrap and retire legacy webhook drift (size: 1)
+
+Status (2026-03-12): In progress. Gmail connect currently can report success while watch bootstrap failed or never even ran, and the repo still teaches the old direct HTTPS webhook story even though production uses Pub/Sub.
+
+**Goal:** Make Gmail connector setup/reporting honest, make production renewal/watch registration Pub/Sub-only, and remove misleading legacy webhook surface/docs from the normal runtime path.
+
+- [ ] Make `/auth/google/gmail` return explicit watch/mailbox bootstrap state instead of swallowing failures
+- [ ] Stop production watch registration/renewal from falling back to the legacy direct HTTPS webhook path
+- [ ] Fail fast when `GMAIL_PUBSUB_TOPIC` is configured without `PUBSUB_AUDIENCE`
+- [ ] Quarantine the legacy `/email/webhook/google` route to testing/local compatibility only
+- [ ] Add focused regression coverage for Gmail connect bootstrap and renewal state handling
+- [ ] Regenerate typed API artifacts and deploy/verify the hosted instance after the cleanup
+
+Notes:
+- 2026-03-12: `connect_gmail()` currently clears prior watch metadata before attempting bootstrap and swallows all exceptions, so reconnect can silently degrade a healthy connector.
+- 2026-03-12: The legacy direct HTTPS webhook/router is still mounted and still appears in generated API surface/docs, which keeps misleading future work.
+
 ## [Launch][Product][Docs/Drift] Tighten Longhouse tool surfaces for OSS/demo clarity (size: 5)
 
 Status (2026-03-12): In progress. Longhouse currently mixes continuity features with hidden agent-tooling conveniences, and `longhouse connect --install` quietly injects the Longhouse MCP server into everyday local Claude/Codex configs. For launch, default surfaces need to match the product story exactly.
