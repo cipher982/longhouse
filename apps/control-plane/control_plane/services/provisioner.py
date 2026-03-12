@@ -221,8 +221,10 @@ def _env_for(
     if settings.instance_ssh_private_key_b64:
         env["SSH_PRIVATE_KEY_B64"] = settings.instance_ssh_private_key_b64
 
-    # LLM shared pool — Groq is injected into every instance (no allowlist needed;
-    # Groq pricing is cheap enough to share and we enforce quotas via the limit vars below).
+    # LLM shared pool — xAI and Groq injected into every instance (no allowlist needed;
+    # pricing is cheap enough to share and we enforce quotas via the limit vars below).
+    if settings.instance_xai_api_key:
+        env["XAI_API_KEY"] = settings.instance_xai_api_key
     if settings.instance_groq_api_key:
         env["GROQ_API_KEY"] = settings.instance_groq_api_key
 
