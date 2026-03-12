@@ -5,6 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { RunnerWebSocketClient } from '../ws-client';
 
 const metadata = () => ({
+  hostname: 'lh-test-runner',
   platform: 'linux',
   arch: 'x64',
   runner_version: '0.1.3',
