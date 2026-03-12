@@ -46,6 +46,128 @@ Still blocked:
 - Oikos reply tooling and conversation-aware outbound email append
 - migration of web and Telegram onto the new conversation domain
 
+## Remaining Migration Plan
+
+The remaining rollout should stay deliberately staged. The product does not
+need a unified "one inbox UI" before the transcript model is correct.
+
+### API stance
+
+- `/conversations` is the canonical read/write API for human-visible threads.
+- `/api/oikos/conversations` remains temporarily as a deprecated façade for
+  compatibility and first-party migration safety.
+- No new product features should target `/api/oikos/conversations`.
+- The façade can be removed only after the web chat and Telegram surfaces read
+  from canonical `Conversation*` records by default.
+
+### Phase 7a: Web chat migration
+
+#### Goal
+
+Make the existing `/chat` Oikos UX run on a real canonical web conversation
+without forcing a visual rewrite.
+
+#### Recommended rollout
+
+##### Phase 7a.1: Canonical identity + write mirror
+
+- create and reuse a stable canonical binding for the current web surface
+  conversation (`surface_id=web`, `external_conversation_id=web:main`)
+- expose that canonical conversation identity through the existing Oikos
+  bootstrap/thread path so the frontend can treat it as real metadata instead
+  of a synthetic thread label
+- mirror newly created web user/assistant turns into `Conversation*` while
+  keeping `/api/oikos/history` as the live read path for now
+
+**Done when:**
+
+- every new web chat run creates or reuses one canonical `web:main`
+  conversation
+- new web user/assistant turns are persisted in `ConversationMessage`
+- `/api/oikos/thread` (or equivalent Oikos bootstrap metadata) exposes the
+  canonical conversation identity for the web surface
+- regression tests prove stable binding reuse and mirrored message writes
+
+##### Phase 7a.2: Read-path cutover
+
+- keep the current `/chat` UX and existing route structure
+- change web chat history loading from fake per-surface Oikos thread filtering
+  to canonical conversation reads
+- retain legacy `?thread=` prehydration only as explicit compatibility behavior
+
+**Done when:**
+
+- the default web Oikos experience reads canonical conversation messages
+- a newly sent web turn is visible in the next page load without relying on
+  `/api/oikos/history`
+- legacy `?thread=` links still render, but are clearly compatibility-only
+
+##### Phase 7a.3: Legacy web dependency removal
+
+- stop treating the Oikos `SUPER` thread as the source of truth for the web UI
+- keep private Oikos scratchpad behavior intact for runtime execution
+
+**Done when:**
+
+- first-party web chat no longer depends on `/api/oikos/history` for its
+  default transcript
+- the web surface only uses the Oikos `SUPER` thread as execution memory, not
+  as the human transcript model
+
+### Phase 7b: Telegram migration
+
+#### Goal
+
+Make Telegram DMs and forum topics durable canonical conversations instead of
+surface-filtered slices of the shared Oikos thread.
+
+#### Recommended rollout
+
+##### Phase 7b.1: Binding fidelity
+
+- map one Telegram DM to one canonical conversation
+- map one Telegram forum topic to one canonical conversation
+- preserve existing transport metadata (`chat_id`, `thread_id`,
+  `reply_to_message_id`, platform message IDs) in bindings/message metadata
+
+**Done when:**
+
+- Telegram ingress reuses stable canonical conversations for DMs and topics
+- no inbound Telegram turn loses the topic/thread metadata that identifies its
+  real conversation
+- regression tests cover DM and topic binding identity
+
+##### Phase 7b.2: Canonical transcript writes
+
+- mirror Telegram user/assistant turns into canonical conversations
+- keep push delivery behavior unchanged
+
+**Done when:**
+
+- Telegram replies are durable in `ConversationMessage`
+- Telegram history reconstruction does not require `/api/oikos/history`
+
+### Phase 7c: Legacy history shrink
+
+#### Goal
+
+Downgrade `/api/oikos/history` from product transcript API to compatibility and
+debug plumbing.
+
+#### Recommended rollout
+
+- keep the endpoint during migration to avoid breaking old clients
+- stop using it in first-party web/Telegram flows once both surfaces read from
+  canonical conversations
+- either remove it entirely or retain a minimal private-memory/debug scope
+
+**Done when:**
+
+- first-party web and Telegram flows no longer use `/api/oikos/history`
+- `/api/oikos/history` is clearly compatibility/debug-only
+- deleting or clearing user-visible conversation history does not depend on
+  mutating the shared Oikos `SUPER` thread
+
 ## Problem
 
 Current state in Zerg:

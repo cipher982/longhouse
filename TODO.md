@@ -831,7 +831,7 @@ Notes:
 - 2026-03-12: Oikos now has `list_conversations`, `search_conversations`, `read_conversation`, and `reply_in_conversation` tools over the canonical conversation store, so agent memory/actions can work on email threads without relying on the shared Oikos transcript.
 - 2026-03-12: The authenticated app now ships a first inbox/thread/reply UI on `/conversations`, backed by the canonical conversation APIs rather than deepening reliance on `/api/oikos/conversations`.
 - 2026-03-12: Gmail Pub/Sub webhook processing no longer advances connector `history_id` before sync. Notifications now track `last_notified_history_id` separately, with focused webhook router tests covering auth, mailbox mapping, and invalid cursor payloads.
-- 2026-03-12: The next build order is now web-chat migration, Telegram DM/topic migration, and then shrinking the compatibility-only `/api/oikos/history` / `/api/oikos/conversations` façade layer.
+- 2026-03-12: API stance is now explicit in the spec/task tracker: `/conversations` is canonical, `/api/oikos/conversations` stays temporarily as a deprecated façade, and the next implementation slice is web-chat migration foundation (`web:main` canonical identity + mirrored writes) before Telegram or `/api/oikos/history` shrinkage.
 
 ## [Product] First-class Oikos surface adapter interface extraction (size: 4)
 

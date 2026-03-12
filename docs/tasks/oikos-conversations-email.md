@@ -16,7 +16,45 @@
 - [x] Phase 5c: Add backend/tool tests for reply threading, recipient safety, and replay behavior
 - [x] Phase 6a: Add canonical `POST /conversations/{id}/reply` backend endpoint
 - [x] Phase 6b: Add inbox/thread UI backed by `/conversations`
-- [ ] Phase 6c: Decide whether `/api/oikos/conversations` remains a façade or is removed
-- [ ] Phase 7a: Migrate web chat onto the conversation layer
-- [ ] Phase 7b: Migrate Telegram DM/topic threads onto the conversation layer
-- [ ] Phase 7c: Retire or shrink `/api/oikos/history` compatibility behavior
+- [ ] Phase 6c: Keep `/api/oikos/conversations` as a deprecated façade until first-party migration is complete
+- [ ] Phase 7a.1: Create a stable canonical web conversation binding for `web:main`
+- [ ] Phase 7a.1: Expose canonical web conversation metadata through the existing Oikos bootstrap/thread path
+- [ ] Phase 7a.1: Mirror newly created web turns into `Conversation*` while keeping `/api/oikos/history` as the read path
+- [ ] Phase 7a.1: Add regression coverage for stable web binding reuse and mirrored writes
+- [ ] Phase 7a.2: Switch the default web Oikos read path from `/api/oikos/history` to canonical conversation reads
+- [ ] Phase 7a.2: Keep legacy `?thread=` prehydration as explicit compatibility behavior only
+- [ ] Phase 7a.3: Remove default web transcript dependence on the shared Oikos `SUPER` thread
+- [ ] Phase 7b.1: Map Telegram DMs to stable canonical conversations
+- [ ] Phase 7b.1: Map Telegram forum topics to stable canonical conversations with preserved topic metadata
+- [ ] Phase 7b.2: Mirror Telegram user/assistant turns into canonical conversations
+- [ ] Phase 7b.2: Add regression coverage for Telegram DM/topic binding identity and transcript writes
+- [ ] Phase 7c: Remove first-party dependence on `/api/oikos/history`
+- [ ] Phase 7c: Either delete `/api/oikos/history` or leave it compatibility/debug-only with reduced scope
+
+## Done Conditions
+
+### Phase 6c
+
+- `/conversations` is treated as canonical in docs and first-party feature work
+- `/api/oikos/conversations` is marked and documented as compatibility-only
+- no new product surface work depends on the façade
+
+### Phase 7a
+
+- the web surface has one stable canonical conversation identity (`web:main`)
+- new web turns are durable in `ConversationMessage`
+- first-party web chat can reload from canonical conversations instead of fake
+  surface-filtered Oikos thread history
+
+### Phase 7b
+
+- Telegram DMs and forum topics each map to their own durable canonical
+  conversation
+- Telegram transcript reconstruction no longer depends on the shared Oikos
+  thread
+
+### Phase 7c
+
+- `/api/oikos/history` is no longer a first-party transcript API
+- user-visible conversation lifecycle no longer depends on mutating the shared
+  Oikos `SUPER` thread
