@@ -34,21 +34,22 @@ Notes:
 
 ## [Launch][Product][Docs/Drift] Tighten Longhouse tool surfaces for OSS/demo clarity (size: 5)
 
-Status (2026-03-12): In progress. Longhouse currently mixes continuity features with hidden agent-tooling conveniences, and `longhouse connect --install` quietly injects the Longhouse MCP server into everyday local Claude/Codex configs. For launch, default surfaces need to match the product story exactly.
+Status (2026-03-12): Done. Longhouse now keeps the continuity/Oikos-fit MCP tools, normal local `connect --install` no longer mutates everyday Claude/Codex tool menus, workspace-local MCP injection still powers cloud resume, and hosted deploy + CI both passed.
 
 **Goal:** Make the public/default tool surfaces legible: continuity and Oikos stay, hidden local-agent convenience features go away unless they are clearly part of cloud resume or cross-session intelligence.
 
-- [ ] Write and commit the cleanup spec/task docs with explicit keep/remove decisions
-- [ ] Trim the Longhouse MCP server to continuity/Oikos-fit tools only
-- [ ] Stop auto-registering Longhouse MCP into normal local Claude/Codex installs
-- [ ] Keep workspace-scoped MCP injection for cloud commis/resume workspaces
-- [ ] Update docs/help text/tests/generated artifacts so the product boundary is consistent
-- [ ] Ship, reprovision, and verify the hosted control plane + dev instance post-change
+- [x] Write and commit the cleanup spec/task docs with explicit keep/remove decisions
+- [x] Trim the Longhouse MCP server to continuity/Oikos-fit tools only
+- [x] Stop auto-registering Longhouse MCP into normal local Claude/Codex installs
+- [x] Keep workspace-scoped MCP injection for cloud commis/resume workspaces
+- [x] Update docs/help text/tests/generated artifacts so the product boundary is consistent
+- [x] Ship, reprovision, and verify the hosted control plane + dev instance post-change
 
 Notes:
 - 2026-03-12: The product boundary is now explicit: Longhouse = session continuity, cloud resume, search/recall, and Oikos support. Surprise local-agent tooling in normal terminal sessions is feature bloat.
 - 2026-03-12: Longhouse MCP local KV memory (`~/.claude/longhouse-memory.json`) is misleading because it is not shared Longhouse memory. Remove it from the Longhouse MCP surface.
 - 2026-03-12: `visual_compare` and `get_reflections` may be useful internally, but they are not part of the launch story. Lean toward removal from the default Longhouse MCP server.
+- 2026-03-12: Shipped across commits `bc661142` -> `3d401607`. Hosted health and `make qa-live` both passed after deploy, and final `push-pr-ci` run `23023163344` finished green after rerunning a flaky E2E job.
 - Spec: `docs/specs/longhouse-tool-surface-tightening.md`
 - Tasks: `docs/tasks/longhouse-tool-surface-tightening.md`
 

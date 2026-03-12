@@ -1,6 +1,6 @@
 # Longhouse Tool Surface Tightening
 
-Status: In progress
+Status: Done
 Owner: Codex
 Last updated: 2026-03-12
 
@@ -176,6 +176,16 @@ Must not expose:
    - Longhouse MCP server exposing the expected trimmed tool list
 8. Local verification passes.
 9. Hosted deploy is completed and the primary dev instance remains healthy after reprovision.
+
+## Outcome
+
+Completed on 2026-03-12.
+
+- Longhouse MCP now exposes only `search_sessions`, `get_session_detail`, `get_session_events`, `recall`, `log_insight`, `query_insights`, and `notify_oikos`.
+- `longhouse connect --install` and `--hooks-only` no longer register Longhouse MCP globally into normal Claude/Codex configs.
+- Workspace-local Claude/Codex MCP injection remains in place for cloud commis/resume workspaces.
+- README, AGENTS, and VISION now describe the tighter boundary consistently.
+- Hosted deploy succeeded and the dev instance stayed healthy.
 
 ## Implementation Phases
 
