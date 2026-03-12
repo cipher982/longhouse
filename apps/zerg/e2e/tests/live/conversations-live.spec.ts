@@ -59,7 +59,7 @@ test('conversations inbox loads and renders canonical email surface', async ({ c
   await expect(page).toHaveURL(/\/conversations(\?.*)?$/, { timeout: 10_000 });
   await page.locator('body[data-ready="true"]').waitFor({ timeout: 12_000 });
 
-  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible();
   await expect(page.getByLabel('Search conversations')).toBeVisible();
   await expect(page.getByTestId('gmail-connection-panel')).toBeVisible();
 
