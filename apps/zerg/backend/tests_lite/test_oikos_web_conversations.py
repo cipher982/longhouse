@@ -94,6 +94,77 @@ def test_oikos_thread_exposes_canonical_web_conversation(tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
+def test_oikos_thread_backfills_legacy_web_history_into_canonical_conversation(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user = _seed_user(db, "backfill@test.local")
+        service = OikosService(db)
+        fiche = service.get_or_create_oikos_fiche(user.id)
+        thread = service.get_or_create_oikos_thread(user.id, fiche)
+
+        crud.create_thread_message(
+            db=db,
+            thread_id=thread.id,
+            role="user",
+            content="legacy web user",
+            processed=True,
+        )
+        crud.create_thread_message(
+            db=db,
+            thread_id=thread.id,
+            role="assistant",
+            content="legacy web assistant",
+            processed=True,
+        )
+        crud.create_thread_message(
+            db=db,
+            thread_id=thread.id,
+            role="user",
+            content="telegram user should stay out",
+            processed=True,
+            message_metadata={
+                "surface": {
+                    "origin_surface_id": "telegram",
+                    "origin_conversation_id": "telegram:42",
+                    "delivery_surface_id": "telegram",
+                    "delivery_conversation_id": "telegram:42",
+                    "visibility": "surface-local",
+                }
+            },
+        )
+
+        client, api_app_ref = _make_client(db, user)
+        try:
+            resp = client.get("/api/oikos/thread")
+            assert resp.status_code == 200
+            payload = resp.json()
+            canonical = payload["canonical_conversation"]
+            assert canonical["message_count"] == 2
+
+            conversation = ConversationService.get_conversation_by_binding(
+                db,
+                owner_id=user.id,
+                surface_id="web",
+                external_conversation_id="web:main",
+            )
+            assert conversation is not None
+
+            messages = ConversationService.list_messages(
+                db,
+                owner_id=user.id,
+                conversation_id=conversation.id,
+                limit=10,
+            )
+            assert [message.content for message in messages] == [
+                "legacy web user",
+                "legacy web assistant",
+            ]
+            assert messages[1].message_metadata["oikos"]["mirrored_from_oikos_thread"] is True
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 @pytest.mark.asyncio
 async def test_run_oikos_mirrors_new_web_turns_into_canonical_conversation(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)

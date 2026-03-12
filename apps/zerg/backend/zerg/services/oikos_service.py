@@ -302,6 +302,9 @@ class OikosService:
         thread_id = getattr(thread_message, "thread_id", None)
         if thread_id is not None:
             oikos_metadata["thread_id"] = thread_id
+        tool_calls = getattr(thread_message, "tool_calls", None)
+        if tool_calls:
+            oikos_metadata["tool_calls"] = tool_calls
         oikos_metadata["mirrored_from_oikos_thread"] = True
         message_metadata["oikos"] = oikos_metadata
 
@@ -341,6 +344,70 @@ class OikosService:
                 sender_kind="agent",
                 sender_display="Oikos",
             )
+
+    @staticmethod
+    def _surface_info_from_thread_message(thread_message: Any) -> tuple[str | None, str | None, str | None]:
+        message_metadata = getattr(thread_message, "message_metadata", None) or {}
+        surface = message_metadata.get("surface") if isinstance(message_metadata, dict) else None
+        if not isinstance(surface, dict):
+            return None, None, None
+        return (
+            surface.get("origin_surface_id"),
+            surface.get("delivery_surface_id"),
+            surface.get("visibility"),
+        )
+
+    def _thread_message_visible_on_surface(self, *, thread_message: Any, surface_id: str) -> bool:
+        origin, delivery, visibility = self._surface_info_from_thread_message(thread_message)
+        if visibility == "internal" or getattr(thread_message, "internal", False):
+            return False
+        if not origin and not delivery:
+            return surface_id == "web"
+        return origin == surface_id or delivery == surface_id
+
+    def ensure_surface_conversation_backfilled(
+        self,
+        *,
+        owner_id: int,
+        thread_id: int,
+        conversation,
+        surface_id: str,
+    ) -> None:
+        """Backfill legacy visible surface messages into the canonical conversation once."""
+        metadata = dict(conversation.conversation_metadata or {})
+        migration = dict(metadata.get("migration") or {})
+        migration_key = f"{surface_id}_thread_backfilled_at"
+        if migration.get(migration_key):
+            return
+
+        from zerg.models.thread import ThreadMessage as ThreadMessageModel
+
+        rows = (
+            self.db.query(ThreadMessageModel)
+            .filter(
+                ThreadMessageModel.thread_id == thread_id,
+                ThreadMessageModel.role.in_(["user", "assistant"]),
+                ThreadMessageModel.internal.is_(False),
+            )
+            .order_by(ThreadMessageModel.sent_at.asc(), ThreadMessageModel.id.asc())
+            .all()
+        )
+        for row in rows:
+            if not self._thread_message_visible_on_surface(thread_message=row, surface_id=surface_id):
+                continue
+            self._mirror_thread_message_to_surface_conversation(
+                owner_id=owner_id,
+                conversation_id=conversation.id,
+                thread_message=row,
+                direction="incoming" if row.role == "user" else "outgoing",
+                sender_kind="human" if row.role == "user" else "agent",
+                sender_display=None if row.role == "user" else "Oikos",
+            )
+
+        migration[migration_key] = datetime.now(timezone.utc).isoformat()
+        metadata["migration"] = migration
+        conversation.conversation_metadata = metadata
+        self.db.commit()
 
     def get_or_create_oikos_fiche(self, owner_id: int) -> FicheModel:
         """Get or create the oikos fiche for a user.

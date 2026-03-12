@@ -96,6 +96,7 @@ export interface OikosChatConfig {
 export interface OikosHistoryOptions {
   surface_id?: string;
   view?: 'surface' | 'all';
+  conversation_id?: string | number | null;
 }
 
 type QuotaHint = {
@@ -187,14 +188,26 @@ export class OikosChatController {
     try {
       logger.debug('[OikosChat] Loading history from server...');
 
-      const params = new URLSearchParams({
-        limit: String(limit),
-        surface_id: options.surface_id || 'web',
-      });
-      if (options.view === 'all') {
-        params.set('view', 'all');
+      const canonicalConversationId =
+        options.view !== 'all' && options.conversation_id !== undefined && options.conversation_id !== null
+          ? String(options.conversation_id)
+          : null;
+
+      let url: string;
+      if (canonicalConversationId) {
+        const params = new URLSearchParams({ limit: String(limit) });
+        url = toAbsoluteUrl(`${CONFIG.API_BASE}/conversations/${canonicalConversationId}/messages?${params.toString()}`);
+      } else {
+        const params = new URLSearchParams({
+          limit: String(limit),
+          surface_id: options.surface_id || 'web',
+        });
+        if (options.view === 'all') {
+          params.set('view', 'all');
+        }
+        url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?${params.toString()}`);
       }
-      const url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?${params.toString()}`);
+
       const response = await fetch(url, {
         method: 'GET',
         credentials: 'include', // Cookie auth
@@ -206,18 +219,41 @@ export class OikosChatController {
 
       const data = await response.json();
 
-      // Transform server format to UI format
-      // Server returns: { messages: Array<{ role, content, timestamp, usage?, tool_calls? }>, total }
-      const messages: OikosChatMessage[] = (data.messages || []).map((msg: any) => ({
-        role: msg.role,
-        content: msg.content,
-        timestamp: parseUTC(msg.timestamp),
-        origin_surface_id: msg.origin_surface_id || undefined,
-        delivery_surface_id: msg.delivery_surface_id || undefined,
-        visibility: msg.visibility || undefined,
-        usage: msg.usage || undefined,
-        tool_calls: msg.tool_calls || undefined,
-      }));
+      const messages: OikosChatMessage[] = (data.messages || [])
+        .filter((msg: any) => msg.role === 'user' || msg.role === 'assistant')
+        .map((msg: any) => {
+          if (canonicalConversationId) {
+            const surface = msg.message_metadata?.surface || {};
+            const oikos = msg.message_metadata?.oikos || {};
+            return {
+              role: msg.role,
+              content: msg.content,
+              timestamp: parseUTC(msg.sent_at),
+              origin_surface_id: surface.origin_surface_id || undefined,
+              delivery_surface_id: surface.delivery_surface_id || undefined,
+              visibility: surface.visibility || undefined,
+              usage: msg.message_metadata?.usage || undefined,
+              tool_calls: oikos.tool_calls
+                ? oikos.tool_calls.map((toolCall: any) => ({
+                    tool_call_id: toolCall.id,
+                    tool_name: toolCall.name,
+                    args: toolCall.args,
+                  }))
+                : undefined,
+            };
+          }
+
+          return {
+            role: msg.role,
+            content: msg.content,
+            timestamp: parseUTC(msg.timestamp),
+            origin_surface_id: msg.origin_surface_id || undefined,
+            delivery_surface_id: msg.delivery_surface_id || undefined,
+            visibility: msg.visibility || undefined,
+            usage: msg.usage || undefined,
+            tool_calls: msg.tool_calls || undefined,
+          };
+        });
 
       logger.debug(`[OikosChat] Loaded ${messages.length} messages from history`);
       return messages;
