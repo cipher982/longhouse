@@ -196,7 +196,6 @@ CLI agents (Claude Code, Codex, Gemini) can call back into Longhouse's toolbox v
 - `recall` — chunk-level semantic recall with event window retrieval
 - `memory_read` / `memory_write` — persistent memory across commis runs
 - `log_insight` / `query_insights` — write/read insights
-- `reserve_file` / `check_reservation` / `release_reservation` — prevent edit conflicts
 - `get_reflections` — retrieve recent reflection briefings
 - `notify_oikos` — commis reports status back to Oikos coordinator (currently logs)
 
@@ -206,7 +205,7 @@ CLI agents (Claude Code, Codex, Gemini) can call back into Longhouse's toolbox v
 - Commis spawned via `hatch` automatically get the Longhouse MCP server configured
 - A hatch-spawned agent can search "how did we implement retry logic?" against the Longhouse archive mid-task
 
-**Current State (as of 2026-02-12):** MCP server implemented with stdio and HTTP transport. Toolset expanded (search/detail/recall, memory, insights, reservations, reflections, notify). Auto-registered via `longhouse connect --install`. Auto-configured for commis workspaces (injected into `.claude/settings.json` at spawn time). Codex `config.toml` MCP registration supported. Quality gates (verify hooks) injected into commis workspaces. `notify_oikos` still logs (WebSocket delivery pending).
+**Current State (as of 2026-02-12):** MCP server implemented with stdio and HTTP transport. Toolset expanded (search/detail/recall, memory, insights, reflections, notify). Auto-registered via `longhouse connect --install`. Auto-configured for commis workspaces (injected into `.claude/settings.json` at spawn time). Codex `config.toml` MCP registration supported. Quality gates (verify hooks) injected into commis workspaces. `notify_oikos` still logs (WebSocket delivery pending).
 
 ### Multi-Provider Backend Integration
 

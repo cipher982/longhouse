@@ -51,7 +51,6 @@ GUID_COLUMN_SPECS: tuple[GuidColumnSpec, ...] = (
     GuidColumnSpec("action_proposals", "id", ("id",), "report_only"),
     GuidColumnSpec("action_proposals", "insight_id", ("id",), "report_only"),
     GuidColumnSpec("action_proposals", "reflection_run_id", ("id",), "set_null"),
-    GuidColumnSpec("file_reservations", "id", ("id",), "report_only"),
     GuidColumnSpec("insights", "id", ("id",), "report_only"),
     GuidColumnSpec("insights", "session_id", ("id",), "set_null"),
     GuidColumnSpec("reflection_runs", "id", ("id",), "report_only"),

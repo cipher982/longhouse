@@ -8,7 +8,6 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
 from zerg.models.agents import AgentsBase
-from zerg.models.work import FileReservation  # noqa: F401
 from zerg.models.work import Insight
 
 

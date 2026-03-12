@@ -143,7 +143,6 @@ try:
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserSkill  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
-    from zerg.models.work import FileReservation  # noqa: F401
     from zerg.models.work import Insight  # noqa: F401
 except ImportError:
     # Handle case where models module might not be available during certain imports
@@ -400,7 +399,6 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
-    from zerg.models.work import FileReservation  # noqa: F401
     from zerg.models.work import Insight  # noqa: F401
 
     target_engine = engine or default_engine
@@ -431,6 +429,7 @@ def initialize_database(engine: Engine = None) -> None:
 
     # Migrate existing tables: add columns that create_all() won't ALTER into place
     _migrate_agents_columns(target_engine)
+    _cleanup_legacy_agents_tables(target_engine)
 
     if target_engine.dialect.name == "sqlite":
         # Keep a ledger table ready for explicit heavy migrations.
@@ -743,6 +742,32 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.commit()
     except Exception:
         logger.debug("job_runs table migration skipped (table may not exist yet)", exc_info=True)
+
+
+def _cleanup_legacy_agents_tables(engine: Engine) -> None:
+    """Drop removed SQLite-only agent tables so existing instances converge."""
+    if engine.dialect.name != "sqlite":
+        return
+
+    try:
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'file_reservations'
+                    LIMIT 1
+                    """
+                )
+            ).fetchone()
+            if exists is None:
+                return
+            conn.execute(text("DROP TABLE file_reservations"))
+            conn.commit()
+            logger.info("Dropped legacy file_reservations table")
+    except Exception:
+        logger.debug("legacy file_reservations cleanup skipped", exc_info=True)
 
 
 def _ensure_agents_fts(engine: Engine) -> None:

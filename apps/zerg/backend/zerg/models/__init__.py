@@ -40,7 +40,6 @@ from .trigger_config import TriggerConfig
 from .types import GUID
 from .user import User
 from .waitlist import WaitlistEntry
-from .work import FileReservation
 from .work import Insight
 
 __all__ = [
@@ -83,6 +82,5 @@ __all__ = [
     "UserSkill",
     "CommisJob",
     "SurfaceIngressClaim",
-    "FileReservation",
     "Insight",
 ]

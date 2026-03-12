@@ -83,24 +83,3 @@ class LonghouseAPIClient:
         if project:
             params["project"] = project
         return await self.get("/api/agents/reflections", params=params)
-
-    async def delete(
-        self,
-        path: str,
-        params: dict | None = None,
-    ) -> httpx.Response:
-        """Send a DELETE request to the Longhouse API.
-
-        Args:
-            path: API path.
-            params: Optional query parameters.
-
-        Returns:
-            The httpx Response object.
-        """
-        async with httpx.AsyncClient(timeout=15) as client:
-            return await client.delete(
-                f"{self.base_url}{path}",
-                headers=self._headers,
-                params=params,
-            )
