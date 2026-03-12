@@ -1,6 +1,6 @@
 # Longhouse Tool Surface Tightening Tasks
 
-Status: In progress
+Status: Done
 Spec: `docs/specs/longhouse-tool-surface-tightening.md`
 Last updated: 2026-03-12
 
@@ -28,7 +28,7 @@ Last updated: 2026-03-12
 - [x] Keep workspace-local Claude MCP injection working
 - [x] Keep workspace-local Codex MCP injection working
 - [x] Add/adjust tests for local install vs workspace injection
-- [ ] Commit Phase 2
+- [x] Commit Phase 2
 
 ## Phase 3: Docs and verification
 
@@ -39,17 +39,23 @@ Last updated: 2026-03-12
 - [x] Regenerate artifacts if required
 - [x] Run targeted tests
 - [x] Run broader local verification (`make test` and any necessary follow-on checks)
-- [ ] Commit Phase 3
+- [x] Commit Phase 3
 
 Notes:
 - 2026-03-12: No generated OpenAPI/tool-schema artifacts were required for this cleanup. The public API surface did not change; only Longhouse MCP defaults, install behavior, and docs changed.
 
 ## Phase 4: Ship and verify
 
-- [ ] Push `main`
-- [ ] Wait for CI/build workflows to finish successfully
-- [ ] Deploy hosted control plane/marketing if needed
-- [ ] Reprovision `david010` user instance
-- [ ] Verify hosted health and `make qa-live`
-- [ ] Update this task doc with final status notes
-- [ ] Commit any last doc/status updates if needed
+- [x] Push `main`
+- [x] Wait for CI/build workflows to finish successfully
+- [x] Deploy hosted control plane/marketing if needed
+- [x] Reprovision `david010` user instance
+- [x] Verify hosted health and `make qa-live`
+- [x] Update this task doc with final status notes
+- [x] Commit any last doc/status updates if needed
+
+Final notes:
+- Phase commits: `bc661142` (spec), `e6c8296e` (trim MCP), `ba7e61f1` (split local install from workspace MCP), `d5c14346` (docs), `dd4a3537` (runner fixture drift), `3d401607` (dashboard accessibility).
+- Local verification passed with targeted pytest, `make test`, `make test-e2e`, `make test-runner-unit`, `make test-readmes MODE=smoke`, and frontend type validation.
+- Hosted verification passed with healthy `/api/health` and `make qa-live` (`8 passed`).
+- Final GitHub Actions runs for commit `3d401607ddef95f918be734752ef8be970233633` completed successfully, including `push-pr-ci` run `23023163344` and `Deploy and Verify` run `23023226471`.
