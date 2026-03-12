@@ -112,6 +112,7 @@ class Settings:  # noqa: D401 – simple data container
     allowed_cors_origins: str
     openai_api_key: Any
     groq_api_key: Any
+    xai_api_key: Any
     # Public URL --------------------------------------------------------
     # Legacy name (kept for backwards compatibility)
     app_public_url: str | None
@@ -207,7 +208,7 @@ class Settings:  # noqa: D401 – simple data container
         Used for graceful degradation: UI boots without API keys,
         but chat features prompt for configuration.
         """
-        return bool(self.openai_api_key) or bool(self.groq_api_key)
+        return bool(self.openai_api_key) or bool(self.groq_api_key) or bool(self.xai_api_key)
 
     @property
     def data_dir(self) -> Path:
@@ -454,6 +455,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         allowed_cors_origins=os.getenv("ALLOWED_CORS_ORIGINS", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         groq_api_key=os.getenv("GROQ_API_KEY"),
+        xai_api_key=os.getenv("XAI_API_KEY"),
         app_public_url=os.getenv("APP_PUBLIC_URL") or os.getenv("PUBLIC_SITE_URL"),
         public_site_url=os.getenv("PUBLIC_SITE_URL") or os.getenv("APP_PUBLIC_URL"),
         public_api_url=os.getenv("PUBLIC_API_URL"),

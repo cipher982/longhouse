@@ -11,6 +11,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -134,16 +135,25 @@ def _make_llm(
 
     settings = get_settings()
     provider = model_config.provider
+    api_key_env_var = model_config.api_key_env_var or ("GROQ_API_KEY" if provider == ModelProvider.GROQ else "OPENAI_API_KEY")
+    api_key = os.getenv(api_key_env_var)
+    if not api_key:
+        if api_key_env_var == "GROQ_API_KEY":
+            api_key = settings.groq_api_key
+        elif api_key_env_var == "OPENAI_API_KEY":
+            api_key = settings.openai_api_key
+        elif api_key_env_var == "XAI_API_KEY":
+            api_key = settings.xai_api_key
 
     kwargs: dict = {
         "model": model,
         "streaming": settings.llm_token_stream,
-        "api_key": settings.groq_api_key if provider == ModelProvider.GROQ else settings.openai_api_key,
+        "api_key": api_key,
     }
-    if provider == ModelProvider.GROQ:
+    if provider != ModelProvider.ANTHROPIC and model_config.base_url:
         kwargs["base_url"] = model_config.base_url
-        if not kwargs["api_key"]:
-            raise ValueError(f"GROQ_API_KEY not configured but Groq model '{model}' selected")
+    if not kwargs["api_key"]:
+        raise ValueError(f"{api_key_env_var} not configured but model '{model}' selected")
 
     capabilities = model_config.capabilities or {}
     if capabilities.get("reasoning", False):

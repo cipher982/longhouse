@@ -56,14 +56,14 @@ test.describe('Model Capabilities & Reasoning Selector', () => {
     await expect(reasoningSelector.locator('option[value="high"]')).toBeAttached();
   });
 
-  test('reasoning selector hidden for Llama 4 Maverick (no reasoning support)', async ({
+  test('reasoning selector hidden for Grok 4.1 Fast (no reasoning support)', async ({
     page,
   }) => {
     const modelSelector = page.locator('.model-select');
     const reasoningSelector = page.locator('.reasoning-select');
 
-    // Select Llama 4 Maverick (no reasoning support)
-    await modelSelector.selectOption('meta-llama/llama-4-maverick-17b-128e-instruct');
+    // Select Grok 4.1 Fast (no reasoning support)
+    await modelSelector.selectOption('grok-4-1-fast-reasoning');
 
     // Reasoning selector should be hidden
     await expect(reasoningSelector).not.toBeVisible();
@@ -92,8 +92,8 @@ test.describe('Model Capabilities & Reasoning Selector', () => {
     await modelSelector.selectOption('gpt-5.2');
     await expect(reasoningSelector).toBeVisible();
 
-    // Switch to Llama 4 (reasoning hidden)
-    await modelSelector.selectOption('meta-llama/llama-4-maverick-17b-128e-instruct');
+    // Switch to Grok 4.1 Fast (reasoning hidden)
+    await modelSelector.selectOption('grok-4-1-fast-reasoning');
     await expect(reasoningSelector).not.toBeVisible();
 
     // Switch back to gpt-5.2 (reasoning visible again)
@@ -130,7 +130,7 @@ test.describe('Model Capabilities & Reasoning Selector', () => {
       'gpt-5-mini',
       'gpt-5-nano',
       'qwen/qwen3-32b',
-      'meta-llama/llama-4-maverick-17b-128e-instruct',
+      'grok-4-1-fast-reasoning',
     ];
 
     for (const modelId of expectedModels) {

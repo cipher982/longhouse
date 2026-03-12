@@ -16,6 +16,7 @@ import { Badge, Button, Card, Input, Spinner } from "./ui";
 const KNOWN_PROVIDERS = [
   { id: "openai", name: "OpenAI", baseUrl: "" },
   { id: "groq", name: "Groq", baseUrl: "https://api.groq.com/openai/v1" },
+  { id: "xai", name: "xAI", baseUrl: "https://api.x.ai/v1" },
   { id: "ollama", name: "Ollama / Local", baseUrl: "http://localhost:11434/v1" },
   { id: "custom", name: "Custom", baseUrl: "" },
 ] as const;

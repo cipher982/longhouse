@@ -528,7 +528,7 @@ def status(
     typer.echo("Features:")
     typer.echo(f"  Auth: {'disabled' if settings.auth_disabled else 'enabled'}")
     typer.echo(f"  Single tenant: {'yes' if settings.single_tenant else 'no'}")
-    typer.echo(f"  LLM available: {'yes' if settings.llm_available else 'no (set OPENAI_API_KEY)'}")
+    typer.echo(f"  LLM available: {'yes' if settings.llm_available else 'no (set OPENAI_API_KEY, GROQ_API_KEY, or XAI_API_KEY)'}")
     typer.echo(f"  Job queue: {'enabled' if settings.job_queue_enabled else 'disabled'}")
 
     typer.echo("")
