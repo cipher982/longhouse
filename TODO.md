@@ -15,6 +15,26 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Product][Docs/Drift] Tighten Longhouse tool surfaces for OSS/demo clarity (size: 5)
+
+Status (2026-03-12): In progress. Longhouse currently mixes continuity features with hidden agent-tooling conveniences, and `longhouse connect --install` quietly injects the Longhouse MCP server into everyday local Claude/Codex configs. For launch, default surfaces need to match the product story exactly.
+
+**Goal:** Make the public/default tool surfaces legible: continuity and Oikos stay, hidden local-agent convenience features go away unless they are clearly part of cloud resume or cross-session intelligence.
+
+- [ ] Write and commit the cleanup spec/task docs with explicit keep/remove decisions
+- [ ] Trim the Longhouse MCP server to continuity/Oikos-fit tools only
+- [ ] Stop auto-registering Longhouse MCP into normal local Claude/Codex installs
+- [ ] Keep workspace-scoped MCP injection for cloud commis/resume workspaces
+- [ ] Update docs/help text/tests/generated artifacts so the product boundary is consistent
+- [ ] Ship, reprovision, and verify the hosted control plane + dev instance post-change
+
+Notes:
+- 2026-03-12: The product boundary is now explicit: Longhouse = session continuity, cloud resume, search/recall, and Oikos support. Surprise local-agent tooling in normal terminal sessions is feature bloat.
+- 2026-03-12: Longhouse MCP local KV memory (`~/.claude/longhouse-memory.json`) is misleading because it is not shared Longhouse memory. Remove it from the Longhouse MCP surface.
+- 2026-03-12: `visual_compare` and `get_reflections` may be useful internally, but they are not part of the launch story. Lean toward removal from the default Longhouse MCP server.
+- Spec: `docs/specs/longhouse-tool-surface-tightening.md`
+- Tasks: `docs/tasks/longhouse-tool-surface-tightening.md`
+
 ## [Product][Tech Debt] Refactor session detail into a pane-based workspace (size: 4)
 
 Status (2026-03-11): Done. The pane-based workspace now has draggable desktop gutters with persisted sidebar and inspector widths, so users can give the transcript more room without another route redesign.
