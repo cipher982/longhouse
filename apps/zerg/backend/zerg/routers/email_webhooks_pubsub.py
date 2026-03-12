@@ -160,16 +160,28 @@ async def gmail_pubsub_webhook(
         )
         return {"status": "ignored", "reason": "no_connector"}
 
-    # Update history_id if provided
+    # Keep ``history_id`` reserved for the last successfully processed cursor.
+    # Pub/Sub notifications carry a newer history id, but persisting it here
+    # would cause ``process_connector()`` to skip the very change we were
+    # notified about when it calls Gmail ``history.list(startHistoryId=...)``.
     if history_id:
-        config = dict(matching_connector.config or {})
-        current_history_id = int(config.get("history_id", 0))
-        new_history_id = int(history_id)
+        try:
+            notified_history_id = int(history_id)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Pub/Sub message has invalid historyId",
+                extra={"connector_id": matching_connector.id, "history_id": history_id},
+            )
+        else:
+            config = dict(matching_connector.config or {})
+            try:
+                last_notified_history_id = int(config.get("last_notified_history_id", 0) or 0)
+            except (TypeError, ValueError):
+                last_notified_history_id = 0
 
-        # Only update if newer
-        if new_history_id > current_history_id:
-            config["history_id"] = new_history_id
-            crud.update_connector(db, matching_connector.id, config=config)
+            if notified_history_id > last_notified_history_id:
+                config["last_notified_history_id"] = notified_history_id
+                crud.update_connector(db, matching_connector.id, config=config)
 
     # Trigger async processing
     from zerg.email.providers import get_provider
