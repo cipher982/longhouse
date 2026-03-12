@@ -183,6 +183,9 @@ _OIKOS_UTILITY_TOOL_LIST = [
     "grep_sessions",
     "filter_sessions",
     "get_session_detail",
+    # Canonical conversation discovery
+    "search_conversations",
+    "read_conversation",
 ]
 
 # Personal context tools are gated behind PERSONAL_TOOLS_ENABLED env var

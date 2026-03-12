@@ -8,6 +8,7 @@ import os
 
 from zerg.tools.builtin.connector_tools import TOOLS as CONNECTOR_TOOLS
 from zerg.tools.builtin.contact_user import TOOLS as CONTACT_USER_TOOLS
+from zerg.tools.builtin.conversation_tools import TOOLS as CONVERSATION_TOOLS
 from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
 from zerg.tools.builtin.discord_tools import TOOLS as DISCORD_TOOLS
 from zerg.tools.builtin.email_tools import TOOLS as EMAIL_TOOLS
@@ -50,6 +51,7 @@ else:
 
 BUILTIN_TOOLS = (
     CONNECTOR_TOOLS
+    + CONVERSATION_TOOLS
     + CONTACT_USER_TOOLS
     + DATETIME_TOOLS
     + DISCORD_TOOLS
