@@ -39,12 +39,13 @@ Completed locally in this session:
 - Phase 3 groundwork: provider-neutral email ingest + raw archive service
 - Phase 3 inbound Gmail connector integration inside `GmailProvider.process_connector()`
 - Phase 4 search/read groundwork: Oikos `search_conversations` and `read_conversation` tools
+- Phase 6c decision: `/api/oikos/conversations` remains only as a deprecated façade
+- Phase 7a.1 foundation: stable `web:main` canonical conversation identity, mirrored web writes, and focused regression coverage
 - targeted backend tests for conversation APIs, email ingest, and Gmail replay behavior
 
 Still blocked:
 
-- Oikos reply tooling and conversation-aware outbound email append
-- migration of web and Telegram onto the new conversation domain
+- migration of default web read-path and Telegram onto the new conversation domain
 
 ## Remaining Migration Plan
 

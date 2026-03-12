@@ -776,6 +776,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Conversations */
+        get: operations["list_conversations_conversations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/conversations/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Conversations */
+        get: operations["search_conversations_conversations_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Conversation */
+        get: operations["get_conversation_conversations__conversation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/conversations/{conversation_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Messages */
+        get: operations["list_messages_conversations__conversation_id__messages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/conversations/{conversation_id}/reply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reply To Conversation */
+        post: operations["reply_to_conversation_conversations__conversation_id__reply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/triggers/{trigger_id}": {
         parameters: {
             query?: never;
@@ -1855,6 +1940,237 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/oikos/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Oikos Chat
+         * @description Text chat with Oikos — returns an SSE stream of run events.
+         *
+         *     Validates the request, invokes Oikos via the transport-agnostic
+         *     ``invoke_oikos()``, and wires the resulting run to an SSE stream.
+         */
+        post: operations["oikos_chat_oikos_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/run/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Oikos Run Cancel
+         * @description Cancel a running oikos investigation.
+         */
+        post: operations["oikos_run_cancel_oikos_run__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oikos Bootstrap
+         * @description Get Oikos bootstrap configuration.
+         *
+         *     Returns system prompt, enabled tools, user context, available models,
+         *     and saved preferences. This is the single source of truth for Oikos
+         *     frontend initialization.
+         */
+        get: operations["oikos_bootstrap_oikos_bootstrap_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/thread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Oikos Thread
+         * @description Get the oikos thread for the current user.
+         */
+        get: operations["get_oikos_thread_oikos_thread_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Oikos Update Preferences
+         * @description Update user's Oikos preferences (model, reasoning effort).
+         */
+        patch: operations["oikos_update_preferences_oikos_preferences_patch"];
+        trace?: never;
+    };
+    "/api/oikos/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oikos Session
+         * @description Mint an ephemeral OpenAI Realtime session token.
+         */
+        get: operations["oikos_session_oikos_session_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Oikos Conversations
+         * @deprecated
+         */
+        get: operations["list_oikos_conversations_oikos_conversations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/conversations/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Oikos Conversations
+         * @deprecated
+         */
+        get: operations["search_oikos_conversations_oikos_conversations_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Oikos Conversation
+         * @deprecated
+         */
+        get: operations["get_oikos_conversation_oikos_conversations__conversation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/conversations/{conversation_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Oikos Conversation Messages
+         * @deprecated
+         */
+        get: operations["list_oikos_conversation_messages_oikos_conversations__conversation_id__messages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oikos History
+         * @description Get conversation history from Oikos thread.
+         */
+        get: operations["oikos_history_oikos_history_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Oikos Clear History
+         * @description Clear conversation history (keeps thread, deletes messages).
+         */
+        delete: operations["oikos_clear_history_oikos_history_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/oikos/fiches": {
         parameters: {
             query?: never;
@@ -1864,17 +2180,7 @@ export interface paths {
         };
         /**
          * List Oikos Fiches
-         * @description List available fiches for Oikos UI.
-         *
-         *     Returns a minimal summary of all active fiches including their schedules
-         *     and next run times. This powers the fiche selection UI in Oikos.
-         *
-         *     Args:
-         *         db: Database session
-         *         current_user: Authenticated user (Oikos service account)
-         *
-         *     Returns:
-         *         List of fiche summaries
+         * @description List the current user's fiches with schedule and status summaries.
          */
         get: operations["list_oikos_fiches_oikos_fiches_get"];
         put?: never;
@@ -1895,20 +2201,28 @@ export interface paths {
         /**
          * List Oikos Runs
          * @description List recent fiche runs for Oikos Task Inbox.
-         *
-         *     Returns recent run history with summaries, filtered by fiche if specified.
-         *     This powers the Task Inbox UI in Oikos showing all automated activity.
-         *
-         *     Args:
-         *         limit: Maximum number of runs to return (default 50)
-         *         fiche_id: Optional filter by specific fiche
-         *         db: Database session
-         *         current_user: Authenticated user (Oikos service account)
-         *
-         *     Returns:
-         *         List of run summaries ordered by created_at descending
          */
         get: operations["list_oikos_runs_oikos_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/wakeups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Oikos Wakeups
+         * @description List recent proactive Oikos wakeups for the authenticated owner.
+         */
+        get: operations["list_oikos_wakeups_oikos_wakeups_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1926,19 +2240,7 @@ export interface paths {
         };
         /**
          * Get Active Run
-         * @description Get the user's currently running oikos run (if any).
-         *
-         *     Returns the most recent RUNNING, WAITING, or DEFERRED run for the user's oikos fiche.
-         *     Returns 204 No Content if no active run exists.
-         *
-         *     This endpoint enables run reconnection after page refresh.
-         *
-         *     Args:
-         *         db: Database session
-         *         current_user: Authenticated user (multi-tenant filtered)
-         *
-         *     Returns:
-         *         JSONResponse with run details if found, or 204 No Content
+         * @description Get the user's currently active oikos run (RUNNING/WAITING/DEFERRED), or 204.
          */
         get: operations["get_active_run_oikos_runs_active_get"];
         put?: never;
@@ -1959,20 +2261,6 @@ export interface paths {
         /**
          * Get Run Status
          * @description Get current status of a specific run.
-         *
-         *     Returns detailed status including timing, errors, and result if completed.
-         *     This endpoint is used for polling run status after async task submission.
-         *
-         *     Args:
-         *         run_id: ID of the run to query
-         *         db: Database session
-         *         current_user: Authenticated user (multi-tenant filtered)
-         *
-         *     Returns:
-         *         Run status with result if completed
-         *
-         *     Raises:
-         *         HTTPException: 404 if run not found or not owned by user
          */
         get: operations["get_run_status_oikos_runs__run_id__get"];
         put?: never;
@@ -1992,19 +2280,7 @@ export interface paths {
         };
         /**
          * Attach To Run Stream
-         * @description Attach to an existing run's event stream.
-         *
-         *     For RUNNING runs: Streams events via SSE as they occur.
-         *     For completed runs: Returns a single completion event and closes.
-         *
-         *     This enables run reconnection after page refresh.
-         *
-         *     Args:
-         *         run_id: ID of the run to attach to
-         *         current_user: Authenticated user (multi-tenant filtered)
-         *
-         *     Returns:
-         *         EventSourceResponse for SSE streaming
+         * @description Attach to an existing run's SSE stream (or replay completion for finished runs).
          */
         get: operations["attach_to_run_stream_oikos_runs__run_id__stream_get"];
         put?: never;
@@ -2024,23 +2300,7 @@ export interface paths {
         };
         /**
          * Get Run Events
-         * @description Get events for a specific run.
-         *
-         *     Returns events stored during run execution, optionally filtered by type.
-         *     This endpoint is useful for E2E testing to verify tool calls and lifecycle events.
-         *
-         *     Args:
-         *         run_id: ID of the run to query
-         *         event_type: Optional filter by event type (e.g., "oikos_tool_started")
-         *         limit: Maximum number of events to return (default 100)
-         *         db: Database session
-         *         current_user: Authenticated user (multi-tenant filtered)
-         *
-         *     Returns:
-         *         List of events for the run
-         *
-         *     Raises:
-         *         HTTPException: 404 if run not found or not owned by user
+         * @description Get events for a specific run, optionally filtered by type.
          */
         get: operations["get_run_events_oikos_runs__run_id__events_get"];
         put?: never;
@@ -2060,145 +2320,11 @@ export interface paths {
         };
         /**
          * Get Run Timeline
-         * @description Get timing timeline for a specific run.
-         *
-         *     Returns structured timing data with phase-based events and summary statistics.
-         *     This endpoint powers performance profiling and observability for Oikos chat.
-         *
-         *     Args:
-         *         run_id: ID of the run to query
-         *         db: Database session
-         *         current_user: Authenticated user (multi-tenant filtered)
-         *
-         *     Returns:
-         *         Timeline with events and timing summary
-         *
-         *     Raises:
-         *         HTTPException: 404 if run not found or not owned by user
+         * @description Get timing timeline for a specific run (phase events + summary stats).
          */
         get: operations["get_run_timeline_oikos_runs__run_id__timeline_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/dispatch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Oikos Dispatch
-         * @description Dispatch fiche task from Oikos.
-         *
-         *     Triggers immediate execution of a fiche task and returns run/thread IDs
-         *     for tracking. Oikos can then listen to the SSE stream for updates.
-         *
-         *     Args:
-         *         request: Dispatch request with fiche_id and optional task override
-         *         db: Database session
-         *         current_user: Authenticated user (Oikos service account)
-         *
-         *     Returns:
-         *         OikosDispatchResponse with run and thread IDs
-         *
-         *     Raises:
-         *         404: Fiche not found
-         *         409: Fiche already running
-         *         500: Execution error
-         */
-        post: operations["oikos_dispatch_oikos_dispatch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Oikos Run
-         * @description Dispatch a task to the oikos fiche.
-         *
-         *     The oikos is the "one brain" that coordinates commis and maintains
-         *     long-term context. Each user has a single oikos thread that persists
-         *     across sessions.
-         *
-         *     This endpoint:
-         *     1. Finds or creates the user's oikos thread (idempotent)
-         *     2. Creates a new run attached to that thread
-         *     3. Kicks off oikos execution in the background
-         *     4. Returns immediately with run_id and stream_url
-         *
-         *     Args:
-         *         request: Task and optional context/preferences
-         *         db: Database session
-         *         current_user: Authenticated user
-         *
-         *     Returns:
-         *         OikosRunResponse with run_id, thread_id, and stream_url
-         *
-         *     Example:
-         *         POST /api/oikos/run
-         *         {"task": "Check my server health"}
-         *
-         *         Response:
-         *         {
-         *             "run_id": 456,
-         *             "thread_id": 789,
-         *             "status": "running",
-         *             "stream_url": "/api/stream/runs/456"
-         *         }
-         */
-        post: operations["oikos_run_oikos_run_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/run/{run_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Oikos Run Cancel
-         * @description Cancel a running oikos investigation.
-         *
-         *     Marks the run as cancelled and emits a cancellation event to SSE subscribers.
-         *     If the run is already complete, returns the current status without error.
-         *
-         *     Args:
-         *         run_id: The oikos run ID to cancel
-         *         db: Database session
-         *         current_user: Authenticated user
-         *
-         *     Returns:
-         *         OikosRunCancelResponse with run status
-         *
-         *     Raises:
-         *         HTTPException 404: If run not found or doesn't belong to user
-         */
-        post: operations["oikos_run_cancel_oikos_run__run_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2216,180 +2342,9 @@ export interface paths {
         put?: never;
         /**
          * Resume Run
-         * @description Resume a WAITING run when a commis completes.
-         *
-         *     Called internally when a commis completes while the oikos run was
-         *     WAITING (interrupted by spawn_workspace_commis). Uses FicheRunner.run_continuation()
-         *     to continue the oikos loop from persisted history.
-         *
-         *     Args:
-         *         run_id: ID of the WAITING oikos run
-         *         payload: Commis completion data
-         *         db: Database session
-         *
-         *     Returns:
-         *         Dict with resumed run info
-         *
-         *     Raises:
-         *         404: Run not found
-         *         500: Error resuming run
+         * @description Resume a WAITING run when its commis completes.
          */
         post: operations["resume_run_oikos_internal_runs__run_id__resume_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/chat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Oikos Chat
-         * @description Text chat endpoint - streams responses from Oikos.
-         *
-         *     This endpoint provides a simpler alternative to /run for text-only
-         *     chat. It still uses the Oikos under the hood but returns an SSE stream
-         *     directly instead of requiring a separate connection.
-         *
-         *     Args:
-         *         request: Chat request with user message
-         *         current_user: Authenticated user
-         *
-         *     Returns:
-         *         EventSourceResponse streaming chat responses
-         *
-         *     Example:
-         *         POST /api/oikos/chat
-         *         {"message": "What's the weather?"}
-         *
-         *         Streams SSE events:
-         *         - oikos_started: Chat processing started
-         *         - oikos_thinking: Oikos analyzing
-         *         - oikos_complete: Final response with result
-         */
-        post: operations["oikos_chat_oikos_chat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/tts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Convert Text To Speech
-         * @description Convert text to speech and return audio.
-         *
-         *     Returns audio data directly in the response body.
-         *     Content-Type will be audio/mpeg for MP3 format.
-         */
-        post: operations["convert_text_to_speech_oikos_tts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/tts/json": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Convert Text To Speech Json
-         * @description Convert text to speech and return metadata (without audio).
-         *
-         *     Use this endpoint to check if TTS would succeed without actually
-         *     generating the audio. Useful for validation.
-         */
-        post: operations["convert_text_to_speech_json_oikos_tts_json_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/tts/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Stream Text To Speech
-         * @description Stream audio generation.
-         *
-         *     For now, this streams the complete audio once generated.
-         *     Future: implement true streaming with ElevenLabs.
-         */
-        get: operations["stream_text_to_speech_oikos_tts_stream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/tts/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Tts Status
-         * @description Get TTS service status and configuration.
-         */
-        get: operations["get_tts_status_oikos_tts_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/tts/voices": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Voices
-         * @description List available TTS voices.
-         *
-         *     Args:
-         *         provider: Filter by provider (openai, elevenlabs, edge, or all)
-         *
-         *     Returns:
-         *         List of available voices with metadata
-         */
-        get: operations["list_voices_oikos_tts_voices_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2461,49 +2416,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/oikos/auth": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Oikos Auth
-         * @description Deprecated: Oikos now uses standard SaaS user authentication.
-         *
-         *     Oikos is treated as a normal client (like the dashboard). It authenticates
-         *     using the same JWT bearer token as other frontend clients.
-         */
-        post: operations["oikos_auth_oikos_auth_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/agents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Oikos Agents
-         * @description Compatibility alias for fiche listing (historical /agents path).
-         */
-        get: operations["list_oikos_agents_oikos_agents_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/oikos/events": {
         parameters: {
             query?: never;
@@ -2513,196 +2425,11 @@ export interface paths {
         };
         /**
          * Oikos Events
-         * @description Server-Sent Events stream for Oikos.
-         *
-         *     Provides real-time updates for fiche and run events. Oikos listens to this
-         *     stream to update the Task Inbox UI without polling.
-         *
-         *     Authentication:
-         *     - Standard SaaS auth: `Authorization: Bearer <jwt>`
-         *     - SSE fallback: `?token=<jwt>` query parameter (EventSource cannot send headers)
-         *     - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
-         *
-         *     Event types:
-         *     - connected: Initial connection confirmation
-         *     - heartbeat: Keep-alive ping every 30 seconds
-         *     - fiche_updated: Fiche status or configuration changed
-         *     - run_created: New fiche run started
-         *     - run_updated: Run status changed (running → success/failed)
-         *
-         *     Args:
-         *         current_user: Authenticated user (Oikos service account)
-         *
-         *     Returns:
-         *         EventSourceResponse streaming SSE events
+         * @description SSE stream for real-time fiche/run updates (Task Inbox UI).
          */
         get: operations["oikos_events_oikos_events_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Oikos History
-         * @description Get conversation history from Oikos thread.
-         *
-         *     Returns paginated message history from the user's oikos thread.
-         *     Only includes user and assistant messages (filters out system messages).
-         *
-         *     Args:
-         *         limit: Maximum number of messages to return (default 50)
-         *         offset: Number of messages to skip (default 0)
-         *         db: Database session
-         *         current_user: Authenticated user
-         *
-         *     Returns:
-         *         OikosHistoryResponse with messages and total count
-         */
-        get: operations["oikos_history_oikos_history_get"];
-        put?: never;
-        post?: never;
-        /**
-         * Oikos Clear History
-         * @description Clear conversation history by deleting all messages from Oikos thread.
-         *
-         *     This clears all conversation messages from the user's Oikos thread.
-         *     The thread itself and the fiche's system instructions are preserved.
-         *
-         *     System prompts are injected fresh on every run from fiche.system_instructions,
-         *     so clearing history doesn't affect the fiche's behavior.
-         *
-         *     Args:
-         *         db: Database session
-         *         current_user: Authenticated user
-         */
-        delete: operations["oikos_clear_history_oikos_history_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/bootstrap": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Oikos Bootstrap
-         * @description Get Oikos bootstrap configuration.
-         *
-         *     Returns the complete system prompt (built from user context),
-         *     list of enabled tools, and a safe subset of user context for display.
-         *
-         *     This is the single source of truth for Oikos configuration.
-         */
-        get: operations["oikos_bootstrap_oikos_bootstrap_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/thread": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Oikos Thread
-         * @description Get the oikos thread for the current user.
-         *
-         *     Returns basic information about the user's oikos thread.
-         */
-        get: operations["get_oikos_thread_oikos_thread_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/preferences": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Oikos Update Preferences
-         * @description Update user's Oikos preferences.
-         *
-         *     Saves preferences to the user's context in the database.
-         *     Only provided fields are updated; others remain unchanged.
-         */
-        patch: operations["oikos_update_preferences_oikos_preferences_patch"];
-        trace?: never;
-    };
-    "/api/oikos/session": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Oikos Session Get
-         * @description Mint an ephemeral OpenAI Realtime session token.
-         *
-         *     Directly calls OpenAI's API - no separate oikos-server needed.
-         */
-        get: operations["oikos_session_get_oikos_session_get"];
-        put?: never;
-        /**
-         * Oikos Session Post
-         * @description Backwards compatibility: some clients may still POST.
-         */
-        post: operations["oikos_session_post_oikos_session_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/conversation/title": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Oikos Conversation Title
-         * @description Generate a conversation title using OpenAI.
-         *
-         *     Directly calls OpenAI's API - no separate oikos-server needed.
-         */
-        post: operations["oikos_conversation_title_oikos_conversation_title_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2720,23 +2447,7 @@ export interface paths {
         put?: never;
         /**
          * Resume Run
-         * @description Resume a WAITING run when a commis completes.
-         *
-         *     Called internally when a commis completes while the oikos run was
-         *     WAITING (interrupted by spawn_workspace_commis). Uses FicheRunner.run_continuation()
-         *     to continue the oikos loop from persisted history.
-         *
-         *     Args:
-         *         run_id: ID of the WAITING oikos run
-         *         payload: Commis completion data
-         *         db: Database session
-         *
-         *     Returns:
-         *         Dict with resumed run info
-         *
-         *     Raises:
-         *         404: Run not found
-         *         500: Error resuming run
+         * @description Resume a WAITING run when its commis completes.
          */
         post: operations["resume_run_internal_runs__run_id__resume_post"];
         delete?: never;
@@ -4270,23 +3981,6 @@ export interface paths {
          * @description Chat with a Claude Code session.
          *
          *     Resumes an existing session and streams the response via SSE.
-         *
-         *     Flow:
-         *     1. Validate session ownership
-         *     2. Acquire per-session lock (409 if locked)
-         *     3. Resolve workspace (use local or clone git repo)
-         *     4. Prepare session file for --resume
-         *     5. Stream Claude output as SSE
-         *     6. On disconnect: kill process, release lock
-         *     7. On complete: ship session to Longhouse, release lock
-         *
-         *     Returns:
-         *         StreamingResponse with SSE events
-         *
-         *     Raises:
-         *         404: Session not found
-         *         409: Session is locked by another request
-         *         500: Internal error
          */
         post: operations["chat_with_session_sessions__session_id__chat_post"];
         delete?: never;
@@ -4683,6 +4377,26 @@ export interface paths {
          * @description Get a single session by ID.
          */
         get: operations["get_session_agents_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/thread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Thread
+         * @description Get all concrete continuations in a logical thread.
+         */
+        get: operations["get_session_thread_agents_sessions__session_id__thread_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5637,6 +5351,19 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** CanonicalConversation */
+        CanonicalConversation: {
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /** Title */
+            title?: string | null;
+            /** External Conversation Id */
+            external_conversation_id: string;
+            /** Message Count */
+            message_count: number;
+        };
         /** CapabilitiesResponse */
         CapabilitiesResponse: {
             text: components["schemas"]["CapabilityStatus"];
@@ -6035,6 +5762,270 @@ export interface components {
             context: {
                 [key: string]: unknown;
             };
+        };
+        /** ConversationBindingInfo */
+        ConversationBindingInfo: {
+            /** Id */
+            id: number;
+            /** Surface Id */
+            surface_id: string;
+            /** Provider */
+            provider: string;
+            /** Binding Scope */
+            binding_scope: string;
+            /** Connector Id */
+            connector_id?: number | null;
+            /** External Conversation Id */
+            external_conversation_id: string;
+            /** Binding Metadata */
+            binding_metadata?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** ConversationBindingResponse */
+        ConversationBindingResponse: {
+            /** Id */
+            id: number;
+            /** Surface Id */
+            surface_id: string;
+            /** Provider */
+            provider: string;
+            /** Binding Scope */
+            binding_scope: string;
+            /** Connector Id */
+            connector_id?: number | null;
+            /** External Conversation Id */
+            external_conversation_id: string;
+            /** Binding Metadata */
+            binding_metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ConversationDetail */
+        ConversationDetail: {
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /** Title */
+            title?: string | null;
+            /** Status */
+            status: string;
+            /** Last Message At */
+            last_message_at?: string | null;
+            /** Conversation Metadata */
+            conversation_metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Message Count */
+            message_count: number;
+            /** Bindings */
+            bindings?: components["schemas"]["ConversationBindingInfo"][];
+        };
+        /** ConversationDetailResponse */
+        ConversationDetailResponse: {
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /** Title */
+            title?: string | null;
+            /** Status */
+            status: string;
+            /** Last Message At */
+            last_message_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Message Count */
+            message_count: number;
+            /** Binding Count */
+            binding_count: number;
+            /** Conversation Metadata */
+            conversation_metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Bindings */
+            bindings: components["schemas"]["ConversationBindingResponse"][];
+        };
+        /** ConversationListResponse */
+        ConversationListResponse: {
+            /** Conversations */
+            conversations: components["schemas"]["ConversationSummaryResponse"][];
+            /** Total */
+            total: number;
+        };
+        /** ConversationMessageInfo */
+        ConversationMessageInfo: {
+            /** Id */
+            id: number;
+            /** Role */
+            role: string;
+            /** Direction */
+            direction: string;
+            /** Sender Kind */
+            sender_kind: string;
+            /** Sender Display */
+            sender_display?: string | null;
+            /** Content */
+            content: string;
+            /** External Message Id */
+            external_message_id?: string | null;
+            /** Archive Relpath */
+            archive_relpath?: string | null;
+            /** Internal */
+            internal: boolean;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Message Metadata */
+            message_metadata?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** ConversationMessageResponse */
+        ConversationMessageResponse: {
+            /** Id */
+            id: number;
+            /** Conversation Id */
+            conversation_id: number;
+            /** Role */
+            role: string;
+            /** Direction */
+            direction: string;
+            /** Sender Kind */
+            sender_kind: string;
+            /** Sender Display */
+            sender_display?: string | null;
+            /** Content */
+            content: string;
+            /** Content Blocks */
+            content_blocks?: unknown[] | null;
+            /** External Message Id */
+            external_message_id?: string | null;
+            /** Parent Message Id */
+            parent_message_id?: number | null;
+            /** Archive Relpath */
+            archive_relpath?: string | null;
+            /** Message Metadata */
+            message_metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Internal */
+            internal: boolean;
+            /**
+             * Sent At
+             * Format: date-time
+             */
+            sent_at: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ConversationMessagesResponse */
+        ConversationMessagesResponse: {
+            /** Messages */
+            messages: components["schemas"]["ConversationMessageResponse"][];
+            /** Total */
+            total: number;
+        };
+        /** ConversationReplyRequest */
+        ConversationReplyRequest: {
+            /** Body */
+            body: string;
+            /**
+             * Reply All
+             * @default false
+             */
+            reply_all: boolean;
+        };
+        /** ConversationReplyResponse */
+        ConversationReplyResponse: {
+            /** Conversation Id */
+            conversation_id: number;
+            /** Provider */
+            provider: string;
+            /** Thread Id */
+            thread_id: string;
+            /** Subject */
+            subject: string;
+            /** Reply All */
+            reply_all: boolean;
+            /** To Emails */
+            to_emails: string[];
+            /** Cc Emails */
+            cc_emails: string[];
+            message: components["schemas"]["ConversationMessageResponse"];
+        };
+        /** ConversationSummary */
+        ConversationSummary: {
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /** Title */
+            title?: string | null;
+            /** Status */
+            status: string;
+            /** Last Message At */
+            last_message_at?: string | null;
+        };
+        /** ConversationSummaryResponse */
+        ConversationSummaryResponse: {
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /** Title */
+            title?: string | null;
+            /** Status */
+            status: string;
+            /** Last Message At */
+            last_message_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Message Count */
+            message_count: number;
+            /** Binding Count */
+            binding_count: number;
+            /** Conversation Metadata */
+            conversation_metadata?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * CreateTokenRequest
@@ -7309,62 +7300,22 @@ export interface components {
             runner_name: string;
         };
         /**
-         * OikosAuthRequest
-         * @description Oikos authentication request with device secret.
-         */
-        OikosAuthRequest: {
-            /**
-             * Device Secret
-             * @description Device secret for Oikos authentication
-             */
-            device_secret: string;
-        };
-        /**
-         * OikosAuthResponse
-         * @description Oikos authentication response metadata.
-         */
-        OikosAuthResponse: {
-            /**
-             * Session Expires In
-             * @description Session expiry window in seconds
-             */
-            session_expires_in: number;
-            /**
-             * Session Cookie Name
-             * @description Name of session cookie storing Oikos session
-             */
-            session_cookie_name: string;
-        };
-        /**
          * OikosBootstrapResponse
          * @description Bootstrap response with prompt, tools, and user context.
          */
         OikosBootstrapResponse: {
-            /**
-             * Prompt
-             * @description Complete Oikos system prompt
-             */
+            /** Prompt */
             prompt: string;
-            /**
-             * Enabled Tools
-             * @description List of available tools
-             */
+            /** Enabled Tools */
             enabled_tools: {
                 [key: string]: unknown;
             }[];
-            /**
-             * User Context
-             * @description User context summary (safe subset)
-             */
+            /** User Context */
             user_context: {
                 [key: string]: unknown;
             };
-            /**
-             * Available Models
-             * @description Models available for selection
-             */
+            /** Available Models */
             available_models: components["schemas"]["OikosModelInfo"][];
-            /** @description User's saved preferences */
             preferences: components["schemas"]["OikosPreferences"];
         };
         /**
@@ -7388,32 +7339,17 @@ export interface components {
              * @description Message timestamp
              */
             timestamp: string;
-            /**
-             * Origin Surface Id
-             * @description Origin surface for this message
-             */
+            /** Origin Surface Id */
             origin_surface_id?: string | null;
-            /**
-             * Delivery Surface Id
-             * @description Delivery surface for this message
-             */
+            /** Delivery Surface Id */
             delivery_surface_id?: string | null;
-            /**
-             * Visibility
-             * @description Visibility scope for this message
-             */
+            /** Visibility */
             visibility?: string | null;
-            /**
-             * Usage
-             * @description Optional LLM usage metadata for this assistant response
-             */
+            /** Usage */
             usage?: {
                 [key: string]: unknown;
             } | null;
-            /**
-             * Tool Calls
-             * @description Tool calls made by this assistant message
-             */
+            /** Tool Calls */
             tool_calls?: components["schemas"]["ToolCallInfo"][] | null;
         };
         /**
@@ -7447,48 +7383,6 @@ export interface components {
              * @description Replay scenario name (dev only, requires REPLAY_MODE_ENABLED=true)
              */
             replay_scenario?: string | null;
-        };
-        /**
-         * OikosDispatchRequest
-         * @description Oikos dispatch request to trigger fiche execution.
-         */
-        OikosDispatchRequest: {
-            /**
-             * Fiche Id
-             * @description ID of fiche to execute
-             */
-            fiche_id: number;
-            /**
-             * Task Override
-             * @description Optional task instruction override
-             */
-            task_override?: string | null;
-        };
-        /**
-         * OikosDispatchResponse
-         * @description Oikos dispatch response with run/thread IDs.
-         */
-        OikosDispatchResponse: {
-            /**
-             * Run Id
-             * @description Run ID for tracking execution
-             */
-            run_id: number;
-            /**
-             * Thread Id
-             * @description Thread ID containing conversation
-             */
-            thread_id: number;
-            /**
-             * Status
-             * @description Initial run status
-             */
-            status: string;
-            /**
-             * Fiche Name
-             * @description Name of fiche being executed
-             */
-            fiche_name: string;
         };
         /**
          * OikosFicheSummary
@@ -7529,25 +7423,13 @@ export interface components {
          * @description Model information for frontend display.
          */
         OikosModelInfo: {
-            /**
-             * Id
-             * @description Model ID (e.g., gpt-5.2)
-             */
+            /** Id */
             id: string;
-            /**
-             * Display Name
-             * @description Human-readable name
-             */
+            /** Display Name */
             display_name: string;
-            /**
-             * Description
-             * @description Brief description
-             */
+            /** Description */
             description: string;
-            /**
-             * Capabilities
-             * @description Model capabilities (reasoning, etc.)
-             */
+            /** Capabilities */
             capabilities?: {
                 [key: string]: unknown;
             } | null;
@@ -7557,32 +7439,22 @@ export interface components {
          * @description User preferences for Oikos chat.
          */
         OikosPreferences: {
-            /**
-             * Chat Model
-             * @description Selected model for text chat
-             */
+            /** Chat Model */
             chat_model: string;
-            /**
-             * Reasoning Effort
-             * @description Reasoning effort: none, low, medium, high
-             */
+            /** Reasoning Effort */
             reasoning_effort: string;
+            operator_mode: components["schemas"]["OperatorMode"];
         };
         /**
          * OikosPreferencesUpdate
          * @description Request to update user preferences.
          */
         OikosPreferencesUpdate: {
-            /**
-             * Chat Model
-             * @description Model for text chat
-             */
+            /** Chat Model */
             chat_model?: string | null;
-            /**
-             * Reasoning Effort
-             * @description Reasoning effort: none, low, medium, high
-             */
+            /** Reasoning Effort */
             reasoning_effort?: string | null;
+            operator_mode?: components["schemas"]["OperatorModeUpdate"] | null;
         };
         /**
          * OikosRunCancelResponse
@@ -7604,57 +7476,6 @@ export interface components {
              * @description Human-readable status message
              */
             message: string;
-        };
-        /**
-         * OikosRunRequest
-         * @description Request to dispatch a task to the oikos fiche.
-         */
-        OikosRunRequest: {
-            /**
-             * Task
-             * @description Natural language task for the oikos
-             */
-            task: string;
-            /**
-             * Context
-             * @description Optional context including conversation_id and previous_messages
-             */
-            context?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Preferences
-             * @description Optional preferences like verbosity and notify_on_complete
-             */
-            preferences?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
-         * OikosRunResponse
-         * @description Response from oikos dispatch.
-         */
-        OikosRunResponse: {
-            /**
-             * Run Id
-             * @description Oikos run ID for tracking
-             */
-            run_id: number;
-            /**
-             * Thread Id
-             * @description Oikos thread ID (long-lived)
-             */
-            thread_id: number;
-            /**
-             * Status
-             * @description Initial run status
-             */
-            status: string;
-            /**
-             * Stream Url
-             * @description SSE stream URL for progress updates
-             */
-            stream_url: string;
         };
         /**
          * OikosRunSummary
@@ -7705,21 +7526,72 @@ export interface components {
          * @description Oikos thread information.
          */
         OikosThreadInfo: {
-            /**
-             * Thread Id
-             * @description Thread ID
-             */
+            /** Thread Id */
             thread_id: number;
-            /**
-             * Title
-             * @description Thread title
-             */
+            /** Title */
             title: string;
-            /**
-             * Message Count
-             * @description Number of messages in thread
-             */
+            /** Message Count */
             message_count: number;
+            canonical_conversation: components["schemas"]["CanonicalConversation"];
+        };
+        /**
+         * OikosWakeupSummary
+         * @description Minimal proactive wakeup summary for operator-mode review.
+         */
+        OikosWakeupSummary: {
+            /** Id */
+            id: number;
+            /** Source */
+            source: string;
+            /** Trigger Type */
+            trigger_type: string;
+            /** Status */
+            status: string;
+            /** Reason */
+            reason?: string | null;
+            /** Session Id */
+            session_id?: string | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Wakeup Key */
+            wakeup_key?: string | null;
+            /** Run Id */
+            run_id?: number | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** OperatorMode */
+        OperatorMode: {
+            /** Enabled */
+            enabled: boolean;
+            /** Shadow Mode */
+            shadow_mode: boolean;
+            /** Allow Continue */
+            allow_continue: boolean;
+            /** Allow Notify */
+            allow_notify: boolean;
+            /** Allow Small Repairs */
+            allow_small_repairs: boolean;
+        };
+        /** OperatorModeUpdate */
+        OperatorModeUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Shadow Mode */
+            shadow_mode?: boolean | null;
+            /** Allow Continue */
+            allow_continue?: boolean | null;
+            /** Allow Notify */
+            allow_notify?: boolean | null;
+            /** Allow Small Repairs */
+            allow_small_repairs?: boolean | null;
         };
         /**
          * OpsSeriesPoint
@@ -8896,6 +8768,47 @@ export interface components {
              */
             match_score?: number | null;
             /**
+             * Thread Root Session Id
+             * @description Logical thread root session UUID
+             */
+            thread_root_session_id: string;
+            /**
+             * Thread Head Session Id
+             * @description Current writable head session UUID
+             */
+            thread_head_session_id: string;
+            /**
+             * Thread Continuation Count
+             * @description Number of concrete continuations in this logical thread
+             */
+            thread_continuation_count: number;
+            /**
+             * Continued From Session Id
+             * @description Parent continuation session UUID
+             */
+            continued_from_session_id?: string | null;
+            /**
+             * Continuation Kind
+             * @description Continuation kind: local|cloud|runner
+             */
+            continuation_kind?: string | null;
+            /**
+             * Origin Label
+             * @description User-facing execution origin label
+             */
+            origin_label?: string | null;
+            /**
+             * Branched From Event Id
+             * @description Event id where this continuation branched
+             */
+            branched_from_event_id?: number | null;
+            /**
+             * Is Writable Head
+             * @description True when this session is the current writable head
+             * @default false
+             */
+            is_writable_head: boolean;
+            /**
              * Is Sidechain
              * @description True when session is a Task sub-agent (not human-initiated)
              * @default false
@@ -8963,6 +8876,18 @@ export interface components {
              * @description Last assistant message (truncated)
              */
             last_ai_message?: string | null;
+        };
+        /**
+         * SessionThreadResponse
+         * @description Response for a logical thread and its concrete continuations.
+         */
+        SessionThreadResponse: {
+            /** Root Session Id */
+            root_session_id: string;
+            /** Head Session Id */
+            head_session_id: string;
+            /** Sessions */
+            sessions: components["schemas"]["SessionResponse"][];
         };
         /**
          * SessionsListResponse
@@ -9187,89 +9112,6 @@ export interface components {
              * @description Client timestamp (ISO format)
              */
             ts: string;
-        };
-        /**
-         * TTSRequest
-         * @description Request to convert text to speech.
-         */
-        TTSRequest: {
-            /**
-             * Text
-             * @description Text to convert to speech
-             */
-            text: string;
-            /**
-             * Provider
-             * @description TTS provider: openai, elevenlabs, or edge (default: auto)
-             */
-            provider?: string | null;
-            /**
-             * Voice Id
-             * @description Voice ID/name for the selected provider
-             */
-            voice_id?: string | null;
-        };
-        /**
-         * TTSResponse
-         * @description Response from TTS conversion (metadata only).
-         */
-        TTSResponse: {
-            /**
-             * Success
-             * @description Whether conversion succeeded
-             */
-            success: boolean;
-            /**
-             * Latency Ms
-             * @description Conversion latency in milliseconds
-             */
-            latency_ms?: number | null;
-            /**
-             * Provider
-             * @description Provider used for conversion
-             */
-            provider?: string | null;
-            /**
-             * Output Format
-             * @description Audio output format
-             */
-            output_format?: string | null;
-            /**
-             * Content Type
-             * @description Audio MIME type
-             */
-            content_type?: string | null;
-            /**
-             * Error
-             * @description Error message if failed
-             */
-            error?: string | null;
-        };
-        /**
-         * TTSStatusResponse
-         * @description TTS service status.
-         */
-        TTSStatusResponse: {
-            /**
-             * Enabled
-             * @description Whether TTS is enabled
-             */
-            enabled: boolean;
-            /**
-             * Default Provider
-             * @description Default TTS provider
-             */
-            default_provider: string;
-            /**
-             * Available Providers
-             * @description List of available providers
-             */
-            available_providers: string[];
-            /**
-             * Max Text Length
-             * @description Maximum text length for TTS
-             */
-            max_text_length: number;
         };
         /** Thread */
         Thread: {
@@ -9851,37 +9693,6 @@ export interface components {
             truncated: boolean;
         };
         /**
-         * VoiceInfo
-         * @description Information about a TTS voice.
-         */
-        VoiceInfo: {
-            /**
-             * Id
-             * @description Voice identifier
-             */
-            id: string;
-            /**
-             * Name
-             * @description Human-readable voice name
-             */
-            name: string;
-            /**
-             * Provider
-             * @description Provider this voice belongs to
-             */
-            provider: string;
-            /**
-             * Language
-             * @description Language code
-             */
-            language: string;
-            /**
-             * Gender
-             * @description Voice gender (male/female/neutral)
-             */
-            gender?: string | null;
-        };
-        /**
          * VoiceTranscribeResponse
          * @description Response for a voice transcription request.
          */
@@ -9946,17 +9757,6 @@ export interface components {
             tts?: components["schemas"]["VoiceAudioResponse"] | null;
             /** Message Id */
             message_id?: string | null;
-        };
-        /**
-         * VoicesResponse
-         * @description List of available voices.
-         */
-        VoicesResponse: {
-            /**
-             * Voices
-             * @description Available voices
-             */
-            voices: components["schemas"]["VoiceInfo"][];
         };
         /**
          * WaitlistRequest
@@ -11597,6 +11397,180 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_conversations_conversations_get: {
+        parameters: {
+            query?: {
+                kind?: string | null;
+                status?: string | null;
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_conversations_conversations_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                kind?: string | null;
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_conversation_conversations__conversation_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                conversation_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_messages_conversations__conversation_id__messages_get: {
+        parameters: {
+            query?: {
+                include_internal?: boolean;
+                limit?: number;
+                offset?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                conversation_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationMessagesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reply_to_conversation_conversations__conversation_id__reply_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                conversation_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationReplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationReplyResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -13451,6 +13425,427 @@ export interface operations {
             };
         };
     };
+    oikos_chat_oikos_chat_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OikosChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oikos_run_cancel_oikos_run__run_id__cancel_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OikosRunCancelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oikos_bootstrap_oikos_bootstrap_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OikosBootstrapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_oikos_thread_oikos_thread_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OikosThreadInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oikos_update_preferences_oikos_preferences_patch: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OikosPreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OikosPreferences"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oikos_session_oikos_session_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_oikos_conversations_oikos_conversations_get: {
+        parameters: {
+            query?: {
+                kind?: string | null;
+                status_filter?: string | null;
+                limit?: number;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_oikos_conversations_oikos_conversations_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                kind?: string | null;
+                limit?: number;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_oikos_conversation_oikos_conversations__conversation_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                conversation_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_oikos_conversation_messages_oikos_conversations__conversation_id__messages_get: {
+        parameters: {
+            query?: {
+                include_internal?: boolean;
+                limit?: number;
+                offset?: number;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                conversation_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationMessageInfo"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oikos_history_oikos_history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                surface_id?: string;
+                view?: string;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OikosHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oikos_clear_history_oikos_history_delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_oikos_fiches_oikos_fiches_get: {
         parameters: {
             query?: {
@@ -13506,6 +13901,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OikosRunSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_oikos_wakeups_oikos_wakeups_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                status?: string | null;
+                trigger_type?: string | null;
+                session_id?: string | null;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OikosWakeupSummary"][];
                 };
             };
             /** @description Validation Error */
@@ -13694,115 +14126,6 @@ export interface operations {
             };
         };
     };
-    oikos_dispatch_oikos_dispatch_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OikosDispatchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosDispatchResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_run_oikos_run_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OikosRunRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosRunResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_run_cancel_oikos_run__run_id__cancel_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path: {
-                run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosRunCancelResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     resume_run_oikos_internal_runs__run_id__resume_post: {
         parameters: {
             query?: {
@@ -13827,217 +14150,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_chat_oikos_chat_post: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OikosChatRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    convert_text_to_speech_oikos_tts_post: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TTSRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    convert_text_to_speech_json_oikos_tts_json_post: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TTSRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TTSResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stream_text_to_speech_oikos_tts_stream_get: {
-        parameters: {
-            query: {
-                text: string;
-                provider?: string | null;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_tts_status_oikos_tts_status_get: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TTSStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_voices_oikos_tts_voices_get: {
-        parameters: {
-            query?: {
-                provider?: string | null;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VoicesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -14162,345 +14274,7 @@ export interface operations {
             };
         };
     };
-    oikos_auth_oikos_auth_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OikosAuthRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosAuthResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_oikos_agents_oikos_agents_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosFicheSummary"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     oikos_events_oikos_events_get: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_history_oikos_history_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                offset?: number;
-                surface_id?: string;
-                view?: string;
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosHistoryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_clear_history_oikos_history_delete: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_bootstrap_oikos_bootstrap_get: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosBootstrapResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_oikos_thread_oikos_thread_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosThreadInfo"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_update_preferences_oikos_preferences_patch: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OikosPreferencesUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OikosPreferences"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_session_get_oikos_session_get: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_session_post_oikos_session_post: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    oikos_conversation_title_oikos_conversation_title_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -16987,9 +16761,9 @@ export interface operations {
     get_session_lock_status_sessions__session_id__lock_get: {
         parameters: {
             query?: {
+                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -17022,9 +16796,9 @@ export interface operations {
     force_release_lock_sessions__session_id__lock_delete: {
         parameters: {
             query?: {
+                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -17748,6 +17522,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_thread_agents_sessions__session_id__thread_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionThreadResponse"];
                 };
             };
             /** @description Validation Error */
