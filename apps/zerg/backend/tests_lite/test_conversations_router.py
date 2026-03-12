@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 
+import tiktoken
 from fastapi.testclient import TestClient
 
 from zerg.database import Base
@@ -36,8 +37,21 @@ def _seed_user(db, user_id: int, email: str) -> User:
     return user
 
 
-def test_conversations_list_search_detail_and_messages(tmp_path):
+class _DummyEncoding:
+    def encode(self, text: str):
+        return list(text.encode("utf-8"))
+
+    def decode(self, tokens):
+        return bytes(tokens).decode("utf-8", errors="ignore")
+
+
+def _stub_tiktoken(monkeypatch):
+    monkeypatch.setattr(tiktoken, "get_encoding", lambda _name: _DummyEncoding())
+
+
+def test_conversations_list_search_detail_and_messages(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
+    _stub_tiktoken(monkeypatch)
 
     with SessionLocal() as db:
         owner = _seed_user(db, 1, "owner@test.local")
@@ -134,6 +148,7 @@ def test_conversations_list_search_detail_and_messages(tmp_path):
 def test_conversation_reply_endpoint_sends_reply_and_returns_message(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     archive_root = tmp_path / "data"
+    _stub_tiktoken(monkeypatch)
 
     monkeypatch.setattr(conversation_archive, "get_settings", lambda: SimpleNamespace(data_dir=archive_root))
     monkeypatch.setattr(crypto, "decrypt", lambda value: "refresh-token")

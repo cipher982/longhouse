@@ -1,0 +1,207 @@
+.conversations-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.conversations-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 1.25rem;
+  min-height: 72vh;
+}
+
+.conversations-sidebar,
+.conversations-thread {
+  background: var(--panel-bg, rgba(16, 20, 28, 0.72));
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.08));
+  border-radius: 1.25rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.16);
+}
+
+.conversations-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.conversations-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+}
+
+.conversations-sidebar-empty,
+.conversations-thread__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+}
+
+.conversations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.conversations-list-item {
+  appearance: none;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.02);
+  color: inherit;
+  border-radius: 1rem;
+  padding: 0.85rem 0.95rem;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.conversations-list-item:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  transform: translateY(-1px);
+}
+
+.conversations-list-item.is-active {
+  border-color: rgba(124, 168, 255, 0.4);
+  background: rgba(124, 168, 255, 0.08);
+}
+
+.conversations-list-item__title {
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.conversations-list-item__meta {
+  margin-top: 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.84rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.62));
+}
+
+.conversations-thread {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.conversations-thread__header {
+  padding: 1.25rem 1.35rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.conversations-thread__header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.conversations-thread__header p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.62));
+}
+
+.conversations-thread__messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1.1rem 1.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.conversation-message {
+  border-radius: 1rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.conversation-message--incoming {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.conversation-message--outgoing {
+  background: rgba(124, 168, 255, 0.08);
+  border-color: rgba(124, 168, 255, 0.22);
+}
+
+.conversation-message__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.62));
+}
+
+.conversation-message__sender {
+  font-weight: 600;
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+}
+
+.conversation-message__content {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.conversations-reply {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 1rem 1.35rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.conversations-reply__label {
+  font-weight: 600;
+}
+
+.conversations-reply__textarea {
+  width: 100%;
+  min-height: 150px;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(6, 10, 18, 0.62);
+  color: inherit;
+  padding: 0.9rem 1rem;
+  resize: vertical;
+}
+
+.conversations-reply__textarea:focus {
+  outline: none;
+  border-color: rgba(124, 168, 255, 0.5);
+  box-shadow: 0 0 0 1px rgba(124, 168, 255, 0.35);
+}
+
+.conversations-reply__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+}
+
+.conversations-reply__error {
+  color: var(--color-intent-error, #ff7f7f);
+  font-size: 0.92rem;
+}
+
+.conversations-reply__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .conversations-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .conversations-sidebar {
+    max-height: 320px;
+  }
+}
