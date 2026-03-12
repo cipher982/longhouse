@@ -21,8 +21,8 @@
 - [x] Phase 7a.1: Expose canonical web conversation metadata through the existing Oikos bootstrap/thread path
 - [x] Phase 7a.1: Mirror newly created web turns into `Conversation*` while keeping `/api/oikos/history` as the read path
 - [x] Phase 7a.1: Add regression coverage for stable web binding reuse and mirrored writes
-- [ ] Phase 7a.2: Switch the default web Oikos read path from `/api/oikos/history` to canonical conversation reads
-- [ ] Phase 7a.2: Keep legacy `?thread=` prehydration as explicit compatibility behavior only
+- [x] Phase 7a.2: Switch the default web Oikos read path from `/api/oikos/history` to canonical conversation reads
+- [x] Phase 7a.2: Keep legacy `?thread=` prehydration as explicit compatibility behavior only
 - [ ] Phase 7a.3: Remove default web transcript dependence on the shared Oikos `SUPER` thread
 - [ ] Phase 7b.1: Map Telegram DMs to stable canonical conversations
 - [ ] Phase 7b.1: Map Telegram forum topics to stable canonical conversations with preserved topic metadata

@@ -210,6 +210,12 @@ def get_oikos_thread(
         backing_thread_id=thread.id,
         title=thread.title or "Oikos",
     )
+    service.ensure_surface_conversation_backfilled(
+        owner_id=current_user.id,
+        thread_id=thread.id,
+        conversation=conversation,
+        surface_id="web",
+    )
 
     message_count = (
         db.query(func.count(ThreadMessage.id))
