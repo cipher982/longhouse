@@ -28,6 +28,7 @@ class EmailConversationIngest:
     sender_kind: str = "human"
     sender_display: str | None = None
     from_email: str | None = None
+    reply_to_emails: tuple[str, ...] = ()
     to_emails: tuple[str, ...] = ()
     cc_emails: tuple[str, ...] = ()
     raw_bytes: bytes | None = None
@@ -93,6 +94,7 @@ class EmailConversationIngestService:
             "external_message_id": message.external_message_id,
             "subject": message.subject,
             "from_email": message.from_email,
+            "reply_to_emails": list(message.reply_to_emails),
             "to_emails": list(message.to_emails),
             "cc_emails": list(message.cc_emails),
         }
@@ -117,6 +119,7 @@ class EmailConversationIngestService:
                 "thread_id": message.external_thread_id,
                 "subject": message.subject,
                 "from_email": message.from_email,
+                "reply_to_emails": list(message.reply_to_emails),
                 "to_emails": list(message.to_emails),
                 "cc_emails": list(message.cc_emails),
             }

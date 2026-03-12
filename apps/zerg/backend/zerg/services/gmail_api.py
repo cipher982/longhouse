@@ -21,6 +21,8 @@ import json
 import logging
 import urllib.parse
 import urllib.request
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 from typing import Dict
 from typing import List
@@ -32,6 +34,17 @@ from zerg.utils.retry import async_retry
 _settings = get_settings()
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GmailSendResult:
+    """Normalized result from Gmail send endpoints."""
+
+    message_id: str
+    thread_id: str | None = None
+    label_ids: tuple[str, ...] = ()
+
+
 # ---------------------------------------------------------------------------
 # Push *watch* helpers
 # ---------------------------------------------------------------------------
@@ -435,7 +448,6 @@ def send_email(
         Requires the gmail.send OAuth scope. If the token doesn't have this
         scope, the API will return 403.
     """
-    import base64
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
@@ -452,20 +464,69 @@ def send_email(
     if from_email:
         msg["From"] = from_email
 
-    # Base64url encode the message
-    raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+    result = send_raw_message(access_token, raw_bytes=msg.as_bytes())
+    return result.message_id if result else None
 
-    # Send via Gmail API
-    url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 
+def send_raw_message(
+    access_token: str,
+    raw_bytes: bytes,
+    *,
+    thread_id: str | None = None,
+) -> GmailSendResult | None:
+    """Send a pre-built RFC822 message via Gmail API."""
+
+    payload: Dict[str, Any] = {
+        "raw": base64.urlsafe_b64encode(raw_bytes).decode("ascii"),
+    }
+    if thread_id:
+        payload["threadId"] = thread_id
     try:
-        result = _post_json(url, access_token, {"raw": raw_message})
-        message_id = result.get("id")
-        logger.info("Gmail message sent: %s", message_id)
-        return message_id
+        result = _post_json("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", access_token, payload)
     except Exception as exc:
-        logger.error("send_email failed: %s", exc)
+        logger.error("send_raw_message failed: %s", exc)
         return None
+
+    message_id = str(result.get("id") or "").strip()
+    if not message_id:
+        logger.error("send_raw_message missing id in response: %s", result)
+        return None
+
+    logger.info("Gmail message sent: %s", message_id)
+    response_thread_id = str(result.get("threadId") or "").strip() or thread_id
+    label_ids = tuple(str(item) for item in result.get("labelIds", []) if item)
+    return GmailSendResult(
+        message_id=message_id,
+        thread_id=response_thread_id,
+        label_ids=label_ids,
+    )
+
+
+def send_thread_reply(
+    access_token: str,
+    *,
+    raw_bytes: bytes,
+    thread_id: str,
+    to_emails: Sequence[str],
+    cc_emails: Sequence[str] | None = None,
+) -> GmailSendResult | None:
+    """Send a reply into an existing Gmail thread."""
+
+    if not thread_id:
+        raise RuntimeError("thread_id is required")
+    if not list(to_emails):
+        raise RuntimeError("at least one recipient is required")
+
+    result = send_raw_message(access_token, raw_bytes=raw_bytes, thread_id=thread_id)
+    if result:
+        logger.info(
+            "Gmail threaded reply sent: id=%s thread_id=%s to=%s cc=%s",
+            result.message_id,
+            thread_id,
+            list(to_emails),
+            list(cc_emails or ()),
+        )
+    return result
 
 
 @async_retry(provider="gmail")
@@ -492,4 +553,20 @@ async def async_send_email(
         body_text,
         body_html,
         from_email,
+    )
+
+
+@async_retry(provider="gmail")
+async def async_send_raw_message(
+    access_token: str,
+    *,
+    raw_bytes: bytes,
+    thread_id: str | None = None,
+) -> GmailSendResult | None:
+    """Async wrapper for send_raw_message with retry."""
+    return await asyncio.to_thread(
+        send_raw_message,
+        access_token,
+        raw_bytes=raw_bytes,
+        thread_id=thread_id,
     )

@@ -67,3 +67,19 @@ class ConversationListResponse(BaseModel):
 class ConversationMessagesResponse(BaseModel):
     messages: list[ConversationMessageResponse]
     total: int = Field(..., ge=0)
+
+
+class ConversationReplyRequest(BaseModel):
+    body: str = Field(..., min_length=1)
+    reply_all: bool = False
+
+
+class ConversationReplyResponse(UTCBaseModel):
+    conversation_id: int
+    provider: str
+    thread_id: str
+    subject: str
+    reply_all: bool
+    to_emails: list[str]
+    cc_emails: list[str]
+    message: ConversationMessageResponse

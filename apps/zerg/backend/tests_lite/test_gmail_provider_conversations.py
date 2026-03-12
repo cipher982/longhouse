@@ -62,6 +62,7 @@ def _build_email_bytes(
     to_header: str,
     body_text: str,
     cc_header: str | None = None,
+    reply_to_header: str | None = None,
     message_id: str = "<message@test.local>",
 ) -> bytes:
     message = EmailMessage()
@@ -72,6 +73,8 @@ def _build_email_bytes(
     message["Message-ID"] = message_id
     if cc_header:
         message["Cc"] = cc_header
+    if reply_to_header:
+        message["Reply-To"] = reply_to_header
     message.set_content(body_text)
     return message.as_bytes()
 
@@ -140,6 +143,7 @@ async def test_process_connector_ingests_incoming_gmail_into_conversation(tmp_pa
                 to_header="owner@gmail.com",
                 body_text="Can you book dinner for 7?",
                 cc_header="team@example.com",
+                reply_to_header="Assistant <assistant+reply@example.com>",
                 message_id="<gmail-msg-1@example.com>",
             ),
         }
@@ -172,6 +176,7 @@ async def test_process_connector_ingests_incoming_gmail_into_conversation(tmp_pa
             messages[0].message_metadata["email"]["provider_metadata"]["rfc_message_id"]
             == "<gmail-msg-1@example.com>"
         )
+        assert messages[0].message_metadata["email"]["reply_to_emails"] == ["assistant+reply@example.com"]
         assert refreshed_connector is not None
         assert refreshed_connector.config["history_id"] == 101
 

@@ -11,12 +11,18 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
+from zerg.models.conversation import ConversationMessage
 from zerg.schemas.conversation_schemas import ConversationBindingResponse
 from zerg.schemas.conversation_schemas import ConversationDetailResponse
 from zerg.schemas.conversation_schemas import ConversationListResponse
 from zerg.schemas.conversation_schemas import ConversationMessageResponse
 from zerg.schemas.conversation_schemas import ConversationMessagesResponse
+from zerg.schemas.conversation_schemas import ConversationReplyRequest
+from zerg.schemas.conversation_schemas import ConversationReplyResponse
 from zerg.schemas.conversation_schemas import ConversationSummaryResponse
+from zerg.services.conversation_reply_service import ConversationReplyError
+from zerg.services.conversation_reply_service import ConversationReplyRequest as ConversationReplyServiceRequest
+from zerg.services.conversation_reply_service import ConversationReplyService
 from zerg.services.conversation_service import ConversationService
 
 router = APIRouter(prefix="/conversations", tags=["conversations"], dependencies=[Depends(get_current_user)])
@@ -170,4 +176,62 @@ def list_messages(
             for message in messages
         ],
         total=len(messages),
+    )
+
+
+@router.post("/{conversation_id}/reply", response_model=ConversationReplyResponse)
+def reply_to_conversation(
+    conversation_id: int,
+    payload: ConversationReplyRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> ConversationReplyResponse:
+    service = ConversationReplyService(db)
+    try:
+        result = service.reply(
+            ConversationReplyServiceRequest(
+                owner_id=current_user.id,
+                conversation_id=conversation_id,
+                body_text=payload.body,
+                reply_all=payload.reply_all,
+                role="user",
+                sender_kind="human",
+                sender_display=getattr(current_user, "display_name", None) or current_user.email,
+            )
+        )
+        message = db.get(ConversationMessage, result.message_id)
+    except ConversationReplyError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    if message is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Reply message not found after send",
+        )
+
+    return ConversationReplyResponse(
+        conversation_id=result.conversation_id,
+        provider=result.provider,
+        thread_id=result.thread_id,
+        subject=result.subject,
+        reply_all=payload.reply_all,
+        to_emails=list(result.to_emails),
+        cc_emails=list(result.cc_emails),
+        message=ConversationMessageResponse(
+            id=message.id,
+            conversation_id=message.conversation_id,
+            role=message.role,
+            direction=message.direction,
+            sender_kind=message.sender_kind,
+            sender_display=message.sender_display,
+            content=message.content,
+            content_blocks=message.content_blocks,
+            external_message_id=message.external_message_id,
+            parent_message_id=message.parent_message_id,
+            archive_relpath=message.archive_relpath,
+            message_metadata=message.message_metadata,
+            internal=message.internal,
+            sent_at=message.sent_at,
+            created_at=message.created_at,
+            updated_at=message.updated_at,
+        ),
     )
