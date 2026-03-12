@@ -9,5 +9,14 @@
 - [x] Phase 3 groundwork: Add provider-neutral email ingest service
 - [x] Phase 3 groundwork: Add raw email archive store under `settings.data_dir / conversations`
 - [x] Phase 3: Ingest inbound email into conversations using existing email connectors
-- [ ] Phase 4: Add Oikos conversation search/read/reply tools
-- [ ] Phase 5: Migrate web and Telegram surfaces onto the conversation layer
+- [x] Phase 4a: Add Oikos `search_conversations` and `read_conversation` tools
+- [ ] Phase 4b: Add Oikos `list_conversations` and `reply_in_conversation` tools
+- [ ] Phase 5a: Add Gmail reply service for existing conversations only
+- [ ] Phase 5b: Append successful outbound replies back into the same conversation
+- [ ] Phase 5c: Add backend/tool tests for reply threading, recipient safety, and replay behavior
+- [ ] Phase 6a: Add canonical `POST /conversations/{id}/reply` backend endpoint
+- [ ] Phase 6b: Add inbox/thread UI backed by `/conversations`
+- [ ] Phase 6c: Decide whether `/api/oikos/conversations` remains a façade or is removed
+- [ ] Phase 7a: Migrate web chat onto the conversation layer
+- [ ] Phase 7b: Migrate Telegram DM/topic threads onto the conversation layer
+- [ ] Phase 7c: Retire or shrink `/api/oikos/history` compatibility behavior

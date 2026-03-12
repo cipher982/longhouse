@@ -501,3 +501,159 @@ Acceptance criteria:
 - `/conversations` is the intended canonical read API, but `/api/oikos/conversations` still exists as a temporary façade until the client migration decision is finalized.
 - Gmail inbound is now conversation-aware, but outbound in-thread reply append is still missing.
 - Telegram topic/reply metadata is still not preserved end-to-end; that should be fixed during its migration phase rather than ignored.
+
+## Detailed Next Pieces
+
+The broad direction is settled. The next work should be broken into four small, buildable slices rather than one large "finish conversations" task.
+
+### Next Piece 1: Existing-Thread Email Reply Pipeline
+
+Goal:
+
+- allow Oikos or the web UI to reply inside an existing email conversation
+- append the successful outbound message back into the same canonical conversation
+
+Scope:
+
+- Gmail only
+- existing conversations only
+- no new outbound threads
+- no arbitrary new recipients
+
+Recommended MVP rules:
+
+- default behavior is **reply-to-sender**, not reply-all
+- `reply_all` is explicit and opt-in
+- only conversations with `kind=email` and a Gmail `ConversationBinding` are eligible
+- the sending connector must match the binding's `connector_id`
+
+Concrete backend shape:
+
+1. Add a small `ConversationReplyService` that resolves the conversation, binding, connector, and anchor message.
+2. Add a Gmail send helper that supports:
+   - `threadId`
+   - raw MIME reply headers (`In-Reply-To`, `References`)
+   - returning the provider message id
+3. Build recipients from the latest visible email message:
+   - default `to`: latest incoming sender
+   - `reply_all=true`: include prior `to` and `cc`, excluding the mailbox itself and duplicates
+4. Persist the successful outbound message as `ConversationMessage` with:
+   - `role=assistant`
+   - `direction=outgoing`
+   - `sender_kind=agent`
+   - provider send result stored in `message_metadata.email`
+
+Non-goals for this slice:
+
+- drafts
+- approval workflows
+- multi-provider sending
+- first-contact email
+
+Why this slice first:
+
+- it completes the email thread loop without dragging in UI migration
+- it gives Oikos a real action, not just read-only retrieval
+- it keeps the risk surface small because the send path is limited to existing threads
+
+Acceptance criteria:
+
+- replying to an existing Gmail conversation sends on the correct thread
+- the sent message is appended back into the same conversation
+- duplicate/retry handling does not create duplicate outbound rows
+- default behavior does not unexpectedly reply-all
+
+### Next Piece 2: Finish Oikos Conversation Tools
+
+Goal:
+
+- complete the minimum useful Oikos interface over canonical conversations
+
+Scope:
+
+- add `list_conversations`
+- add `reply_in_conversation`
+
+Recommended tool contract:
+
+- `list_conversations(kind=None, status="active", limit=20)`
+- `search_conversations(query, kind=None, limit=10)` already exists
+- `read_conversation(conversation_id, include_internal=False, limit=100, offset=0)` already exists
+- `reply_in_conversation(conversation_id, body, reply_all=False)`
+
+Recommended boundaries:
+
+- `reply_in_conversation` calls the same backend service as the web/API layer
+- tools stay owner-scoped and fail closed when the conversation is missing or not replyable
+- do not add "create conversation" tools yet
+
+Acceptance criteria:
+
+- Oikos can list, search, and read canonical conversations
+- Oikos can reply to an existing Gmail thread through one tool
+- tool errors are explicit for unsupported conversation kinds or providers
+
+### Next Piece 3: Canonical Inbox and Reply API/UI
+
+Goal:
+
+- make the conversation system visible and usable without a terminal
+
+Scope:
+
+- canonical backend reply endpoint
+- minimal inbox/thread UI for email conversations
+
+Recommended backend/API shape:
+
+- keep `/conversations` as canonical
+- add `POST /conversations/{id}/reply`
+- keep `/api/oikos/conversations` as a temporary façade only if an existing client still depends on it
+
+Recommended frontend slice:
+
+- email inbox list using `GET /conversations?kind=email`
+- search box using `/conversations/search`
+- thread detail view using `/conversations/{id}` and `/conversations/{id}/messages`
+- reply composer that posts to `/conversations/{id}/reply`
+
+Recommended UX boundaries:
+
+- email conversations only for the first inbox pass
+- no unified "all surfaces" inbox yet
+- mobile-friendly but not a full mail client clone
+
+Acceptance criteria:
+
+- a user can open the app and browse email conversations
+- a user can reply to an existing email thread from the app
+- the UI uses `/conversations` rather than deepening reliance on `/api/oikos/conversations`
+
+### Next Piece 4: Migrate Web and Telegram onto Canonical Conversations
+
+Goal:
+
+- stop treating the shared Oikos thread as the only human-visible transcript store
+
+Scope:
+
+- web chat surface
+- Telegram DM/topic surface
+
+Recommended migration order:
+
+1. Web chat first, because the current app already owns that UI and auth model.
+2. Telegram second, because topic/reply preservation needs more care.
+
+Recommended behavior:
+
+- each web chat thread gets its own `ConversationBinding`
+- each Telegram DM or forum topic gets its own `ConversationBinding`
+- Oikos may still keep the `SUPER` thread as private scratch memory
+- `/api/oikos/history` becomes compatibility-only and should stop pretending to be the canonical transcript
+
+Acceptance criteria:
+
+- new web chat turns are persisted as conversation messages
+- Telegram topic/reply structure maps cleanly to distinct conversations
+- the canonical human transcript no longer depends on surface metadata filters over the shared Oikos thread
