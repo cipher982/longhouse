@@ -645,7 +645,7 @@ def inject_agents_md(
         [
             "",
             "This workspace was provisioned by Longhouse for commis (background agent) execution.",
-            "Longhouse MCP tools (session search, memory, notifications) are auto-configured in .claude/settings.json.",
+            "Longhouse MCP tools (session search, recall, insights, Oikos callbacks) are auto-configured in .claude/settings.json.",
         ]
     )
     sections.append("\n".join(longhouse_lines))
@@ -689,7 +689,7 @@ def inject_mcp_settings(workspace_path: Path, api_url: str | None = None) -> Pat
     """Inject Longhouse MCP server config into workspace .claude/settings.json.
 
     This allows commis (Claude Code subprocesses) to access Longhouse's
-    session search, memory, and notification tools mid-task.
+    session search, recall, insight, and Oikos callback tools mid-task.
 
     Parameters
     ----------
@@ -747,7 +747,7 @@ def inject_codex_mcp_settings(workspace_path: Path, api_url: str | None = None) 
     """Inject Longhouse MCP server config into workspace .codex/config.toml.
 
     This allows Codex-backend commis (Codex CLI subprocesses) to access
-    Longhouse's session search, memory, and notification tools mid-task.
+    Longhouse's session search, recall, insight, and Oikos callback tools mid-task.
 
     Delegates to the shared ``upsert_codex_mcp_toml`` in ``shipper.hooks``
     with ``strict=False`` (best-effort for workspace provisioning).
