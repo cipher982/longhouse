@@ -68,6 +68,21 @@ Notes:
 - Spec: `docs/specs/longhouse-tool-surface-tightening.md`
 - Tasks: `docs/tasks/longhouse-tool-surface-tightening.md`
 
+## [Launch][Product] Add first-class xAI support and retire stale hosted Maverick routing (size: 1)
+
+Status (2026-03-12): Done. xAI is now a first-class Settings provider, hosted internal text routing now uses xAI's Grok 4.1 Fast model instead of the dead Groq Maverick entry, and regression coverage exists for provider defaults plus hosted routing.
+
+**Goal:** Support xAI as a first-class OpenAI-compatible provider and move hosted internal text routing onto Grok 4.1.
+
+- [x] Add first-class xAI provider defaults to the settings/provider config surface
+- [x] Add `grok-4-1-fast-reasoning` model config + hosted-profile routing for summarization/reflection/internal hosted text use cases
+- [x] Fix any remaining runtime assumptions that only OpenAI/Groq env vars exist for text models
+- [x] Add focused regression coverage for xAI provider config + hosted model routing
+
+Notes:
+- 2026-03-12: Current repo state treats xAI as only a generic custom OpenAI-compatible endpoint, not a first-class provider. That is enough for manual base URL entry but not good enough for product defaults or hosted routing.
+- 2026-03-12: The first-class default now uses `grok-4-1-fast-reasoning`, matching current xAI docs. In Longhouse's current capability schema that model is marked `reasoning: false` deliberately, because xAI exposes it as an always-reasoning model rather than one with an adjustable reasoning-effort selector.
+
 ## [Product][Tech Debt] Refactor session detail into a pane-based workspace (size: 4)
 
 Status (2026-03-11): Done. The pane-based workspace now has draggable desktop gutters with persisted sidebar and inspector widths, so users can give the transcript more room without another route redesign.

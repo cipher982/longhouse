@@ -42,6 +42,7 @@ _settings = get_settings()
 _KNOWN_PROVIDERS = {
     "openai": None,  # SDK default
     "groq": "https://api.groq.com/openai/v1",
+    "xai": "https://api.x.ai/v1",
     "ollama": "http://localhost:11434/v1",
 }
 
@@ -49,6 +50,7 @@ _KNOWN_PROVIDERS = {
 _TEST_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
     "groq": "llama-3.3-70b-versatile",
+    "xai": "grok-4-1-fast-reasoning",
     "ollama": "llama3.2",
 }
 
@@ -180,6 +182,8 @@ def _resolve_capability(capability: str, db: Session, user: User) -> tuple[bool,
             return True, "environment", "openai"
         if os.getenv("GROQ_API_KEY"):
             return True, "environment", "groq"
+        if os.getenv("XAI_API_KEY"):
+            return True, "environment", "xai"
     elif capability == "embedding":
         if os.getenv("OPENAI_API_KEY"):
             return True, "environment", "openai"
@@ -200,6 +204,8 @@ def _resolve_capability_no_user(capability: str, db: Session) -> tuple[bool, str
             return True, "environment", "openai"
         if os.getenv("GROQ_API_KEY"):
             return True, "environment", "groq"
+        if os.getenv("XAI_API_KEY"):
+            return True, "environment", "xai"
     elif capability == "embedding":
         if os.getenv("OPENAI_API_KEY"):
             return True, "environment", "openai"

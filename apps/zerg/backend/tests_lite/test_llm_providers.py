@@ -10,6 +10,7 @@ Uses in-memory SQLite with inline setup (no shared conftest).
 """
 
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -103,6 +104,19 @@ class TestLlmCapabilities:
             # Public endpoint does not expose source/provider_name
             assert data["text"]["source"] is None
             assert data["embedding"]["available"] is True
+
+    def test_xai_env_var_makes_text_available_only(self, tmp_path):
+        """When XAI_API_KEY is set, text is available but embeddings stay unavailable."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            with patch.dict(os.environ, {"XAI_API_KEY": "xai-test-123"}, clear=False):
+                os.environ.pop("OPENAI_API_KEY", None)
+                os.environ.pop("GROQ_API_KEY", None)
+                resp = client.get("/capabilities/llm")
+                data = resp.json()
+                assert data["text"]["available"] is True
+                assert data["text"]["source"] is None
+                assert data["embedding"]["available"] is False
 
     def test_db_config_makes_available(self, tmp_path):
         """When DB has a provider config, capability shows as available."""
@@ -315,3 +329,43 @@ class TestDeleteProvider:
         for client in _get_client(sf):
             resp = client.delete("/llm/providers/text")
             assert resp.status_code == 404
+
+
+class TestProviderConnection:
+    def test_xai_text_provider_test_uses_default_base_url_and_model(self, tmp_path):
+        """POST /test uses xAI defaults when provider_name=xai and no base_url/model override is supplied."""
+        sf = _make_db(tmp_path)
+        captured: dict[str, object] = {}
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                captured["client_kwargs"] = kwargs
+                self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+            async def _create(self, **kwargs):
+                captured["request_kwargs"] = kwargs
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                )
+
+            async def close(self):
+                captured["closed"] = True
+
+        for client in _get_client(sf):
+            with patch("openai.AsyncOpenAI", FakeAsyncOpenAI):
+                resp = client.post(
+                    "/llm/providers/text/test",
+                    json={
+                        "provider_name": "xai",
+                        "api_key": "xai-test-key",
+                        "base_url": None,
+                    },
+                )
+
+            assert resp.status_code == 200
+            assert resp.json() == {"success": True, "message": "Connection successful"}
+            assert captured["client_kwargs"]["api_key"] == "xai-test-key"
+            assert captured["client_kwargs"]["base_url"] == "https://api.x.ai/v1"
+            assert captured["request_kwargs"]["model"] == "grok-4-1-fast-reasoning"
+            assert captured["request_kwargs"]["max_tokens"] == 3
+            assert captured["closed"] is True

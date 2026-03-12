@@ -378,6 +378,7 @@ class EmbeddingConfig:
 _DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
     "groq": "llama-3.3-70b-versatile",
+    "xai": "grok-4-1-fast-reasoning",
     "ollama": "llama3.2",
 }
 

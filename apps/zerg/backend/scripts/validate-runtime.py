@@ -23,8 +23,8 @@ def check_environment():
     errors = []
 
     # Core application
-    if not os.getenv("OPENAI_API_KEY"):
-        errors.append("OPENAI_API_KEY is missing")
+    if not (os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("XAI_API_KEY")):
+        errors.append("No text LLM API key is configured (set OPENAI_API_KEY, GROQ_API_KEY, or XAI_API_KEY)")
 
     if not os.getenv("DATABASE_URL"):
         errors.append("DATABASE_URL is missing")

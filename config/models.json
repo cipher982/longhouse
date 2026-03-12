@@ -39,11 +39,12 @@
           "reasoningNone": false
         }
       },
-      "meta-llama/llama-4-maverick-17b-128e-instruct": {
-        "displayName": "Llama 4 Maverick (Groq)",
-        "provider": "groq",
-        "description": "Meta's Llama 4 Maverick via Groq LPU - blazing fast",
-        "baseUrl": "https://api.groq.com/openai/v1",
+      "grok-4-1-fast-reasoning": {
+        "displayName": "Grok 4.1 Fast (xAI)",
+        "provider": "openai",
+        "description": "xAI Grok 4.1 Fast via xAI's OpenAI-compatible API",
+        "baseUrl": "https://api.x.ai/v1",
+        "apiKeyEnvVar": "XAI_API_KEY",
         "capabilities": {
           "reasoning": false
         }
@@ -133,18 +134,18 @@
       "$comment": "Default OSS profile: no overrides"
     },
     "hosted": {
-      "$comment": "Hosted instances: Longhouse internal tasks (Oikos, summarization, etc.) route to Groq. Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
+      "$comment": "Hosted instances: Longhouse internal tasks route to the shared hosted pool (Qwen on Groq for Oikos chat; Grok 4.1 Fast on xAI for summaries/reflection). Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
       "text": {
         "useCases": {
           "fiche_conversation": "qwen/qwen3-32b",
-          "summarization": "meta-llama/llama-4-maverick-17b-128e-instruct",
-          "summary_update": "meta-llama/llama-4-maverick-17b-128e-instruct",
-          "reflection": "meta-llama/llama-4-maverick-17b-128e-instruct",
-          "bulk_classification": "meta-llama/llama-4-maverick-17b-128e-instruct"
+          "summarization": "grok-4-1-fast-reasoning",
+          "summary_update": "grok-4-1-fast-reasoning",
+          "reflection": "grok-4-1-fast-reasoning",
+          "bulk_classification": "grok-4-1-fast-reasoning"
         },
         "defaults": {
           "fiche": "qwen/qwen3-32b",
-          "test": "meta-llama/llama-4-maverick-17b-128e-instruct"
+          "test": "grok-4-1-fast-reasoning"
         }
       }
     },
