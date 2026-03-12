@@ -16,6 +16,7 @@ The module purposefully keeps **zero third-party dependencies** – we re-use
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import urllib.parse
@@ -249,6 +250,13 @@ async def async_get_message_metadata(access_token: str, msg_id: str):  # noqa: D
     return await asyncio.to_thread(get_message_metadata, access_token, msg_id)
 
 
+@async_retry(provider="gmail")
+async def async_get_message_raw(access_token: str, msg_id: str):  # noqa: D401
+    """Async wrapper for :func:`get_message_raw` with retry."""
+
+    return await asyncio.to_thread(get_message_raw, access_token, msg_id)
+
+
 # ---------------------------------------------------------------------------
 # Gmail History helpers
 # ---------------------------------------------------------------------------
@@ -336,6 +344,48 @@ def get_message_metadata(access_token: str, msg_id: str) -> Dict[str, Any]:  # n
         "id": payload.get("id"),
         "labelIds": payload.get("labelIds", []),
         "headers": headers_dict,
+    }
+
+
+def _decode_base64url(raw_value: str) -> bytes:
+    padding = "=" * (-len(raw_value) % 4)
+    return base64.urlsafe_b64decode(raw_value + padding)
+
+
+def get_message_raw(access_token: str, msg_id: str) -> Dict[str, Any]:  # noqa: D401 – helper
+    """Fetch raw RFC822 bytes and threading metadata for ``msg_id``.
+
+    Returns an empty dict on error so higher-level processing can skip the
+    message while keeping connector history moving forward.
+    """
+
+    url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" f"{msg_id}?format=raw"
+
+    try:
+        with _make_request(url, access_token) as resp:  # type: ignore[attr-defined]
+            payload: Dict[str, Any] = json.loads(resp.read().decode())
+    except Exception as exc:  # pragma: no cover – offline
+        logger.warning("get_message_raw network failure: %s", exc)
+        return {}
+
+    raw_value = payload.get("raw")
+    if not raw_value:
+        return {}
+
+    try:
+        raw_bytes = _decode_base64url(str(raw_value))
+    except Exception as exc:  # pragma: no cover – malformed payload
+        logger.warning("get_message_raw decode failure: %s", exc)
+        return {}
+
+    return {
+        "id": payload.get("id"),
+        "threadId": payload.get("threadId"),
+        "labelIds": payload.get("labelIds", []),
+        "historyId": payload.get("historyId"),
+        "internalDate": payload.get("internalDate"),
+        "snippet": payload.get("snippet"),
+        "raw_bytes": raw_bytes,
     }
 
 

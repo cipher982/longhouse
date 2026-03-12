@@ -138,3 +138,52 @@ def test_email_conversation_ingest_reuses_thread_binding(tmp_path):
         assert first.conversation_id == second.conversation_id
         assert len(messages) == 2
         assert messages[1].content == "Also check flights from NYC"
+
+
+def test_email_conversation_ingest_does_not_duplicate_raw_archive(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    archive_root = tmp_path / "conversation-archive"
+
+    with SessionLocal() as db:
+        user = _seed_user(db)
+        connector = _seed_connector(db, owner_id=user.id)
+        service = EmailConversationIngestService(
+            db,
+            archive_store=ConversationArchiveStore(str(archive_root)),
+        )
+
+        first = service.ingest(
+            EmailConversationIngest(
+                owner_id=user.id,
+                connector_id=connector.id,
+                provider="gmail",
+                external_thread_id="thread-dup",
+                external_message_id="msg-dup",
+                subject="Same message",
+                body_text="One copy only",
+                raw_bytes=b"raw-email-payload",
+            )
+        )
+        second = service.ingest(
+            EmailConversationIngest(
+                owner_id=user.id,
+                connector_id=connector.id,
+                provider="gmail",
+                external_thread_id="thread-dup",
+                external_message_id="msg-dup",
+                subject="Same message",
+                body_text="One copy only",
+                raw_bytes=b"raw-email-payload",
+            )
+        )
+
+        messages = ConversationService.list_messages(
+            db,
+            owner_id=user.id,
+            conversation_id=first.conversation_id,
+        )
+        raw_dir = archive_root / "1" / str(first.conversation_id) / "raw"
+
+        assert first.message_id == second.message_id
+        assert len(messages) == 1
+        assert len(list(raw_dir.glob("*.eml"))) == 1

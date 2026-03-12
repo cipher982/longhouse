@@ -824,6 +824,7 @@ Notes:
 - 2026-03-12: The rollout is intentionally additive: `Thread` remains fiche/Oikos scratchpad state for now, while new `Conversation*` models become the canonical human-visible communication store.
 - 2026-03-12: Phase 1 landed on `david/email-conversations-foundation`: additive `Conversation`, `ConversationBinding`, and `ConversationMessage` models plus owner-scoped `/conversations` and `/api/oikos/conversations` read/search APIs, all covered by SQLite lite tests.
 - 2026-03-12: Provider-neutral email ingest groundwork is landing separately from Gmail cutover so the archive/normalization seam can be tested before connector wiring.
+- 2026-03-12: Gmail connector ingress now persists inbound and replayed mailbox messages into conversations inside `GmailProvider.process_connector()`, with raw `.eml` archive coverage and duplicate replay protection. Reply sending back into the same conversation is still the next slice.
 
 ## [Product] First-class Oikos surface adapter interface extraction (size: 4)
 
