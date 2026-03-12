@@ -806,6 +806,23 @@ Notes:
 - 2026-03-05: Phase C shipped: browser chat view toggle (`Web only` vs `All activity`) now reloads history with `view=all` when enabled and renders per-message surface badges (Telegram/Voice/System) from metadata.
 - 2026-03-05: Control-plane env durability shipped: added `cp_instances.custom_env_json`, admin GET/PUT endpoints for per-instance env overrides, merge semantics in provision/reprovision/deploy flows (including null-to-unset support), and test coverage for persistence across reprovision + password regen.
 
+## [Product] Oikos first-class conversations + email surface (size: 5)
+
+Status (2026-03-12): In progress (spec + foundation rollout started).
+
+**Goal:** Introduce a real conversation domain for human-visible assistant communication so email chains, future Telegram topics, and future web threads are durable, searchable, and independent from the private Oikos `SUPER` thread.
+
+- [x] Write a first-principles spec covering conversations, email onboarding, memory/search, and phased rollout
+- [ ] Add conversation models, bindings, and lightweight migrations
+- [ ] Add conversation service + minimal authenticated list/detail/search APIs
+- [ ] Add Gmail conversation ingest + in-thread reply MVP
+- [ ] Add inbox/thread UI and mailbox onboarding polish
+- [ ] Teach Oikos to search/read/reply in conversations
+
+Notes:
+- 2026-03-12: Draft spec landed in `docs/specs/oikos-conversations-email.md` with domain model, onboarding decisions, and phased rollout.
+- 2026-03-12: The rollout is intentionally additive: `Thread` remains fiche/Oikos scratchpad state for now, while new `Conversation*` models become the canonical human-visible communication store.
+
 ## [Product] First-class Oikos surface adapter interface extraction (size: 4)
 
 Status (2026-03-05): Done.
