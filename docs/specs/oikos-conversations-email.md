@@ -164,6 +164,15 @@ debug plumbing.
   canonical conversations
 - either remove it entirely or retain a minimal private-memory/debug scope
 
+**Status (2026-03-12):**
+
+- first-party web reads now use canonical `/conversations/{id}/messages`
+  and `/conversations/activity`
+- reset/debug flows moved off `DELETE /api/oikos/history` onto
+  `DELETE /api/oikos/thread` plus canonical conversation APIs
+- `/api/oikos/history` remains in place only as a deprecated compatibility
+  endpoint
+
 **Done when:**
 
 - first-party web and Telegram flows no longer use `/api/oikos/history`

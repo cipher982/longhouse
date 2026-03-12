@@ -51,6 +51,27 @@ def _serialize_summary(db: Session, owner_id: int, conversation) -> Conversation
     )
 
 
+def _serialize_message(message: ConversationMessage) -> ConversationMessageResponse:
+    return ConversationMessageResponse(
+        id=message.id,
+        conversation_id=message.conversation_id,
+        role=message.role,
+        direction=message.direction,
+        sender_kind=message.sender_kind,
+        sender_display=message.sender_display,
+        content=message.content,
+        content_blocks=message.content_blocks,
+        external_message_id=message.external_message_id,
+        parent_message_id=message.parent_message_id,
+        archive_relpath=message.archive_relpath,
+        message_metadata=message.message_metadata,
+        internal=message.internal,
+        sent_at=message.sent_at,
+        created_at=message.created_at,
+        updated_at=message.updated_at,
+    )
+
+
 @router.get("", response_model=ConversationListResponse)
 def list_conversations(
     kind: str | None = Query(default=None),
@@ -69,6 +90,30 @@ def list_conversations(
     return ConversationListResponse(
         conversations=[_serialize_summary(db, current_user.id, conversation) for conversation in conversations],
         total=len(conversations),
+    )
+
+
+@router.get("/activity", response_model=ConversationMessagesResponse)
+def list_activity_messages(
+    include_internal: bool = Query(default=False),
+    kind: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> ConversationMessagesResponse:
+    kinds = [kind] if kind else None
+    messages = ConversationService.list_activity_messages(
+        db,
+        owner_id=current_user.id,
+        include_internal=include_internal,
+        kinds=kinds,
+        limit=limit,
+        offset=offset,
+    )
+    return ConversationMessagesResponse(
+        messages=[_serialize_message(message) for message in messages],
+        total=len(messages),
     )
 
 
@@ -154,27 +199,7 @@ def list_messages(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return ConversationMessagesResponse(
-        messages=[
-            ConversationMessageResponse(
-                id=message.id,
-                conversation_id=message.conversation_id,
-                role=message.role,
-                direction=message.direction,
-                sender_kind=message.sender_kind,
-                sender_display=message.sender_display,
-                content=message.content,
-                content_blocks=message.content_blocks,
-                external_message_id=message.external_message_id,
-                parent_message_id=message.parent_message_id,
-                archive_relpath=message.archive_relpath,
-                message_metadata=message.message_metadata,
-                internal=message.internal,
-                sent_at=message.sent_at,
-                created_at=message.created_at,
-                updated_at=message.updated_at,
-            )
-            for message in messages
-        ],
+        messages=[_serialize_message(message) for message in messages],
         total=len(messages),
     )
 
@@ -216,22 +241,5 @@ def reply_to_conversation(
         reply_all=payload.reply_all,
         to_emails=list(result.to_emails),
         cc_emails=list(result.cc_emails),
-        message=ConversationMessageResponse(
-            id=message.id,
-            conversation_id=message.conversation_id,
-            role=message.role,
-            direction=message.direction,
-            sender_kind=message.sender_kind,
-            sender_display=message.sender_display,
-            content=message.content,
-            content_blocks=message.content_blocks,
-            external_message_id=message.external_message_id,
-            parent_message_id=message.parent_message_id,
-            archive_relpath=message.archive_relpath,
-            message_metadata=message.message_metadata,
-            internal=message.internal,
-            sent_at=message.sent_at,
-            created_at=message.created_at,
-            updated_at=message.updated_at,
-        ),
+        message=_serialize_message(message),
     )

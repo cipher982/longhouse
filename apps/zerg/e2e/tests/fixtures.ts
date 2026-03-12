@@ -149,7 +149,7 @@ export const test = base.extend<TestFixtures>({
 
 test.beforeEach(async ({ request }, testInfo) => {
   try {
-    const response = await request.delete('/api/oikos/history');
+    const response = await request.delete('/api/oikos/thread');
     if (!response.ok()) {
       // Avoid failing the entire suite if Oikos endpoints are temporarily
       // unavailable; individual chat specs should still assert correctness.

@@ -1,4 +1,4 @@
-"""Oikos conversation history endpoints (GET, DELETE)."""
+"""Compatibility Oikos history endpoints (GET, DELETE)."""
 
 import logging
 from collections import deque
@@ -211,7 +211,7 @@ def _surface_info(msg: ThreadMessage) -> tuple[Optional[str], Optional[str], Opt
     )
 
 
-@router.get("/history", response_model=OikosHistoryResponse)
+@router.get("/history", response_model=OikosHistoryResponse, deprecated=True)
 def oikos_history(
     limit: int = 50,
     offset: int = 0,
@@ -340,29 +340,17 @@ def oikos_history(
     return OikosHistoryResponse(messages=chat_messages, total=total)
 
 
-@router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/history", status_code=status.HTTP_204_NO_CONTENT, deprecated=True)
 def oikos_clear_history(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> None:
-    """Clear conversation history (keeps thread, deletes messages)."""
-    from zerg.crud import crud
-    from zerg.models.enums import ThreadType
+    """Compatibility alias for resetting Oikos memory."""
+    from zerg.services.oikos_service import OikosService
 
-    fiches = crud.get_fiches(db, owner_id=current_user.id)
-    fiche = next((f for f in fiches if (f.config or {}).get("is_oikos")), None)
-    if fiche is None:
-        return
-
-    threads = crud.get_threads(db, fiche_id=fiche.id)
-    thread = next((t for t in threads if t.thread_type == ThreadType.SUPER), None)
-    if thread is None:
-        return
-
-    deleted = db.query(ThreadMessage).filter(ThreadMessage.thread_id == thread.id).delete()
-    db.commit()
-
-    logger.info(
-        f"Oikos history cleared: {deleted} messages from thread {thread.id} for user {current_user.id}",
-        extra={"tag": "OIKOS"},
+    service = OikosService(db)
+    service.clear_thread_and_surface_conversation(
+        owner_id=current_user.id,
+        surface_id="web",
+        external_conversation_id="web:main",
     )

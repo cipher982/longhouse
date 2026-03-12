@@ -834,6 +834,7 @@ Notes:
 - 2026-03-12: API stance is now explicit in the spec/task tracker: `/conversations` is canonical, `/api/oikos/conversations` stays temporarily as a deprecated façade, and the next implementation slice is web-chat migration foundation (`web:main` canonical identity + mirrored writes) before Telegram or `/api/oikos/history` shrinkage.
 - 2026-03-12: Web migration cutover is now in two landed slices: `/api/oikos/thread` exposes the canonical `web:main` conversation identity, new web turns are mirrored into `Conversation*`, legacy web-visible Oikos history is backfilled into that conversation on first load, and the default `/chat` history path now reads canonical conversation messages while `view=all` and legacy `?thread=` prehydration stay on compatibility plumbing for now.
 - 2026-03-12: Telegram migration foundation landed too: adapter conversation IDs now distinguish DMs from forum topics (`telegram:<chat>` vs `telegram:<chat>:topic:<thread>`), bridge replies preserve `thread_id` for topic delivery, and `run_oikos()` mirrors new Telegram turns into canonical conversations the same way it now does for web.
+- 2026-03-12: Legacy history shrink landed: the `/chat` all-activity toggle now reads canonical `/conversations/activity`, reset moved to `DELETE /api/oikos/thread` while also clearing the canonical `web:main` transcript, and `/api/oikos/history` is now a deprecated compatibility endpoint rather than a live first-party transcript API.
 
 ## [Product] First-class Oikos surface adapter interface extraction (size: 4)
 

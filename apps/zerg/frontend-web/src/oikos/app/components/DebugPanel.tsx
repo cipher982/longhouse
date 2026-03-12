@@ -12,6 +12,13 @@ interface ThreadInfo {
   thread_id: number
   title: string
   message_count: number
+  canonical_conversation?: {
+    id: number
+    kind: string
+    title?: string | null
+    external_conversation_id: string
+    message_count: number
+  }
 }
 
 interface DebugPanelProps {
@@ -119,15 +126,21 @@ export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: D
               </span>
             </div>
             <div className="debug-row">
-              <span className="debug-label">Messages (DB)</span>
+              <span className="debug-label">Messages (Conversation)</span>
               <span className="debug-value" data-testid="debug-messages-db">
-                {threadInfo?.message_count ?? '—'}
+                {threadInfo?.canonical_conversation?.message_count ?? '—'}
               </span>
             </div>
             <div className="debug-row">
               <span className="debug-label">Messages (UI)</span>
               <span className="debug-value" data-testid="debug-messages-ui">
                 {state.messages.length}
+              </span>
+            </div>
+            <div className="debug-row">
+              <span className="debug-label">Messages (Scratch)</span>
+              <span className="debug-value">
+                {threadInfo?.message_count ?? '—'}
               </span>
             </div>
             <div className="debug-row">
@@ -166,13 +179,23 @@ export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: D
             >
               Thread →
             </a>
+            {threadInfo?.canonical_conversation && (
+              <a
+                href={`${config.apiBaseUrl}/conversations/${threadInfo.canonical_conversation.id}/messages?limit=10`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="debug-link"
+              >
+                Conversation →
+              </a>
+            )}
             <a
-              href={`${config.apiBaseUrl}/oikos/history?limit=10`}
+              href={`${config.apiBaseUrl}/conversations/activity?limit=10`}
               target="_blank"
               rel="noopener noreferrer"
               className="debug-link"
             >
-              History →
+              Activity →
             </a>
           </div>
         </div>

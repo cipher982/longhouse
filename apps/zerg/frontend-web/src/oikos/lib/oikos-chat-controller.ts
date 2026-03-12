@@ -4,7 +4,7 @@
  * Responsibilities:
  * - Send messages to POST /api/oikos/chat (SSE streaming)
  * - Handle SSE stream for streaming responses
- * - Load conversation history from GET /api/oikos/history
+ * - Load canonical conversation history from /api/conversations/*
  * - Emit events for UI updates via stateManager
  *
  * Usage:
@@ -192,19 +192,20 @@ export class OikosChatController {
         options.view !== 'all' && options.conversation_id !== undefined && options.conversation_id !== null
           ? String(options.conversation_id)
           : null;
+      const useCanonicalFormat = Boolean(canonicalConversationId) || options.view === 'all';
 
       let url: string;
       if (canonicalConversationId) {
         const params = new URLSearchParams({ limit: String(limit) });
         url = toAbsoluteUrl(`${CONFIG.API_BASE}/conversations/${canonicalConversationId}/messages?${params.toString()}`);
+      } else if (options.view === 'all') {
+        const params = new URLSearchParams({ limit: String(limit) });
+        url = toAbsoluteUrl(`${CONFIG.API_BASE}/conversations/activity?${params.toString()}`);
       } else {
         const params = new URLSearchParams({
           limit: String(limit),
           surface_id: options.surface_id || 'web',
         });
-        if (options.view === 'all') {
-          params.set('view', 'all');
-        }
         url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?${params.toString()}`);
       }
 
@@ -222,7 +223,7 @@ export class OikosChatController {
       const messages: OikosChatMessage[] = (data.messages || [])
         .filter((msg: any) => msg.role === 'user' || msg.role === 'assistant')
         .map((msg: any) => {
-          if (canonicalConversationId) {
+          if (useCanonicalFormat) {
             const surface = msg.message_metadata?.surface || {};
             const oikos = msg.message_metadata?.oikos || {};
             return {
@@ -1052,14 +1053,13 @@ export class OikosChatController {
   }
 
   /**
-   * Clear server-side conversation history
-   * Creates a new Oikos thread, effectively clearing all history
+   * Reset Oikos memory and clear the canonical web transcript.
    */
   async clearHistory(): Promise<void> {
     try {
       logger.debug('[OikosChat] Clearing server-side history...');
 
-      const url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history`);
+      const url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/thread`);
       const response = await fetch(url, {
         method: 'DELETE',
         credentials: 'include', // Cookie auth

@@ -84,11 +84,13 @@ test.describe('Debug Panel Tests', () => {
     const threadId = threadSection.locator('.debug-row').filter({ hasText: 'ID' });
     await expect(threadId).toBeVisible();
 
-    // Should show message counts (DB and UI)
-    const dbMessageCount = threadSection.locator('.debug-row').filter({ hasText: 'Messages (DB)' });
+    // Should show message counts (canonical conversation, scratch thread, and UI)
+    const dbMessageCount = threadSection.locator('.debug-row').filter({ hasText: 'Messages (Conversation)' });
     await expect(dbMessageCount).toBeVisible();
     const uiMessageCount = threadSection.locator('.debug-row').filter({ hasText: 'Messages (UI)' });
     await expect(uiMessageCount).toBeVisible();
+    const scratchMessageCount = threadSection.locator('.debug-row').filter({ hasText: 'Messages (Scratch)' });
+    await expect(scratchMessageCount).toBeVisible();
   });
 
   test('debug panel shows voice state', async ({ page }) => {
@@ -116,12 +118,15 @@ test.describe('Debug Panel Tests', () => {
     const apiSection = page.locator('.debug-section').filter({ hasText: 'API' });
     await expect(apiSection).toBeVisible();
 
-    // Should have Thread and History links
+    // Should have Thread, Conversation, and Activity links
     const threadLink = apiSection.locator('.debug-link').filter({ hasText: 'Thread' });
     await expect(threadLink).toBeVisible();
 
-    const historyLink = apiSection.locator('.debug-link').filter({ hasText: 'History' });
-    await expect(historyLink).toBeVisible();
+    const conversationLink = apiSection.locator('.debug-link').filter({ hasText: 'Conversation' });
+    await expect(conversationLink).toBeVisible();
+
+    const activityLink = apiSection.locator('.debug-link').filter({ hasText: 'Activity' });
+    await expect(activityLink).toBeVisible();
   });
 });
 
@@ -156,7 +161,7 @@ test.describe('Reset Memory Tests', () => {
     await resetButton.scrollIntoViewIfNeeded();
     await Promise.all([
       page.waitForResponse(
-        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/oikos/history') && (r.status() === 200 || r.status() === 204),
+        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/oikos/thread') && (r.status() === 200 || r.status() === 204),
         { timeout: 15000 }
       ),
       resetButton.click(),
@@ -217,7 +222,7 @@ test.describe('Reset Memory Tests', () => {
     await resetButton.scrollIntoViewIfNeeded();
     await Promise.all([
       page.waitForResponse(
-        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/oikos/history') && (r.status() === 200 || r.status() === 204),
+        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/oikos/thread') && (r.status() === 200 || r.status() === 204),
         { timeout: 15000 }
       ),
       resetButton.click(),

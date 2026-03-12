@@ -246,6 +246,22 @@ def get_oikos_thread(
     )
 
 
+@router.delete("/thread", status_code=status.HTTP_204_NO_CONTENT)
+def clear_oikos_thread(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> None:
+    """Reset Oikos memory for the current user and clear the canonical web transcript."""
+    from zerg.services.oikos_service import OikosService
+
+    service = OikosService(db)
+    service.clear_thread_and_surface_conversation(
+        owner_id=current_user.id,
+        surface_id="web",
+        external_conversation_id="web:main",
+    )
+
+
 @router.patch("/preferences", response_model=OikosPreferences)
 def oikos_update_preferences(
     update: OikosPreferencesUpdate,

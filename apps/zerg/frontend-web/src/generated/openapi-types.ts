@@ -793,6 +793,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/conversations/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Activity Messages */
+        get: operations["list_activity_messages_conversations_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/conversations/search": {
         parameters: {
             query?: never;
@@ -2021,7 +2038,11 @@ export interface paths {
         get: operations["get_oikos_thread_oikos_thread_get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Clear Oikos Thread
+         * @description Reset Oikos memory for the current user and clear the canonical web transcript.
+         */
+        delete: operations["clear_oikos_thread_oikos_thread_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2156,6 +2177,7 @@ export interface paths {
         };
         /**
          * Oikos History
+         * @deprecated
          * @description Get conversation history from Oikos thread.
          */
         get: operations["oikos_history_oikos_history_get"];
@@ -2163,7 +2185,8 @@ export interface paths {
         post?: never;
         /**
          * Oikos Clear History
-         * @description Clear conversation history (keeps thread, deletes messages).
+         * @deprecated
+         * @description Compatibility alias for resetting Oikos memory.
          */
         delete: operations["oikos_clear_history_oikos_history_delete"];
         options?: never;
@@ -11300,6 +11323,41 @@ export interface operations {
             };
         };
     };
+    list_activity_messages_conversations_activity_get: {
+        parameters: {
+            query?: {
+                include_internal?: boolean;
+                kind?: string | null;
+                limit?: number;
+                offset?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationMessagesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     search_conversations_conversations_search_get: {
         parameters: {
             query: {
@@ -13408,6 +13466,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["OikosThreadInfo"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_oikos_thread_oikos_thread_delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

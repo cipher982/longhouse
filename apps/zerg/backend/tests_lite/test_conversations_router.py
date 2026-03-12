@@ -145,6 +145,91 @@ def test_conversations_list_search_detail_and_messages(tmp_path, monkeypatch):
         api_app.dependency_overrides.clear()
 
 
+def test_conversations_activity_is_owner_scoped(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _stub_tiktoken(monkeypatch)
+
+    with SessionLocal() as db:
+        owner = _seed_user(db, 1, "owner@test.local")
+        other = _seed_user(db, 2, "other@test.local")
+
+        web_conversation = ConversationService.get_or_create_by_binding(
+            db,
+            owner_id=owner.id,
+            kind="web",
+            surface_id="web",
+            external_conversation_id="web:main",
+        )
+        telegram_conversation = ConversationService.get_or_create_by_binding(
+            db,
+            owner_id=owner.id,
+            kind="telegram",
+            surface_id="telegram",
+            external_conversation_id="telegram:42",
+        )
+        other_conversation = ConversationService.get_or_create_by_binding(
+            db,
+            owner_id=other.id,
+            kind="email",
+            surface_id="email",
+            provider="gmail",
+            binding_scope="other@gmail.com",
+            external_conversation_id="thread-other",
+        )
+
+        ConversationService.append_message(
+            db,
+            owner_id=owner.id,
+            conversation_id=web_conversation.id,
+            role="user",
+            content="Web question",
+            message_metadata={"surface": {"origin_surface_id": "web", "delivery_surface_id": "web"}},
+        )
+        ConversationService.append_message(
+            db,
+            owner_id=owner.id,
+            conversation_id=telegram_conversation.id,
+            role="assistant",
+            content="Telegram follow-up",
+            message_metadata={"surface": {"origin_surface_id": "telegram", "delivery_surface_id": "telegram"}},
+        )
+        ConversationService.append_message(
+            db,
+            owner_id=other.id,
+            conversation_id=other_conversation.id,
+            role="assistant",
+            content="Private message",
+            message_metadata={"surface": {"origin_surface_id": "email", "delivery_surface_id": "email"}},
+        )
+
+    from zerg.dependencies.auth import get_current_user
+    from zerg.main import api_app
+
+    def override_db():
+        with SessionLocal() as db:
+            yield db
+
+    def override_user():
+        return User(id=1, email="owner@test.local", role="USER")
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[get_current_user] = override_user
+
+    client = TestClient(api_app)
+    try:
+        response = client.get("/conversations/activity", params={"limit": 10})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 2
+        assert [message["content"] for message in payload["messages"]] == [
+            "Web question",
+            "Telegram follow-up",
+        ]
+        assert payload["messages"][1]["message_metadata"]["surface"]["origin_surface_id"] == "telegram"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_conversation_reply_endpoint_sends_reply_and_returns_message(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     archive_root = tmp_path / "data"

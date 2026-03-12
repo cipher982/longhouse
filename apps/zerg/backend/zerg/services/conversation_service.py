@@ -265,6 +265,36 @@ class ConversationService:
         )
 
     @staticmethod
+    def list_activity_messages(
+        db: Session,
+        *,
+        owner_id: int,
+        include_internal: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+        kinds: list[str] | None = None,
+    ) -> list[ConversationMessage]:
+        query = (
+            db.query(ConversationMessage)
+            .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
+            .filter(Conversation.owner_id == owner_id)
+        )
+        if not include_internal:
+            query = query.filter(ConversationMessage.internal.is_(False))
+        if kinds:
+            query = query.filter(Conversation.kind.in_(kinds))
+
+        return (
+            query.order_by(
+                ConversationMessage.sent_at.asc(),
+                ConversationMessage.id.asc(),
+            )
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+    @staticmethod
     def list_bindings(
         db: Session,
         *,
@@ -358,3 +388,21 @@ class ConversationService:
             ConversationBinding.conversation_id == conversation_id,
         )
         return int(query.scalar() or 0)
+
+    @staticmethod
+    def clear_messages(
+        db: Session,
+        *,
+        owner_id: int,
+        conversation_id: int,
+    ) -> int:
+        conversation = ConversationService.get_conversation(db, owner_id=owner_id, conversation_id=conversation_id)
+        if conversation is None:
+            raise ValueError("Conversation not found")
+
+        deleted = (
+            db.query(ConversationMessage).filter(ConversationMessage.conversation_id == conversation_id).delete(synchronize_session=False)
+        )
+        conversation.last_message_at = None
+        db.commit()
+        return int(deleted or 0)

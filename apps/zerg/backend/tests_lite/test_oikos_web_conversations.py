@@ -12,6 +12,7 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.models import ThreadMessage
 from zerg.models import User
 from zerg.models.enums import UserRole
 from zerg.routers.oikos_auth import get_current_oikos_user
@@ -161,6 +162,55 @@ def test_oikos_thread_backfills_legacy_web_history_into_canonical_conversation(t
                 "legacy web assistant",
             ]
             assert messages[1].message_metadata["oikos"]["mirrored_from_oikos_thread"] is True
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_delete_oikos_thread_clears_web_conversation_and_thread(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user = _seed_user(db, "reset@test.local")
+        service = OikosService(db)
+        fiche = service.get_or_create_oikos_fiche(user.id)
+        thread = service.get_or_create_oikos_thread(user.id, fiche)
+        conversation = service.get_or_create_surface_conversation(
+            owner_id=user.id,
+            surface_id="web",
+            external_conversation_id="web:main",
+            backing_thread_id=thread.id,
+            title="Oikos",
+        )
+
+        crud.create_thread_message(
+            db=db,
+            thread_id=thread.id,
+            role="user",
+            content="thread message",
+            processed=True,
+        )
+        ConversationService.append_message(
+            db,
+            owner_id=user.id,
+            conversation_id=conversation.id,
+            role="user",
+            content="conversation message",
+        )
+
+        client, api_app_ref = _make_client(db, user)
+        try:
+            resp = client.delete("/api/oikos/thread")
+            assert resp.status_code == 204
+
+            assert db.query(ThreadMessage).filter(ThreadMessage.thread_id == thread.id).count() == 0
+
+            messages = ConversationService.list_messages(
+                db,
+                owner_id=user.id,
+                conversation_id=conversation.id,
+                limit=10,
+            )
+            assert messages == []
         finally:
             api_app_ref.dependency_overrides = {}
 
