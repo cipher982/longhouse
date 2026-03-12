@@ -34,6 +34,7 @@ from zerg.models.models import Run
 from zerg.models.models import Thread as ThreadModel
 from zerg.prompts import build_oikos_prompt
 from zerg.services.commis_artifact_store import CommisArtifactStore
+from zerg.services.conversation_service import ConversationService
 from zerg.services.oikos_commis_context import RECENT_COMMIS_CONTEXT_MARKER
 from zerg.services.oikos_commis_context import RECENT_COMMIS_HISTORY_LIMIT
 from zerg.services.oikos_commis_context import RECENT_COMMIS_HISTORY_MINUTES
@@ -246,6 +247,100 @@ class OikosService:
         for row in rows:
             row.message_metadata = self._merge_surface_metadata(row.message_metadata, surface_metadata)
         self.db.commit()
+
+    def get_or_create_surface_conversation(
+        self,
+        *,
+        owner_id: int,
+        surface_id: str,
+        external_conversation_id: str,
+        backing_thread_id: int | None = None,
+        title: str | None = None,
+    ):
+        """Return the canonical human-visible conversation for a surface thread."""
+        normalized_surface_id = str(surface_id or "web").strip().lower() or "web"
+        normalized_external_id = str(external_conversation_id or f"{normalized_surface_id}:main").strip()
+        if not normalized_external_id:
+            normalized_external_id = f"{normalized_surface_id}:main"
+
+        conversation_metadata: dict[str, Any] = {
+            "surface": {
+                "surface_id": normalized_surface_id,
+                "external_conversation_id": normalized_external_id,
+            }
+        }
+        if backing_thread_id is not None:
+            conversation_metadata["surface"]["backing_oikos_thread_id"] = backing_thread_id
+
+        return ConversationService.get_or_create_by_binding(
+            self.db,
+            owner_id=owner_id,
+            kind=normalized_surface_id,
+            surface_id=normalized_surface_id,
+            provider="default",
+            external_conversation_id=normalized_external_id,
+            title=title,
+            conversation_metadata=conversation_metadata,
+        )
+
+    def _mirror_thread_message_to_surface_conversation(
+        self,
+        *,
+        owner_id: int,
+        conversation_id: int,
+        thread_message: Any,
+        direction: str,
+        sender_kind: str,
+        sender_display: str | None,
+    ) -> None:
+        """Mirror one Oikos thread message into the canonical conversation store."""
+        thread_message_id = getattr(thread_message, "id", None)
+        message_metadata = dict(getattr(thread_message, "message_metadata", None) or {})
+        oikos_metadata = dict(message_metadata.get("oikos") or {})
+        if thread_message_id is not None:
+            oikos_metadata["thread_message_id"] = thread_message_id
+        thread_id = getattr(thread_message, "thread_id", None)
+        if thread_id is not None:
+            oikos_metadata["thread_id"] = thread_id
+        oikos_metadata["mirrored_from_oikos_thread"] = True
+        message_metadata["oikos"] = oikos_metadata
+
+        external_message_id = f"thread-message:{thread_message_id}" if thread_message_id is not None else None
+        ConversationService.append_message(
+            self.db,
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            role=getattr(thread_message, "role", "assistant"),
+            content=getattr(thread_message, "content", "") or "",
+            direction=direction,
+            sender_kind=sender_kind,
+            sender_display=sender_display,
+            external_message_id=external_message_id,
+            message_metadata=message_metadata,
+            sent_at=getattr(thread_message, "sent_at", None),
+        )
+
+    def _mirror_assistant_messages_to_surface_conversation(
+        self,
+        *,
+        owner_id: int,
+        conversation_id: int,
+        created_messages: list[Any],
+    ) -> None:
+        """Mirror assistant messages created during a run into canonical conversations."""
+        for row in created_messages:
+            if getattr(row, "role", None) != "assistant":
+                continue
+            if not (getattr(row, "content", "") or "").strip():
+                continue
+            self._mirror_thread_message_to_surface_conversation(
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                thread_message=row,
+                direction="outgoing",
+                sender_kind="agent",
+                sender_display="Oikos",
+            )
 
     def get_or_create_oikos_fiche(self, owner_id: int) -> FicheModel:
         """Get or create the oikos fiche for a user.
@@ -495,6 +590,15 @@ class OikosService:
         self.db.commit()
         logger.debug(f"Refreshed oikos prompt for fiche {fiche.id} (user {owner_id})")
         thread = self.get_or_create_oikos_thread(owner_id, fiche)
+        surface_conversation = None
+        if source_surface_id == "web":
+            surface_conversation = self.get_or_create_surface_conversation(
+                owner_id=owner_id,
+                surface_id=source_surface_id,
+                external_conversation_id=source_conversation_id,
+                backing_thread_id=thread.id,
+                title=thread.title or "Oikos",
+            )
 
         # Use existing run or create new one
         if run_id:
@@ -616,6 +720,15 @@ class OikosService:
                 message_metadata=surface_metadata,
             )
             self.db.commit()
+            if surface_conversation is not None and not is_continuation:
+                self._mirror_thread_message_to_surface_conversation(
+                    owner_id=owner_id,
+                    conversation_id=surface_conversation.id,
+                    thread_message=user_message_row,
+                    direction="incoming",
+                    sender_kind="human",
+                    sender_display=None,
+                )
 
             # Acknowledge commis jobs AFTER messages are persisted (atomic semantics)
             # This ensures jobs aren't marked "seen" unless oikos actually sees them
@@ -679,6 +792,12 @@ class OikosService:
                     timeout=timeout,
                 )
                 self._annotate_assistant_messages_with_surface_metadata(list(created_messages), surface_metadata)
+                if surface_conversation is not None:
+                    self._mirror_assistant_messages_to_surface_conversation(
+                        owner_id=owner_id,
+                        conversation_id=surface_conversation.id,
+                        created_messages=list(created_messages),
+                    )
             except asyncio.TimeoutError:
                 # Timeout migration: run continues in background, we return deferred status
                 # Calculate duration for the deferred event
@@ -741,6 +860,12 @@ class OikosService:
                 # finished and persist the result (SSE streams can close on OIKOS_DEFERRED).
                 created_messages = await run_task
                 self._annotate_assistant_messages_with_surface_metadata(list(created_messages), surface_metadata)
+                if surface_conversation is not None:
+                    self._mirror_assistant_messages_to_surface_conversation(
+                        owner_id=owner_id,
+                        conversation_id=surface_conversation.id,
+                        created_messages=list(created_messages),
+                    )
 
             except FicheInterrupted as interrupt:
                 self._annotate_assistant_messages_after_id(

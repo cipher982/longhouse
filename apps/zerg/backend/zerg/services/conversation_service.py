@@ -45,6 +45,29 @@ class ConversationService:
         )
 
     @staticmethod
+    def get_conversation_by_binding(
+        db: Session,
+        *,
+        owner_id: int,
+        surface_id: str,
+        external_conversation_id: str,
+        provider: str = "default",
+        binding_scope: str | None = None,
+    ) -> Conversation | None:
+        binding = (
+            db.query(ConversationBinding)
+            .filter(
+                ConversationBinding.owner_id == owner_id,
+                ConversationBinding.surface_id == surface_id,
+                ConversationBinding.provider == provider,
+                ConversationBinding.binding_scope == _normalize_scope(binding_scope),
+                ConversationBinding.external_conversation_id == external_conversation_id,
+            )
+            .first()
+        )
+        return binding.conversation if binding is not None else None
+
+    @staticmethod
     def get_or_create_by_binding(
         db: Session,
         *,

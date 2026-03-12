@@ -1,4 +1,4 @@
-"""Oikos conversation list/read/search endpoints."""
+"""Deprecated Oikos-namespaced façade over canonical conversation APIs."""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def _to_message(row: ConversationMessage) -> ConversationMessageInfo:
     )
 
 
-@router.get("/conversations", response_model=List[ConversationSummary])
+@router.get("/conversations", response_model=List[ConversationSummary], deprecated=True)
 def list_oikos_conversations(
     kind: Optional[str] = None,
     status_filter: Optional[str] = "active",
@@ -118,7 +118,7 @@ def list_oikos_conversations(
     return [_to_summary(row) for row in rows]
 
 
-@router.get("/conversations/search", response_model=List[ConversationSummary])
+@router.get("/conversations/search", response_model=List[ConversationSummary], deprecated=True)
 def search_oikos_conversations(
     q: str,
     kind: Optional[str] = None,
@@ -136,7 +136,7 @@ def search_oikos_conversations(
     return [_to_summary(row) for row in rows]
 
 
-@router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
+@router.get("/conversations/{conversation_id}", response_model=ConversationDetail, deprecated=True)
 def get_oikos_conversation(
     conversation_id: int,
     db: Session = Depends(get_db),
@@ -171,7 +171,7 @@ def get_oikos_conversation(
     )
 
 
-@router.get("/conversations/{conversation_id}/messages", response_model=List[ConversationMessageInfo])
+@router.get("/conversations/{conversation_id}/messages", response_model=List[ConversationMessageInfo], deprecated=True)
 def list_oikos_conversation_messages(
     conversation_id: int,
     include_internal: bool = False,

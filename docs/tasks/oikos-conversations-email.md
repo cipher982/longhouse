@@ -16,11 +16,11 @@
 - [x] Phase 5c: Add backend/tool tests for reply threading, recipient safety, and replay behavior
 - [x] Phase 6a: Add canonical `POST /conversations/{id}/reply` backend endpoint
 - [x] Phase 6b: Add inbox/thread UI backed by `/conversations`
-- [ ] Phase 6c: Keep `/api/oikos/conversations` as a deprecated façade until first-party migration is complete
-- [ ] Phase 7a.1: Create a stable canonical web conversation binding for `web:main`
-- [ ] Phase 7a.1: Expose canonical web conversation metadata through the existing Oikos bootstrap/thread path
-- [ ] Phase 7a.1: Mirror newly created web turns into `Conversation*` while keeping `/api/oikos/history` as the read path
-- [ ] Phase 7a.1: Add regression coverage for stable web binding reuse and mirrored writes
+- [x] Phase 6c: Keep `/api/oikos/conversations` as a deprecated façade until first-party migration is complete
+- [x] Phase 7a.1: Create a stable canonical web conversation binding for `web:main`
+- [x] Phase 7a.1: Expose canonical web conversation metadata through the existing Oikos bootstrap/thread path
+- [x] Phase 7a.1: Mirror newly created web turns into `Conversation*` while keeping `/api/oikos/history` as the read path
+- [x] Phase 7a.1: Add regression coverage for stable web binding reuse and mirrored writes
 - [ ] Phase 7a.2: Switch the default web Oikos read path from `/api/oikos/history` to canonical conversation reads
 - [ ] Phase 7a.2: Keep legacy `?thread=` prehydration as explicit compatibility behavior only
 - [ ] Phase 7a.3: Remove default web transcript dependence on the shared Oikos `SUPER` thread
