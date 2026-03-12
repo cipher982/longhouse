@@ -656,31 +656,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/email/webhook/google": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Gmail Webhook
-         * @description Handle Gmail *watch* callbacks.
-         *
-         *     The implementation is an **MVP**: every callback simply triggers all
-         *     *gmail* email-type triggers.  Later versions will match the *resourceId*
-         *     to a specific user and run the Gmail *history* API to fetch only the new
-         *     messages.
-         */
-        post: operations["gmail_webhook_email_webhook_google_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/email/webhook/google/pubsub": {
         parameters: {
             query?: never;
@@ -1684,10 +1659,12 @@ export interface paths {
          * @description Connect Gmail via OAuth and create/update a Gmail connector.
          *
          *     Expected body: { "auth_code": "...", "callback_url": "https://.../api/email/webhook/google" }
+         *     where ``callback_url`` is optional and only used in tests/local legacy flows.
          *
          *     - Stores the encrypted refresh token in a Connector (type="email", provider="gmail").
-         *     - Optionally attempts to register a Gmail watch if ``callback_url`` is provided.
-         *     - Returns the ``connector_id``.
+         *     - Registers a Gmail Pub/Sub watch when ``GMAIL_PUBSUB_TOPIC`` is configured.
+         *     - Uses direct HTTPS callbacks only in tests, never as the production path.
+         *     - Returns connector + watch bootstrap state so callers can surface partial failure.
          */
         post: operations["connect_gmail_auth_google_gmail_post"];
         delete?: never;
@@ -6523,6 +6500,41 @@ export interface components {
              */
             machines: string[];
         };
+        /**
+         * GmailConnectResponse
+         * @description Response returned after connecting a Gmail inbox.
+         */
+        GmailConnectResponse: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "connected";
+            /** Connector Id */
+            connector_id: number;
+            /** Mailbox Email */
+            mailbox_email?: string | null;
+            watch: components["schemas"]["GmailWatchStateResponse"];
+        };
+        /**
+         * GmailWatchStateResponse
+         * @description Watch/bootstrap state returned after Gmail connector setup.
+         */
+        GmailWatchStateResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "failed" | "not_configured";
+            /** Method */
+            method?: ("pubsub" | "legacy") | null;
+            /** History Id */
+            history_id?: number | null;
+            /** Watch Expiry */
+            watch_expiry?: number | null;
+            /** Error */
+            error?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -11115,48 +11127,6 @@ export interface operations {
             };
         };
     };
-    gmail_webhook_email_webhook_google_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header: {
-                "X-Goog-Channel-Token": string;
-                "X-Goog-Resource-Id"?: string | null;
-                "X-Goog-Message-Number"?: string | null;
-                Authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                } | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     gmail_pubsub_webhook_email_webhook_google_pubsub_post: {
         parameters: {
             query?: {
@@ -12755,9 +12725,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string | number;
-                    };
+                    "application/json": components["schemas"]["GmailConnectResponse"];
                 };
             };
             /** @description Validation Error */

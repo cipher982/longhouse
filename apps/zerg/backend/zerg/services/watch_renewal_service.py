@@ -137,6 +137,11 @@ class WatchRenewalService:
         # Get refresh token
         enc_token = config.get("refresh_token")
         if not enc_token:
+            config["watch_status"] = "failed"
+            config["watch_method"] = config.get("watch_method")
+            config["watch_error"] = "Missing Gmail refresh token"
+            config["watch_checked_at"] = datetime.now(timezone.utc).isoformat()
+            crud.update_connector(session, connector.id, config=config)
             logger.warning(
                 "No refresh token for connector",
                 extra={"connector_id": connector.id},
@@ -144,24 +149,24 @@ class WatchRenewalService:
             return
 
         refresh_token = crypto.decrypt(enc_token)
+        watch_method: str | None = None
 
         try:
             # Exchange for access token
             access_token = await gmail_api.async_exchange_refresh_token(refresh_token)
 
-            # Determine callback URL
             from zerg.config import get_settings
 
             settings = get_settings()
             topic = getattr(settings, "gmail_pubsub_topic", None)
-            # Renew the watch (use sync version in async context); prefer Pub/Sub
             if topic:
+                watch_method = "pubsub"
                 watch_info = gmail_api.start_watch(
                     access_token=access_token,
                     topic_name=topic,
                 )
-            else:
-                # Legacy/local fallback (not valid for real Gmail push, kept for tests)
+            elif settings.testing:
+                watch_method = "legacy"
                 callback_url = (
                     f"{settings.app_public_url}/api/email/webhook/google"
                     if settings.app_public_url
@@ -171,10 +176,25 @@ class WatchRenewalService:
                     access_token=access_token,
                     callback_url=callback_url,
                 )
+            else:
+                config["watch_status"] = "not_configured"
+                config["watch_method"] = None
+                config["watch_error"] = "GMAIL_PUBSUB_TOPIC is not configured."
+                config["watch_checked_at"] = datetime.now(timezone.utc).isoformat()
+                crud.update_connector(session, connector.id, config=config)
+                logger.warning(
+                    "Skipping Gmail watch renewal because Pub/Sub is not configured",
+                    extra={"connector_id": connector.id},
+                )
+                return
 
             # Update connector with new watch info
             config["history_id"] = watch_info["history_id"]
             config["watch_expiry"] = watch_info["watch_expiry"]
+            config["watch_status"] = "active"
+            config["watch_method"] = watch_method
+            config["watch_error"] = None
+            config["watch_checked_at"] = datetime.now(timezone.utc).isoformat()
 
             crud.update_connector(session, connector.id, config=config)
 
@@ -194,6 +214,11 @@ class WatchRenewalService:
             )
 
         except Exception as e:
+            config["watch_status"] = "failed"
+            config["watch_method"] = watch_method
+            config["watch_error"] = f"Failed to renew Gmail watch: {e}"
+            config["watch_checked_at"] = datetime.now(timezone.utc).isoformat()
+            crud.update_connector(session, connector.id, config=config)
             logger.error(
                 "Failed to renew watch",
                 extra={"connector_id": connector.id, "error": str(e)},

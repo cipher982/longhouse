@@ -1,26 +1,9 @@
-"""Webhook endpoints for e-mail provider push notifications.
+"""Legacy Gmail HTTPS webhook kept only for tests/local compatibility.
 
-Phase-2 of the *Email Trigger* roadmap introduces provider-side push support
-so we can react to new e-mails without polling.  The most widely used provider
-is Gmail; Microsoft Graph will follow a similar pattern.
-
-For now the implementation is deliberately *minimal*:
-
-1. The frontend registers a *watch* via the Gmail API and sets the
-   ``channel_token`` to the **user ID**.  That means the callback receives
-   the user ID straight from the ``X-Goog-Channel-Token`` header so we can
-   resolve triggers without an additional lookup table.
-
-2. The webhook simply schedules **all* triggers of type ``email`` whose
-   ``config.provider == "gmail"``.  A future iteration will inspect the Gmail
-   *history* API to filter messages according to per-trigger rules before
-   firing.
-
-Security considerations
------------------------
-Google signs the webhook with a JWT in the *Authorization* header when using
-the *"push to HTTPS"* option.  Validation is **always enabled** unless the
-`TESTING=1` environment variable is set (unit-tests run without real JWTs).
+Production Gmail push for Zerg uses Cloud Pub/Sub via
+``/email/webhook/google/pubsub``. This direct HTTPS callback path is retained
+only so older tests and local experiments do not need a live Pub/Sub setup.
+It should not be mounted into the normal first-party runtime surface.
 """
 
 # typing helpers
@@ -155,13 +138,7 @@ async def gmail_webhook(
     payload: Optional[Dict] = None,  # Google sends no body – future-proof
     db: Session = Depends(get_db),
 ):
-    """Handle Gmail *watch* callbacks.
-
-    The implementation is an **MVP**: every callback simply triggers all
-    *gmail* email-type triggers.  Later versions will match the *resourceId*
-    to a specific user and run the Gmail *history* API to fetch only the new
-    messages.
-    """
+    """Handle legacy Gmail HTTPS watch callbacks in testing/local mode only."""
 
     logger.debug(
         "Gmail webhook: token=%s, resource_id=%s, msg_no=%s",

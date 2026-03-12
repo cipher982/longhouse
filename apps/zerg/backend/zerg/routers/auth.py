@@ -12,7 +12,9 @@ from collections import defaultdict
 from collections import deque
 from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 from typing import Any
+from typing import Literal
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -812,6 +814,25 @@ class PasswordLoginRequest(BaseModel):
     password: str
 
 
+class GmailWatchStateResponse(BaseModel):
+    """Watch/bootstrap state returned after Gmail connector setup."""
+
+    status: Literal["active", "failed", "not_configured"]
+    method: Literal["pubsub", "legacy"] | None = None
+    history_id: int | None = None
+    watch_expiry: int | None = None
+    error: str | None = None
+
+
+class GmailConnectResponse(BaseModel):
+    """Response returned after connecting a Gmail inbox."""
+
+    status: Literal["connected"]
+    connector_id: int
+    mailbox_email: str | None = None
+    watch: GmailWatchStateResponse
+
+
 def _resolve_password_user(db: Session):
     """Resolve the user for password login without violating single-tenant rules.
 
@@ -964,19 +985,108 @@ def cli_login(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/google/gmail", status_code=status.HTTP_200_OK)
+def _utc_now_iso() -> str:
+    """Return an ISO8601 UTC timestamp string."""
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_email_address(value: Any) -> str | None:
+    """Normalize a mailbox email string for connector config storage."""
+
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _gmail_watch_target(settings: Any, callback_url: str | None) -> tuple[str | None, str | None, str | None]:
+    """Resolve the watch target for the current runtime."""
+
+    topic = getattr(settings, "gmail_pubsub_topic", None)
+    if topic:
+        return "pubsub", topic, None
+
+    if settings.testing and callback_url:
+        return "legacy", callback_url, None
+
+    if callback_url:
+        return None, None, "Legacy Gmail HTTPS webhooks are test-only. Configure GMAIL_PUBSUB_TOPIC for production."
+
+    return None, None, "GMAIL_PUBSUB_TOPIC is not configured."
+
+
+def _bootstrap_gmail_watch(refresh_token: str, callback_url: str | None) -> tuple[str | None, GmailWatchStateResponse]:
+    """Fetch mailbox profile info and attempt to start a Gmail watch."""
+
+    from zerg.services import gmail_api
+
+    settings = get_settings()
+    watch_method, watch_target, watch_target_error = _gmail_watch_target(settings, callback_url)
+    access_token: str | None = None
+    mailbox_email: str | None = None
+
+    try:
+        access_token = gmail_api.exchange_refresh_token(refresh_token)
+    except Exception as exc:
+        if watch_method is None:
+            return mailbox_email, GmailWatchStateResponse(status="not_configured", error=watch_target_error)
+        return (
+            mailbox_email,
+            GmailWatchStateResponse(
+                status="failed",
+                method=watch_method,  # type: ignore[arg-type]
+                error=f"Failed to exchange Gmail refresh token: {exc}",
+            ),
+        )
+
+    mailbox_email = _normalize_email_address(gmail_api.get_profile(access_token).get("emailAddress"))
+
+    if watch_method is None:
+        return mailbox_email, GmailWatchStateResponse(status="not_configured", error=watch_target_error)
+
+    try:
+        if watch_method == "pubsub":
+            watch_info = gmail_api.start_watch(access_token=access_token, topic_name=watch_target)
+        else:
+            watch_info = gmail_api.start_watch(access_token=access_token, callback_url=watch_target)
+    except Exception as exc:
+        return (
+            mailbox_email,
+            GmailWatchStateResponse(
+                status="failed",
+                method=watch_method,  # type: ignore[arg-type]
+                error=f"Failed to start Gmail watch: {exc}",
+            ),
+        )
+
+    return (
+        mailbox_email,
+        GmailWatchStateResponse(
+            status="active",
+            method=watch_method,  # type: ignore[arg-type]
+            history_id=watch_info["history_id"],
+            watch_expiry=watch_info["watch_expiry"],
+            error=None,
+        ),
+    )
+
+
+@router.post("/google/gmail", status_code=status.HTTP_200_OK, response_model=GmailConnectResponse)
 def connect_gmail(
     body: dict[str, str],
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
-) -> dict[str, str | int]:
+) -> GmailConnectResponse:
     """Connect Gmail via OAuth and create/update a Gmail connector.
 
     Expected body: { "auth_code": "...", "callback_url": "https://.../api/email/webhook/google" }
+    where ``callback_url`` is optional and only used in tests/local legacy flows.
 
     - Stores the encrypted refresh token in a Connector (type="email", provider="gmail").
-    - Optionally attempts to register a Gmail watch if ``callback_url`` is provided.
-    - Returns the ``connector_id``.
+    - Registers a Gmail Pub/Sub watch when ``GMAIL_PUBSUB_TOPIC`` is configured.
+    - Uses direct HTTPS callbacks only in tests, never as the production path.
+    - Returns connector + watch bootstrap state so callers can surface partial failure.
     """
 
     auth_code = body.get("auth_code")
@@ -1000,9 +1110,6 @@ def connect_gmail(
         conn = existing[0]
         cfg = dict(conn.config or {})
         cfg["refresh_token"] = enc
-        # Clear watch meta; will be re-initialized below when possible
-        cfg.pop("history_id", None)
-        cfg.pop("watch_expiry", None)
         conn = crud.update_connector(db, conn.id, config=cfg)  # type: ignore[assignment]
         connector_id = conn.id if conn else None
     else:
@@ -1022,71 +1129,47 @@ def connect_gmail(
                 raise
             conn = existing[0]
             connector_id = conn.id
-
-    # Optionally start a Gmail watch immediately (best effort)
-    try:
-        # Derive/validate callback URL server-side for security
-        final_callback: str | None = None
-        settings = get_settings()
-        if settings.app_public_url:
-            base = str(settings.app_public_url).rstrip("/")
-            final_callback = f"{base}/api/email/webhook/google"
-        elif callback_url:
-            # In testing we allow arbitrary callback to keep unit-tests simple
-            if settings.testing:
-                final_callback = callback_url
-            else:
-                # Minimal validation when APP_PUBLIC_URL is not set – only accept https
-                # and the expected webhook path.
-                from urllib.parse import urlparse
-
-                try:
-                    parsed = urlparse(callback_url)
-                    if parsed.scheme == "https" and parsed.path.endswith("/api/email/webhook/google"):
-                        final_callback = callback_url
-                except Exception:  # pragma: no cover – defensive parsing guard
-                    final_callback = None
-
-        if final_callback:
-            # Exchange refresh->access token and start watch
-            from zerg.services import gmail_api
-
-            access_token = gmail_api.exchange_refresh_token(refresh_token)
-
-            # Get user's email address for Pub/Sub mapping
-            try:
-                import httpx
-
-                headers = {"Authorization": f"Bearer {access_token}"}
-                resp = httpx.get(
-                    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-                    headers=headers,
-                )
-                if resp.status_code == 200:
-                    email_address = resp.json().get("emailAddress")
-                else:
-                    email_address = None
-            except Exception:
-                email_address = None
-
-            # Prefer Pub/Sub topic if configured; otherwise fall back to legacy
-            # callback param for local dev/tests (some tests patch start_watch).
-            topic = getattr(settings, "gmail_pubsub_topic", None)
-            if topic:
-                watch_info = gmail_api.start_watch(access_token=access_token, topic_name=topic)
-            else:
-                watch_info = gmail_api.start_watch(access_token=access_token, callback_url=final_callback)
-
             cfg = dict(conn.config or {})
-            cfg.update(
-                {
-                    "history_id": watch_info["history_id"],
-                    "watch_expiry": watch_info["watch_expiry"],
-                    "emailAddress": email_address,  # Store for Pub/Sub mapping
-                }
-            )
-            crud.update_connector(db, conn.id, config=cfg)
-    except Exception:  # pragma: no cover – best-effort; skip network failures
-        pass
+            cfg["refresh_token"] = enc
+            conn = crud.update_connector(db, conn.id, config=cfg)  # type: ignore[assignment]
 
-    return {"status": "connected", "connector_id": int(connector_id)}
+    mailbox_email, watch_state = _bootstrap_gmail_watch(refresh_token, callback_url)
+
+    cfg = dict(conn.config or {})
+    previous_mailbox = _normalize_email_address(cfg.get("emailAddress"))
+    effective_mailbox = mailbox_email or previous_mailbox
+    mailbox_changed = bool(mailbox_email and previous_mailbox and mailbox_email != previous_mailbox)
+
+    if mailbox_changed:
+        cfg.pop("history_id", None)
+        cfg.pop("watch_expiry", None)
+        cfg.pop("last_notified_history_id", None)
+
+    if effective_mailbox:
+        cfg["emailAddress"] = effective_mailbox
+
+    if watch_state.status == "active" and watch_state.method == "pubsub" and not effective_mailbox:
+        watch_state = GmailWatchStateResponse(
+            status="failed",
+            method="pubsub",
+            error="Started Gmail watch but could not resolve mailbox email for Pub/Sub routing.",
+        )
+
+    cfg["watch_status"] = watch_state.status
+    cfg["watch_method"] = watch_state.method
+    cfg["watch_error"] = watch_state.error
+    cfg["watch_checked_at"] = _utc_now_iso()
+
+    if watch_state.status == "active":
+        cfg["history_id"] = watch_state.history_id
+        cfg["watch_expiry"] = watch_state.watch_expiry
+        cfg.pop("last_notified_history_id", None)
+
+    crud.update_connector(db, conn.id, config=cfg)
+
+    return GmailConnectResponse(
+        status="connected",
+        connector_id=int(connector_id),
+        mailbox_email=effective_mailbox,
+        watch=watch_state,
+    )

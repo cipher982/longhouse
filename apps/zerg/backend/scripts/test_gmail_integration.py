@@ -148,8 +148,8 @@ def send_test_email(subject=None, body=None):
         return None
 
 
-def setup_watch(webhook_url):
-    """Set up Gmail watch for push notifications."""
+def setup_watch(topic_name):
+    """Set up Gmail watch for Pub/Sub push notifications."""
     service = get_gmail_service()
     if not service:
         return None
@@ -158,7 +158,7 @@ def setup_watch(webhook_url):
         # Set up watch request
         request_body = {
             "labelIds": ["INBOX"],
-            "topicName": "projects/your-project/topics/gmail-push",  # Update with your topic
+            "topicName": topic_name,
             "labelFilterAction": "include",
         }
 
@@ -173,9 +173,8 @@ def setup_watch(webhook_url):
 
     except HttpError as error:
         print(f"✗ Error setting up watch: {error}")
-        print("\nNote: For direct HTTPS webhooks (without Pub/Sub), you'll need to:")
-        print("1. Use ngrok or a public URL")
-        print("2. Configure the webhook URL in your app")
+        print("\nNote: Production Gmail push uses Cloud Pub/Sub, not direct HTTPS callbacks.")
+        print("Provide a fully-qualified topic like projects/<project>/topics/<topic>.")
         return None
 
 
@@ -239,7 +238,7 @@ def check_messages(history_id=None):
 def main():
     parser = argparse.ArgumentParser(description="Gmail Integration Test Script")
     parser.add_argument("command", choices=["setup", "send", "watch", "check"], help="Command to run")
-    parser.add_argument("--webhook-url", help="Webhook URL for watch setup")
+    parser.add_argument("--topic-name", help="Pub/Sub topic for watch setup (projects/<project>/topics/<topic>)")
     parser.add_argument("--history-id", help="History ID for checking changes")
     parser.add_argument("--subject", help="Email subject for send command")
     parser.add_argument("--body", help="Email body for send command")
@@ -251,13 +250,11 @@ def main():
     elif args.command == "send":
         send_test_email(args.subject, args.body)
     elif args.command == "watch":
-        if not args.webhook_url:
-            print("Error: --webhook-url required for watch command")
-            print(
-                "Example: python test_gmail_integration.py watch --webhook-url https://xyz.ngrok.io/api/email/webhook/google"
-            )
+        if not args.topic_name:
+            print("Error: --topic-name required for watch command")
+            print("Example: python test_gmail_integration.py watch --topic-name projects/my-project/topics/gmail-push")
         else:
-            setup_watch(args.webhook_url)
+            setup_watch(args.topic_name)
     elif args.command == "check":
         check_messages(args.history_id)
 

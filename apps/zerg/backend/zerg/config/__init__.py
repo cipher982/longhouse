@@ -567,6 +567,9 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
     if not settings.fernet_secret:
         missing_vars.append("FERNET_SECRET")
 
+    if settings.gmail_pubsub_topic and not settings.pubsub_audience:
+        missing_vars.append("PUBSUB_AUDIENCE (required when GMAIL_PUBSUB_TOPIC is set)")
+
     # Authentication requirements
     if not settings.auth_disabled:
         weak = settings.jwt_secret.strip() in {"", "dev-secret"} or len(settings.jwt_secret) < 16

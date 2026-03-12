@@ -49,10 +49,11 @@ class GmailSendResult:
 # Push *watch* helpers
 # ---------------------------------------------------------------------------
 
-# Gmail delivers push notifications to Cloud Pub/Sub *or* direct HTTPS
-# endpoints.  For the Fiche Platform we only support the **HTTPS** variant so
-# users do not need a GCP project with Pub/Sub enabled.  The relevant REST
-# endpoint is:
+# Gmail delivers push notifications to Cloud Pub/Sub. The old direct HTTPS
+# callback path is legacy test-only scaffolding kept so isolated tests can
+# patch this helper without standing up Pub/Sub. Production/runtime code
+# should pass ``topic_name`` and never rely on ``callback_url``. The relevant
+# REST endpoint is:
 #
 #     POST https://gmail.googleapis.com/gmail/v1/users/me/watch
 #
@@ -69,9 +70,9 @@ class GmailSendResult:
 #
 # In addition to creating the initial watch we also expose a small helper that
 # simply **re-creates** the watch to renew it once the expiration comes
-# close.  Gmail does not currently offer an explicit *renew* endpoint – the
+# close. Gmail does not currently offer an explicit *renew* endpoint – the
 # recommended workflow is to call *watch* again which implicitly stops the
-# old channel and starts a new one.  Therefore ``renew_watch`` is merely an
+# old channel and starts a new one. Therefore ``renew_watch`` is merely an
 # alias that calls ``start_watch``.
 
 
@@ -105,7 +106,8 @@ def start_watch(
     access_token
         Short-lived OAuth access token with the ``gmail.readonly`` scope.
     callback_url
-        Public HTTPS URL that Google will POST push notifications to.
+        Legacy test-only fallback. Production callers should use
+        ``topic_name``.
     label_ids
         If provided, limit notifications to specific labels (default:
         ``["INBOX"]``).
@@ -118,11 +120,8 @@ def start_watch(
 
     url = "https://gmail.googleapis.com/gmail/v1/users/me/watch"
 
-    # Gmail requires a Pub/Sub topic for push notifications. In production,
-    # pass a fully-qualified topic name (projects/<id>/topics/<name>).
-    # For legacy/local test flows, some tests patch this function and use the
-    # older callback_url param; if topic_name is not provided, we fall back
-    # to using callback_url value for the field to keep tests/dev stubs simple.
+    # Gmail requires a Pub/Sub topic for real push notifications. Tests may
+    # still pass ``callback_url`` because older mocks patch this helper.
     body = {
         "topicName": topic_name or (callback_url or ""),
         "labelFilterAction": "include",
