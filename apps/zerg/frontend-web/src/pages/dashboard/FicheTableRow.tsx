@@ -149,7 +149,6 @@ function FicheTableRowComponent({
     <Fragment>
       <Table.Row
         data-fiche-id={fiche.id}
-        aria-expanded={isExpanded}
         className={clsx('fiche-row', fiche.status === "error" && "error-row")}
         onClick={() => onToggleRow(fiche.id)}
         onKeyDown={handleRowKeyDown}
