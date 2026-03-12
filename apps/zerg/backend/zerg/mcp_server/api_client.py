@@ -64,22 +64,3 @@ class LonghouseAPIClient:
                 headers=self._headers,
                 json=json,
             )
-
-    async def get_reflections(
-        self,
-        project: str | None = None,
-        limit: int = 5,
-    ) -> httpx.Response:
-        """Fetch reflection run history.
-
-        Args:
-            project: Optional project filter.
-            limit: Max results to return.
-
-        Returns:
-            The httpx Response object.
-        """
-        params: dict = {"limit": limit}
-        if project:
-            params["project"] = project
-        return await self.get("/api/agents/reflections", params=params)

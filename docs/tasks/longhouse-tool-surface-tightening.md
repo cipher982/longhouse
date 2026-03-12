@@ -9,15 +9,15 @@ Last updated: 2026-03-12
 - [x] Add `TODO.md` tracking entry
 - [x] Write spec with explicit keep/remove decisions
 - [x] Write granular task checklist
-- [ ] Commit Phase 0 artifacts
+- [x] Commit Phase 0 artifacts
 
 ## Phase 1: MCP server cleanup
 
-- [ ] Remove Longhouse MCP local KV memory tools
-- [ ] Remove `get_reflections` from Longhouse MCP
-- [ ] Remove `visual_compare` from Longhouse MCP
-- [ ] Remove any now-unused MCP client/helper code
-- [ ] Add/adjust tests for the trimmed Longhouse MCP tool list
+- [x] Remove Longhouse MCP local KV memory tools
+- [x] Remove `get_reflections` from Longhouse MCP
+- [x] Remove `visual_compare` from Longhouse MCP
+- [x] Remove any now-unused MCP client/helper code
+- [x] Add/adjust tests for the trimmed Longhouse MCP tool list
 - [ ] Commit Phase 1
 
 ## Phase 2: Local install boundary
