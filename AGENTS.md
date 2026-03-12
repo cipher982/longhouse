@@ -67,7 +67,7 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 
 **LLM model config:** `config/models.json` is the single source of truth — models, tiers, use cases, routing profiles, and embedding config. Set `MODELS_PROFILE` env var to select per-instance overrides (default `oss`). Each model can declare `apiKeyEnvVar` for its required API key. See `models_config.py:get_llm_client_for_use_case()` for LLM factory, `get_embedding_config()` for embeddings (gracefully returns None if no API key).
 
-**MCP server:** `zerg/mcp_server/server.py:create_server()` exposes tools to CLI agents (Claude Code, Codex, Gemini). Tools: session search (FTS + semantic), recall, memory read/write, insights, file reservations, notify_oikos, visual_compare. New tools go inside `create_server()`. API client at `mcp_server/api_client.py` (get/post/delete methods).
+**MCP server:** `zerg/mcp_server/server.py:create_server()` exposes tools to CLI agents (Claude Code, Codex, Gemini). Tools: session search (FTS + semantic), recall, memory read/write, insights, notify_oikos, visual_compare. New tools go inside `create_server()`. API client at `mcp_server/api_client.py` (get/post methods).
 
 ## Features (What Exists)
 
@@ -83,7 +83,6 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 | Reflection | `GET /api/agents/reflection/briefing` | BriefingsPage | `get_briefing` | Daily/weekly session briefings |
 | Jobs/Scheduler | `GET /api/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
 | Memory | `GET/PUT /api/agents/memory` | — | `read_memory`, `write_memory` | Key-value store for agent state |
-| File reservations | `POST /api/agents/reservations` | — | `reserve_file` | Prevent concurrent edits |
 | Action proposals | `GET/POST /api/proposals` | ProposalsPage | — | Review queue for reflection insights with approve/decline; approved proposals show in briefings |
 | Runner daemon | WebSocket from runner binary | — | — | Remote command execution on user infra |
 | **Session presence** | `POST /api/agents/presence` + `GET /api/agents/sessions/active` | ForumPage | — | Real-time state (thinking/running/idle) via Claude Code hooks; `session_presence` table, stale after 10min |

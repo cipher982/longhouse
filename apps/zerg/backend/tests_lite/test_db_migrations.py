@@ -8,6 +8,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.database import _migrate_agents_columns
+from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.db_migrations import apply_heavy_migrations
 from zerg.db_migrations import plan_heavy_migrations
@@ -170,3 +171,40 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
 
     normalized_sql = "".join(ch for ch in _table_sql(engine, "source_lines").lower() if not ch.isspace())
     assert "unique(session_id,source_path,source_offset)" not in normalized_sql
+
+
+def test_initialize_database_drops_legacy_file_reservations_table(tmp_path):
+    db_path = tmp_path / "legacy_reservations.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE file_reservations (
+                id VARCHAR(36) PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                project VARCHAR(255) NOT NULL DEFAULT '',
+                agent VARCHAR(255) NOT NULL DEFAULT 'claude',
+                reason TEXT,
+                expires_at DATETIME NOT NULL,
+                released_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    initialize_database(engine)
+
+    with engine.connect() as conn:
+        exists = conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'file_reservations'
+                LIMIT 1
+                """
+            )
+        ).fetchone()
+
+    assert exists is None

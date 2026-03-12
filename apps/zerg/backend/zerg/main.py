@@ -92,7 +92,6 @@ from zerg.routers.ops import router as ops_router
 from zerg.routers.presence import router as presence_router
 from zerg.routers.proposals import router as proposals_router
 from zerg.routers.reliability import router as reliability_router
-from zerg.routers.reservations import router as reservations_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
 from zerg.routers.session_chat import router as session_chat_router
@@ -1041,7 +1040,6 @@ api_app.include_router(presence_router)  # Claude Code hook presence signals
 api_app.include_router(device_tokens_router)  # Per-device authentication tokens
 api_app.include_router(insights_router)  # Insights tracking for agent infrastructure
 api_app.include_router(proposals_router)  # Action proposals review queue
-api_app.include_router(reservations_router)  # File reservations for multi-agent workflows
 
 # metrics_router stays on parent app — Prometheus expects /metrics at root
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics

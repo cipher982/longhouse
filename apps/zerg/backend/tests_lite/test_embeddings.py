@@ -12,7 +12,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionEmbedding
-from zerg.models.work import FileReservation  # noqa: F401
 from zerg.models.work import Insight  # noqa: F401
 from zerg.services.session_processing.embeddings import bytes_to_embedding
 from zerg.services.session_processing.embeddings import content_hash
