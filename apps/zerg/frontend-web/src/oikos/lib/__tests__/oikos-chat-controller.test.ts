@@ -41,8 +41,8 @@ describe('OikosChatController history loading', () => {
     await controller.loadHistory(50, { view: 'all' });
 
     const [url] = fetchMock.mock.calls[0] as [string];
-    expect(url).toContain('surface_id=web');
-    expect(url).toContain('view=all');
+    expect(url).toContain('/api/conversations/activity?');
+    expect(url).not.toContain('/api/oikos/history');
   });
 
   it('maps surface metadata fields from history payload', async () => {
@@ -119,5 +119,38 @@ describe('OikosChatController history loading', () => {
     expect(messages[0].origin_surface_id).toBe('web');
     expect(messages[0].usage?.total_tokens).toBe(42);
     expect(messages[0].tool_calls?.[0].tool_name).toBe('search_conversations');
+  });
+
+  it('loads all-activity from canonical conversation activity', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        messages: [
+          {
+            role: 'assistant',
+            content: 'Telegram follow-up',
+            sent_at: '2026-03-12T15:00:00Z',
+            message_metadata: {
+              surface: {
+                origin_surface_id: 'telegram',
+                delivery_surface_id: 'telegram',
+                visibility: 'cross-surface',
+              },
+            },
+          },
+        ],
+        total: 1,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const controller = new OikosChatController();
+    const messages = await controller.loadHistory(50, { view: 'all' });
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain('/api/conversations/activity?');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].origin_surface_id).toBe('telegram');
+    expect(messages[0].visibility).toBe('cross-surface');
   });
 });

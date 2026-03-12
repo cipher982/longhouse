@@ -539,6 +539,53 @@ class OikosService:
         logger.info(f"Created oikos thread {thread.id} for user {owner_id}")
         return thread
 
+    def clear_thread_and_surface_conversation(
+        self,
+        *,
+        owner_id: int,
+        surface_id: str = "web",
+        external_conversation_id: str | None = None,
+    ) -> tuple[int, int]:
+        """Clear the shared Oikos thread and matching surface transcript."""
+        from zerg.models.thread import ThreadMessage as ThreadMessageModel
+
+        fiche = self.get_or_create_oikos_fiche(owner_id)
+        thread = self.get_or_create_oikos_thread(owner_id, fiche)
+        normalized_surface_id = str(surface_id or "web").strip().lower() or "web"
+        normalized_external_id = (external_conversation_id or f"{normalized_surface_id}:main").strip()
+        conversation = self.get_or_create_surface_conversation(
+            owner_id=owner_id,
+            surface_id=normalized_surface_id,
+            external_conversation_id=normalized_external_id,
+            backing_thread_id=thread.id,
+            title=thread.title or "Oikos",
+        )
+
+        cleared_conversation_messages = ConversationService.clear_messages(
+            self.db,
+            owner_id=owner_id,
+            conversation_id=conversation.id,
+        )
+        cleared_thread_messages = (
+            self.db.query(ThreadMessageModel).filter(ThreadMessageModel.thread_id == thread.id).delete(synchronize_session=False)
+        )
+        self.db.commit()
+
+        logger.info(
+            "Cleared Oikos thread and surface conversation",
+            extra={
+                "tag": "OIKOS",
+                "owner_id": owner_id,
+                "surface_id": normalized_surface_id,
+                "external_conversation_id": normalized_external_id,
+                "thread_id": thread.id,
+                "conversation_id": conversation.id,
+                "cleared_thread_messages": cleared_thread_messages,
+                "cleared_conversation_messages": cleared_conversation_messages,
+            },
+        )
+        return int(cleared_thread_messages or 0), int(cleared_conversation_messages or 0)
+
     def _build_recent_commis_context(self, owner_id: int) -> tuple[str | None, list[int]]:
         """Build inbox context with active commis and unread recent results."""
         return build_recent_commis_context(self.db, owner_id)

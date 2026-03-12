@@ -2,8 +2,8 @@
 
 Sub-routers (each is a focused module with its own endpoints):
 - oikos_chat: POST /chat, POST /run/{id}/cancel
-- oikos_config: GET /bootstrap, PATCH /preferences, GET /thread, GET /session
-- oikos_history: GET /history, DELETE /history
+- oikos_config: GET /bootstrap, PATCH /preferences, GET /thread, DELETE /thread, GET /session
+- oikos_history: GET /history, DELETE /history (deprecated compatibility)
 - oikos_fiches: GET /fiches
 - oikos_runs: GET /runs, GET /runs/active, GET /runs/{id}, etc.
 - oikos_internal: POST /internal/runs/{id}/resume

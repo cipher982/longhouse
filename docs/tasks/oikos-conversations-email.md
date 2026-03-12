@@ -23,13 +23,13 @@
 - [x] Phase 7a.1: Add regression coverage for stable web binding reuse and mirrored writes
 - [x] Phase 7a.2: Switch the default web Oikos read path from `/api/oikos/history` to canonical conversation reads
 - [x] Phase 7a.2: Keep legacy `?thread=` prehydration as explicit compatibility behavior only
-- [ ] Phase 7a.3: Remove default web transcript dependence on the shared Oikos `SUPER` thread
+- [x] Phase 7a.3: Remove default web transcript dependence on the shared Oikos `SUPER` thread
 - [x] Phase 7b.1: Map Telegram DMs to stable canonical conversations
 - [x] Phase 7b.1: Map Telegram forum topics to stable canonical conversations with preserved topic metadata
 - [x] Phase 7b.2: Mirror Telegram user/assistant turns into canonical conversations
 - [x] Phase 7b.2: Add regression coverage for Telegram DM/topic binding identity and transcript writes
-- [ ] Phase 7c: Remove first-party dependence on `/api/oikos/history`
-- [ ] Phase 7c: Either delete `/api/oikos/history` or leave it compatibility/debug-only with reduced scope
+- [x] Phase 7c: Remove first-party dependence on `/api/oikos/history`
+- [x] Phase 7c: Either delete `/api/oikos/history` or leave it compatibility/debug-only with reduced scope
 
 ## Done Conditions
 
