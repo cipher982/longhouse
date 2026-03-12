@@ -7,11 +7,21 @@ import { TestRouter } from "../../test/test-utils";
 import ConversationsPage from "../ConversationsPage";
 
 const apiMocks = vi.hoisted(() => ({
+  connectGmailInbox: vi.fn(),
   fetchConversations: vi.fn(),
   searchConversations: vi.fn(),
   fetchConversation: vi.fn(),
   fetchConversationMessages: vi.fn(),
   replyToConversation: vi.fn(),
+}));
+
+const authMocks = vi.hoisted(() => ({
+  useAuth: vi.fn(),
+  refreshAuth: vi.fn(),
+}));
+
+const googleCodeClientMocks = vi.hoisted(() => ({
+  requestGoogleAuthorizationCode: vi.fn(),
 }));
 
 vi.mock("../../services/api", async (importOriginal) => {
@@ -22,13 +32,31 @@ vi.mock("../../services/api", async (importOriginal) => {
   };
 });
 
+vi.mock("../../lib/auth", () => ({
+  useAuth: authMocks.useAuth,
+}));
+
+vi.mock("../../lib/config", () => ({
+  config: {
+    googleClientId: "google-client-id",
+  },
+}));
+
+vi.mock("../../lib/googleCodeClient", () => ({
+  requestGoogleAuthorizationCode: googleCodeClientMocks.requestGoogleAuthorizationCode,
+}));
+
 const {
+  connectGmailInbox: mockConnectGmailInbox,
   fetchConversations: mockFetchConversations,
   searchConversations: mockSearchConversations,
   fetchConversation: mockFetchConversation,
   fetchConversationMessages: mockFetchConversationMessages,
   replyToConversation: mockReplyToConversation,
 } = apiMocks;
+
+const { useAuth: mockUseAuth, refreshAuth: mockRefreshAuth } = authMocks;
+const { requestGoogleAuthorizationCode: mockRequestGoogleAuthorizationCode } = googleCodeClientMocks;
 
 function renderConversationsPage(initialEntry = "/conversations?conversation=1") {
   const queryClient = new QueryClient({
@@ -52,6 +80,22 @@ function renderConversationsPage(initialEntry = "/conversations?conversation=1")
 describe("ConversationsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRefreshAuth.mockResolvedValue(undefined);
+    mockUseAuth.mockReturnValue({
+      user: {
+        id: 1,
+        email: "owner@example.com",
+        display_name: "Owner",
+        is_active: true,
+        created_at: "2026-03-12T18:00:00Z",
+        gmail_connected: true,
+        gmail_mailbox_email: "owner@gmail.com",
+        gmail_watch_status: "active",
+        gmail_watch_error: null,
+        gmail_watch_expiry: 654321,
+      },
+      refreshAuth: mockRefreshAuth,
+    });
 
     mockFetchConversations.mockResolvedValue({
       total: 2,
@@ -185,11 +229,26 @@ describe("ConversationsPage", () => {
         updated_at: "2026-03-12T19:20:00Z",
       },
     });
+    mockRequestGoogleAuthorizationCode.mockResolvedValue("auth-code");
+    mockConnectGmailInbox.mockResolvedValue({
+      status: "connected",
+      connector_id: 1,
+      mailbox_email: "owner@gmail.com",
+      watch: {
+        status: "active",
+        method: "pubsub",
+        history_id: 321,
+        watch_expiry: 654321,
+        error: null,
+      },
+    });
   });
 
   it("loads a selected thread and sends a reply", async () => {
     renderConversationsPage();
 
+    expect(await screen.findByText("Email sync is healthy")).toBeInTheDocument();
+    expect(screen.getByText("Connected as owner@gmail.com")).toBeInTheDocument();
     expect(await screen.findByTestId("conversation-item-1")).toBeInTheDocument();
     expect(await screen.findByText("Can you book dinner for 7?")).toBeInTheDocument();
 
@@ -210,6 +269,41 @@ describe("ConversationsPage", () => {
         body: "Check TAP and Delta.",
         reply_all: true,
       });
+    });
+  });
+
+  it("lets the user connect Gmail from the inbox when it is not connected", async () => {
+    mockUseAuth.mockReturnValue({
+      user: {
+        id: 1,
+        email: "owner@example.com",
+        display_name: "Owner",
+        is_active: true,
+        created_at: "2026-03-12T18:00:00Z",
+        gmail_connected: false,
+        gmail_mailbox_email: null,
+        gmail_watch_status: null,
+        gmail_watch_error: null,
+        gmail_watch_expiry: null,
+      },
+      refreshAuth: mockRefreshAuth,
+    });
+    mockFetchConversations.mockResolvedValue({ total: 0, conversations: [] });
+
+    renderConversationsPage("/conversations");
+
+    expect(await screen.findByText("Connect Gmail to start your inbox")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Connect Gmail" }));
+
+    await waitFor(() => {
+      expect(mockRequestGoogleAuthorizationCode).toHaveBeenCalledWith({
+        clientId: "google-client-id",
+        scope: "https://www.googleapis.com/auth/gmail.modify",
+      });
+      expect(mockConnectGmailInbox).toHaveBeenCalledWith("auth-code");
+      expect(mockRefreshAuth).toHaveBeenCalled();
     });
   });
 });

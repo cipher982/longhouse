@@ -15,6 +15,21 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Product][QA/Test] Polish Gmail inbox onboarding and health UX (size: 1)
+
+Status (2026-03-12): Done. The inbox now exposes a direct Gmail connect/reconnect path, reports health from the real connector state instead of the stale legacy user field, and explains the reply boundary in-product.
+
+**Goal:** Make the email surface launch-legible without adding new backend scope: obvious connect CTA, honest health state, and explicit trust copy.
+
+- [x] Derive Gmail connection state from the actual Gmail connector/watch metadata
+- [x] Surface connect/reconnect directly inside the inbox
+- [x] Explain that replies send from the connected Gmail account and stay in the same thread
+- [x] Add focused regression coverage plus live hosted coverage for the inbox health panel
+
+Notes:
+- 2026-03-12: The previous inbox told users to "connect Gmail" but offered no first-class place to do it.
+- 2026-03-12: `auth/status` had still been reading `gmail_connected` from the legacy `users.gmail_refresh_token` field even though the product now stores Gmail in connectors.
+
 ## [Launch][QA/Test][Docs/Drift] Harden Gmail connector watch bootstrap and retire legacy webhook drift (size: 1)
 
 Status (2026-03-12): In progress. Gmail connect currently can report success while watch bootstrap failed or never even ran, and the repo still teaches the old direct HTTPS webhook story even though production uses Pub/Sub.

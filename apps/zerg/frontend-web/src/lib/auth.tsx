@@ -16,6 +16,11 @@ interface User {
   last_login?: string | null;
   prefs?: Record<string, unknown> | null;
   role?: string; // ADMIN or USER
+  gmail_connected?: boolean;
+  gmail_mailbox_email?: string | null;
+  gmail_watch_status?: "active" | "failed" | "not_configured" | null;
+  gmail_watch_error?: string | null;
+  gmail_watch_expiry?: number | null;
 }
 
 interface TokenData {
@@ -265,6 +270,18 @@ declare global {
         id: {
           initialize: (config: { client_id: string; callback: (response: { credential: string }) => void }) => void;
           renderButton: (element: HTMLElement, options: { theme: string; size: string }) => void;
+        };
+        oauth2?: {
+          initCodeClient: (config: {
+            client_id: string;
+            scope: string;
+            ux_mode: "popup";
+            select_account?: boolean;
+            callback: (response: { code?: string; error?: string; error_description?: string }) => void;
+            error_callback?: (error: { type?: string; message?: string }) => void;
+          }) => {
+            requestCode: () => void;
+          };
         };
       };
     };

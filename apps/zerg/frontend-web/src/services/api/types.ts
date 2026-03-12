@@ -83,6 +83,21 @@ export interface CanonicalConversationReplyResponse {
   message: CanonicalConversationMessage;
 }
 
+export interface GmailWatchState {
+  status: "active" | "failed" | "not_configured";
+  method?: "pubsub" | "legacy" | null;
+  history_id?: number | null;
+  watch_expiry?: number | null;
+  error?: string | null;
+}
+
+export interface GmailConnectResponse {
+  status: "connected";
+  connector_id: number;
+  mailbox_email: string | null;
+  watch: GmailWatchState;
+}
+
 export type ConversationSummary = CanonicalConversationSummary;
 export type ConversationDetail = CanonicalConversationDetail;
 export type ConversationMessage = CanonicalConversationMessage;
