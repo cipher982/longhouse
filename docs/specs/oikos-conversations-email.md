@@ -42,6 +42,7 @@ Completed locally in this session:
 - Phase 6c decision: `/api/oikos/conversations` remains only as a deprecated façade
 - Phase 7a.1 foundation: stable `web:main` canonical conversation identity, mirrored web writes, and focused regression coverage
 - Phase 7a.2 cutover: default web chat history now reads from canonical conversations, with one-time legacy web history backfill from the Oikos thread
+- Phase 7b foundation: Telegram DMs/topics now map to stable canonical conversation IDs, Telegram topic replies preserve `thread_id`, and new Telegram turns are mirrored into `Conversation*`
 - targeted backend tests for conversation APIs, email ingest, and Gmail replay behavior
 
 Still blocked:

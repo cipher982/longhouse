@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 from zerg.database import Base
 from zerg.database import make_engine
@@ -108,7 +111,7 @@ async def test_orchestrator_multi_surface_end_to_end_with_telegram_delivery(tmp_
 
     resolve_owner_cb.assert_awaited_once_with("42")
     persist_chat_id_cb.assert_awaited_once_with(owner_id, "42")
-    send_cb.assert_awaited_once_with("42", "fmt::adapter response")
+    send_cb.assert_awaited_once_with("42", "fmt::adapter response", None)
 
     assert len(FakeOikosService.calls) == 3
     calls_by_surface = {call["source_surface_id"]: call for call in FakeOikosService.calls}
@@ -127,6 +130,46 @@ async def test_orchestrator_multi_surface_end_to_end_with_telegram_delivery(tmp_
         claims = db.query(SurfaceIngressClaim).all()
         assert len(claims) == 3
         assert {claim.surface_id for claim in claims} == {"web", "voice", "telegram"}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_preserves_telegram_topic_conversation_id(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(email="orch-telegram-topic@test.local", role="USER")
+        db.add(user)
+        db.commit()
+        owner_id = user.id
+
+    FakeOikosService.calls.clear()
+    send_cb = AsyncMock()
+    telegram_adapter = TelegramSurfaceAdapter(
+        send_cb=send_cb,
+        resolve_owner_cb=AsyncMock(return_value=owner_id),
+        persist_chat_id_cb=AsyncMock(),
+        formatter=lambda text: text,
+    )
+
+    orchestrator = SurfaceOrchestrator(
+        session_factory=lambda: _session_factory(SessionLocal),
+        oikos_service_cls=FakeOikosService,
+    )
+
+    result = await orchestrator.handle_inbound(
+        telegram_adapter,
+        raw_input={
+            "chat_id": "42",
+            "chat_type": "group",
+            "thread_id": "777",
+            "message_id": "77",
+            "text": "from telegram topic",
+            "raw": {"update_id": 9002},
+        },
+    )
+
+    assert result.status == SurfaceHandleStatus.PROCESSED
+    assert FakeOikosService.calls[-1]["source_conversation_id"] == "telegram:42:topic:777"
+    send_cb.assert_awaited_once_with("42", "adapter response", "777")
 
 
 @pytest.mark.asyncio

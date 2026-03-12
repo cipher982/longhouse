@@ -658,13 +658,13 @@ class OikosService:
         logger.debug(f"Refreshed oikos prompt for fiche {fiche.id} (user {owner_id})")
         thread = self.get_or_create_oikos_thread(owner_id, fiche)
         surface_conversation = None
-        if source_surface_id == "web":
+        if source_surface_id in {"web", "telegram"}:
             surface_conversation = self.get_or_create_surface_conversation(
                 owner_id=owner_id,
                 surface_id=source_surface_id,
                 external_conversation_id=source_conversation_id,
                 backing_thread_id=thread.id,
-                title=thread.title or "Oikos",
+                title=(thread.title or "Oikos") if source_surface_id == "web" else source_conversation_id,
             )
 
         # Use existing run or create new one
