@@ -196,6 +196,9 @@ curl -s https://longhouse.ai | grep '<title>'          # Marketing site content
 curl -s https://david010.longhouse.ai/api/health       # User instance health
 ```
 
+### Automation Note
+Pushes to `main` that touch the runtime image paths (`apps/zerg/backend/**`, `apps/zerg/frontend-web/**`, `config/**`, `docker/runtime.dockerfile`) now trigger the GitHub Actions runtime-image build and the follow-on deploy workflow. Treat that as the primary path for normal app deploys, and keep the manual Coolify + reprovision steps above as the operator fallback and recovery path.
+
 ### If Something Breaks
 ```bash
 ssh zerg 'docker logs longhouse-david010 --tail 50'    # User instance
