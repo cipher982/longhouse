@@ -13,6 +13,7 @@ import {
 } from "../services/api";
 import { buildUrl } from "../services/api";
 import { ConnectionStatus, createEnvelope, useWebSocket } from "../lib/useWebSocket";
+import { DEFAULT_TEXT_MODEL } from "../oikos/core/model-config";
 import { useAuth } from "../lib/auth";
 import { PlusIcon } from "../components/icons";
 import FicheSettingsDrawer from "../components/fiche-settings/FicheSettingsDrawer";
@@ -158,7 +159,7 @@ export default function DashboardPage() {
   });
 
   const defaultModel = useMemo(() => {
-    return modelsData?.find((m) => m.is_default)?.id || "gpt-5.2";
+    return modelsData?.find((m) => m.is_default)?.id || DEFAULT_TEXT_MODEL;
   }, [modelsData]);
 
   const {

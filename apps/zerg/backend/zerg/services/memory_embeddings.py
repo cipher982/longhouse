@@ -11,10 +11,9 @@ from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from zerg.models.models import MemoryEmbedding
+from zerg.models_config import EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)
-
-EMBEDDING_MODEL = "text-embedding-3-small"
 
 _client: OpenAI | None = None
 

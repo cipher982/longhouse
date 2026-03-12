@@ -195,6 +195,30 @@ jobs:
     - name: Run control plane E2E tests
       run: make test-e2e-cp
 
+  model-smoke:
+    runs-on: ubuntu-latest
+    # No dependency — runs in parallel, fast (<5s)
+    name: "🔥 model-smoke--ping-all-models-json"
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install deps
+      run: pip install openai anthropic
+
+    - name: Smoke test all models
+      run: python scripts/smoke_models.py --ci
+
   oss-qa:
     runs-on: ubuntu-latest
     # No dependency on validate - can run immediately on GitHub-hosted runners

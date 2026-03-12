@@ -1,7 +1,7 @@
 """Embedding generation and session chunking pipeline.
 
 Generates embeddings for session search (session-level) and recall (turn-level).
-Uses OpenAI text-embedding-3-small (256 dims) as the sole provider.
+Embedding model configured in config/models.json (default: OpenAI, 256 dims).
 """
 
 from __future__ import annotations

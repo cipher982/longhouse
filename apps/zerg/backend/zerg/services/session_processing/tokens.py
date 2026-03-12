@@ -1,7 +1,7 @@
 """Token counting and truncation with explicit encoding control.
 
 Callers specify the encoding — never change the default silently. The default
-``cl100k_base`` matches embedding models (text-embedding-3-small). Callers using
+``cl100k_base`` matches the default embedding model. Callers using
 GPT-5 era models should pass ``o200k_base`` explicitly.
 """
 

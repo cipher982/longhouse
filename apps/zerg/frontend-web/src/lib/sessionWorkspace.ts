@@ -88,18 +88,7 @@ export function formatDuration(startedAt: string, endedAt: string | null): strin
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
 }
 
-export function getProviderColor(provider: string): string {
-  switch (provider) {
-    case "claude":
-      return "var(--color-brand-accent)";
-    case "codex":
-      return "var(--color-intent-success)";
-    case "gemini":
-      return "var(--color-neon-cyan)";
-    default:
-      return "var(--color-text-secondary)";
-  }
-}
+export { getProviderColor, supportsCloudContinuation, getProviderLabel as formatProviderLabel } from "./providers";
 
 export function truncatePath(path: string | null, maxLen: number = 50): string {
   if (!path) return "";
@@ -108,15 +97,6 @@ export function truncatePath(path: string | null, maxLen: number = 50): string {
   const parts = path.split("/");
   if (parts.length <= 3) return "..." + path.slice(-maxLen);
   return "~/" + parts.slice(-3).join("/");
-}
-
-export function supportsCloudContinuation(provider: string): boolean {
-  return provider === "claude";
-}
-
-export function formatProviderLabel(provider: string): string {
-  if (!provider) return "Unknown";
-  return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
 export function formatContinuationStamp(dateStr: string): string {

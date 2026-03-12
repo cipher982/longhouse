@@ -114,3 +114,12 @@ export const MODELS = {
 export const DEFAULT_MODEL = REALTIME_TIER_1;
 export const DEFAULT_REALTIME_MODEL = REALTIME_TIER_1;
 export const DEFAULT_REALTIME_MODEL_MINI = REALTIME_TIER_2;
+
+// Default text model for chat — use this instead of hardcoding model IDs
+export const DEFAULT_TEXT_MODEL = TEXT_TIER_1;
+
+// Default chat preferences fallback — single source for all Oikos preference defaults
+export const DEFAULT_CHAT_PREFERENCES = {
+  chat_model: TEXT_TIER_1,
+  reasoning_effort: 'none' as const,
+};

@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { getProviderIcon } from "../lib/providers";
 import { Button } from "./ui";
 import {
   useAgentSessionSummaries,
@@ -54,14 +55,7 @@ function formatRelativeTime(dateStr: string): string {
   return date.toLocaleDateString();
 }
 
-function getProviderIcon(provider: string): string {
-  switch (provider) {
-    case "claude": return "C";
-    case "codex": return "X";
-    case "gemini": return "G";
-    default: return "?";
-  }
-}
+// getProviderIcon imported from lib/providers
 
 function truncatePath(path: string | null, maxLen: number = 30): string {
   if (!path) return "";

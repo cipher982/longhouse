@@ -10,7 +10,7 @@ Memory Architecture (2 systems):
      - Best for: quick save-and-search of notes, decisions, bugs, preferences.
 
   2. Memory Files + Embeddings (memory_tools.py) — memory_write / memory_read / memory_ls / memory_search / memory_delete
-     - Backed by `MemoryFile` table (virtual filesystem: path + content) + `MemoryEmbedding` (text-embedding-3-small)
+     - Backed by `MemoryFile` table (virtual filesystem: path + content) + `MemoryEmbedding` (model from config/models.json)
      - Semantic search with keyword fallback. Auto-populated by memory_summarizer.py (episode summaries).
      - Best for: structured long-term memory, episode logs, anything needing semantic retrieval.
 

@@ -21,8 +21,8 @@ def test_hosted_profile_summary_update_routes_to_xai(monkeypatch):
 
     try:
         model_id, provider, key_env = models_config.validate_use_case_llm_config("summary_update")
-        assert model_id == "grok-4-1-fast-reasoning"
-        assert provider == models_config.ModelProvider.OPENAI
+        assert model_id == "grok-4-1-fast-non-reasoning"
+        assert provider == models_config.ModelProvider.XAI
         assert key_env == "XAI_API_KEY"
     finally:
         if original_profile is None:
@@ -51,10 +51,11 @@ def test_oikos_make_llm_uses_xai_api_key_and_base_url(monkeypatch):
     monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
     monkeypatch.setattr(oikos_react_engine, "OpenAIChat", FakeOpenAIChat)
 
-    llm = oikos_react_engine._make_llm(model="grok-4-1-fast-reasoning", tools=[], reasoning_effort="none")
+    # Use non-reasoning model so reasoning_effort is not added
+    llm = oikos_react_engine._make_llm(model="grok-4-1-fast-non-reasoning", tools=[], reasoning_effort="none")
 
     assert isinstance(llm, FakeOpenAIChat)
-    assert captured["kwargs"]["model"] == "grok-4-1-fast-reasoning"
+    assert captured["kwargs"]["model"] == "grok-4-1-fast-non-reasoning"
     assert captured["kwargs"]["api_key"] == "xai-test-key"
     assert captured["kwargs"]["base_url"] == "https://api.x.ai/v1"
     assert "reasoning_effort" not in captured["kwargs"]
