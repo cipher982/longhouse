@@ -120,7 +120,7 @@ longhouse serve      # Start the server
 longhouse serve --demo   # Start with sample data
 longhouse serve --demo-fresh # Rebuild demo data on start
 longhouse connect    # Sync Claude Code sessions (continuous)
-longhouse connect --install  # Install hooks + background engine service
+longhouse connect --install  # Install hooks + background engine service for shipping
 longhouse ship       # One-time sync
 longhouse status     # Show configuration
 longhouse onboard    # Re-run setup wizard
@@ -176,6 +176,8 @@ longhouse doctor
 # Manually ship once to test
 longhouse ship --verbose
 ```
+
+`longhouse connect --install` sets up shipping and hooks only. It does not modify your normal global Claude/Codex MCP tool menus.
 
 ### Reinstalling or upgrading
 

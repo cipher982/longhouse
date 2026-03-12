@@ -55,7 +55,7 @@ make qa-visual-compare       # Visual comparison with Gemini LLM triage
 make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 ```
 
-**Visual compare** (`scripts/visual-compare.ts`): Hybrid pixelmatch + Gemini Flash triage. Catches semantic regressions (color catastrophes, broken layouts) that pixel-perfect baselines miss. Two modes: (1) `--baseline-dir`/`--current-dir` for CI, (2) single-pair for agent use via MCP `visual_compare` tool. Shared page definitions in `apps/zerg/e2e/tests/helpers/page-list.ts`. Requires `GOOGLE_API_KEY` for LLM triage; falls back to hard threshold without it.
+**Visual compare** (`scripts/visual-compare.ts`): Hybrid pixelmatch + Gemini Flash triage. Catches semantic regressions (color catastrophes, broken layouts) that pixel-perfect baselines miss. Two modes: (1) `--baseline-dir`/`--current-dir` for CI, (2) single-pair manual debugging. Shared page definitions in `apps/zerg/e2e/tests/helpers/page-list.ts`. Requires `GOOGLE_API_KEY` for LLM triage; falls back to hard threshold without it.
 
 **`tests_lite/` convention:** No shared conftest. Each test file creates its own DB via `_make_db(tmp_path)` using `make_engine("sqlite:///...")` + `AgentsBase.metadata.create_all()`. HTTP-level tests use `TestClient` with `dependency_overrides` on `api_app` (not `app`). See `test_job_preflight.py` for a clean example of both ORM-only and HTTP-level patterns.
 
@@ -67,7 +67,7 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 
 **LLM model config:** `config/models.json` is the single source of truth — models, tiers, use cases, routing profiles, and embedding config. Set `MODELS_PROFILE` env var to select per-instance overrides (default `oss`). Each model can declare `apiKeyEnvVar` for its required API key. See `models_config.py:get_llm_client_for_use_case()` for LLM factory, `get_embedding_config()` for embeddings (gracefully returns None if no API key).
 
-**MCP server:** `zerg/mcp_server/server.py:create_server()` exposes tools to CLI agents (Claude Code, Codex, Gemini). Tools: session search (FTS + semantic), recall, memory read/write, insights, notify_oikos, visual_compare. New tools go inside `create_server()`. API client at `mcp_server/api_client.py` (get/post methods).
+**MCP server:** `zerg/mcp_server/server.py:create_server()` exposes Longhouse continuity tools to managed CLI workspaces. Tools: session search, session detail/event drill-down, recall, insights, and `notify_oikos`. `longhouse connect --install` no longer registers this globally in normal local Claude/Codex configs; workspace provisioning injects it where needed. New tools go inside `create_server()`. API client at `mcp_server/api_client.py` (get/post methods).
 
 ## Features (What Exists)
 
@@ -82,7 +82,6 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 | Insights | `GET/POST /api/agents/insights` | InsightsPage | `log_insight`, `query_insights` | Patterns, failures, learnings |
 | Reflection | `GET /api/agents/reflection/briefing` | BriefingsPage | `get_briefing` | Daily/weekly session briefings |
 | Jobs/Scheduler | `GET /api/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
-| Memory | `GET/PUT /api/agents/memory` | — | `read_memory`, `write_memory` | Key-value store for agent state |
 | Action proposals | `GET/POST /api/proposals` | ProposalsPage | — | Review queue for reflection insights with approve/decline; approved proposals show in briefings |
 | Runner daemon | WebSocket from runner binary | — | — | Remote command execution on user infra |
 | **Session presence** | `POST /api/agents/presence` + `GET /api/agents/sessions/active` | ForumPage | — | Real-time state (thinking/running/idle) via Claude Code hooks; `session_presence` table, stale after 10min |

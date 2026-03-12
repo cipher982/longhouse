@@ -32,14 +32,17 @@ Last updated: 2026-03-12
 
 ## Phase 3: Docs and verification
 
-- [ ] Update README command/help text
-- [ ] Update `AGENTS.md`
-- [ ] Update `VISION.md`
-- [ ] Update any other stale references discovered during implementation
-- [ ] Regenerate artifacts if required
-- [ ] Run targeted tests
-- [ ] Run broader local verification (`make test` and any necessary follow-on checks)
+- [x] Update README command/help text
+- [x] Update `AGENTS.md`
+- [x] Update `VISION.md`
+- [x] Update any other stale references discovered during implementation
+- [x] Regenerate artifacts if required
+- [x] Run targeted tests
+- [x] Run broader local verification (`make test` and any necessary follow-on checks)
 - [ ] Commit Phase 3
+
+Notes:
+- 2026-03-12: No generated OpenAPI/tool-schema artifacts were required for this cleanup. The public API surface did not change; only Longhouse MCP defaults, install behavior, and docs changed.
 
 ## Phase 4: Ship and verify
 
