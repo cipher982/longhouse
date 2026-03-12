@@ -1,4 +1,4 @@
-"""Longhouse MCP server — exposes session search, memory, and notifications.
+"""Longhouse MCP server — exposes continuity/search tools for CLI agents.
 
 Uses the ``mcp`` SDK's ``FastMCP`` decorator pattern to register tools.
 All tools return JSON strings.
@@ -8,10 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import tempfile
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
@@ -40,45 +37,6 @@ def _truncate_event(event: dict, max_chars: int, include_tool_output: bool) -> d
             result[f"_{field}_truncated"] = True
             result[f"_{field}_full_chars"] = len(val)
     return result
-
-
-# Local file-based memory store (pragmatic shortcut; upgrade to API later)
-_MEMORY_PATH = Path.home() / ".claude" / "longhouse-memory.json"
-
-
-def _load_memory() -> dict[str, str]:
-    """Load the local memory KV store from disk."""
-    if not _MEMORY_PATH.exists():
-        return {}
-    try:
-        text = _MEMORY_PATH.read_text()
-        if not text.strip():
-            return {}
-        return json.loads(text)
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to read memory file %s: %s", _MEMORY_PATH, exc)
-        return {}
-
-
-def _save_memory(data: dict[str, str]) -> None:
-    """Write the local memory KV store to disk atomically.
-
-    Uses write-to-temp + rename so a crash mid-write doesn't corrupt the file.
-    """
-    _MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=_MEMORY_PATH.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
-        os.replace(tmp_path, _MEMORY_PATH)
-    except BaseException:
-        # Clean up temp file on any failure
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
@@ -296,48 +254,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": str(exc)})
 
     # ------------------------------------------------------------------
-    # Tool: memory_read
-    # ------------------------------------------------------------------
-    @server.tool()
-    async def memory_read(key: str) -> str:
-        """Read a persistent memory value.
-
-        Reads from a local JSON key-value store at
-        ``~/.claude/longhouse-memory.json``. Returns the value if found,
-        or an error message if the key does not exist.
-
-        Args:
-            key: The key to look up.
-        """
-        store = _load_memory()
-        if key in store:
-            return json.dumps({"key": key, "value": store[key]})
-        return json.dumps({"key": key, "error": "Key not found"})
-
-    # ------------------------------------------------------------------
-    # Tool: memory_write
-    # ------------------------------------------------------------------
-    @server.tool()
-    async def memory_write(key: str, value: str) -> str:
-        """Write a persistent memory value.
-
-        Stores a key-value pair in a local JSON file at
-        ``~/.claude/longhouse-memory.json``. Overwrites any existing
-        value for the same key.
-
-        Args:
-            key: The key to store.
-            value: The value to associate with the key.
-        """
-        store = _load_memory()
-        store[key] = value
-        try:
-            _save_memory(store)
-            return json.dumps({"key": key, "status": "written"})
-        except Exception as exc:
-            return json.dumps({"key": key, "error": str(exc)})
-
-    # ------------------------------------------------------------------
     # Tool: notify_oikos
     # ------------------------------------------------------------------
     @server.tool()
@@ -454,31 +370,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": str(exc)})
 
     # ------------------------------------------------------------------
-    # Tool: get_reflections
-    # ------------------------------------------------------------------
-    @server.tool()
-    async def get_reflections(
-        project: str | None = None,
-        limit: int = 5,
-    ) -> str:
-        """Query recent reflection runs — automated analysis of sessions for insights.
-
-        Returns the history of reflection runs showing what was analyzed and
-        what insights were extracted. Use query_insights to see the actual insights.
-
-        Args:
-            project: Filter by project name (optional).
-            limit: Maximum results to return (default 5).
-        """
-        try:
-            resp = await client.get_reflections(project=project, limit=limit)
-            if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
-            return resp.text
-        except Exception as exc:
-            return json.dumps({"error": str(exc)})
-
-    # ------------------------------------------------------------------
     # Tool: recall
     # ------------------------------------------------------------------
     @server.tool()
@@ -523,57 +414,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             if resp.status_code != 200:
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
-        except Exception as exc:
-            return json.dumps({"error": str(exc)})
-
-    # ------------------------------------------------------------------
-    # Tool: visual_compare
-    # ------------------------------------------------------------------
-    @server.tool()
-    async def visual_compare(
-        before_path: str,
-        after_path: str,
-        skip_llm: bool = False,
-    ) -> str:
-        """Compare two screenshots for visual regressions.
-
-        Uses pixelmatch for deterministic pixel diff, then Gemini vision LLM
-        for semantic triage if diff exceeds threshold. Catches color catastrophes,
-        broken layouts, and missing elements while ignoring font rendering variance.
-
-        Args:
-            before_path: Absolute path to baseline/before screenshot PNG.
-            after_path: Absolute path to current/after screenshot PNG.
-            skip_llm: Skip LLM triage, only report pixelmatch numbers (default false).
-        """
-        import subprocess  # noqa: PLC0415
-
-        script = Path(__file__).parents[4] / "scripts" / "visual-compare.ts"
-        if not script.exists():
-            return json.dumps({"error": f"Script not found: {script}"})
-
-        for p, label in [(before_path, "before"), (after_path, "after")]:
-            if not Path(p).exists():
-                return json.dumps({"error": f"{label} file not found: {p}"})
-
-        cmd = ["bun", "run", str(script), before_path, after_path, "--json"]
-        if skip_llm:
-            cmd.append("--skip-llm")
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=str(script.parent.parent),
-            )
-            # Exit code 1 = failures detected (still valid JSON output)
-            if result.returncode == 2:
-                return json.dumps({"error": result.stderr.strip() or "Unknown error"})
-            return result.stdout
-        except subprocess.TimeoutExpired:
-            return json.dumps({"error": "visual-compare timed out after 120s"})
         except Exception as exc:
             return json.dumps({"error": str(exc)})
 
