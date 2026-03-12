@@ -182,30 +182,29 @@ Delegation modes should be explicit:
 - Backend selection for commis is mostly implicit (model mapping) rather than first-class user intent.
 - See `apps/zerg/backend/docs/specs/unified-memory-bridge.md` (Phase 3) for the implementation plan.
 
-**What Longhouse owns:** orchestration, job queue, workspace isolation, timeline, search, resume, always-on infrastructure, runner coordination, modular toolbox (integrations, memory, communication).
+**What Longhouse owns:** orchestration, job queue, workspace isolation, timeline, search, resume, always-on infrastructure, runner coordination, and the continuity toolbox (session search, recall, insights, Oikos callbacks).
 
 **What CLI agents own:** the agent loop, tool execution, file editing, bash, MCP servers, context management, streaming.
 
 ### Longhouse MCP Server (CLI Agent Integration)
 
-CLI agents (Claude Code, Codex, Gemini) can call back into Longhouse's toolbox via MCP. This is the standard industry pattern — teams expose internal tooling as MCP servers so agents can access shared context mid-task.
+Managed CLI workspaces (Claude Code, Codex, Gemini) can call back into Longhouse via MCP. This is the standard industry pattern — teams expose internal tooling as MCP servers so agents can access shared context mid-task. The important boundary is that this is part of Longhouse-managed cloud work, not something shipping install should silently inject into a user's everyday local terminal setup.
 
 **Longhouse exposes as MCP tools:**
 - `search_sessions` — find past solutions in the session archive
 - `get_session_detail` — retrieve specific session content/events
+- `get_session_events` — surgical event search within a known session
 - `recall` — chunk-level semantic recall with event window retrieval
-- `memory_read` / `memory_write` — persistent memory across commis runs
 - `log_insight` / `query_insights` — write/read insights
-- `get_reflections` — retrieve recent reflection briefings
 - `notify_oikos` — commis reports status back to Oikos coordinator (currently logs)
 
 **How it works:**
-- Longhouse runs an MCP server (stdio transport for local, streamable HTTP for remote)
-- `longhouse connect --install` registers the MCP server in Claude Code's `.claude/settings.json`
-- Commis spawned via `hatch` automatically get the Longhouse MCP server configured
+- Longhouse runs an MCP server (stdio transport for workspace/manual use, streamable HTTP for remote)
+- `longhouse connect --install` sets up shipping hooks/service only; it does not modify the user's normal global Claude/Codex MCP config
+- Commis spawned via `hatch` automatically get the Longhouse MCP server configured in their workspace-local Claude/Codex settings
 - A hatch-spawned agent can search "how did we implement retry logic?" against the Longhouse archive mid-task
 
-**Current State (as of 2026-02-12):** MCP server implemented with stdio and HTTP transport. Toolset expanded (search/detail/recall, memory, insights, reflections, notify). Auto-registered via `longhouse connect --install`. Auto-configured for commis workspaces (injected into `.claude/settings.json` at spawn time). Codex `config.toml` MCP registration supported. Quality gates (verify hooks) injected into commis workspaces. `notify_oikos` still logs (WebSocket delivery pending).
+**Current State (as of 2026-03-12):** MCP server implemented with stdio and HTTP transport. Default toolset is continuity-focused (search/detail/event drill-down, recall, insights, notify). Longhouse no longer auto-registers this MCP server into normal local Claude/Codex installs; it is auto-configured for commis workspaces only (injected into workspace-local `.claude/settings.json` / `.codex/config.toml`). Quality gates (verify hooks) are also injected into commis workspaces. `notify_oikos` still logs (WebSocket delivery pending).
 
 ### Multi-Provider Backend Integration
 
@@ -649,7 +648,7 @@ The shipper daemon for providers without hook support (Codex, Gemini, Cursor):
 **Current State (as of 2026-02-20):**
 - **Rust engine daemon** (`apps/engine/`) is the only shipping path. Python watcher/shipper deleted (2026-02-20). Resource profile: 27 MB RSS idle (vs 835 MB Python), 0% CPU idle, 3 threads, <1s wake-to-ship latency. Uses FSEvents (macOS) / inotify (Linux) via `notify` crate, tokio single-threaded runtime, zstd compression (12x faster than gzip).
 - `longhouse-engine connect --flush-ms 500 --fallback-scan-secs 300 --compression zstd --log-dir ~/.claude/logs` is the daemon command. Managed by `longhouse connect --install` (launchd/systemd). Watches Claude, Codex, and Gemini directories.
-- **Python `longhouse connect`** manages service lifecycle only (`--install`, `--uninstall`, `--status`), hooks, and MCP registration. No Python shipping code remains.
+- **Python `longhouse connect`** manages service lifecycle only (`--install`, `--uninstall`, `--status`) plus shipping hooks. No Python shipping code remains.
 - **Stop hook calls `longhouse-engine ship --file "$TRANSCRIPT"` directly** (not via Python wrapper). Absolute path baked at install time via `get_engine_executable()`. `exec` replaces the shell — zero Python overhead. Hook registration is currently `async: false` (sync).
 - **Presence hooks (2026-02-20):** Four lifecycle events now emit real-time state to `POST /api/agents/presence`: `UserPromptSubmit→thinking`, `PreToolUse→running` (with tool name), `PostToolUse→thinking`, `Stop→idle`. Stored in `session_presence` table (one row per session, stale after 10 min). Active sessions endpoint joins presence for real status vs heuristic fallback.
 - **Hardened (2026-02-18):** Rate-limited warn! via `error_tracker`. Daily rolling log files to `~/.claude/logs/`. Watcher channel bounded. `raw_line` capped at 32KB. Offline mode, spool dead/prune, 429 backoff with jitter, heartbeat every 5 min to `POST /api/agents/heartbeat`.
