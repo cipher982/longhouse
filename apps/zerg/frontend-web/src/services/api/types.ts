@@ -8,6 +8,84 @@ export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
 export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
 export type ThreadUpdatePayload = Schemas["ThreadUpdate"];
+
+export interface CanonicalConversationSummary {
+  id: number;
+  kind: string;
+  title: string | null;
+  status: string;
+  last_message_at: string | null;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  binding_count: number;
+  conversation_metadata: Record<string, unknown> | null;
+}
+
+export interface CanonicalConversationBinding {
+  id: number;
+  surface_id: string;
+  provider: string;
+  binding_scope: string;
+  connector_id: number | null;
+  external_conversation_id: string;
+  binding_metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CanonicalConversationDetail extends CanonicalConversationSummary {
+  bindings: CanonicalConversationBinding[];
+}
+
+export interface CanonicalConversationMessage {
+  id: number;
+  conversation_id: number;
+  role: string;
+  direction: string;
+  sender_kind: string;
+  sender_display: string | null;
+  content: string;
+  content_blocks: unknown[] | null;
+  external_message_id: string | null;
+  parent_message_id: number | null;
+  archive_relpath: string | null;
+  message_metadata: Record<string, unknown> | null;
+  internal: boolean;
+  sent_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CanonicalConversationListResponse {
+  conversations: CanonicalConversationSummary[];
+  total: number;
+}
+
+export interface CanonicalConversationMessagesResponse {
+  messages: CanonicalConversationMessage[];
+  total: number;
+}
+
+export interface CanonicalConversationReplyRequest {
+  body: string;
+  reply_all?: boolean;
+}
+
+export interface CanonicalConversationReplyResponse {
+  conversation_id: number;
+  provider: string;
+  thread_id: string;
+  subject: string;
+  reply_all: boolean;
+  to_emails: string[];
+  cc_emails: string[];
+  message: CanonicalConversationMessage;
+}
+
+export type ConversationSummary = CanonicalConversationSummary;
+export type ConversationDetail = CanonicalConversationDetail;
+export type ConversationMessage = CanonicalConversationMessage;
 export interface ContainerPolicy {
   enabled: boolean;
   default_image: string | null;

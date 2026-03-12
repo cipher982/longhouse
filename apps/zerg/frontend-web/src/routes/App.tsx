@@ -31,6 +31,7 @@ import { AuthGuard } from "../lib/auth";
 
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
 const ChatPage = lazy(() => import("../pages/ChatPage"));
+const ConversationsPage = lazy(() => import("../pages/ConversationsPage"));
 const OikosChatPage = lazy(() => import("../pages/OikosChatPage"));
 const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
 import { ShelfProvider } from "../lib/useShelfState";
@@ -257,6 +258,16 @@ export default function App() {
           path: "/",
           element: <Navigate to="/timeline" replace />
         }] : []),
+        {
+          path: "/conversations",
+          element: (
+            <ErrorBoundary>
+              <Suspense fallback={<PageLoader />}>
+                <ConversationsPage />
+              </Suspense>
+            </ErrorBoundary>
+          )
+        },
         {
           path: "/chat",
           element: (
