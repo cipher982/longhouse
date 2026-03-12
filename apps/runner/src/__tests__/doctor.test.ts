@@ -24,6 +24,7 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
       heartbeatIntervalMs: 30000,
       reconnectDelayMs: 5000,
       maxReconnectDelayMs: 60000,
+      connectTimeoutMs: 15000,
       capabilities: ['exec.full'],
     }),
     runCommand: () => ({ status: 0, stdout: '', stderr: '' }),
