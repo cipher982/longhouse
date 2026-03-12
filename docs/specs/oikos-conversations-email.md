@@ -1,502 +1,503 @@
 # Oikos Conversations and Email Surface
 
-Status: proposed
-Owner: David / Oikos
+Status: in progress
+Owner: David / Oikos product direction
 Updated: 2026-03-12
 
 ## Executive Summary
 
-Longhouse currently has two different concepts mixed together:
+Longhouse needs a first-class conversation layer above the existing Oikos `SUPER` thread.
 
-- `Thread` / `ThreadMessage` as the persistence model for fiche execution
-- Oikos as a single long-lived `SUPER` thread per user with surface-local metadata layered onto that one thread
+Today the product treats the per-user Oikos thread as both:
 
-That model was good enough for web + Telegram MVP work, but it is the wrong abstraction for a real assistant that participates in e-mail, chat, and future channels.
+- Oikos's private working memory
+- the human-visible conversation store
 
-The product now needs a first-class **conversation** domain:
+That was tolerable for a single web chat, but it breaks once email, Telegram, operator wakeups, and future surfaces all need their own durable threads.
 
-- every email chain is its own conversation
-- every future Telegram topic / web chat / operator thread can also be its own conversation
-- Oikos can search and read across conversations
-- Oikos keeps its own private scratchpad thread, but human-visible communication stops pretending to be that scratchpad
+The core change is:
 
-This spec defines the new domain model, search/memory contract, mailbox onboarding strategy, and a phased rollout that keeps the existing Oikos stack working while we introduce conversations incrementally.
+- `Thread` / `ThreadMessage` remain Oikos-private execution memory for now
+- new `Conversation` records become the canonical human-visible transcript layer
+- every email chain is its own `Conversation`
+- every surface event binds to a `Conversation`, not directly to the one Oikos thread
+- Oikos searches/read-reconstructs from conversations and agent sessions instead of pretending one immortal prompt thread is the source of truth
+
+This spec keeps the first implementation slice deliberately narrow:
+
+- add additive conversation tables and services
+- keep existing Oikos chat behavior working
+- wire email into conversations before migrating web/Telegram
+
+## Current Implementation Status
+
+Completed locally in this session:
+
+- Phase 0 spec and task tracker
+- Phase 1 conversation tables and service helpers
+- Phase 2 authenticated list/read/search/message APIs
+- Phase 3 groundwork: provider-neutral email ingest + raw archive service
+- Phase 3 inbound Gmail connector integration inside `GmailProvider.process_connector()`
+- Phase 4 search/read groundwork: Oikos `search_conversations` and `read_conversation` tools
+- targeted backend tests for conversation APIs, email ingest, and Gmail replay behavior
+
+Still blocked:
+
+- Oikos reply tooling and conversation-aware outbound email append
+- migration of web and Telegram onto the new conversation domain
 
 ## Problem
 
-Current behavior has three hard limits:
+Current state in Zerg:
 
-1. Human-visible history is not modeled as first-class conversations.
-2. E-mail exists as connector-trigger plumbing, not as a durable assistant communication surface.
-3. The user is still the message bus: email arrives, the user pastes it into a terminal/chat session, and the agent only then becomes aware of it.
+- Oikos has exactly one long-lived `SUPER` thread per user
+- surface adapters already pass `surface_id` and `conversation_id`
+- those identifiers only annotate `ThreadMessage.message_metadata`
+- `/api/oikos/history` filters the shared Oikos thread by surface metadata for presentation
+- Gmail integration is connector/trigger oriented, not conversational
 
-That breaks the personal-assistant mental model. A real assistant should behave more like:
+That creates five real problems:
 
-- I see my email threads
-- my assistant can read and search them
-- I can reply in Mail, web, or another surface and stay in the same thread
-- the history is durable and searchable later
+1. Human-visible threads are not first-class data.
+2. Email cannot work like a normal personal assistant inbox because email chains are not stored as their own conversations.
+3. Oikos memory and human transcript concerns are coupled.
+4. Search across "all my threads" is missing because the only durable chat store is the one Oikos thread.
+5. OSS and hosted onboarding are muddy because email transport and conversation semantics are mixed together.
 
 ## Product Principles
 
-- Email chains are their own threads.
-- Human-visible conversations are first-class product objects.
-- Oikos memory should query conversations, not hide them inside one giant private prompt transcript.
-- Oikos may keep a private scratchpad, but that is not the user-facing source of truth.
-- Search beats manual organization. Persist everything durable and let Oikos retrieve it.
-- Existing mailbox onboarding should be easy for OSS users. Domain + MX + SES setup is not the default.
-- Hosted low-cost users bring their own mailbox. Longhouse does not provision inboxes for them.
-- Push/webhook richness is an upgrade, not a prerequisite for local installs.
+### 1. Human-visible conversations are canonical
+
+Humans should interact with conversations, not with Oikos's private execution thread.
+
+Examples:
+
+- an email chain is one conversation
+- a Telegram DM is one conversation
+- a Telegram forum topic is one conversation
+- a web chat thread is one conversation
+
+### 2. Oikos private memory stays separate
+
+The Oikos `SUPER` thread is still useful as private scratch space, summaries, internal coordination, and execution history.
+
+It is not the canonical user inbox or transcript model.
+
+### 3. Email is a surface, not a workflow hack
+
+Replying to an email should append to the same durable conversation that web and terminal tooling can inspect.
+
+Email must not require:
+
+- forwarding raw content into a fresh coding session
+- copy/pasting alerts into the terminal
+- creating a new orphaned agent session per reply
+
+### 4. Search must span conversations and sessions
+
+Oikos should be able to:
+
+- list conversations
+- search conversation content
+- read a conversation
+- search agent sessions separately
+- combine evidence from both
+
+### 5. OSS onboarding must stay practical
+
+Longhouse should support user-provided mailboxes without Longhouse becoming a mailbox host.
+
+The product should support:
+
+- Gmail / Google Workspace as the preferred mailbox-connect path
+- other providers later
+- IMAP/SMTP as an advanced compatibility option, not the primary onboarding UX
+- BYO mailbox for hosted low-cost instances
+
+### 6. Raw email should be archived to disk
+
+Normalized text belongs in the database.
+
+Original transport artifacts also matter:
+
+- raw `.eml`
+- attachments
+- provider-specific headers and threading data
+
+Those should live under `settings.data_dir`, referenced from the DB, so they remain grep-able and recoverable.
 
 ## Non-Goals
 
-- No attempt to make the current `Thread` table serve both fiche execution and human communication.
-- No forced migration of all web/Telegram UI onto the new model in the first slice.
-- No platform-provided agent mailboxes for the `$5/mo` hosted tier.
-- No giant rules engine for every mail provider before the Gmail path works.
-- No attempt to merge every historical transcript source into one schema before the inbox MVP exists.
+- Do not replace the existing Oikos `SUPER` thread immediately.
+- Do not migrate all web/Telegram history into conversations in the first slice.
+- Do not build a full mailbox provisioning control plane.
+- Do not make Longhouse responsible for hosting inboxes for low-cost hosted users.
+- Do not overfit the domain model to email-only semantics.
+- Do not introduce a giant rules engine for memory/thread routing.
 
 ## Current State
 
-### Oikos
+### What already exists
 
-- Oikos has one persistent `SUPER` thread per user.
-- Web, voice, operator, and Telegram all flow into that thread.
-- Surface metadata is attached to `ThreadMessage.message_metadata`.
-- `/api/oikos/history` can filter by surface for rendering, but the underlying memory remains one shared thread.
+- Surface adapters normalize inbound events with `surface_id`, `conversation_id`, `dedupe_key`, and owner resolution.
+- The shared `SurfaceOrchestrator` already handles transport-agnostic dedupe and Oikos invocation.
+- Gmail connectors already persist provider config such as `history_id`, `watch_expiry`, and `emailAddress`.
+- Gmail Pub/Sub plumbing already exists in the broader stack.
+- Outbound email helpers already support proper reply headers.
 
-### Email
+### What is missing
 
-- Gmail connect exists and stores an email connector with refresh token + watch metadata.
-- Gmail Pub/Sub and legacy webhook handlers process connector history and fire trigger jobs.
-- Outbound email exists via SES helpers and Gmail send helpers.
-- There is no first-class inbox, thread, message, or reply-by-email conversation model.
-
-### Implication
-
-We already have useful plumbing:
-
-- connector auth/config
-- Gmail history sync
-- outbound threaded reply headers
-- surface adapter/orchestrator infrastructure
-
-But the canonical storage model for human communication does not exist yet.
-
-## Decision Log
-
-### Decision: Add a new `Conversation` domain instead of overloading `Thread`
-
-**Context:** `Thread` is fiche execution state plus Oikos scratchpad state. Human communication has different semantics and product requirements.
-
-**Choice:** Introduce `Conversation`, `ConversationMessage`, and provider bindings as a separate domain.
-
-**Rationale:** This keeps human-visible communication durable and queryable without destabilizing fiche execution.
-
-**Revisit if:** We later fully retire fiche `Thread` from user-visible features.
-
-### Decision: Oikos keeps a private scratchpad for now
-
-**Context:** The current Oikos runtime and tools are built around one `SUPER` thread.
-
-**Choice:** Preserve the `SUPER` thread as Oikos private reasoning state in the near term.
-
-**Rationale:** This makes the rollout additive and reversible. Conversations become first-class memory inputs before they become the entire Oikos runtime substrate.
-
-**Revisit if:** A future Oikos runtime can operate directly on retrieved conversation context and ephemeral prompts.
-
-### Decision: Reuse `Connector` for mailbox auth/config in v1
-
-**Context:** Gmail connect, watch renewal, and refresh token storage already use `connectors`.
-
-**Choice:** Keep mailbox credentials/config in `Connector` rows for the first rollout, rather than inventing a second auth table immediately.
-
-**Rationale:** The conversation layer does not need a new mailbox credential model on day one.
-
-**Revisit if:** We need multiple mailbox identities per provider per user or richer mailbox-local settings that no longer fit cleanly in `Connector.config`.
-
-### Decision: Gmail and Microsoft-style OAuth are the default onboarding path; IMAP/SMTP is fallback
-
-**Context:** Users want smooth onboarding, not mail-server configuration homework.
-
-**Choice:** Design the product around provider-native mailbox connection first. Keep IMAP/SMTP as advanced fallback. Keep SES as advanced inbox provisioning infrastructure, not default onboarding.
-
-**Rationale:** Existing mailbox connection is the smoothest path for both personal use and OSS adoption.
-
-**Revisit if:** We choose a managed programmable mailbox product later for agent-owned inboxes.
-
-### Decision: Use normalized DB text as the first searchable source of truth
-
-**Context:** The user wants conversations persisted to disk and searchable. Full raw archive is valuable but adds ingestion complexity.
-
-**Choice:** Store normalized conversation/message text in the DB immediately, with message-level raw archive references optional. Add raw `.eml` / payload archiving as a later additive phase.
-
-**Rationale:** SQLite/Postgres persistence is already disk-backed for self-hosted installs, and DB search is enough to unlock Oikos retrieval and inbox UX quickly.
-
-**Revisit if:** We need grep-friendly raw archives for all providers in the first inbox beta.
+- outbound in-thread reply append into conversations
+- Oikos reply tooling on top of the conversation layer
+- migration of web and Telegram onto canonical conversations
+- a clean separation between Oikos-private memory and human-visible threads for every surface, not just email
 
 ## Domain Model
 
 ### Conversation
 
-Represents one human-visible thread.
+Canonical human-visible thread.
 
-Initial fields:
+Proposed MVP fields:
 
 - `id`
 - `owner_id`
-- `kind` (`email`, `telegram`, `web`, `voice`, `operator`, `other`)
-- `status` (`active`, `archived`, `closed`, `snoozed`)
+- `kind` (`email`, `telegram`, `web`, `voice`, `operator`, `system`)
 - `title`
-- `latest_message_at`
-- `conversation_metadata`
+- `status` (`active`, `archived`, `spam`, `hidden`)
+- `conversation_metadata` JSON
+- `last_message_at`
 - `created_at`
 - `updated_at`
-- optional `archived_at`
 
-### ConversationMessage
+Notes:
 
-Represents one normalized message inside a conversation.
-
-Initial fields:
-
-- `id`
-- `conversation_id`
-- `role` (`user`, `assistant`, `system`, `tool`, `external`)
-- `direction` (`inbound`, `outbound`, `internal`)
-- `author_name`
-- `author_address`
-- `content_text`
-- optional `content_html`
-- `occurred_at`
-- optional `parent_message_id`
-- optional `transport_message_id`
-- optional `raw_source_path`
-- `message_metadata`
-- `created_at`
-- `updated_at`
+- `kind` is the user-facing thread type, not necessarily the transport provider.
+- `status` is deliberately lightweight for MVP.
 
 ### ConversationBinding
 
-Maps one internal conversation to one external surface thread identity.
+Maps one durable conversation to a surface-native thread key.
 
-Initial fields:
+Proposed MVP fields:
 
 - `id`
 - `conversation_id`
 - `owner_id`
-- optional `connector_id`
 - `surface_id`
 - `provider`
+- `binding_scope`
+- `connector_id` nullable
 - `external_conversation_id`
-- `binding_metadata`
+- `binding_metadata` JSON
 - `created_at`
 - `updated_at`
 
-Example bindings:
+Examples:
 
-- Gmail thread id
-- Microsoft Graph conversation id
-- Telegram `chat_id:topic_id`
-- web conversation id
+- `surface_id=email`, `provider=gmail`, `binding_scope=connector:12`, `external_conversation_id=<gmail threadId>`
+- `surface_id=telegram`, `external_conversation_id=telegram:<chat_id>`
+- `surface_id=telegram`, `external_conversation_id=telegram:<chat_id>:topic:<topic_id>`
+- `surface_id=web`, `external_conversation_id=<web conversation GUID>`
 
-### ConversationMessageBinding
+MVP uniqueness:
 
-Maps one normalized message to one external provider message identity for dedupe and reply threading.
+- one binding per `(owner_id, surface_id, provider, binding_scope, external_conversation_id)`
 
-Initial fields:
+### ConversationMessage
+
+Canonical message rows for the human-visible transcript.
+
+Proposed MVP fields:
 
 - `id`
-- `conversation_message_id`
-- optional `connector_id`
-- `surface_id`
-- `provider`
-- `external_message_id`
-- `binding_metadata`
-- `created_at`
+- `conversation_id`
+- `role` (`user`, `assistant`, `system`, `tool`)
+- `direction` (`incoming`, `outgoing`, `internal`)
+- `sender_kind` (`human`, `agent`, `tool`, `system`)
+- `sender_display`
+- `content`
+- `content_blocks` JSON nullable
+- `external_message_id` nullable
+- `parent_message_id` nullable
+- `archive_relpath` nullable
+- `message_metadata` JSON
+- `internal`
+- `sent_at`
 
-This is how we avoid re-importing the same Gmail or Telegram message on webhook retry or poll replay.
+MVP uniqueness:
 
-## Search and Memory Model
+- one message per `(conversation_id, external_message_id)` when `external_message_id` is present
 
-### Canonical truth
+### Raw Archive
 
-The canonical store for human-visible assistant communication becomes:
+Disk layout under `settings.data_dir / "conversations"`:
 
-- DB rows in `conversations` and `conversation_messages`
-- optionally linked raw archives on disk
+- raw RFC822 mail
+- attachment payloads
+- provider-specific payload snapshots when useful
 
-### Oikos retrieval
+Archive policy:
 
-Oikos gains tools and services to:
+- DB stores normalized message text and metadata
+- DB stores `archive_relpath`
+- archive files are append-only durable artifacts
 
-- search conversations by query / surface / participant / recency
-- read a conversation thread
-- reply in an existing conversation
+## Key Decisions
 
-The private Oikos `SUPER` thread remains available for short-lived working memory, but long-lived human communication is no longer stored there as the only truth.
+### Decision: Keep Oikos `SUPER` thread as private memory for phase 1
 
-### Search rollout
+**Context:** The current Oikos runtime, wakeup logic, and history endpoints all assume a single long-lived Oikos thread.
 
-Phase 1:
+**Choice:** Do not replace it yet. Add conversations alongside it.
 
-- simple DB-backed search over normalized message text
+**Rationale:** This is the smallest reversible way to introduce the correct human-facing data model without breaking current Oikos execution.
 
-Phase 2:
+**Revisit if:** Web and Telegram have both migrated onto the conversation layer and the old history endpoints are no longer primary.
 
-- SQLite FTS5 for local installs
-- Postgres-native FTS where applicable
+### Decision: Reuse `Connector` for mailbox/provider auth
 
-Phase 3:
+**Context:** Email providers already use `Connector(type="email", provider=...)` as the account/config store.
 
-- optional raw archive references for exact payload inspection / future grep workflows
+**Choice:** Do not invent a separate mailbox-account table in the MVP.
 
-## Surface Model
+**Rationale:** Connector records already carry the right ownership and provider config semantics.
 
-The current `SurfaceAdapter` layer stays useful, but its role changes.
+**Revisit if:** We later need one connector to expose multiple independently addressable mailboxes/personas.
 
-Instead of:
+### Decision: Email chains get their own conversations
 
-- inbound surface event
-- directly run Oikos against the shared `SUPER` thread
-- optionally annotate shared thread messages
+**Context:** The human wants email to work like a normal assistant inbox, with durable searchable threads.
 
-the target shape becomes:
+**Choice:** Each provider thread maps to one `Conversation`.
 
-- inbound surface event
-- resolve/create canonical conversation
-- persist normalized conversation message
-- optionally wake Oikos with the canonical conversation id
-- deliver assistant response back through the same surface
+**Rationale:** This matches human expectations and keeps reply semantics simple.
 
-This lets email, Telegram, web, and future channels share the same product model without forcing the same transport semantics.
+**Revisit if:** A provider lacks a stable native thread concept and RFC822 fallback proves insufficient.
 
-## Email Model
+### Decision: Raw archive lives under `settings.data_dir`
 
-### Inbound
+**Context:** The user explicitly wants durable, grep-able mail history, not only normalized DB rows.
 
-For provider-backed mailboxes:
+**Choice:** Store raw mail artifacts on disk and reference them from conversation messages.
 
-- connect mailbox auth/config through `Connector`
-- ingest provider thread + message identity
-- upsert `ConversationBinding`
-- append normalized `ConversationMessage`
-- bind provider message ids for dedupe
+**Rationale:** This fits Longhouse's existing artifact-first philosophy and OSS deployment model.
 
-### Outbound
+**Revisit if:** Attachment volume or multi-instance replication requires a dedicated object store abstraction.
 
-Reply behavior:
+### Decision: Gmail-first onboarding, provider-agnostic internals
 
-- default to replying inside an existing conversation
-- preserve provider-native thread identity when supported
-- preserve RFC threading headers when sending raw email
-- first-contact or new-recipient outbound remains policy-gated
+**Context:** Smooth onboarding matters for OSS and hosted users, but Longhouse should not become a mailbox host.
 
-### Ownership
+**Choice:** Favor Gmail/Workspace first, keep connector/provider abstractions generic, and leave IMAP/SMTP as advanced fallback.
 
-Each email conversation belongs to one Longhouse owner, but can contain many external participants.
+**Rationale:** This aligns with the user's desired UX without hardcoding one proprietary mail provider into the data model.
 
-Mailbox identity comes from the connector/account used to ingest or send.
+**Revisit if:** Microsoft 365 becomes equally common in the actual user base.
 
-## Onboarding Strategy
+## Architecture
+
+### Inbound flow
+
+#### Email
+
+1. Email transport receives a new message event.
+2. The provider resolves the owning `Connector`.
+3. The provider computes a stable `surface_id` + `external_conversation_id`.
+4. `ConversationService` upserts the `ConversationBinding`.
+5. Raw payload is archived to disk.
+6. Normalized message is persisted to `ConversationMessage`.
+7. Oikos may be woken with the conversation ID and compact context.
+8. Any assistant reply is appended back into the same conversation.
+
+#### Other surfaces
+
+The same model should apply later:
+
+1. normalize inbound transport event
+2. resolve or create conversation binding
+3. persist conversation message
+4. optionally invoke Oikos
+5. persist assistant response in the same conversation
+
+### Oikos context model
+
+Oikos should operate against:
+
+- private Oikos thread for scratch context
+- selected conversation transcript
+- search over other conversations
+- search over agent sessions
+
+That means future Oikos tools should include:
+
+- `list_conversations`
+- `search_conversations`
+- `read_conversation`
+- `reply_in_conversation`
+
+The Oikos runtime does not need every conversation in prompt context. It only needs retrieval and durable references.
+
+### Search model
+
+MVP search should be additive and SQLite-friendly.
+
+Planned path:
+
+- Phase 1: service-level search using indexed DB rows
+- Phase 2: SQLite FTS-backed conversation message search
+- Phase 3: unify conversation search with existing session-search UX
+
+Search is a product requirement, but FTS-backed optimization does not need to block the first schema slice.
+
+### API surface
+
+MVP backend APIs:
+
+- `GET /conversations`
+- `GET /conversations/{id}`
+- `GET /conversations/{id}/messages`
+- `GET /conversations/search?q=...`
+- temporary façade: `/api/oikos/conversations/*`
+
+Email-specific APIs later:
+
+- mailbox connect status
+- mailbox sync state
+- thread reply / draft endpoints
+
+Current `/api/oikos/thread` and `/api/oikos/history` remain for compatibility until web chat migrates.
+
+## Onboarding Model
 
 ### Personal instance
 
-- Gmail via OAuth first
-- Gmail push/watch if infra exists
-- polling fallback when push is not available
-- advanced later: custom subdomain / SES / programmable inboxes
+- Connect existing Gmail / Workspace mailbox first
+- Later optionally add SES on `agents.drose.io` for headless agent personas
 
 ### OSS self-hosted
 
-Recommended order:
+- preferred: connect Gmail / Workspace
+- advanced fallback: other mailbox providers
+- raw provider complexity stays behind connector setup and sync services
 
-1. Connect Gmail
-2. Connect Microsoft 365 / Outlook
-3. Other mailbox via IMAP/SMTP (advanced)
-4. Programmable inbox/domain setup (advanced)
+### Hosted low-cost users
 
-Principles:
+- BYO mailbox only
+- no Longhouse-hosted mailbox provisioning
+- connect existing account, then use Longhouse as assistant UI + automation layer
 
-- Do not require SES or domain setup for first mailbox onboarding.
-- Do not require a public webhook endpoint for the first working inbox.
-- Polling is acceptable for the first OSS experience.
+## Implementation Phases
 
-### Hosted `$5/mo` tier
+### Phase 0: Spec and task tracker
 
-- user brings their own mailbox
-- Longhouse provides mailbox connection UX
-- Longhouse does not provide inbox hosting
+- create this spec
+- record decisions and phase boundaries
 
-## UX Target
+Acceptance criteria:
 
-The end-state UX should feel like a real assistant inbox:
+- persistent spec exists in-repo
+- phase sequencing is explicit
+- blockers and non-goals are written down
 
-- inbox list
-- searchable threads
-- thread detail view
-- reply from web
-- reply from native mail client
-- same underlying conversation either way
+### Phase 1: Additive conversation foundation
 
-The inbox is not an alert dump. It is the assistant’s conversation workspace with the human.
+- add `Conversation`, `ConversationBinding`, `ConversationMessage` models
+- register them in startup DB initialization
+- add `ConversationService`
+- add backend tests for create/bind/append/search behavior
 
-## Architecture Ownership
+Acceptance criteria:
 
-### Backend models and services
+- new tables create cleanly in SQLite
+- bindings dedupe by `(owner_id, surface_id, external_conversation_id)`
+- message append updates `last_message_at`
+- existing Oikos/thread behavior remains unchanged
 
-New likely ownership areas:
+### Phase 2: Conversation APIs
 
-- `apps/zerg/backend/zerg/models/conversation.py`
-- `apps/zerg/backend/zerg/services/conversation_service.py`
-- `apps/zerg/backend/zerg/schemas/conversation_schemas.py`
-- `apps/zerg/backend/zerg/routers/conversations.py`
+- add list/read/search message APIs for authenticated owners
+- make `/conversations` the canonical API surface
+- keep `/api/oikos/conversations` only as a temporary façade if needed
+- add API tests
 
-Existing files likely to evolve:
+Acceptance criteria:
 
-- `apps/zerg/backend/zerg/database.py`
-- `apps/zerg/backend/zerg/models/__init__.py`
-- `apps/zerg/backend/zerg/services/oikos_service.py`
-- `apps/zerg/backend/zerg/surfaces/orchestrator.py`
-- `apps/zerg/backend/zerg/routers/auth.py`
-- `apps/zerg/backend/zerg/routers/email_webhooks_pubsub.py`
-- `apps/zerg/backend/zerg/email/providers.py`
-- `apps/zerg/backend/zerg/shared/email.py`
-- `apps/zerg/backend/zerg/services/gmail_api.py`
+- authenticated user can list own conversations
+- authenticated user can read one conversation and its messages
+- search returns matching conversations without leaking other users' data
 
-### Frontend
+### Phase 3: Email conversation ingestion
 
-Likely new frontend areas:
+- add an email conversation ingress service using existing email `Connector` records
+- map provider thread IDs to `ConversationBinding`
+- archive raw email to disk
+- persist normalized inbound messages
+- add tests with mocked provider responses
 
-- inbox page
-- thread detail page
-- mailbox onboarding settings
-- future cross-surface conversation search surfaces
+Acceptance criteria:
 
-Existing likely touch points:
+- a new inbound email creates a conversation and message rows
+- a reply on the same provider thread reuses the same conversation
+- raw archive path is stored for each ingested message
 
-- `apps/zerg/frontend-web/src/pages/IntegrationsPage.tsx`
-- new conversation/inbox API hooks and pages
+### Phase 4: Oikos reads and replies through conversations
 
-## Phased Implementation
+- add Oikos tools for conversation search/read/reply
+- make email reply path append assistant output into the same conversation
+- preserve Oikos private thread for scratch summaries and internal coordination
 
-### Phase 0: Spec and tracking
+Acceptance criteria:
 
-- create persistent spec
-- create tracking doc
-- record rollout notes in `TODO.md`
+- Oikos can search conversation history without depending on the shared Oikos chat transcript
+- assistant replies remain attached to the correct email conversation
 
-Acceptance:
+### Phase 5: Migrate web and Telegram onto conversations
 
-- spec is concrete enough to drive the first code slice
-- decisions are recorded instead of deferred into chat
+- web chat writes to conversations
+- Telegram chat/topic writes to conversations
+- `/api/oikos/history` becomes compatibility-only or is retired
 
-### Phase 1: Conversation foundation
+Acceptance criteria:
 
-- add `Conversation`, `ConversationMessage`, `ConversationBinding`, `ConversationMessageBinding`
-- add startup-safe lightweight SQLite migrations
-- add service helpers to create conversations, append messages, and resolve bindings
-- add minimal authenticated read APIs:
-  - list conversations
-  - get conversation detail
-  - get messages
-  - basic search
-- add backend tests for binding resolution, append ordering, and search
-
-Acceptance:
-
-- Longhouse can persist and query first-class conversations independent of fiche `Thread`
-- provider/surface bindings can map inbound external thread ids to one canonical conversation
-- search can find conversation messages without touching Oikos `SUPER` history
-
-### Phase 2: Email conversation ingest MVP
-
-- add email ingest path that writes conversations instead of only firing triggers
-- support Gmail first using existing connector + history sync plumbing
-- create/update email conversation bindings from Gmail `threadId`
-- store normalized messages and dedupe by provider message id
-- add reply service for existing email conversations
-
-Acceptance:
-
-- a connected Gmail account can produce canonical conversations and messages
-- reprocessing the same Gmail history does not duplicate messages
-- assistant replies can be sent back in-thread
-
-### Phase 3: Inbox UI and mailbox onboarding
-
-- add web inbox list + thread view
-- expose mailbox connection status and email-specific onboarding on settings/integrations
-- support provider-first onboarding copy and advanced fallback entry points
-
-Acceptance:
-
-- a user can browse and search email conversations in Longhouse
-- a user can reply from web in the same thread
-- onboarding copy does not force SES/SMTP setup for common cases
-
-### Phase 4: Oikos conversation retrieval tools
-
-- add search/read/reply conversation tools for Oikos
-- teach Oikos to reference conversations as durable memory
-- add policy around reply-only vs first-contact sends
-
-Acceptance:
-
-- Oikos can search and read prior email threads without manual paste-in
-- Oikos can draft or send replies within policy bounds
-
-### Phase 5: Converge other surfaces onto conversations
-
-- move Telegram topics and future web chat threads onto the same conversation domain
-- keep the current `SUPER` thread as private scratchpad until replacement is justified
-
-Acceptance:
-
-- web, Telegram, and email can all participate in the same product-level conversation model
-- human-visible history is no longer stored only as surface-filtered views of a private scratchpad
+- web and Telegram have their own first-class conversations
+- the old surface-filtered shared-thread model is no longer primary
 
 ## Testing Strategy
 
-### Backend tests
+### Backend unit tests
 
-- conversation creation / append / list ordering
-- binding uniqueness and lookup
-- message dedupe through message bindings
-- search results over normalized text
-- Gmail ingest replay idempotency
-- reply threading metadata preservation
+- conversation binding dedupe
+- message append updates timestamps
+- duplicate external message IDs do not create duplicate rows
+- per-owner search isolation
+- conversation APIs enforce owner scoping
 
-### Browser tests
+### Transport integration tests
 
-- inbox list renders seeded conversations
-- thread detail loads messages in order
-- search returns expected thread
-- reply action posts into the same conversation
+- inbound email creates conversation + message rows
+- same thread reuses existing conversation
+- assistant reply writes outbound conversation message
 
-### Live QA
+### Live QA targets
 
-- connect a real Gmail mailbox on a dev instance
-- ingest a known existing thread
-- verify thread appears once with correct messages
-- reply from web and confirm native mailbox threading
-- reply from native mail client and confirm Longhouse appends to the same thread
+- connect a Gmail mailbox
+- receive a new thread
+- verify it appears as one conversation
+- reply by email client
+- verify the same conversation updates
+- ask Oikos about that thread and verify retrieval works
 
 ## Acceptance Criteria
 
-- Email chains are modeled as first-class conversations, not stuffed into the Oikos `SUPER` thread.
-- Oikos can search and read durable conversations without the human manually pasting e-mail into a coding session.
-- The first mailbox onboarding path is smooth for common users and does not require SES/domain setup.
-- Hosted cheap users can connect their own mailbox, but Longhouse does not need to provide inboxes.
-- The rollout is additive: current Oikos behavior keeps working while conversations land in phases.
+- Email chains are first-class conversations, not annotations on the shared Oikos thread.
+- Oikos can search across conversations and agent sessions as separate evidence stores.
+- The system persists normalized conversation rows in DB and raw email artifacts on disk.
+- The first release works for BYO mailbox setups and does not require Longhouse-hosted mailboxes.
+- Existing Oikos web behavior keeps working while the migration is in progress.
 
-## Immediate Next Step
+## Open Issues
 
-Build Phase 1 only:
-
-- conversation models
-- service layer
-- minimal authenticated APIs
-- tests
-
-Do not begin Gmail ingest cutover until that foundation exists and passes its own test ring.
+- `/conversations` is the intended canonical read API, but `/api/oikos/conversations` still exists as a temporary façade until the client migration decision is finalized.
+- Gmail inbound is now conversation-aware, but outbound in-thread reply append is still missing.
+- Telegram topic/reply metadata is still not preserved end-to-end; that should be fixed during its migration phase rather than ignored.
