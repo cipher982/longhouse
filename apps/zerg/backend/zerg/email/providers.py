@@ -284,6 +284,7 @@ class GmailProvider:  # noqa: D101 – obvious from context
         subject = cls._decode_header_value(parsed_message.get("Subject"))
         from_header = cls._decode_header_value(parsed_message.get("From"))
         from_emails = cls._extract_addresses(parsed_message, "From")
+        reply_to_emails = cls._extract_addresses(parsed_message, "Reply-To")
         to_emails = cls._extract_addresses(parsed_message, "To")
         cc_emails = cls._extract_addresses(parsed_message, "Cc")
         fallback_text = raw_message.get("snippet") or subject or "(no content)"
@@ -315,6 +316,7 @@ class GmailProvider:  # noqa: D101 – obvious from context
             sender_kind="human",
             sender_display=from_header or (from_emails[0] if from_emails else None),
             from_email=from_emails[0] if from_emails else None,
+            reply_to_emails=reply_to_emails,
             to_emails=to_emails,
             cc_emails=cc_emails,
             raw_bytes=raw_bytes,
