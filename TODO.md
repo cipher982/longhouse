@@ -813,8 +813,8 @@ Status (2026-03-12): In progress (spec + foundation rollout started).
 **Goal:** Introduce a real conversation domain for human-visible assistant communication so email chains, future Telegram topics, and future web threads are durable, searchable, and independent from the private Oikos `SUPER` thread.
 
 - [x] Write a first-principles spec covering conversations, email onboarding, memory/search, and phased rollout
-- [ ] Add conversation models, bindings, and lightweight migrations
-- [ ] Add conversation service + minimal authenticated list/detail/search APIs
+- [x] Add conversation models, bindings, and lightweight migrations
+- [x] Add conversation service + minimal authenticated list/detail/search APIs
 - [ ] Add Gmail conversation ingest + in-thread reply MVP
 - [ ] Add inbox/thread UI and mailbox onboarding polish
 - [ ] Teach Oikos to search/read/reply in conversations
@@ -822,6 +822,8 @@ Status (2026-03-12): In progress (spec + foundation rollout started).
 Notes:
 - 2026-03-12: Draft spec landed in `docs/specs/oikos-conversations-email.md` with domain model, onboarding decisions, and phased rollout.
 - 2026-03-12: The rollout is intentionally additive: `Thread` remains fiche/Oikos scratchpad state for now, while new `Conversation*` models become the canonical human-visible communication store.
+- 2026-03-12: Phase 1 landed on `david/email-conversations-foundation`: additive `Conversation`, `ConversationBinding`, and `ConversationMessage` models plus owner-scoped `/conversations` and `/api/oikos/conversations` read/search APIs, all covered by SQLite lite tests.
+- 2026-03-12: Provider-neutral email ingest groundwork is landing separately from Gmail cutover so the archive/normalization seam can be tested before connector wiring.
 
 ## [Product] First-class Oikos surface adapter interface extraction (size: 4)
 
