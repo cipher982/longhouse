@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from zerg.models.conversation import ConversationMessage
 from zerg.services.conversation_archive import ConversationArchiveStore
 from zerg.services.conversation_service import ConversationService
 
@@ -74,6 +75,17 @@ class EmailConversationIngestService:
             conversation_metadata=conversation_metadata,
         )
 
+        existing_message = None
+        if message.external_message_id:
+            existing_message = (
+                self.db.query(ConversationMessage)
+                .filter(
+                    ConversationMessage.conversation_id == conversation.id,
+                    ConversationMessage.external_message_id == message.external_message_id,
+                )
+                .first()
+            )
+
         archive_relpath = None
         archive_metadata = {
             "provider": message.provider,
@@ -84,7 +96,10 @@ class EmailConversationIngestService:
             "to_emails": list(message.to_emails),
             "cc_emails": list(message.cc_emails),
         }
-        if message.raw_bytes is not None:
+        should_save_archive = message.raw_bytes is not None and (
+            existing_message is None or (existing_message is not None and not existing_message.archive_relpath)
+        )
+        if should_save_archive:
             archive_relpath = self.archive_store.save_email_raw(
                 owner_id=message.owner_id,
                 conversation_id=conversation.id,
@@ -93,6 +108,8 @@ class EmailConversationIngestService:
                 extension=message.raw_extension,
                 metadata=archive_metadata,
             )
+        elif existing_message is not None:
+            archive_relpath = existing_message.archive_relpath
 
         message_metadata: dict[str, Any] = {
             "email": {
