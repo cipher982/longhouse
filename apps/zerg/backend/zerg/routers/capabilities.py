@@ -30,6 +30,8 @@ from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import LlmProviderConfig
 from zerg.models.models import User
+from zerg.models_config import _DB_PROVIDER_DEFAULT_MODELS
+from zerg.models_config import EMBEDDING_MODEL
 from zerg.utils.crypto import encrypt
 
 logger = logging.getLogger(__name__)
@@ -46,16 +48,11 @@ _KNOWN_PROVIDERS = {
     "ollama": "http://localhost:11434/v1",
 }
 
-# Per-provider test models (used by /test endpoint only)
-_TEST_MODELS: dict[str, str] = {
-    "openai": "gpt-4o-mini",
-    "groq": "llama-3.3-70b-versatile",
-    "xai": "grok-4-1-fast-reasoning",
-    "ollama": "llama3.2",
-}
+# Per-provider test models — sourced from models_config registry
+_TEST_MODELS = _DB_PROVIDER_DEFAULT_MODELS
 
 _TEST_EMBEDDING_MODELS: dict[str, str] = {
-    "openai": "text-embedding-3-small",
+    "openai": EMBEDDING_MODEL,
 }
 
 
@@ -382,7 +379,7 @@ async def test_llm_provider(
 
         try:
             if capability == "text":
-                test_model = request.model or _TEST_MODELS.get(request.provider_name, "gpt-4o-mini")
+                test_model = request.model or _TEST_MODELS.get(request.provider_name, _TEST_MODELS["openai"])
                 resp = await client.chat.completions.create(
                     model=test_model,
                     messages=[{"role": "user", "content": "Say 'ok'"}],
@@ -393,7 +390,7 @@ async def test_llm_provider(
                 return LlmProviderTestResponse(success=False, message="No response from API")
             else:
                 # Embeddings always use OpenAI-compatible API
-                emb_model = request.model or _TEST_EMBEDDING_MODELS.get(request.provider_name, "text-embedding-3-small")
+                emb_model = request.model or _TEST_EMBEDDING_MODELS.get(request.provider_name, EMBEDDING_MODEL)
                 resp = await client.embeddings.create(
                     model=emb_model,
                     input="test",

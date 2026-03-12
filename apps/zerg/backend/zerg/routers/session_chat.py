@@ -54,6 +54,9 @@ SESSION_CHAT_BACKEND_ZAI = "zai"
 SESSION_CHAT_BACKEND_BEDROCK = "bedrock"
 SESSION_CHAT_BACKEND_ANTHROPIC = "anthropic"
 DEFAULT_SESSION_CHAT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
+# Anthropic-ecosystem model defaults for session continuation (not in models.json —
+# these are Claude Code resume models, not OpenAI-compatible chat models).
+# Override at runtime via SESSION_CHAT_MODEL env var.
 DEFAULT_SESSION_CHAT_ZAI_MODEL = "glm-5"
 DEFAULT_SESSION_CHAT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 SUPPORTED_SESSION_CHAT_BACKENDS = {

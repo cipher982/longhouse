@@ -40,11 +40,31 @@
         }
       },
       "grok-4-1-fast-reasoning": {
-        "displayName": "Grok 4.1 Fast (xAI)",
-        "provider": "openai",
-        "description": "xAI Grok 4.1 Fast via xAI's OpenAI-compatible API",
+        "displayName": "Grok 4.1 Fast (Reasoning)",
+        "provider": "xai",
+        "description": "xAI Grok 4.1 fast with reasoning - great for quality tasks",
         "baseUrl": "https://api.x.ai/v1",
         "apiKeyEnvVar": "XAI_API_KEY",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": false
+        }
+      },
+      "grok-4-1-fast-non-reasoning": {
+        "displayName": "Grok 4.1 Fast",
+        "provider": "xai",
+        "description": "xAI Grok 4.1 fast without reasoning - cheap and fast bulk work",
+        "baseUrl": "https://api.x.ai/v1",
+        "apiKeyEnvVar": "XAI_API_KEY",
+        "capabilities": {
+          "reasoning": false
+        }
+      },
+      "meta-llama/llama-4-scout-17b-16e-instruct": {
+        "displayName": "Llama 4 Scout (Groq)",
+        "provider": "groq",
+        "description": "Meta's Llama 4 Scout via Groq LPU - blazing fast",
+        "baseUrl": "https://api.groq.com/openai/v1",
         "capabilities": {
           "reasoning": false
         }
@@ -134,27 +154,27 @@
       "$comment": "Default OSS profile: no overrides"
     },
     "hosted": {
-      "$comment": "Hosted instances: Longhouse internal tasks route to the shared hosted pool (Qwen on Groq for Oikos chat; Grok 4.1 Fast on xAI for summaries/reflection). Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
+      "$comment": "Hosted instances: Longhouse internal tasks route to xAI Grok 4.1 fast. Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
       "text": {
         "useCases": {
-          "fiche_conversation": "qwen/qwen3-32b",
-          "summarization": "grok-4-1-fast-reasoning",
-          "summary_update": "grok-4-1-fast-reasoning",
-          "reflection": "grok-4-1-fast-reasoning",
-          "bulk_classification": "grok-4-1-fast-reasoning"
+          "fiche_conversation": "grok-4-1-fast-reasoning",
+          "summarization": "grok-4-1-fast-non-reasoning",
+          "summary_update": "grok-4-1-fast-non-reasoning",
+          "reflection": "grok-4-1-fast-non-reasoning",
+          "bulk_classification": "grok-4-1-fast-non-reasoning"
         },
         "defaults": {
-          "fiche": "qwen/qwen3-32b",
-          "test": "grok-4-1-fast-reasoning"
+          "fiche": "grok-4-1-fast-reasoning",
+          "test": "grok-4-1-fast-non-reasoning"
         }
       }
     },
     "david": {
-      "$comment": "David's instance: summarization on gpt-5-mini",
+      "$comment": "David's instance: xAI for summarization",
       "text": {
         "useCases": {
-          "summarization": "gpt-5-mini",
-          "summary_update": "gpt-5-mini"
+          "summarization": "grok-4-1-fast-non-reasoning",
+          "summary_update": "grok-4-1-fast-non-reasoning"
         }
       }
     }

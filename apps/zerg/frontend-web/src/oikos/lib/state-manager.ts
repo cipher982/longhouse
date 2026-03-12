@@ -5,6 +5,7 @@
 
 import type { RealtimeSession } from '@openai/agents/realtime';
 import type { SessionManager, OikosAPIClient } from '../core';
+import { DEFAULT_CHAT_PREFERENCES } from '../core/model-config';
 import type { VoiceAgentConfig } from '../contexts/types';
 import { uuid } from './uuid';
 
@@ -328,7 +329,7 @@ export class StateManager {
    * Get current preferences
    */
   getPreferences(): ChatPreferences {
-    return this.state.bootstrap?.preferences || { chat_model: 'gpt-5.2', reasoning_effort: 'none' };
+    return this.state.bootstrap?.preferences || { ...DEFAULT_CHAT_PREFERENCES };
   }
 
   /**

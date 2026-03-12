@@ -15,10 +15,13 @@ from typing import Tuple
 # External catalog is merged on top of these defaults, so overrides win.
 MODEL_PRICES_USD_PER_1K: dict[str, Tuple[float, float]] = {
     "gpt-mock": (0.0, 0.0),
-    # Groq (shared-pool defaults for hosted instances) — prices per 1K tokens
-    # Source: groq.com/pricing (verify periodically; these are approximate 2025 rates)
+    # xAI Grok (hosted instances) — prices per 1K tokens
+    # Source: x.ai/api ($0.20/1M in, $0.50/1M out for fast models)
+    "grok-4-1-fast-reasoning": (0.0002, 0.0005),
+    "grok-4-1-fast-non-reasoning": (0.0002, 0.0005),
+    # Groq (OSS fallback) — prices per 1K tokens
     "qwen/qwen3-32b": (0.00029, 0.00059),
-    "meta-llama/llama-4-maverick-17b-128e-instruct": (0.0002, 0.0006),
+    "meta-llama/llama-4-scout-17b-16e-instruct": (0.00011, 0.00034),
     "llama-3.3-70b-versatile": (0.00059, 0.00079),
     "llama-3.1-8b-instant": (0.00005, 0.00008),
     # OpenAI (added when OpenAI key is provisioned) — approximate 2025 rates

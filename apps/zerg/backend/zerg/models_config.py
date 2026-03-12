@@ -24,12 +24,14 @@ class ModelProvider(str, Enum):
     """Enum for different model providers."""
 
     OPENAI = "openai"
+    XAI = "xai"
     GROQ = "groq"
     ANTHROPIC = "anthropic"
 
 
 _PROVIDER_DEFAULT_API_KEY_ENVS = {
     ModelProvider.OPENAI: "OPENAI_API_KEY",
+    ModelProvider.XAI: "XAI_API_KEY",
     ModelProvider.GROQ: "GROQ_API_KEY",
     ModelProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
 }
@@ -346,7 +348,7 @@ def get_llm_client_for_use_case(use_case: str) -> tuple:
             kwargs["base_url"] = base_url
         return AsyncAnthropic(**kwargs), model_id, provider
 
-    # OpenAI-compatible providers (openai, groq)
+    # OpenAI-compatible providers (openai, xai, groq)
     from openai import AsyncOpenAI
 
     kwargs = {"api_key": api_key}
@@ -372,13 +374,19 @@ class EmbeddingConfig:
     base_url: str | None = None  # custom endpoint (e.g. DB-configured)
 
 
+# Embedding constants from config/models.json — use these instead of hardcoding model strings
+_EMBEDDING_DEFAULT = _CONFIG.get("embedding", {}).get("default", {})
+EMBEDDING_MODEL: str = _EMBEDDING_DEFAULT.get("model", "text-embedding-3-small")
+EMBEDDING_DIMS: int = _EMBEDDING_DEFAULT.get("dims", 256)
+
+
 # Default models per provider for DB-configured providers that don't match
 # the models.json config (e.g., user configures Groq but models.json has
 # OpenAI models). Maps provider_name -> model_id.
 _DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
+    "xai": "grok-4-1-fast-non-reasoning",
     "groq": "llama-3.3-70b-versatile",
-    "xai": "grok-4-1-fast-reasoning",
     "ollama": "llama3.2",
 }
 

@@ -17,6 +17,7 @@
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { useAppDispatch, useAppState, type ChatMessage } from '../context'
 import { logger, getOikosClient, type OikosAPIClient } from '../../core'
+import { DEFAULT_CHAT_PREFERENCES } from '../../core/model-config'
 import type { ConversationTurn } from '../../data'
 
 // Import controllers (keep these - they're pure business logic)
@@ -833,7 +834,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
     })
 
     // Get preferences from bootstrap
-    const prefs = state.bootstrap?.preferences || { chat_model: 'gpt-5.2', reasoning_effort: 'none' }
+    const prefs = state.bootstrap?.preferences || { ...DEFAULT_CHAT_PREFERENCES }
     const model = options?.model || prefs.chat_model
     const reasoning_effort = options?.reasoning_effort || prefs.reasoning_effort
 

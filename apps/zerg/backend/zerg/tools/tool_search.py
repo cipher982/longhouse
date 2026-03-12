@@ -1,8 +1,8 @@
 """Semantic search over tool catalog using embeddings.
 
 This module provides semantic search for finding relevant tools based on
-natural language queries. It uses OpenAI's text-embedding-3-small model
-and caches embeddings to disk for performance.
+natural language queries. It uses OpenAI embeddings (model configured in
+config/models.json) and caches embeddings to disk for performance.
 
 Usage:
     # Get or build the search index
@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from openai import AsyncOpenAI
+
+from zerg.models_config import EMBEDDING_MODEL
 
 if TYPE_CHECKING:
     from zerg.types.tools import Tool as BaseTool
@@ -271,7 +273,6 @@ def _is_tool_allowed(name: str) -> bool:
 # Configuration
 # ---------------------------------------------------------------------------
 
-EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSIONS = 1536
 
 EMBEDDING_CACHE_DIR = Path(__file__).parent.parent.parent / "data"

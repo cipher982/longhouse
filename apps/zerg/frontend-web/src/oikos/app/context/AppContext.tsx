@@ -5,6 +5,7 @@
 
 import { createContext, useContext, useReducer, type ReactNode, type Dispatch } from 'react'
 import type { AppState, AppAction, ChatMessage } from './types'
+import { DEFAULT_CHAT_PREFERENCES } from '../../core/model-config'
 import { uuid } from '../../lib/uuid'
 
 /**
@@ -40,10 +41,7 @@ const initialState: AppState = {
 
   // Chat preferences
   availableModels: [],
-  preferences: {
-    chat_model: 'gpt-5.2',
-    reasoning_effort: 'none',
-  },
+  preferences: { ...DEFAULT_CHAT_PREFERENCES },
 }
 
 /**
