@@ -65,6 +65,27 @@ async def test_normalize_inbound_missing_update_id_has_empty_dedupe_key():
 
 
 @pytest.mark.asyncio
+async def test_normalize_inbound_uses_topic_thread_as_conversation_id():
+    adapter = _make_adapter()
+    event = {
+        "chat_id": "42",
+        "chat_type": "group",
+        "thread_id": "777",
+        "message_id": "77",
+        "reply_to_id": "66",
+        "text": "hello from topic",
+        "raw": {"update_id": 123456},
+    }
+
+    result = await adapter.normalize_inbound(event)
+
+    assert result is not None
+    assert result.conversation_id == "telegram:42:topic:777"
+    assert result.raw.get("thread_id") == "777"
+    assert result.raw.get("reply_to_id") == "66"
+
+
+@pytest.mark.asyncio
 async def test_resolve_owner_id_persists_dm_chat_id():
     resolve_cb = AsyncMock(return_value=7)
     persist_cb = AsyncMock()
@@ -110,6 +131,7 @@ async def test_handle_unresolved_owner_sends_link_prompt():
     args = send_cb.await_args.args
     assert args[0] == "42"
     assert "/link" in args[1]
+    assert args[2] is None
 
 
 @pytest.mark.asyncio
@@ -132,4 +154,26 @@ async def test_deliver_formats_and_sends_text():
     await adapter.deliver(owner_id=1, text="assistant says hi", event=event)
 
     formatter.assert_called_once_with("assistant says hi")
-    send_cb.assert_awaited_once_with("42", "<b>formatted</b>")
+    send_cb.assert_awaited_once_with("42", "<b>formatted</b>", None)
+
+
+@pytest.mark.asyncio
+async def test_deliver_preserves_thread_id_for_topic_replies():
+    send_cb = AsyncMock()
+    adapter = _make_adapter(send_cb=send_cb)
+
+    event = await adapter.normalize_inbound(
+        {
+            "chat_id": "42",
+            "chat_type": "group",
+            "thread_id": "777",
+            "message_id": "77",
+            "text": "hello",
+            "raw": {"update_id": 123456},
+        }
+    )
+    assert event is not None
+
+    await adapter.deliver(owner_id=1, text="assistant says hi", event=event)
+
+    send_cb.assert_awaited_once_with("42", "assistant says hi", "777")

@@ -236,3 +236,61 @@ async def test_run_oikos_mirrors_new_web_turns_into_canonical_conversation(monke
         assert messages[1].sender_kind == "agent"
         assert messages[0].message_metadata["surface"]["source_message_id"] == "client-msg-1"
         assert messages[2].message_metadata["surface"]["source_message_id"] == "client-msg-2"
+
+
+@pytest.mark.asyncio
+async def test_run_oikos_mirrors_telegram_topic_turns_into_canonical_conversation(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    class FakeRunner:
+        def __init__(self, *_args, **_kwargs):
+            self.usage_prompt_tokens = None
+            self.usage_completion_tokens = None
+            self.usage_total_tokens = None
+            self.usage_reasoning_tokens = None
+
+        async def run_thread(self, inner_db, thread):
+            assistant = crud.create_thread_message(
+                db=inner_db,
+                thread_id=thread.id,
+                role="assistant",
+                content="telegram done",
+                processed=True,
+            )
+            return [assistant]
+
+    _patch_oikos_run_side_effects(monkeypatch, FakeRunner)
+
+    with SessionLocal() as db:
+        user = _seed_user(db, "telegram-mirror@test.local")
+        service = OikosService(db)
+        result = await service.run_oikos(
+            owner_id=user.id,
+            task="telegram task",
+            timeout=10,
+            source_surface_id="telegram",
+            source_conversation_id="telegram:42:topic:777",
+            source_message_id="tg-msg-1",
+            source_event_id="tg-update-1",
+            source_idempotency_key="telegram:42:9001",
+        )
+
+        assert result.status == "success"
+
+        conversation = ConversationService.get_conversation_by_binding(
+            db,
+            owner_id=user.id,
+            surface_id="telegram",
+            external_conversation_id="telegram:42:topic:777",
+        )
+        assert conversation is not None
+
+        messages = ConversationService.list_messages(
+            db,
+            owner_id=user.id,
+            conversation_id=conversation.id,
+            limit=10,
+        )
+        assert [message.content for message in messages] == ["telegram task", "telegram done"]
+        assert messages[0].message_metadata["surface"]["origin_surface_id"] == "telegram"
+        assert messages[0].message_metadata["surface"]["origin_conversation_id"] == "telegram:42:topic:777"

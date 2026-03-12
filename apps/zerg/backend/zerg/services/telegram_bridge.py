@@ -190,7 +190,7 @@ class TelegramBridge:
                 db.commit()
                 logger.info("TelegramBridge: stored chat_id %s for user %s", telegram_chat_id, owner_id)
 
-    async def _send(self, chat_id: str, text: str) -> None:
+    async def _send(self, chat_id: str, text: str, thread_id: str | None = None) -> None:
         """Send an HTML-formatted message to a Telegram chat."""
         msg: ChannelMessage = {
             "channel_id": "telegram",
@@ -198,6 +198,8 @@ class TelegramBridge:
             "text": text,
             "parse_mode": "html",
         }
+        if thread_id:
+            msg["thread_id"] = thread_id
         result = await self._channel.send_message(msg)
         if not result.get("success"):
             logger.warning(

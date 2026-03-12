@@ -31,7 +31,7 @@ class TelegramSurfaceAdapter:
     def __init__(
         self,
         *,
-        send_cb: Callable[[str, str], Awaitable[None]],
+        send_cb: Callable[[str, str, str | None], Awaitable[None]],
         resolve_owner_cb: Callable[[str], Awaitable[int | None]],
         persist_chat_id_cb: Callable[[int, str], Awaitable[None]],
         formatter: Callable[[str], str],
@@ -47,8 +47,9 @@ class TelegramSurfaceAdapter:
         if not text:
             return None
 
-        chat_id = str(event.get("chat_id", "") or "")
         raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+        chat_id = str(event.get("chat_id", "") or "")
+        thread_id = str(event.get("thread_id", "") or raw.get("thread_id", "") or "").strip()
         update_id = str(raw.get("update_id", "") or "")
         dedupe_key = f"telegram:{chat_id}:{update_id}" if chat_id and update_id else ""
         source_message_id = str(event.get("message_id", "") or "") or None
@@ -56,10 +57,19 @@ class TelegramSurfaceAdapter:
         raw_payload = dict(raw)
         if "chat_type" not in raw_payload and event.get("chat_type"):
             raw_payload["chat_type"] = event.get("chat_type")
+        if thread_id:
+            raw_payload["thread_id"] = thread_id
+        if event.get("reply_to_id") and "reply_to_id" not in raw_payload:
+            raw_payload["reply_to_id"] = event.get("reply_to_id")
+
+        if chat_id:
+            conversation_id = f"telegram:{chat_id}:topic:{thread_id}" if thread_id else f"telegram:{chat_id}"
+        else:
+            conversation_id = "telegram:"
 
         return SurfaceInboundEvent(
             surface_id=self.surface_id,
-            conversation_id=f"telegram:{chat_id}" if chat_id else "telegram:",
+            conversation_id=conversation_id,
             dedupe_key=dedupe_key,
             owner_hint=chat_id or None,
             source_message_id=source_message_id,
@@ -95,13 +105,15 @@ class TelegramSurfaceAdapter:
         chat_id = self._chat_id(event)
         if not chat_id:
             raise ValueError("missing telegram chat_id for delivery")
-        await self._send_cb(chat_id, self._formatter(text or "Done."))
+        thread_id = str((event.raw or {}).get("thread_id", "") or "").strip() or None
+        await self._send_cb(chat_id, self._formatter(text or "Done."), thread_id)
 
     async def handle_unresolved_owner(self, event: SurfaceInboundEvent) -> None:
         chat_id = self._chat_id(event)
         if not chat_id:
             return
-        await self._send_cb(chat_id, _UNRESOLVED_OWNER_MESSAGE)
+        thread_id = str((event.raw or {}).get("thread_id", "") or "").strip() or None
+        await self._send_cb(chat_id, _UNRESOLVED_OWNER_MESSAGE, thread_id)
 
     @staticmethod
     def _chat_id(event: SurfaceInboundEvent) -> str:
