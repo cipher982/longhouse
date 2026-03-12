@@ -7,6 +7,9 @@ from .agents import AgentSession
 from .commis_barrier import CommisBarrier
 from .commis_barrier import CommisBarrierJob
 from .connector import Connector
+from .conversation import Conversation
+from .conversation import ConversationBinding
+from .conversation import ConversationMessage
 from .device_token import DeviceToken
 from .fiche import Fiche
 from .fiche import FicheMessage
@@ -55,6 +58,9 @@ __all__ = [
     "RunEvent",
     "CommisBarrierJob",
     "Connector",
+    "Conversation",
+    "ConversationBinding",
+    "ConversationMessage",
     "Thread",
     "ThreadMessage",
     "Trigger",
