@@ -499,14 +499,13 @@ Acceptance criteria:
 ## Open Issues
 
 - `/conversations` is the intended canonical read API, but `/api/oikos/conversations` still exists as a temporary façade until the client migration decision is finalized.
-- Gmail inbound is now conversation-aware, but outbound in-thread reply append is still missing.
 - Telegram topic/reply metadata is still not preserved end-to-end; that should be fixed during its migration phase rather than ignored.
 
 ## Detailed Next Pieces
 
-The broad direction is settled. The next work should be broken into four small, buildable slices rather than one large "finish conversations" task.
+The broad direction is settled. The foundation, Gmail reply MVP, Oikos conversation tools, and first `/conversations` inbox UI are now landed. The remaining work should focus on surface migration rather than reopening the solved email-thread loop.
 
-### Next Piece 1: Existing-Thread Email Reply Pipeline
+### Completed Slice: Existing-Thread Email Reply Pipeline
 
 Goal:
 
@@ -556,14 +555,12 @@ Why this slice first:
 - it gives Oikos a real action, not just read-only retrieval
 - it keeps the risk surface small because the send path is limited to existing threads
 
-Acceptance criteria:
+Status:
 
-- replying to an existing Gmail conversation sends on the correct thread
-- the sent message is appended back into the same conversation
-- duplicate/retry handling does not create duplicate outbound rows
-- default behavior does not unexpectedly reply-all
+- landed on 2026-03-12 via `ConversationReplyService`, Gmail thread-aware send support, canonical `POST /conversations/{id}/reply`, and outbound append back into `ConversationMessage`
+- covered by backend router/service/tool tests and wired into the inbox UI and Oikos tools
 
-### Next Piece 2: Finish Oikos Conversation Tools
+### Completed Slice: Finish Oikos Conversation Tools
 
 Goal:
 
@@ -587,13 +584,12 @@ Recommended boundaries:
 - tools stay owner-scoped and fail closed when the conversation is missing or not replyable
 - do not add "create conversation" tools yet
 
-Acceptance criteria:
+Status:
 
-- Oikos can list, search, and read canonical conversations
-- Oikos can reply to an existing Gmail thread through one tool
-- tool errors are explicit for unsupported conversation kinds or providers
+- landed on 2026-03-12 with `list_conversations` and `reply_in_conversation` added on top of the canonical conversation services
+- tools stay owner-scoped and reuse the same backend reply service as the web/API layer
 
-### Next Piece 3: Canonical Inbox and Reply API/UI
+### Completed Slice: Canonical Inbox and Reply API/UI
 
 Goal:
 
@@ -623,13 +619,12 @@ Recommended UX boundaries:
 - no unified "all surfaces" inbox yet
 - mobile-friendly but not a full mail client clone
 
-Acceptance criteria:
+Status:
 
-- a user can open the app and browse email conversations
-- a user can reply to an existing email thread from the app
-- the UI uses `/conversations` rather than deepening reliance on `/api/oikos/conversations`
+- landed on 2026-03-12 with a dedicated `/conversations` route in the authenticated app, email-only inbox/search/thread/reply UI, and the canonical reply endpoint
+- `/api/oikos/conversations` remains only as a temporary façade while the rest of the app migrates
 
-### Next Piece 4: Migrate Web and Telegram onto Canonical Conversations
+### Next Piece: Migrate Web and Telegram onto Canonical Conversations
 
 Goal:
 
