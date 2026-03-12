@@ -18,16 +18,16 @@ Last updated: 2026-03-12
 - [x] Remove `visual_compare` from Longhouse MCP
 - [x] Remove any now-unused MCP client/helper code
 - [x] Add/adjust tests for the trimmed Longhouse MCP tool list
-- [ ] Commit Phase 1
+- [x] Commit Phase 1
 
 ## Phase 2: Local install boundary
 
-- [ ] Stop `connect --hooks-only` from globally registering Longhouse MCP
-- [ ] Stop `connect --install` from globally registering Longhouse MCP
-- [ ] Remove or retire unused global MCP registration helpers if dead
-- [ ] Keep workspace-local Claude MCP injection working
-- [ ] Keep workspace-local Codex MCP injection working
-- [ ] Add/adjust tests for local install vs workspace injection
+- [x] Stop `connect --hooks-only` from globally registering Longhouse MCP
+- [x] Stop `connect --install` from globally registering Longhouse MCP
+- [x] Remove or retire unused global MCP registration helpers if dead
+- [x] Keep workspace-local Claude MCP injection working
+- [x] Keep workspace-local Codex MCP injection working
+- [x] Add/adjust tests for local install vs workspace injection
 - [ ] Commit Phase 2
 
 ## Phase 3: Docs and verification

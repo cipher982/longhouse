@@ -33,9 +33,7 @@ from zerg.services.shipper import clear_token
 from zerg.services.shipper import clear_zerg_url
 from zerg.services.shipper import get_service_info
 from zerg.services.shipper import get_zerg_url
-from zerg.services.shipper import install_codex_mcp_server
 from zerg.services.shipper import install_hooks
-from zerg.services.shipper import install_mcp_server
 from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
 from zerg.services.shipper import sanitize_machine_name
@@ -796,22 +794,6 @@ def _handle_hooks_only(
         typer.secho(f"[ERROR] Failed to install hooks: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    # Also register the MCP server for Claude Code
-    try:
-        mcp_actions = install_mcp_server(claude_dir=claude_dir)
-        for action in mcp_actions:
-            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
-    except Exception as e:
-        typer.secho(f"  [WARN] Claude MCP server registration failed: {e}", fg=typer.colors.YELLOW)
-
-    # Also register the MCP server for Codex CLI
-    try:
-        codex_actions = install_codex_mcp_server()
-        for action in codex_actions:
-            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
-    except Exception as e:
-        typer.secho(f"  [WARN] Codex MCP server registration failed: {e}", fg=typer.colors.YELLOW)
-
     # Verify PATH in a fresh shell
     _verify_and_warn_path()
 
@@ -880,22 +862,6 @@ def _handle_install(
             typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"  [WARN] Hook installation failed: {e}", fg=typer.colors.YELLOW)
-
-    # Also register the MCP server for Claude Code
-    try:
-        mcp_actions = install_mcp_server(claude_dir=claude_dir)
-        for action in mcp_actions:
-            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
-    except Exception as e:
-        typer.secho(f"  [WARN] Claude MCP server registration failed: {e}", fg=typer.colors.YELLOW)
-
-    # Also register the MCP server for Codex CLI
-    try:
-        codex_actions = install_codex_mcp_server()
-        for action in codex_actions:
-            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
-    except Exception as e:
-        typer.secho(f"  [WARN] Codex MCP server registration failed: {e}", fg=typer.colors.YELLOW)
 
     # Verify PATH in a fresh shell
     _verify_and_warn_path()

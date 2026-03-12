@@ -1,12 +1,11 @@
-"""Claude Code hook installation and MCP server registration for Longhouse.
+"""Claude Code hook installation and shared workspace MCP helpers for Longhouse.
 
 Installs hook scripts and injects hook configuration into
 ~/.claude/settings.json so that Claude Code automatically ships
 sessions and reports real-time presence without network calls in the
 hook hot path.
 
-Also provides MCP server registration for both Claude Code (~/.claude.json)
-and Codex CLI (~/.codex/config.toml).
+Also provides shared TOML helpers used for workspace-scoped Codex MCP config.
 
 Two hooks are installed:
 
@@ -411,66 +410,6 @@ def install_hooks(
     return actions
 
 
-def install_mcp_server(claude_dir: str | None = None) -> list[str]:
-    """Register the Longhouse MCP server in ``~/.claude.json``.
-
-    Claude Code reads MCP server configuration from ``~/.claude.json``
-    (the top-level user config, *not* ``~/.claude/settings.json``).
-
-    This function is idempotent — it adds or updates the
-    ``mcpServers.longhouse`` entry while preserving all other settings.
-
-    Args:
-        claude_dir: Override for Claude config directory (only used to
-                    locate the parent; the file is always
-                    ``~/.claude.json`` unless overridden for testing).
-
-    Returns:
-        List of human-readable action strings describing what was done.
-    """
-    actions: list[str] = []
-
-    if claude_dir:
-        # For testing: place claude.json inside the provided dir
-        claude_json_path = Path(claude_dir).expanduser() / "claude.json"
-    else:
-        claude_json_path = Path.home() / ".claude.json"
-
-    # ------------------------------------------------------------------
-    # 1. Read existing config
-    # ------------------------------------------------------------------
-    config: dict = {}
-    if claude_json_path.exists():
-        text = claude_json_path.read_text()
-        if text.strip():
-            try:
-                config = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"Failed to parse {claude_json_path}: {exc}. " "Fix or remove the file manually before registering MCP server."
-                ) from exc
-
-    # ------------------------------------------------------------------
-    # 2. Add/update mcpServers.longhouse
-    # ------------------------------------------------------------------
-    mcp_servers = config.setdefault("mcpServers", {})
-    mcp_servers["longhouse"] = {
-        "type": "stdio",
-        "command": "longhouse",
-        "args": ["mcp-server"],
-    }
-
-    # ------------------------------------------------------------------
-    # 3. Write back
-    # ------------------------------------------------------------------
-    claude_json_path.parent.mkdir(parents=True, exist_ok=True)
-    claude_json_path.write_text(json.dumps(config, indent=2) + "\n")
-    actions.append(f"Updated {claude_json_path} with mcpServers.longhouse")
-
-    logger.info("Registered Longhouse MCP server in %s", claude_json_path)
-    return actions
-
-
 # ---------------------------------------------------------------------------
 # TOML writing helpers (no external dependency needed)
 # ---------------------------------------------------------------------------
@@ -548,34 +487,3 @@ def upsert_codex_mcp_toml(
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(updated_text, encoding="utf-8")
-
-
-def install_codex_mcp_server(codex_dir: str | None = None) -> list[str]:
-    """Register the Longhouse MCP server in Codex CLI ``config.toml``.
-
-    Codex CLI reads MCP server configuration from
-    ``~/.codex/config.toml`` using ``[mcp_servers.<name>]`` sections.
-
-    This function is idempotent — it adds or updates the
-    ``[mcp_servers.longhouse]`` section while preserving all other
-    configuration.
-
-    Args:
-        codex_dir: Override for Codex config directory (default:
-                   ``~/.codex``). Used for testing.
-
-    Returns:
-        List of human-readable action strings describing what was done.
-    """
-    actions: list[str] = []
-
-    if codex_dir:
-        config_path = Path(codex_dir).expanduser() / "config.toml"
-    else:
-        config_path = Path.home() / ".codex" / "config.toml"
-
-    upsert_codex_mcp_toml(config_path, strict=True)
-    actions.append(f"Updated {config_path} with [mcp_servers.longhouse]")
-
-    logger.info("Registered Longhouse MCP server in %s", config_path)
-    return actions
