@@ -758,6 +758,37 @@ Status:
 - landed on 2026-03-12 with a dedicated `/conversations` route in the authenticated app, email-only inbox/search/thread/reply UI, and the canonical reply endpoint
 - `/api/oikos/conversations` remains only as a temporary façade while the rest of the app migrates
 
+### Current Launch Polish Slice: Gmail Onboarding and Health UX
+
+Goal:
+
+- make the inbox self-explanatory for launch instead of assuming terminal or
+  backend knowledge
+
+Scope:
+
+- derive Gmail connection state from the real connector record instead of the
+  legacy user field
+- show one clear inbox state: not connected, healthy, or needs attention
+- let the user connect or reconnect Gmail directly from the inbox
+- make the reply boundary explicit in-product
+
+Recommended UX:
+
+- when Gmail is not connected, the inbox should lead with a direct connect CTA
+- when Gmail sync is healthy, the page should say so plainly and show the
+  mailbox address
+- when Gmail sync is unhealthy, the page should show the last known problem and
+  a reconnect CTA
+- reply UI should clearly state that mail sends from the connected Gmail
+  account and stays in the same thread
+
+Status:
+
+- landed on 2026-03-12 with connector-backed Gmail health in auth status, a
+  direct Gmail connect/reconnect panel on `/conversations`, and focused unit +
+  hosted live coverage for the health panel
+
 ### Next Piece: Migrate Web and Telegram onto Canonical Conversations
 
 Goal:

@@ -30,6 +30,10 @@
 - [x] Phase 7b.2: Add regression coverage for Telegram DM/topic binding identity and transcript writes
 - [x] Phase 7c: Remove first-party dependence on `/api/oikos/history`
 - [x] Phase 7c: Either delete `/api/oikos/history` or leave it compatibility/debug-only with reduced scope
+- [x] Phase 8a: Surface Gmail connect/health state directly in the inbox UI
+- [x] Phase 8b: Let the user connect or reconnect Gmail from the inbox without terminal/manual API steps
+- [x] Phase 8c: Clarify the launch boundary in-product: replies come from the connected Gmail account and stay in existing threads
+- [x] Phase 8d: Add focused regression/live coverage for the inbox health panel
 
 ## Done Conditions
 
@@ -58,3 +62,13 @@
 - `/api/oikos/history` is no longer a first-party transcript API
 - user-visible conversation lifecycle no longer depends on mutating the shared
   Oikos `SUPER` thread
+
+### Phase 8
+
+- the inbox shows one simple Gmail state: not connected, healthy, or needs
+  attention
+- the user can connect/reconnect Gmail from the inbox without terminal/API
+  hand-holding
+- the reply surface makes the launch boundary explicit: replies come from the
+  connected Gmail account and stay in the same thread
+- first-party regression/live checks assert the inbox health panel exists

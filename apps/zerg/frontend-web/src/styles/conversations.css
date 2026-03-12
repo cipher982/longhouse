@@ -4,6 +4,81 @@
   gap: 1.5rem;
 }
 
+.gmail-connection-panel {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.1rem 1.25rem;
+  border-radius: 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(16, 20, 28, 0.72);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+}
+
+.gmail-connection-panel--success {
+  border-color: rgba(86, 196, 138, 0.28);
+  background: linear-gradient(135deg, rgba(20, 45, 35, 0.92), rgba(16, 20, 28, 0.82));
+}
+
+.gmail-connection-panel--warning {
+  border-color: rgba(255, 188, 92, 0.3);
+  background: linear-gradient(135deg, rgba(61, 43, 16, 0.92), rgba(16, 20, 28, 0.82));
+}
+
+.gmail-connection-panel__content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.gmail-connection-panel__eyebrow {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.62));
+}
+
+.gmail-connection-panel__content h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.gmail-connection-panel__content p {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.72));
+}
+
+.gmail-connection-panel__meta {
+  margin-top: 0.15rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.gmail-connection-panel__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.gmail-connection-panel__status {
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: rgba(86, 196, 138, 0.14);
+  color: rgba(196, 255, 216, 0.95);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.gmail-connection-panel__error {
+  margin-top: 0.2rem;
+  color: var(--color-intent-error, #ff9c9c);
+  font-size: 0.92rem;
+}
+
 .conversations-layout {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
@@ -186,6 +261,12 @@
   color: var(--text-secondary, rgba(255, 255, 255, 0.7));
 }
 
+.conversations-reply__hint {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.62));
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
 .conversations-reply__error {
   color: var(--color-intent-error, #ff7f7f);
   font-size: 0.92rem;
@@ -197,6 +278,15 @@
 }
 
 @media (max-width: 900px) {
+  .gmail-connection-panel {
+    flex-direction: column;
+  }
+
+  .gmail-connection-panel__actions {
+    width: 100%;
+    align-items: stretch;
+  }
+
   .conversations-layout {
     grid-template-columns: 1fr;
   }

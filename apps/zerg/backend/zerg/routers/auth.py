@@ -610,6 +610,19 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
     if not user:
         return {"authenticated": False, "user": None}
 
+    gmail_connectors = crud.get_connectors(db, owner_id=user.id, type="email", provider="gmail")
+    gmail_connector = gmail_connectors[0] if gmail_connectors else None
+    gmail_config = dict(gmail_connector.config or {}) if gmail_connector else {}
+    gmail_connector_connected = bool(gmail_config.get("refresh_token"))
+    gmail_connected = bool(gmail_connector_connected or getattr(user, "gmail_connected", False))
+
+    gmail_watch_status = gmail_config.get("watch_status")
+    gmail_watch_error = gmail_config.get("watch_error")
+
+    if gmail_connector_connected and gmail_watch_status not in {"active", "failed", "not_configured"}:
+        gmail_watch_status = "failed"
+        gmail_watch_error = gmail_watch_error or "Reconnect Gmail to finish email sync."
+
     return {
         "authenticated": True,
         "user": {
@@ -622,7 +635,11 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
             "last_login": getattr(user, "last_login", None),
             "prefs": getattr(user, "prefs", None),
             "role": getattr(user, "role", "USER"),
-            "gmail_connected": getattr(user, "gmail_connected", False),
+            "gmail_connected": gmail_connected,
+            "gmail_mailbox_email": _normalize_email_address(gmail_config.get("emailAddress")),
+            "gmail_watch_status": gmail_watch_status,
+            "gmail_watch_error": gmail_watch_error,
+            "gmail_watch_expiry": gmail_config.get("watch_expiry"),
         },
     }
 

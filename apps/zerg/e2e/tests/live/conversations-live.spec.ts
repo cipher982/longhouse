@@ -61,6 +61,7 @@ test('conversations inbox loads and renders canonical email surface', async ({ c
 
   await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
   await expect(page.getByLabel('Search conversations')).toBeVisible();
+  await expect(page.getByTestId('gmail-connection-panel')).toBeVisible();
 
   if (authErrors.length > 0) {
     await failWithScreenshot(

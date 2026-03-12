@@ -9,7 +9,11 @@ import {
   SectionHeader,
   Spinner,
 } from "../components/ui";
+import { useAuth } from "../lib/auth";
+import { config } from "../lib/config";
+import { requestGoogleAuthorizationCode } from "../lib/googleCodeClient";
 import {
+  connectGmailInbox,
   fetchConversation,
   fetchConversationMessages,
   fetchConversations,
@@ -21,6 +25,7 @@ import {
 import "../styles/conversations.css";
 
 const DEFAULT_LIMIT = 50;
+const GMAIL_CONNECT_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 
 function formatConversationTimestamp(value?: string | null): string {
   if (!value) return "No activity yet";
@@ -47,15 +52,29 @@ function getSenderLabel(message: CanonicalConversationMessage): string {
   return "You";
 }
 
+function formatGmailConnectError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "Could not connect Gmail.";
+  }
+
+  if (error.message.includes("No refresh_token in Google response")) {
+    return "Google did not return long-lived inbox access. Remove Longhouse from your Google account permissions, then try connecting again.";
+  }
+
+  return error.message;
+}
+
 export default function ConversationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const { user, refreshAuth } = useAuth();
 
   const searchQuery = searchParams.get("q") ?? "";
   const selectedConversationId = Number(searchParams.get("conversation") || 0) || null;
   const [draftQuery, setDraftQuery] = useState(searchQuery);
   const [replyBody, setReplyBody] = useState("");
   const [replyAll, setReplyAll] = useState(false);
+  const canConnectGmail = Boolean(config.googleClientId);
 
   useEffect(() => {
     setDraftQuery(searchQuery);
@@ -128,6 +147,24 @@ export default function ConversationsPage() {
     },
   });
 
+  const connectGmailMutation = useMutation({
+    mutationFn: async () => {
+      const authCode = await requestGoogleAuthorizationCode({
+        clientId: config.googleClientId,
+        scope: GMAIL_CONNECT_SCOPE,
+      });
+      return connectGmailInbox(authCode);
+    },
+    onSuccess: async () => {
+      await refreshAuth?.();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["canonical-conversations"] }),
+        queryClient.invalidateQueries({ queryKey: ["canonical-conversation"] }),
+        queryClient.invalidateQueries({ queryKey: ["canonical-conversation-messages"] }),
+      ]);
+    },
+  });
+
   const selectedConversation = useMemo(
     () =>
       conversations.find((conversation) => conversation.id === selectedConversationId)
@@ -137,6 +174,46 @@ export default function ConversationsPage() {
   );
 
   const messages = messagesQuery.data?.messages ?? [];
+  const gmailStatus = user?.gmail_watch_status ?? null;
+
+  const gmailPanel = useMemo(() => {
+    if (!user?.gmail_connected) {
+      return {
+        tone: "neutral",
+        title: "Connect Gmail to start your inbox",
+        description: canConnectGmail
+          ? "This page becomes your assistant email inbox once Gmail is connected. Oikos will search past threads and only reply inside existing conversations."
+          : "Google OAuth is not configured on this instance yet. Add a Google client first, then connect Gmail here.",
+        actionLabel: "Connect Gmail",
+        showAction: true,
+        mailboxLabel: null,
+      };
+    }
+
+    const mailboxLabel = user.gmail_mailbox_email ? `Connected as ${user.gmail_mailbox_email}` : "Gmail connected";
+
+    if (gmailStatus === "active") {
+      return {
+        tone: "success",
+        title: "Email sync is healthy",
+        description: "New Gmail messages will land here automatically, and Oikos can reply in the same thread without leaving the inbox.",
+        actionLabel: null,
+        showAction: false,
+        mailboxLabel,
+      };
+    }
+
+    return {
+      tone: "warning",
+      title: "Gmail needs attention",
+      description:
+        user.gmail_watch_error
+        || "Reconnect Gmail to restore inbox syncing. Existing threads stay searchable, but new mail may stop landing here.",
+      actionLabel: "Reconnect Gmail",
+      showAction: true,
+      mailboxLabel,
+    };
+  }, [canConnectGmail, gmailStatus, user]);
 
   const handleSearch = (event: FormEvent) => {
     event.preventDefault();
@@ -165,12 +242,64 @@ export default function ConversationsPage() {
     await replyMutation.mutateAsync();
   };
 
+  const handleConnectGmail = async () => {
+    await connectGmailMutation.mutateAsync();
+  };
+
+  const emptyInboxDescription = useMemo(() => {
+    if (searchQuery) {
+      return "Try a different search.";
+    }
+    if (!user?.gmail_connected) {
+      return canConnectGmail
+        ? "Connect Gmail above to turn this into your assistant inbox."
+        : "Ask the instance admin to configure Google OAuth, then connect Gmail here.";
+    }
+    if (gmailStatus === "active") {
+      return "Email sync is live. Your first Gmail thread will appear here automatically.";
+    }
+    return "Reconnect Gmail above to restore syncing before new mail can land here.";
+  }, [canConnectGmail, gmailStatus, searchQuery, user?.gmail_connected]);
+
   return (
     <PageShell size="full" className="conversations-page">
       <SectionHeader
         title="Inbox"
         description="Canonical email threads for Longhouse. Search past conversations, open a thread, and reply in place."
       />
+
+      <section
+        className={`gmail-connection-panel gmail-connection-panel--${gmailPanel.tone}`}
+        data-testid="gmail-connection-panel"
+      >
+        <div className="gmail-connection-panel__content">
+          <div className="gmail-connection-panel__eyebrow">Email</div>
+          <h2>{gmailPanel.title}</h2>
+          <p>{gmailPanel.description}</p>
+          {gmailPanel.mailboxLabel ? (
+            <div className="gmail-connection-panel__meta">{gmailPanel.mailboxLabel}</div>
+          ) : null}
+          {connectGmailMutation.isError ? (
+            <div className="gmail-connection-panel__error">
+              {formatGmailConnectError(connectGmailMutation.error)}
+            </div>
+          ) : null}
+        </div>
+        <div className="gmail-connection-panel__actions">
+          {gmailPanel.showAction ? (
+            <Button
+              type="button"
+              variant="primary"
+              onClick={handleConnectGmail}
+              disabled={!canConnectGmail || connectGmailMutation.isPending}
+            >
+              {connectGmailMutation.isPending ? "Connecting..." : gmailPanel.actionLabel}
+            </Button>
+          ) : (
+            <div className="gmail-connection-panel__status">Ready</div>
+          )}
+        </div>
+      </section>
 
       <div className="conversations-layout">
         <aside className="conversations-sidebar">
@@ -203,7 +332,7 @@ export default function ConversationsPage() {
           {!listQuery.isLoading && !listQuery.isError && conversations.length === 0 ? (
             <EmptyState
               title="No email threads yet"
-              description={searchQuery ? "Try a different search." : "Connect Gmail and wait for the first message to land."}
+              description={emptyInboxDescription}
             />
           ) : null}
 
@@ -298,6 +427,9 @@ export default function ConversationsPage() {
                   />
                   Reply all
                 </label>
+                <div className="conversations-reply__hint">
+                  Replies go out from your connected Gmail account and stay in the same thread.
+                </div>
                 {replyMutation.isError ? (
                   <div className="conversations-reply__error">
                     {replyMutation.error instanceof Error ? replyMutation.error.message : "Reply failed"}

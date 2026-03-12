@@ -1,5 +1,6 @@
 // Re-export API modules for shared access
 export * from "./base";
+export * from "./auth";
 export * from "./types";
 export * from "./conversations";
 export * from "./fiches";
