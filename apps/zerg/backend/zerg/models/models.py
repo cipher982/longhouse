@@ -27,6 +27,9 @@ from zerg.database import Base
 from zerg.models.types import GUID
 
 from .connector import Connector  # noqa: E402, F401
+from .conversation import Conversation  # noqa: E402, F401
+from .conversation import ConversationBinding  # noqa: E402, F401
+from .conversation import ConversationMessage  # noqa: E402, F401
 
 # Re-export models that have been split into separate files.
 from .fiche import Fiche  # noqa: E402, F401

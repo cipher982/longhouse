@@ -67,6 +67,7 @@ from zerg.routers.channels_webhooks import router as channels_webhooks_router
 from zerg.routers.commis_internal import router as commis_internal_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
+from zerg.routers.conversations import router as conversations_router
 from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.email_config import router as email_config_router
 from zerg.routers.email_webhooks import router as email_webhook_router
@@ -1004,6 +1005,7 @@ api_app.include_router(email_webhook_router)
 api_app.include_router(pubsub_webhook_router)
 api_app.include_router(channels_webhooks_router)  # Channel plugin webhooks (Telegram, etc.)
 api_app.include_router(connectors_router)
+api_app.include_router(conversations_router)
 api_app.include_router(triggers_router)
 api_app.include_router(knowledge_router)
 api_app.include_router(runs_router)

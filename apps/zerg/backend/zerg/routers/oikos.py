@@ -24,6 +24,7 @@ from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.routers import oikos_chat
 from zerg.routers import oikos_config
+from zerg.routers import oikos_conversations
 from zerg.routers import oikos_fiches
 from zerg.routers import oikos_history
 from zerg.routers import oikos_internal
@@ -38,6 +39,7 @@ router = APIRouter(prefix="/oikos", tags=["oikos"])
 # Include sub-routers
 router.include_router(oikos_chat.router)
 router.include_router(oikos_config.router)
+router.include_router(oikos_conversations.router)
 router.include_router(oikos_history.router)
 router.include_router(oikos_fiches.router)
 router.include_router(oikos_runs.router)

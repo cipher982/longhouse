@@ -127,6 +127,9 @@ Base = declarative_base(metadata=_metadata)
 try:
     from zerg.models.agents import SessionEmbedding  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
+    from zerg.models.models import Conversation  # noqa: F401
+    from zerg.models.models import ConversationBinding  # noqa: F401
+    from zerg.models.models import ConversationMessage  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import Memory  # noqa: F401
@@ -382,6 +385,9 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.agents import AgentsBase
     from zerg.models.agents import SessionEmbedding  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
+    from zerg.models.models import Conversation  # noqa: F401
+    from zerg.models.models import ConversationBinding  # noqa: F401
+    from zerg.models.models import ConversationMessage  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import JobRun  # noqa: F401
