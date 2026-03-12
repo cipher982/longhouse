@@ -815,9 +815,10 @@ Status (2026-03-12): In progress (spec + foundation rollout started).
 - [x] Write a first-principles spec covering conversations, email onboarding, memory/search, and phased rollout
 - [x] Add conversation models, bindings, and lightweight migrations
 - [x] Add conversation service + minimal authenticated list/detail/search APIs
-- [ ] Add Gmail conversation ingest + in-thread reply MVP
-- [ ] Add inbox/thread UI and mailbox onboarding polish
-- [ ] Teach Oikos to search/read/reply in conversations
+- [ ] Finish Gmail in-thread reply MVP for existing conversations
+- [ ] Add inbox/thread UI on top of canonical `/conversations`
+- [ ] Finish Oikos conversation tools (`list_conversations`, `reply_in_conversation`)
+- [ ] Migrate web/Telegram surfaces and retire the compatibility-only history path
 
 Notes:
 - 2026-03-12: Draft spec landed in `docs/specs/oikos-conversations-email.md` with domain model, onboarding decisions, and phased rollout.
@@ -826,6 +827,7 @@ Notes:
 - 2026-03-12: Provider-neutral email ingest groundwork is landing separately from Gmail cutover so the archive/normalization seam can be tested before connector wiring.
 - 2026-03-12: Gmail connector ingress now persists inbound and replayed mailbox messages into conversations inside `GmailProvider.process_connector()`, with raw `.eml` archive coverage and duplicate replay protection. Reply sending back into the same conversation is still the next slice.
 - 2026-03-12: Oikos now has `search_conversations` and `read_conversation` tools over the canonical conversation store, so agent memory can pull from email threads without relying on the shared Oikos transcript. `reply_in_conversation` is still pending.
+- 2026-03-12: Recommended next build order is: existing-thread Gmail reply service, Oikos `reply_in_conversation`, canonical `/conversations/{id}/reply` endpoint, inbox/thread UI, then migration of web/Telegram onto the same store.
 
 ## [Product] First-class Oikos surface adapter interface extraction (size: 4)
 
