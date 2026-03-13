@@ -34,6 +34,10 @@
 - [x] Phase 8b: Let the user connect or reconnect Gmail from the inbox without terminal/manual API steps
 - [x] Phase 8c: Clarify the launch boundary in-product: replies come from the connected Gmail account and stay in existing threads
 - [x] Phase 8d: Add focused regression/live coverage for the inbox health panel
+- [ ] Phase 9a: Add a dedicated real Gmail canary for receive -> ingest -> inbox render -> reply in thread
+- [ ] Phase 9b: Add cross-browser Gmail connect-flow coverage for popup/consent behavior
+- [ ] Phase 9c: Add onboarding validation for fresh hosted and clean OSS installs, including missing/misconfigured Google OAuth
+- [ ] Phase 9d: Expand live thread-correctness coverage for reply/reply-all/idempotency/aliases/list-style headers
 
 ## Done Conditions
 
@@ -72,3 +76,13 @@
 - the reply surface makes the launch boundary explicit: replies come from the
   connected Gmail account and stay in the same thread
 - first-party regression/live checks assert the inbox health panel exists
+
+### Phase 9
+
+- a controlled real Gmail canary proves the receive -> ingest -> reply loop
+  against a real mailbox
+- Gmail connect flow is covered in real browsers, not only mocked/unit flows
+- onboarding checks cover both hosted and OSS first-run states, including
+  missing or broken Google OAuth configuration
+- live thread-correctness checks prove in-thread behavior for reply,
+  reply-all, replay/idempotency, aliases, and list-style headers
