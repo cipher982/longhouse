@@ -32,6 +32,9 @@ exc_type = None
 exc_val = None
 exc_tb = None
 
+# FastAPI route handlers (called by framework, not directly)
+oikos_run_cancel = None
+
 # Pytest fixtures in test files need these parameters even if unused
 force_macos = None
 src = None
