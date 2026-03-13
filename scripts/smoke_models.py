@@ -38,6 +38,20 @@ PROVIDER_DEFAULT_KEYS = {
 }
 
 
+def classify_smoke_exception(exc: Exception) -> tuple[str, str]:
+    """Classify smoke exceptions into fail vs transient skip.
+
+    Live provider quota exhaustion should not make unrelated product changes
+    look broken in CI. We still surface the detail, but treat explicit
+    rate-limit responses as skipped/transient instead of hard failures.
+    """
+    detail = str(exc)
+    lower = detail.lower()
+    if "429" in detail and ("rate limit" in lower or "too many requests" in lower):
+        return "skipped", f"rate limited: {detail}"
+    return "fail", detail
+
+
 def load_config() -> dict:
     return json.loads(CONFIG_PATH.read_text())
 
@@ -147,7 +161,8 @@ async def smoke_one_model(model_id: str, model_info: dict, category: str) -> dic
 
     except Exception as e:
         elapsed = round((time.monotonic() - t0) * 1000)
-        return {"model": model_id, "category": category, "status": "fail", "ms": elapsed, "detail": str(e)}
+        status, detail = classify_smoke_exception(e)
+        return {"model": model_id, "category": category, "status": status, "ms": elapsed, "detail": detail}
 
 
 async def run_all() -> list[dict]:
