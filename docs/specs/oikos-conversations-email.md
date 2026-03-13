@@ -789,6 +789,53 @@ Status:
   direct Gmail connect/reconnect panel on `/conversations`, and focused unit +
   hosted live coverage for the health panel
 
+### Next Confidence Slice: Real Gmail Validation and Onboarding
+
+Goal:
+
+- move confidence from mostly app-level verification into the real user trust
+  boundaries of the Gmail-first inbox
+
+Priority order:
+
+1. Real Gmail canary
+2. Cross-browser Gmail connect flow
+3. Hosted + OSS onboarding validation
+4. Live thread-correctness expansion
+
+Scope:
+
+- a controlled real mailbox canary proving receive -> ingest -> inbox render
+  -> reply in thread
+- real-browser popup/consent coverage for Gmail connect on Chrome, Safari, and
+  mobile Safari
+- first-run validation for hosted instances and clean OSS installs, including
+  missing or broken Google OAuth configuration
+- live mail-thread correctness checks for reply, reply-all, duplicate/replay
+  idempotency, aliases, and list-style headers
+
+Recommended sequencing:
+
+1. Start with the real Gmail canary because it gives the highest signal on
+   provider drift and threading correctness.
+2. Add browser connect-flow coverage next because popup/consent behavior is a
+   real launch risk that unit tests do not cover.
+3. Add onboarding validation once the connect flow is covered so hosted and OSS
+   failures become explicit and reproducible.
+4. Expand thread-correctness cases after the canary exists, reusing the same
+   real mailbox harness where possible.
+
+Recommended discipline:
+
+- prefer fewer real tests over more mocked tests
+- keep dedicated agent/mailbox infrastructure separate from any personal inbox
+- decide explicitly which checks are per-push, daily/nightly, or manual
+
+Status:
+
+- planned on 2026-03-12 as the next testing-heavy tranche after the inbox UX
+  launch polish landed
+
 ### Next Piece: Migrate Web and Telegram onto Canonical Conversations
 
 Goal:
