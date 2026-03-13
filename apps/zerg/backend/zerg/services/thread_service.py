@@ -207,7 +207,6 @@ class ThreadService:
             title=title,
             active=active,
             fiche_state={},
-            memory_strategy="buffer",
             thread_type=thread_type,
         )
 

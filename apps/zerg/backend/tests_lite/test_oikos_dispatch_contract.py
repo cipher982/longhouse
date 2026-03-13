@@ -31,7 +31,7 @@ def test_dispatch_quick_tool_memory_search():
 
     assert response.tool_calls is not None
     assert len(response.tool_calls) == 1
-    assert response.tool_calls[0]["name"] == "search_memory"
+    assert response.tool_calls[0]["name"] == "memory_search"
     assert _classify_dispatch_lane(response.tool_calls) == "quick_tool"
 
 

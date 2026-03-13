@@ -27,7 +27,6 @@ class Thread(Base):
     active = Column(Boolean, default=True)
     # Store additional metadata like fiche state
     fiche_state = Column(MutableDict.as_mutable(JSON), nullable=True)
-    memory_strategy = Column(String, default="buffer", nullable=True)
     thread_type = Column(
         SAEnum(ThreadType, native_enum=False, name="thread_type_enum"),
         default=ThreadType.CHAT.value,

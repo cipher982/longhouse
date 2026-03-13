@@ -109,15 +109,14 @@ def create_thread(thread: ThreadCreate, db: Session = Depends(get_db), current_u
         active=thread.active,
     )
 
-    # If the request supplied fiche_state or memory_strategy we update the
+    # If the request supplied fiche_state we update the
     # thread accordingly (ThreadService currently doesn't take those extras
     # to keep the helper minimal).
-    if thread.fiche_state or thread.memory_strategy != "buffer":
+    if thread.fiche_state:
         _ = crud.update_thread(
             db,
             thread_id=created_thread.id,
             fiche_state=thread.fiche_state,
-            memory_strategy=thread.memory_strategy,
         )
 
     return created_thread
@@ -155,7 +154,6 @@ def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(ge
         title=thread.title,
         active=thread.active,
         fiche_state=thread.fiche_state,
-        memory_strategy=thread.memory_strategy,
         thread_type=thread.thread_type,
     )
     return db_thread

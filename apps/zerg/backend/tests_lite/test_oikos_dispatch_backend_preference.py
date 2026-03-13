@@ -55,7 +55,7 @@ def test_apply_dispatch_contract_leaves_non_spawn_tools_unchanged():
     tool_calls = [
         {
             "id": "call_1",
-            "name": "search_memory",
+            "name": "memory_search",
             "args": {"query": "deployment notes"},
         }
     ]

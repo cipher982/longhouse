@@ -200,6 +200,11 @@ class Settings:  # noqa: D401 – simple data container
     telegram_webhook_url: str | None = None  # TELEGRAM_WEBHOOK_URL (e.g. https://your-domain/api/webhooks/channels/telegram)
     telegram_webhook_secret: str | None = None  # TELEGRAM_WEBHOOK_SECRET for request validation
 
+    # Memory Files -----------------------------------------------------
+    memory_files_enabled: bool = False
+    memory_files_context_enabled: bool = False
+    memory_files_auto_summary_enabled: bool = False
+
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def llm_available(self) -> bool:
@@ -479,6 +484,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
             "OIKOS_WORKSPACE_PATH",
             str(Path.home() / ".longhouse" / "workspaces"),
         ),
+        memory_files_enabled=_truthy(os.getenv("MEMORY_FILES_ENABLED")),
+        memory_files_context_enabled=_truthy(os.getenv("MEMORY_FILES_CONTEXT_ENABLED")),
+        memory_files_auto_summary_enabled=_truthy(os.getenv("MEMORY_FILES_AUTO_SUMMARY_ENABLED")),
         notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         control_plane_url=os.getenv("CONTROL_PLANE_URL"),
         control_plane_jwt_secret=os.getenv("CONTROL_PLANE_JWT_SECRET"),

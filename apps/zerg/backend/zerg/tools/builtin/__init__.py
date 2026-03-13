@@ -20,8 +20,6 @@ from zerg.tools.builtin.knowledge_tools import TOOLS as KNOWLEDGE_TOOLS
 from zerg.tools.builtin.linear_tools import TOOLS as LINEAR_TOOLS
 from zerg.tools.builtin.memory_tools import TOOLS as MEMORY_TOOLS
 from zerg.tools.builtin.notion_tools import TOOLS as NOTION_TOOLS
-from zerg.tools.builtin.oikos_memory_tools import OIKOS_MEMORY_TOOL_NAMES
-from zerg.tools.builtin.oikos_memory_tools import TOOLS as OIKOS_MEMORY_TOOLS
 from zerg.tools.builtin.oikos_tools import COMMIS_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import OIKOS_UTILITY_TOOLS
@@ -64,7 +62,6 @@ BUILTIN_TOOLS = (
     + LINEAR_TOOLS
     + MEMORY_TOOLS
     + NOTION_TOOLS
-    + OIKOS_MEMORY_TOOLS
     + PERSONAL_TOOLS
     + RUNNER_TOOLS
     + RUNNER_SETUP_TOOLS
@@ -81,7 +78,6 @@ BUILTIN_TOOLS = (
 __all__ = [
     "BUILTIN_TOOLS",
     "COMMIS_TOOL_NAMES",
-    "OIKOS_MEMORY_TOOL_NAMES",
     "OIKOS_TOOL_NAMES",
     "OIKOS_UTILITY_TOOLS",
     "_PERSONAL_TOOLS_ENABLED",

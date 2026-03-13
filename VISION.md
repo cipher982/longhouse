@@ -147,9 +147,9 @@ This is the product. Everything else supports it.
 
 **Target:** Longhouse does not build its own LLM execution loop. Claude Code, Codex CLI, and Gemini CLI are agent harnesses built by teams of hundreds. Longhouse should not compete with them.
 
-**Current State (as of 2026-02-11):**
+**Current State (as of 2026-03-12):**
 - Commis uses CLI subprocess execution (workspace mode) and ingests resulting sessions into timeline storage.
-- Slim Oikos (Phase 3) complete: loop simplified, tools flattened, services decoupled, memory consolidated, skills progressive disclosure, MCP server, quality gates, multi-provider research.
+- Slim Oikos (Phase 3) complete: loop simplified, tools flattened, services decoupled, overlapping memory removed, optional Memory Files retained, skills progressive disclosure, MCP server, quality gates, multi-provider research.
 - Oikos in-process loop (`fiche_runner` + `oikos_react_engine`) still runs but is significantly slimmed; deferred items (dispatch contract, compaction API) tracked in TODO.
 
 **Target end-state:**
@@ -164,7 +164,7 @@ This is the product. Everything else supports it.
 Oikos is a coordinator, so every turn should follow a simple dispatch decision:
 
 1. **Direct response** (no tool call)
-2. **Quick tool action** (search/memory/web/messaging)
+2. **Quick tool action** (search/recall/web/messaging, plus optional Memory Files when enabled)
 3. **CLI delegation** (spawn commis with explicit backend + workspace mode)
 
 Dispatch should honor user intent for backend selection:
@@ -177,10 +177,10 @@ Delegation modes should be explicit:
 - **Repo mode:** git repo provided, clone/branch/diff flow
 - **Scratch mode:** no repo, ephemeral workspace for analysis/research/ops-style tasks
 
-**Current State (as of 2026-02-10):**
+**Current State (as of 2026-03-12):**
 - Oikos still uses legacy prompt/tool guidance that is partly ops-era and not fully aligned with workspace-only delegation semantics.
 - Backend selection for commis is mostly implicit (model mapping) rather than first-class user intent.
-- See `apps/zerg/backend/docs/specs/unified-memory-bridge.md` (Phase 3) for the implementation plan.
+- Memory Files are the only surviving optional memory layer; the old Oikos note-memory stack and thread `memory_strategy` surface have been removed.
 
 **What Longhouse owns:** orchestration, job queue, workspace isolation, timeline, search, resume, always-on infrastructure, runner coordination, and the continuity toolbox (session search, recall, insights, Oikos callbacks).
 

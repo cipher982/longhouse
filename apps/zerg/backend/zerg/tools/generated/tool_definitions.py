@@ -49,10 +49,6 @@ class ToolName(str, Enum):
     MEMORY_READ = "memory_read"
     MEMORY_SEARCH = "memory_search"
     MEMORY_WRITE = "memory_write"
-    SAVE_MEMORY = "save_memory"
-    SEARCH_MEMORY = "search_memory"
-    LIST_MEMORIES = "list_memories"
-    FORGET_MEMORY = "forget_memory"
     NOTION_APPEND_BLOCKS = "notion_append_blocks"
     NOTION_CREATE_PAGE = "notion_create_page"
     NOTION_GET_PAGE = "notion_get_page"
@@ -160,10 +156,6 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.MEMORY_READ: ServerName.MEMORY,
     ToolName.MEMORY_SEARCH: ServerName.MEMORY,
     ToolName.MEMORY_WRITE: ServerName.MEMORY,
-    ToolName.SAVE_MEMORY: ServerName.OIKOS,
-    ToolName.SEARCH_MEMORY: ServerName.OIKOS,
-    ToolName.LIST_MEMORIES: ServerName.OIKOS,
-    ToolName.FORGET_MEMORY: ServerName.OIKOS,
     ToolName.NOTION_APPEND_BLOCKS: ServerName.NOTION,
     ToolName.NOTION_CREATE_PAGE: ServerName.NOTION,
     ToolName.NOTION_GET_PAGE: ServerName.NOTION,

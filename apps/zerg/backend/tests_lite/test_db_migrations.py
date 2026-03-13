@@ -174,7 +174,7 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
 
 
 def test_initialize_database_drops_legacy_file_reservations_table(tmp_path):
-    db_path = tmp_path / "legacy_reservations.db"
+    db_path = tmp_path / "legacy_memory_cleanup.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
     with engine.begin() as conn:
@@ -192,11 +192,37 @@ def test_initialize_database_drops_legacy_file_reservations_table(tmp_path):
             )
             """
         )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                fiche_id INTEGER,
+                content TEXT NOT NULL,
+                type TEXT
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE threads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fiche_id INTEGER,
+                title TEXT NOT NULL,
+                active INTEGER,
+                fiche_state JSON,
+                memory_strategy TEXT,
+                thread_type VARCHAR(20) NOT NULL DEFAULT 'chat',
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
 
     initialize_database(engine)
 
     with engine.connect() as conn:
-        exists = conn.execute(
+        file_reservations_exists = conn.execute(
             text(
                 """
                 SELECT 1
@@ -206,5 +232,18 @@ def test_initialize_database_drops_legacy_file_reservations_table(tmp_path):
                 """
             )
         ).fetchone()
+        memories_exists = conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'memories'
+                LIMIT 1
+                """
+            )
+        ).fetchone()
+        thread_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(threads)"))}
 
-    assert exists is None
+    assert file_reservations_exists is None
+    assert memories_exists is None
+    assert "memory_strategy" not in thread_columns

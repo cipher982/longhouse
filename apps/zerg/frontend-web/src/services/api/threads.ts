@@ -5,7 +5,6 @@ type ThreadCreate = {
   fiche_id: number;
   title: string;
   thread_type: string;
-  memory_strategy: string;
   active: boolean;
 };
 
@@ -37,7 +36,6 @@ export async function createThread(ficheId: number, title: string): Promise<Thre
     fiche_id: ficheId,
     title,
     thread_type: "chat",
-    memory_strategy: "buffer",
     active: true,
   };
   return request<Thread>(`/threads`, {

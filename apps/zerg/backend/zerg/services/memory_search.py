@@ -11,6 +11,16 @@ from zerg.models.models import MemoryFile
 from zerg.services import memory_embeddings
 
 
+def _matches_tags(file_tags: list[str] | None, required_tags: List[str] | None) -> bool:
+    if not required_tags:
+        return True
+    if not file_tags:
+        return False
+    file_tag_set = {tag.lower() for tag in file_tags}
+    required_tag_set = {tag.lower() for tag in required_tags}
+    return bool(file_tag_set & required_tag_set)
+
+
 def _extract_snippets(text: str, query: str, max_snippets: int = 3, context_chars: int = 150) -> List[str]:
     """Extract snippets containing the query from a text block."""
     snippets: List[str] = []
@@ -91,8 +101,13 @@ def search_memory_files(
                 file = file_map.get(memory_id)
                 if not file:
                     continue
+                if not _matches_tags(file.tags or [], tags):
+                    continue
                 results.append(_format_result(file, score=score, query=query))
-            return results
+                if len(results) >= limit:
+                    break
+            if results:
+                return results
 
     # Fallback: keyword search
     files = memory_crud.search_memory_files_keyword(

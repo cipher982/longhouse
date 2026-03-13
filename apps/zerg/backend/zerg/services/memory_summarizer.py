@@ -28,6 +28,17 @@ SUMMARY_SYSTEM_PROMPT = (
     "- tags: 3-6 lowercase tags (no spaces)\n"
 )
 
+LOW_SIGNAL_PATTERNS = (
+    re.compile(r"\bsmoke\b", re.IGNORECASE),
+    re.compile(r"\btest greeting\b", re.IGNORECASE),
+    re.compile(r"\backnowledged\b", re.IGNORECASE),
+    re.compile(r"\bhello\b", re.IGNORECASE),
+    re.compile(r"\bwhat is 2\s*\+\s*2\b", re.IGNORECASE),
+    re.compile(r"\bcapital of france\b", re.IGNORECASE),
+    re.compile(r"\bsimple math\b", re.IGNORECASE),
+    re.compile(r"\bgeography question\b", re.IGNORECASE),
+)
+
 
 def _extract_output_text(response: Any) -> str | None:
     # SDK object or dict
@@ -72,6 +83,18 @@ def _default_title(task: str | None, result_text: str | None) -> str:
     if not base:
         return "Run Summary"
     return " ".join(base.split())[:60]
+
+
+def _memory_auto_summary_enabled() -> bool:
+    settings = get_settings()
+    return bool(settings.memory_files_enabled and settings.memory_files_auto_summary_enabled)
+
+
+def _should_skip_summary(task: str, result_text: str) -> bool:
+    combined = " ".join(part.strip() for part in (task or "", result_text or "") if part and part.strip())
+    if not combined:
+        return True
+    return any(pattern.search(combined) for pattern in LOW_SIGNAL_PATTERNS)
 
 
 async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | None:
@@ -142,6 +165,11 @@ async def persist_run_summary(
     trace_id: str | None = None,
 ) -> None:
     """Persist an episodic memory file for a completed run."""
+    if not _memory_auto_summary_enabled():
+        return
+    if _should_skip_summary(task, result_text):
+        return
+
     try:
         summary_data = await _generate_summary(task, result_text)
     except Exception:
@@ -220,7 +248,7 @@ def schedule_run_summary(**kwargs: Any) -> None:
     logger = logging.getLogger(__name__)
     settings = get_settings()
 
-    if settings.testing or settings.llm_disabled:
+    if settings.testing or settings.llm_disabled or not _memory_auto_summary_enabled():
         logger.debug("Skipping memory summary: testing=%s, llm_disabled=%s", settings.testing, settings.llm_disabled)
         return
 

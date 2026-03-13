@@ -17,22 +17,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch][Product][Tech Debt] Consolidate memory into one optional Memory Files layer (size: 4)
 
-Status (2026-03-12): In progress. Longhouse currently still has one real file-backed memory system plus a separate Oikos note-memory stack and a dead `memory_strategy` thread surface. That overlap is product ambiguity and maintenance burden.
+Status (2026-03-12): In progress. The codebase is down to one surviving Memory Files substrate with the overlapping Oikos note-memory stack removed, `memory_strategy` stripped from thread surfaces, and the remaining memory path gated behind explicit flags. Broader verification and hosted rollout remain.
 
 **Goal:** Keep one small, modular memory-files subsystem that can sit on top of recall when explicitly enabled, while removing overlapping memory concepts and ambient defaults.
 
-- [ ] Write and commit the cleanup spec/task docs with explicit keep/remove decisions
-- [ ] Remove the legacy Oikos note-memory stack (`save_memory` / `search_memory` / `list_memories` / `forget_memory`)
-- [ ] Remove the dead `memory_strategy` surface from backend, frontend, and generated API types
-- [ ] Keep only Memory Files, but gate it behind explicit feature flags so it is off by default
-- [ ] Harden Memory Files with path validation and lower-blast-radius automatic behavior
-- [ ] Update tool schemas/docs/tests/generated artifacts so the remaining memory story is consistent
+- [x] Write and commit the cleanup spec/task docs with explicit keep/remove decisions
+- [x] Remove the legacy Oikos note-memory stack (`save_memory` / `search_memory` / `list_memories` / `forget_memory`)
+- [x] Remove the dead `memory_strategy` surface from backend, frontend, and generated API types
+- [x] Keep only Memory Files, but gate it behind explicit feature flags so it is off by default
+- [x] Harden Memory Files with path validation and lower-blast-radius automatic behavior
+- [x] Update tool schemas/docs/tests/generated artifacts so the remaining memory story is consistent
 - [ ] Ship, reprovision, and verify the hosted instance post-change
 
 Notes:
 - 2026-03-12: The desired product shape is `recall` over session history plus an optional filesystem-like memory layer, not multiple competing memory products.
 - 2026-03-12: `memory_files` is the only real candidate to keep. The separate Oikos `memories` table is unused in prod and should be removed.
 - 2026-03-12: Default behavior should lean toward non-exposure: no ambient automatic memory context or auto-summary writes unless explicitly enabled.
+- 2026-03-12: Focused backend verification is passing after the cleanup (`36 passed` across memory/tool/migration coverage); broader suite + hosted rollout still pending.
 - Spec: `docs/specs/memory-system-consolidation.md`
 - Tasks: `docs/tasks/memory-system-consolidation.md`
 

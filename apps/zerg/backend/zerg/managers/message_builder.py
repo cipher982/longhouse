@@ -25,6 +25,7 @@ from typing import List
 from typing import Optional
 from typing import Sequence
 
+from zerg.config import get_settings
 from zerg.types.messages import BaseMessage
 from zerg.types.messages import HumanMessage
 from zerg.types.messages import SystemMessage
@@ -229,7 +230,8 @@ class MessageArrayBuilder:
                 conversation_msgs=conversation_msgs,
             )
 
-        if query:
+        settings = get_settings()
+        if settings.memory_files_enabled and settings.memory_files_context_enabled and query:
             memory_context = self._build_memory_context(query)
             if memory_context:
                 memory_context_msg = SystemMessage(content=memory_context)

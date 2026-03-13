@@ -10,18 +10,23 @@ from typing import List
 from pydantic import BaseModel
 from pydantic import Field
 
+from zerg.config import get_settings
 from zerg.connectors.context import get_credential_resolver
 from zerg.context import get_commis_context
 from zerg.crud import memory_crud
 from zerg.database import db_session
 from zerg.services import memory_embeddings
 from zerg.services import memory_search as memory_search_service
+from zerg.services.memory_paths import normalize_memory_path
+from zerg.services.memory_paths import normalize_memory_prefix
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
 from zerg.types.tools import Tool as StructuredTool
 
 logger = logging.getLogger(__name__)
+
+MEMORY_FILE_TOOL_NAMES: frozenset[str] = frozenset({"memory_write", "memory_read", "memory_ls", "memory_search", "memory_delete"})
 
 
 def _get_owner_id() -> int | None:
@@ -35,6 +40,17 @@ def _get_owner_id() -> int | None:
         return resolver.owner_id
 
     return None
+
+
+def _memory_files_disabled_response() -> Dict[str, Any]:
+    return tool_error(
+        error_type=ErrorType.EXECUTION_ERROR,
+        user_message="Memory Files are disabled for this Longhouse instance.",
+    )
+
+
+def _memory_files_enabled() -> bool:
+    return bool(get_settings().memory_files_enabled)
 
 
 class MemoryWriteInput(BaseModel):
@@ -53,6 +69,9 @@ def memory_write(
     metadata: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Create or overwrite a memory file."""
+    if not _memory_files_enabled():
+        return _memory_files_disabled_response()
+
     owner_id = _get_owner_id()
     if not owner_id:
         return tool_error(
@@ -66,11 +85,16 @@ def memory_write(
             user_message="Path cannot be empty.",
         )
 
+    try:
+        normalized_path = normalize_memory_path(path)
+    except ValueError as exc:
+        return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message=str(exc))
+
     with db_session() as db:
         row = memory_crud.upsert_memory_file(
             db,
             owner_id=owner_id,
-            path=path.strip(),
+            path=normalized_path,
             title=title,
             content=content,
             tags=tags,
@@ -104,6 +128,9 @@ class MemoryReadInput(BaseModel):
 
 def memory_read(path: str) -> Dict[str, Any]:
     """Read a memory file by path."""
+    if not _memory_files_enabled():
+        return _memory_files_disabled_response()
+
     owner_id = _get_owner_id()
     if not owner_id:
         return tool_error(
@@ -117,13 +144,18 @@ def memory_read(path: str) -> Dict[str, Any]:
             user_message="Path cannot be empty.",
         )
 
+    try:
+        normalized_path = normalize_memory_path(path)
+    except ValueError as exc:
+        return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message=str(exc))
+
     with db_session() as db:
-        row = memory_crud.get_memory_file_by_path(db, owner_id=owner_id, path=path.strip())
+        row = memory_crud.get_memory_file_by_path(db, owner_id=owner_id, path=normalized_path)
 
     if not row:
         return tool_error(
             error_type=ErrorType.VALIDATION_ERROR,
-            user_message=f"Memory file not found: {path}",
+            user_message=f"Memory file not found: {normalized_path}",
         )
 
     result = {
@@ -145,6 +177,9 @@ class MemoryLsInput(BaseModel):
 
 def memory_ls(prefix: str | None = None, limit: int = 100) -> Dict[str, Any]:
     """List memory files under a prefix."""
+    if not _memory_files_enabled():
+        return _memory_files_disabled_response()
+
     owner_id = _get_owner_id()
     if not owner_id:
         return tool_error(
@@ -152,8 +187,15 @@ def memory_ls(prefix: str | None = None, limit: int = 100) -> Dict[str, Any]:
             user_message="No user context available. memory_ls requires authenticated execution context.",
         )
 
+    normalized_prefix = None
+    if prefix is not None and prefix.strip():
+        try:
+            normalized_prefix = normalize_memory_prefix(prefix)
+        except ValueError as exc:
+            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message=str(exc))
+
     with db_session() as db:
-        rows = memory_crud.list_memory_files(db, owner_id=owner_id, prefix=prefix, limit=limit)
+        rows = memory_crud.list_memory_files(db, owner_id=owner_id, prefix=normalized_prefix, limit=limit)
 
     files = [
         {
@@ -181,6 +223,9 @@ def memory_search(
     use_embeddings: bool = True,
 ) -> Dict[str, Any]:
     """Search memory files (embeddings-first with keyword fallback)."""
+    if not _memory_files_enabled():
+        return _memory_files_disabled_response()
+
     owner_id = _get_owner_id()
     if not owner_id:
         return tool_error(
@@ -213,6 +258,9 @@ class MemoryDeleteInput(BaseModel):
 
 def memory_delete(path: str) -> Dict[str, Any]:
     """Delete a memory file by path."""
+    if not _memory_files_enabled():
+        return _memory_files_disabled_response()
+
     owner_id = _get_owner_id()
     if not owner_id:
         return tool_error(
@@ -226,16 +274,21 @@ def memory_delete(path: str) -> Dict[str, Any]:
             user_message="Path cannot be empty.",
         )
 
+    try:
+        normalized_path = normalize_memory_path(path)
+    except ValueError as exc:
+        return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message=str(exc))
+
     with db_session() as db:
-        deleted = memory_crud.delete_memory_file(db, owner_id=owner_id, path=path.strip())
+        deleted = memory_crud.delete_memory_file(db, owner_id=owner_id, path=normalized_path)
 
     if not deleted:
         return tool_error(
             error_type=ErrorType.VALIDATION_ERROR,
-            user_message=f"Memory file not found: {path}",
+            user_message=f"Memory file not found: {normalized_path}",
         )
 
-    return tool_success({"deleted": True, "path": path})
+    return tool_success({"deleted": True, "path": normalized_path})
 
 
 memory_write_tool = StructuredTool.from_function(
