@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import time
+import urllib.parse
 from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
@@ -11,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 from fastapi.testclient import TestClient
 
+from zerg.auth.strategy import _decode_jwt_fallback
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -19,6 +22,8 @@ from zerg.dependencies.auth import get_current_user
 from zerg.main import api_app
 from zerg.models import Connector
 from zerg.models import User
+from zerg.routers.auth import JWT_SECRET
+from zerg.routers.auth import _encode_jwt
 from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
@@ -238,5 +243,117 @@ def test_connect_gmail_fails_pubsub_watch_when_mailbox_address_is_missing(tmp_pa
             assert "history_id" not in connector.config
             assert "watch_expiry" not in connector.config
             assert "emailAddress" not in connector.config
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_start_hosted_gmail_connect_returns_control_plane_redirect(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        owner = _seed_user(db)
+
+    client = _make_client(session_local, owner)
+    settings = SimpleNamespace(control_plane_url="https://control.longhouse.ai")
+
+    try:
+        with (
+            patch("zerg.routers.auth.get_settings", return_value=settings),
+            patch.dict(os.environ, {"INSTANCE_ID": "hosted-owner"}, clear=False),
+        ):
+            response = client.post("/auth/google/gmail/start")
+
+        assert response.status_code == 200
+        url = response.json()["url"]
+        parsed = urllib.parse.urlparse(url)
+        token = urllib.parse.parse_qs(parsed.query)["token"][0]
+        payload = _decode_jwt_fallback(token, JWT_SECRET)
+        assert parsed.scheme == "https"
+        assert parsed.netloc == "control.longhouse.ai"
+        assert parsed.path == "/auth/google/gmail/start"
+        assert payload["purpose"] == "hosted_gmail_connect_start"
+        assert payload["instance"] == "hosted-owner"
+        assert payload["email"] == "owner@example.com"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_connect_gmail_rejects_hosted_instances(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        owner = _seed_user(db)
+
+    client = _make_client(session_local, owner)
+    settings = SimpleNamespace(control_plane_url="https://control.longhouse.ai", testing=False)
+
+    try:
+        with patch("zerg.routers.auth.get_settings", return_value=settings):
+            response = client.post("/auth/google/gmail", json={"auth_code": "auth-code"})
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Hosted Gmail connect must start on the control plane."
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_hosted_gmail_handoff_bootstraps_connector(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+
+    def override_db():
+        with session_local() as db:
+            yield db
+
+    api_app.dependency_overrides[get_db] = override_db
+    client = TestClient(api_app)
+    settings = SimpleNamespace(
+        auth_disabled=False,
+        testing=False,
+        internal_api_secret="test-internal-secret",
+        single_tenant=True,
+        gmail_pubsub_topic="projects/demo/topics/gmail",
+        app_public_url=None,
+    )
+    handoff_token = _encode_jwt(
+        {
+            "sub": "owner@example.com",
+            "email": "owner@example.com",
+            "instance": "hosted-owner",
+            "purpose": "hosted_gmail_connect_handoff",
+            "exp": int(time.time()) + 300,
+        },
+        JWT_SECRET,
+    )
+
+    try:
+        with (
+            patch("zerg.dependencies.auth.get_settings", return_value=settings),
+            patch("zerg.routers.auth_internal.get_settings", return_value=settings),
+            patch("zerg.routers.auth.get_settings", return_value=settings),
+            patch("zerg.routers.auth_internal.get_sso_keys", return_value=[]),
+            patch("zerg.services.gmail_api.exchange_refresh_token", return_value="access-token"),
+            patch("zerg.services.gmail_api.get_profile", return_value={"emailAddress": "Owner@gmail.com"}),
+            patch("zerg.services.gmail_api.start_watch", return_value={"history_id": 321, "watch_expiry": 654321}),
+            patch.dict(os.environ, {"INSTANCE_ID": "hosted-owner"}, clear=False),
+        ):
+            response = client.post(
+                "/internal/auth/google/gmail/handoff",
+                json={
+                    "refresh_token": "refresh-token",
+                    "handoff_token": handoff_token,
+                },
+                headers={"X-Internal-Token": "test-internal-secret"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["mailbox_email"] == "owner@gmail.com"
+        assert response.json()["watch"]["status"] == "active"
+
+        with session_local() as db:
+            connector = db.get(Connector, 1)
+            assert connector is not None
+            assert connector.config["emailAddress"] == "owner@gmail.com"
+            assert connector.config["watch_status"] == "active"
+            assert decrypt(connector.config["refresh_token"]) == "refresh-token"
     finally:
         api_app.dependency_overrides.clear()

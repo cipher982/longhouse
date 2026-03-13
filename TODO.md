@@ -37,24 +37,56 @@ Notes:
 - Spec: `docs/specs/memory-system-consolidation.md`
 - Tasks: `docs/tasks/memory-system-consolidation.md`
 
-## [Launch][QA/Test] Deepen Gmail inbox confidence with real-world validation (size: 3)
+## [Launch][Product][Docs/Drift][Tech Debt] Simplify runtime story to sessions + cloud work (size: 5)
 
-Status (2026-03-12): Planned. The current launch gate is green, but the highest-value follow-up work is now real mailbox coverage, connect-flow coverage, onboarding validation, and thread-correctness proof rather than more mocked tests.
+Status (2026-03-13): In progress. Architecture audit complete, Phase 1 truth pass active.
 
-**Goal:** Push confidence beyond app-level smoke and narrow unit tests into the real trust boundaries of the Gmail-first inbox.
+**Goal:** Make the launch and onboarding story match the actual product: Longhouse as a timeline/search/continuation platform for CLI sessions, Oikos as an assistant inside it, and cloud work as managed CLI sessions rather than custom `commis` agents.
 
-- [ ] Add a dedicated real Gmail canary that proves receive -> ingest -> inbox render -> reply in thread on a controlled mailbox
-- [ ] Add cross-browser Gmail connect-flow coverage for popup/consent behavior on Chrome, Safari, and mobile Safari
-- [ ] Add onboarding validation for both fresh hosted instances and clean OSS installs, including missing or misconfigured Google OAuth states
-- [ ] Expand live thread-correctness coverage for reply, reply-all, duplicate delivery/idempotency, aliases, and list-style headers
-- [ ] Decide which of these checks are per-push, daily, or manual canaries and wire them into the existing QA surface
+**Done when:**
+- No user-facing prompt, help text, or operator page describes Longhouse cloud work as spawning custom autonomous agents that execute on servers
+- Provider support is codified honestly for archive, cloud session start, direct web continuation, hooks, and telemetry
+- Launch-facing UI labels say `cloud session` (or equivalent) instead of `commis`, while internal symbol churn stays intentionally minimal
+- The default product path centers sessions, conversations, Oikos, and runners instead of fiche/dashboard-era concepts
+- Regression tests cover the prompt/tool contract, provider capability contract, and key renamed UI surfaces
+
+- [ ] Remove user-facing `commis` / `autonomous agents` / server-first wording from prompts, product copy, and operator pages
+- [ ] Publish one honest provider capability story for archive, cloud session start, continuation, hooks, and telemetry
+- [ ] Rename launch-facing cloud work labels from `commis` to `cloud session` or equivalent while keeping internal symbol churn minimal
+- [ ] Remove fiche/dashboard-era surfaces from default onboarding and primary navigation unless they are directly required
+- [ ] Define and begin the deletion path for the current Oikos harness (`OikosService` / `Runner` / `oikos_react_engine`) instead of treating it as a permanent subsystem
 
 Notes:
-- 2026-03-12: `make verify-prod` is now green, but it still does not prove the full real Gmail receive/reply loop.
-- 2026-03-12: Popup consent behavior and refresh-token return semantics are classic browser/provider edge cases that mocked tests will not catch.
-- 2026-03-12: The next confidence gains should come from fewer, more real tests rather than a larger pile of synthetic frontend mocks.
+- 2026-03-13: The session archive, lineage model, and session workspace already form the clearest product center. The main confusion comes from older Oikos/ops-era `commis` and `fiche` language still leaking into prompts, UI, and docs.
+- 2026-03-13: The spawn path is multi-backend only at the dispatch layer; continuity, ingest, hooks, and presence are still mostly Claude-first. The launch story should reflect that explicitly instead of implying parity.
+- 2026-03-13: Do the naming/capability truth pass first. Avoid a large internal rename or harness rewrite before launch.
+- 2026-03-13: Phase 1 truth pass landed across Oikos prompt/tool copy, shared provider capability helpers, and the most visible launch/admin `commis` labels. `make test-frontend-unit` and `make test` are green. `make test-e2e-core` still has three unrelated chat/thread failures (`useAuth` / missing `create-fiche-btn`) that should be addressed during launch-surface cleanup.
+- Spec: `docs/specs/launch-runtime-simplification.md`
+
+## [Launch][Product][QA/Test][Docs/Drift] Finish Gmail inbox for hosted + OSS launch (size: 6)
+
+Status (2026-03-13): Active. Canonical inbox/reply, connector health UX, the hosted control-plane OAuth flow, hosted Pub/Sub subscription automation, and the OSS BYO-Google setup path are now in place. Remaining launch work is real hosted/OSS canaries plus cleanup of the temporary `david010` scaffolding.
+
+**Goal:** Ship email in a way that is honest, scalable, and launch-ready: hosted users connect their own Gmail/Workspace mailbox through a Longhouse-owned auth path, OSS admins bring their own Google setup per deployment, and both paths are covered by real canaries.
+
+- [x] Land and commit the prelaunch email roadmap/spec/task refresh so hosted vs OSS scope is explicit
+- [x] Move hosted Gmail connect off tenant-local GIS and onto a control-plane-owned OAuth flow with secure instance handoff
+- [x] Provision hosted Gmail watch/PubSub state without tenant-specific manual env or per-subdomain Google client edits
+- [x] Keep OSS Gmail as a BYO Google config flow with explicit onboarding/docs and validation for missing/misconfigured setup
+- [ ] Add real hosted + OSS Gmail canaries plus cross-browser/live thread-correctness coverage
+- [ ] Remove the temporary `david010` Gmail custom env overrides and `gmail-push-david010` subscription once the real hosted flow is live
+
+Notes:
+- 2026-03-13: Hosted Longhouse should not issue or pay for user mailboxes. Hosted users connect an existing Gmail/Google Workspace mailbox.
+- 2026-03-13: Hosted Gmail auth must originate from a stable Longhouse-owned domain (control plane), not arbitrary tenant subdomains.
+- 2026-03-13: OSS/custom-domain installs keep a deployment-local Google OAuth client; zero-config Gmail across arbitrary domains is not a realistic launch model.
+- 2026-03-13: The temporary `david010` canary now proves the live boundary: after forcing in Google/PubSub env, the popup reaches Google and fails on `origin_mismatch` for the tenant origin. That is evidence, not launch design.
+- 2026-03-13: The roadmap/spec/task refresh is now landed so the remaining work is tracked as one prelaunch email tranche rather than scattered Gmail follow-ups.
+- 2026-03-13: Hosted `/conversations` now redirects Gmail connect through `control.longhouse.ai`, the control plane posts the refresh token back to the tenant through an internal signed handoff, and the control plane creates or repairs the per-instance `gmail-push-<subdomain>` subscription before the handoff.
+- 2026-03-13: OSS `/conversations` now disables the Gmail CTA when the instance is missing `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, or `GMAIL_PUBSUB_TOPIC`, and the README now documents the self-hosted BYO-Google contract.
 - Spec: `docs/specs/oikos-conversations-email.md`
 - Tasks: `docs/tasks/oikos-conversations-email.md`
+- Roadmap: `docs/plans/email-launch-roadmap.md`
 
 ## [Launch][Product][QA/Test] Polish Gmail inbox onboarding and health UX (size: 1)
 

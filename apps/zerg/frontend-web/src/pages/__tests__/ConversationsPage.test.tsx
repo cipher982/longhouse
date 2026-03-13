@@ -18,10 +18,15 @@ const apiMocks = vi.hoisted(() => ({
 const authMocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
   refreshAuth: vi.fn(),
+  getAuthMethods: vi.fn(),
 }));
 
 const googleCodeClientMocks = vi.hoisted(() => ({
   requestGoogleAuthorizationCode: vi.fn(),
+}));
+
+const authApiMocks = vi.hoisted(() => ({
+  startHostedGmailConnect: vi.fn(),
 }));
 
 vi.mock("../../services/api", async (importOriginal) => {
@@ -34,6 +39,7 @@ vi.mock("../../services/api", async (importOriginal) => {
 
 vi.mock("../../lib/auth", () => ({
   useAuth: authMocks.useAuth,
+  getAuthMethods: authMocks.getAuthMethods,
 }));
 
 vi.mock("../../lib/config", () => ({
@@ -46,6 +52,10 @@ vi.mock("../../lib/googleCodeClient", () => ({
   requestGoogleAuthorizationCode: googleCodeClientMocks.requestGoogleAuthorizationCode,
 }));
 
+vi.mock("../../services/api/auth", () => ({
+  startHostedGmailConnect: authApiMocks.startHostedGmailConnect,
+}));
+
 const {
   connectGmailInbox: mockConnectGmailInbox,
   fetchConversations: mockFetchConversations,
@@ -55,8 +65,9 @@ const {
   replyToConversation: mockReplyToConversation,
 } = apiMocks;
 
-const { useAuth: mockUseAuth, refreshAuth: mockRefreshAuth } = authMocks;
+const { useAuth: mockUseAuth, refreshAuth: mockRefreshAuth, getAuthMethods: mockGetAuthMethods } = authMocks;
 const { requestGoogleAuthorizationCode: mockRequestGoogleAuthorizationCode } = googleCodeClientMocks;
+const { startHostedGmailConnect: mockStartHostedGmailConnect } = authApiMocks;
 
 function renderConversationsPage(initialEntry = "/conversations?conversation=1") {
   const queryClient = new QueryClient({
@@ -81,6 +92,15 @@ describe("ConversationsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRefreshAuth.mockResolvedValue(undefined);
+    mockGetAuthMethods.mockResolvedValue({
+      google: true,
+      password: false,
+      sso: false,
+      sso_url: null,
+    });
+    mockStartHostedGmailConnect.mockResolvedValue({
+      url: "https://control.longhouse.ai/auth/google/gmail/start?token=test-token",
+    });
     mockUseAuth.mockReturnValue({
       user: {
         id: 1,
@@ -300,10 +320,59 @@ describe("ConversationsPage", () => {
     await waitFor(() => {
       expect(mockRequestGoogleAuthorizationCode).toHaveBeenCalledWith({
         clientId: "google-client-id",
-        scope: "https://www.googleapis.com/auth/gmail.modify",
+        scope: "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send",
       });
       expect(mockConnectGmailInbox).toHaveBeenCalledWith("auth-code");
       expect(mockRefreshAuth).toHaveBeenCalled();
     });
+  });
+
+  it("redirects hosted users through the control plane instead of tenant GIS", async () => {
+    mockGetAuthMethods.mockResolvedValue({
+      google: false,
+      password: true,
+      sso: true,
+      sso_url: "https://control.longhouse.ai",
+    });
+    mockUseAuth.mockReturnValue({
+      user: {
+        id: 1,
+        email: "owner@example.com",
+        display_name: "Owner",
+        is_active: true,
+        created_at: "2026-03-12T18:00:00Z",
+        gmail_connected: false,
+        gmail_mailbox_email: null,
+        gmail_watch_status: null,
+        gmail_watch_error: null,
+        gmail_watch_expiry: null,
+      },
+      refreshAuth: mockRefreshAuth,
+    });
+    mockFetchConversations.mockResolvedValue({ total: 0, conversations: [] });
+    const assignSpy = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign: assignSpy });
+
+    renderConversationsPage("/conversations");
+
+    expect(await screen.findByText("Connect Gmail to start your inbox")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByText(/control\.longhouse\.ai to connect your existing Gmail or Workspace mailbox/i),
+      ).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Connect Gmail" }));
+
+    await waitFor(() => {
+      expect(mockStartHostedGmailConnect).toHaveBeenCalled();
+      expect(mockRequestGoogleAuthorizationCode).not.toHaveBeenCalled();
+      expect(assignSpy).toHaveBeenCalledWith(
+        "https://control.longhouse.ai/auth/google/gmail/start?token=test-token",
+      );
+    });
+
+    vi.unstubAllGlobals();
   });
 });

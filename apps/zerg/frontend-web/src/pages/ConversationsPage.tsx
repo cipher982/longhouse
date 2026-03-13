@@ -9,7 +9,7 @@ import {
   SectionHeader,
   Spinner,
 } from "../components/ui";
-import { useAuth } from "../lib/auth";
+import { getAuthMethods, useAuth } from "../lib/auth";
 import { config } from "../lib/config";
 import { requestGoogleAuthorizationCode } from "../lib/googleCodeClient";
 import {
@@ -22,10 +22,14 @@ import {
   type CanonicalConversationMessage,
   type CanonicalConversationSummary,
 } from "../services/api";
+import { startHostedGmailConnect } from "../services/api/auth";
 import "../styles/conversations.css";
 
 const DEFAULT_LIMIT = 50;
-const GMAIL_CONNECT_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
+const GMAIL_CONNECT_SCOPE = [
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.send",
+].join(" ");
 
 function formatConversationTimestamp(value?: string | null): string {
   if (!value) return "No activity yet";
@@ -74,7 +78,16 @@ export default function ConversationsPage() {
   const [draftQuery, setDraftQuery] = useState(searchQuery);
   const [replyBody, setReplyBody] = useState("");
   const [replyAll, setReplyAll] = useState(false);
-  const canConnectGmail = Boolean(config.googleClientId);
+  const gmailErrorParam = searchParams.get("gmail_error");
+
+  const authMethodsQuery = useQuery({
+    queryKey: ["auth-methods"],
+    queryFn: getAuthMethods,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const usesHostedGmailConnect = Boolean(authMethodsQuery.data?.sso_url);
+  const canConnectGmail = usesHostedGmailConnect || Boolean(config.googleClientId);
 
   useEffect(() => {
     setDraftQuery(searchQuery);
@@ -149,13 +162,21 @@ export default function ConversationsPage() {
 
   const connectGmailMutation = useMutation({
     mutationFn: async () => {
+      if (usesHostedGmailConnect) {
+        const result = await startHostedGmailConnect();
+        window.location.assign(result.url);
+        return { redirected: true as const };
+      }
       const authCode = await requestGoogleAuthorizationCode({
         clientId: config.googleClientId,
         scope: GMAIL_CONNECT_SCOPE,
       });
       return connectGmailInbox(authCode);
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      if ("redirected" in result) {
+        return;
+      }
       await refreshAuth?.();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["canonical-conversations"] }),
@@ -181,7 +202,9 @@ export default function ConversationsPage() {
       return {
         tone: "neutral",
         title: "Connect Gmail to start your inbox",
-        description: canConnectGmail
+        description: usesHostedGmailConnect
+          ? "Longhouse will send you to control.longhouse.ai to connect your existing Gmail or Workspace mailbox, then bring you back here."
+          : canConnectGmail
           ? "This page becomes your assistant email inbox once Gmail is connected. Oikos will search past threads and only reply inside existing conversations."
           : "Google OAuth is not configured on this instance yet. Add a Google client first, then connect Gmail here.",
         actionLabel: "Connect Gmail",
@@ -203,17 +226,18 @@ export default function ConversationsPage() {
       };
     }
 
-    return {
+      return {
       tone: "warning",
       title: "Gmail needs attention",
       description:
-        user.gmail_watch_error
+        gmailErrorParam
+        || user.gmail_watch_error
         || "Reconnect Gmail to restore inbox syncing. Existing threads stay searchable, but new mail may stop landing here.",
       actionLabel: "Reconnect Gmail",
       showAction: true,
       mailboxLabel,
     };
-  }, [canConnectGmail, gmailStatus, user]);
+  }, [canConnectGmail, gmailErrorParam, gmailStatus, user, usesHostedGmailConnect]);
 
   const handleSearch = (event: FormEvent) => {
     event.preventDefault();
@@ -251,7 +275,9 @@ export default function ConversationsPage() {
       return "Try a different search.";
     }
     if (!user?.gmail_connected) {
-      return canConnectGmail
+      return usesHostedGmailConnect
+        ? "Connect Gmail above and Longhouse will finish the hosted authorization flow on control.longhouse.ai."
+        : canConnectGmail
         ? "Connect Gmail above to turn this into your assistant inbox."
         : "Ask the instance admin to configure Google OAuth, then connect Gmail here.";
     }
@@ -259,7 +285,7 @@ export default function ConversationsPage() {
       return "Email sync is live. Your first Gmail thread will appear here automatically.";
     }
     return "Reconnect Gmail above to restore syncing before new mail can land here.";
-  }, [canConnectGmail, gmailStatus, searchQuery, user?.gmail_connected]);
+  }, [canConnectGmail, gmailStatus, searchQuery, user?.gmail_connected, usesHostedGmailConnect]);
 
   return (
     <PageShell size="full" className="conversations-page">
@@ -279,9 +305,11 @@ export default function ConversationsPage() {
           {gmailPanel.mailboxLabel ? (
             <div className="gmail-connection-panel__meta">{gmailPanel.mailboxLabel}</div>
           ) : null}
-          {connectGmailMutation.isError ? (
+          {connectGmailMutation.isError || gmailErrorParam ? (
             <div className="gmail-connection-panel__error">
-              {formatGmailConnectError(connectGmailMutation.error)}
+              {connectGmailMutation.isError
+                ? formatGmailConnectError(connectGmailMutation.error)
+                : gmailErrorParam}
             </div>
           ) : null}
         </div>

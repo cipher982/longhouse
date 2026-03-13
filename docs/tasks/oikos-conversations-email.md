@@ -34,10 +34,16 @@
 - [x] Phase 8b: Let the user connect or reconnect Gmail from the inbox without terminal/manual API steps
 - [x] Phase 8c: Clarify the launch boundary in-product: replies come from the connected Gmail account and stay in existing threads
 - [x] Phase 8d: Add focused regression/live coverage for the inbox health panel
-- [ ] Phase 9a: Add a dedicated real Gmail canary for receive -> ingest -> inbox render -> reply in thread
-- [ ] Phase 9b: Add cross-browser Gmail connect-flow coverage for popup/consent behavior
-- [ ] Phase 9c: Add onboarding validation for fresh hosted and clean OSS installs, including missing/misconfigured Google OAuth
-- [ ] Phase 9d: Expand live thread-correctness coverage for reply/reply-all/idempotency/aliases/list-style headers
+- [x] Phase 9a: Commit the hosted vs OSS Gmail launch plan and make the product boundary explicit in docs
+- [x] Phase 9b: Route hosted Gmail connect through control-plane-owned OAuth instead of tenant-local GIS popup auth
+- [x] Phase 9c: Add secure control-plane -> instance connector bootstrap/handoff for hosted Gmail
+- [x] Phase 9d: Provision hosted Gmail watch/PubSub without tenant-specific manual env or per-subdomain GCP edits
+- [x] Phase 9e: Keep OSS Gmail as a BYO Google config flow and add first-run onboarding validation/docs for missing or broken setup
+- [ ] Phase 10a: Add a dedicated real OSS Gmail canary for receive -> ingest -> inbox render -> reply in thread
+- [ ] Phase 10b: Add a dedicated real hosted Gmail canary for control-plane connect -> ingest -> inbox render -> reply in thread
+- [ ] Phase 10c: Add cross-browser Gmail connect-flow coverage for the supported hosted/OSS entrypoints
+- [ ] Phase 10d: Expand live thread-correctness coverage for reply/reply-all/idempotency/aliases/list-style headers
+- [ ] Phase 10e: Remove the temporary `david010` Gmail custom env overrides and `gmail-push-david010` subscription after the real hosted flow lands
 
 ## Done Conditions
 
@@ -79,10 +85,21 @@
 
 ### Phase 9
 
-- a controlled real Gmail canary proves the receive -> ingest -> reply loop
-  against a real mailbox
-- Gmail connect flow is covered in real browsers, not only mocked/unit flows
-- onboarding checks cover both hosted and OSS first-run states, including
-  missing or broken Google OAuth configuration
-- live thread-correctness checks prove in-thread behavior for reply,
-  reply-all, replay/idempotency, aliases, and list-style headers
+- hosted users connect an existing Gmail/Workspace mailbox through a
+  Longhouse-owned auth path
+- hosted Gmail no longer depends on tenant-local GIS auth or per-tenant GCP
+  origin edits
+- hosted instances receive the Gmail connector/watch state they need without
+  manual tenant-specific env mutation
+- OSS keeps an explicit BYO Google setup path with honest onboarding/error
+  states
+
+### Phase 10
+
+- hosted and OSS real canaries both prove the receive -> ingest -> reply loop
+- browser and live coverage prove the real launch boundary, not only mocked
+  flows
+- thread-correctness cases cover reply, reply-all, replay/idempotency,
+  aliases, and list-style headers
+- temporary tenant-specific canary scaffolding is removed after the replacement
+  path is validated

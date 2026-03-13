@@ -1645,6 +1645,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/google/gmail/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Hosted Gmail Connect
+         * @description Return the control-plane Gmail connect URL for hosted instances.
+         */
+        post: operations["start_hosted_gmail_connect_auth_google_gmail_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/google/gmail": {
         parameters: {
             query?: never;
@@ -1667,6 +1687,26 @@ export interface paths {
          *     - Returns connector + watch bootstrap state so callers can surface partial failure.
          */
         post: operations["connect_gmail_auth_google_gmail_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/internal/auth/google/gmail/handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hosted Gmail Connect Handoff
+         * @description Persist a hosted Gmail connector after control-plane OAuth succeeds.
+         */
+        post: operations["hosted_gmail_connect_handoff_internal_auth_google_gmail_handoff_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6576,6 +6616,24 @@ export interface components {
              * @default false
              */
             is_offline: boolean;
+        };
+        /**
+         * HostedGmailConnectHandoffPayload
+         * @description Payload the control plane sends after Gmail OAuth succeeds.
+         */
+        HostedGmailConnectHandoffPayload: {
+            /** Handoff Token */
+            handoff_token: string;
+            /** Refresh Token */
+            refresh_token: string;
+        };
+        /**
+         * HostedGmailConnectStartResponse
+         * @description Short-lived control-plane redirect URL for hosted Gmail connect.
+         */
+        HostedGmailConnectStartResponse: {
+            /** Url */
+            url: string;
         };
         /** IngestHealthResponse */
         IngestHealthResponse: {
@@ -12685,6 +12743,37 @@ export interface operations {
             };
         };
     };
+    start_hosted_gmail_connect_auth_google_gmail_start_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostedGmailConnectStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     connect_gmail_auth_google_gmail_post: {
         parameters: {
             query?: {
@@ -12699,6 +12788,41 @@ export interface operations {
                 "application/json": {
                     [key: string]: string;
                 };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GmailConnectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hosted_gmail_connect_handoff_internal_auth_google_gmail_handoff_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostedGmailConnectHandoffPayload"];
             };
         };
         responses: {
