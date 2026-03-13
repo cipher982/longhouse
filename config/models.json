@@ -46,7 +46,7 @@
         "baseUrl": "https://api.x.ai/v1",
         "apiKeyEnvVar": "XAI_API_KEY",
         "capabilities": {
-          "reasoning": false
+          "reasoning": true
         }
       },
       "grok-4-1-fast-non-reasoning": {
