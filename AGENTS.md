@@ -137,6 +137,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 17. **Zerg host backups/cleanup are unified under `zerg-ops`** — source of truth is `scripts/zerg-ops.sh`, deployed to `/usr/local/bin/zerg-ops`. It is intentionally code-configured (no `/etc/zerg-ops.env` contract). For scoped checks use CLI `--instance`, and offsite uses SSH alias `longhouse-offsite` configured on the host.
 18. **Demo seed/reset identity + repair path** — demo rows are identified by `provider_session_id LIKE 'demo-%'` (not `device_id`). In dev (`AUTH_DISABLED=1`), run `POST /api/agents/demo?replace=true` to wipe/reseed stale rows. Response includes `sessions_failed` and `sessions_deleted`.
 19. **`~/.claude/longhouse-machine-name` is read at engine startup** — changing the file does nothing for the already-running `com.longhouse.shipper` daemon. Restart/reinstall the LaunchAgent (and re-sign via `make install-engine` first if launchd reports a codesigning exit) or new sessions may keep the stale label.
+20. **Hosted Gmail is opt-in per instance** — the control plane does not inject Google OAuth or Gmail Pub/Sub env into hosted instances by default. To test hosted Gmail, add `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GMAIL_PUBSUB_TOPIC` / `PUBSUB_AUDIENCE` (and usually `PUBSUB_SA_EMAIL`) via instance `custom_env`, then reprovision; Google Identity Services also requires the exact hosted origin (for example `https://david010.longhouse.ai`) on the OAuth client or the popup fails with `origin_mismatch`.
 
 ## Pushing Changes
 
