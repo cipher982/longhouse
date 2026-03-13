@@ -366,6 +366,6 @@ class TestProviderConnection:
             assert resp.json() == {"success": True, "message": "Connection successful"}
             assert captured["client_kwargs"]["api_key"] == "xai-test-key"
             assert captured["client_kwargs"]["base_url"] == "https://api.x.ai/v1"
-            assert captured["request_kwargs"]["model"] == "grok-4-1-fast-reasoning"
+            assert captured["request_kwargs"]["model"] == "grok-4-1-fast-non-reasoning"
             assert captured["request_kwargs"]["max_tokens"] == 3
             assert captured["closed"] is True
