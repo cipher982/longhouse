@@ -187,3 +187,67 @@ def test_email_conversation_ingest_does_not_duplicate_raw_archive(tmp_path):
         assert first.message_id == second.message_id
         assert len(messages) == 1
         assert len(list(raw_dir.glob("*.eml"))) == 1
+
+
+def test_email_conversation_ingest_replay_backfills_archive_and_metadata(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    archive_root = tmp_path / "conversation-archive"
+
+    with SessionLocal() as db:
+        user = _seed_user(db, email="owner+alerts@gmail.com")
+        connector = _seed_connector(db, owner_id=user.id)
+        service = EmailConversationIngestService(
+            db,
+            archive_store=ConversationArchiveStore(str(archive_root)),
+        )
+
+        first = service.ingest(
+            EmailConversationIngest(
+                owner_id=user.id,
+                connector_id=connector.id,
+                provider="gmail",
+                external_thread_id="thread-replay",
+                external_message_id="msg-replay",
+                subject="[Project] Build failed",
+                body_text="Please investigate.",
+                from_email="maintainer@example.com",
+                reply_to_emails=("project-list@example.com",),
+                to_emails=("owner+alerts@gmail.com",),
+            )
+        )
+        second = service.ingest(
+            EmailConversationIngest(
+                owner_id=user.id,
+                connector_id=connector.id,
+                provider="gmail",
+                external_thread_id="thread-replay",
+                external_message_id="msg-replay",
+                subject="[Project] Build failed",
+                body_text="Please investigate.",
+                from_email="maintainer@example.com",
+                reply_to_emails=("project-list@example.com",),
+                to_emails=("owner+alerts@gmail.com",),
+                raw_bytes=b"raw-email-payload",
+                provider_metadata={
+                    "history_id": "201",
+                    "rfc_message_id": "<msg-replay@example.com>",
+                },
+            )
+        )
+
+        messages = ConversationService.list_messages(
+            db,
+            owner_id=user.id,
+            conversation_id=first.conversation_id,
+        )
+
+        assert first.message_id == second.message_id
+        assert len(messages) == 1
+        assert second.archive_relpath is not None
+        assert messages[0].archive_relpath == second.archive_relpath
+        assert messages[0].message_metadata["email"]["reply_to_emails"] == ["project-list@example.com"]
+        assert messages[0].message_metadata["email"]["provider_metadata"]["history_id"] == "201"
+
+        archive_path = archive_root / second.archive_relpath
+        assert archive_path.exists()
+        assert archive_path.read_bytes() == b"raw-email-payload"

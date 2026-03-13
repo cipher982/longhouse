@@ -64,6 +64,7 @@ def _build_email_bytes(
     cc_header: str | None = None,
     reply_to_header: str | None = None,
     message_id: str = "<message@test.local>",
+    extra_headers: dict[str, str] | None = None,
 ) -> bytes:
     message = EmailMessage()
     message["Subject"] = subject
@@ -75,6 +76,8 @@ def _build_email_bytes(
         message["Cc"] = cc_header
     if reply_to_header:
         message["Reply-To"] = reply_to_header
+    for header_name, header_value in (extra_headers or {}).items():
+        message[header_name] = header_value
     message.set_content(body_text)
     return message.as_bytes()
 
@@ -186,6 +189,117 @@ async def test_process_connector_ingests_incoming_gmail_into_conversation(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_process_connector_ingests_list_style_headers_for_alias_mailbox(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    archive_root = tmp_path / "data"
+
+    with SessionLocal() as db:
+        user = _seed_user(db, email="owner+alerts@gmail.com")
+        connector = _seed_connector(
+            db,
+            owner_id=user.id,
+            history_id=100,
+            email_address="owner+alerts@gmail.com",
+        )
+        owner_id = user.id
+        connector_id = connector.id
+
+    monkeypatch.setattr(database, "default_session_factory", SessionLocal)
+    monkeypatch.setattr(conversation_archive, "get_settings", lambda: SimpleNamespace(data_dir=archive_root))
+    monkeypatch.setattr(crypto, "decrypt", lambda value: "refresh-token")
+
+    async def fake_exchange_refresh_token(_refresh_token: str) -> str:
+        return "access-token"
+
+    async def fake_list_history(_access_token: str, start_history_id: int):
+        assert start_history_id == 100
+        return [
+            {
+                "id": "101",
+                "messagesAdded": [
+                    {
+                        "message": {
+                            "id": "gmail-list-1",
+                        }
+                    }
+                ],
+            }
+        ]
+
+    async def fake_get_message_metadata(_access_token: str, msg_id: str):
+        assert msg_id == "gmail-list-1"
+        return {
+            "id": msg_id,
+            "labelIds": ["INBOX"],
+            "headers": {
+                "From": "Maintainer <maintainer@example.com>",
+                "Subject": "[Project] Nightly failed",
+            },
+        }
+
+    async def fake_get_message_raw(_access_token: str, msg_id: str):
+        assert msg_id == "gmail-list-1"
+        return {
+            "id": msg_id,
+            "threadId": "thread-list",
+            "labelIds": ["INBOX"],
+            "historyId": "101",
+            "internalDate": "1773340200000",
+            "snippet": "Patch posted to the list.",
+            "raw_bytes": _build_email_bytes(
+                subject="[Project] Nightly failed",
+                from_header="Maintainer <maintainer@example.com>",
+                to_header="Owner Alerts <owner+alerts@gmail.com>",
+                body_text="Patch posted to the list.",
+                cc_header="Project Team <project-team@example.com>",
+                reply_to_header="Project List <project-list@example.com>",
+                message_id="<gmail-list-1@example.com>",
+                extra_headers={
+                    "Delivered-To": "owner+alerts@gmail.com",
+                    "List-Id": "Project Updates <project.example.com>",
+                    "List-Post": "<mailto:project-list@example.com>",
+                    "References": "<root@example.com> <parent@example.com>",
+                    "In-Reply-To": "<parent@example.com>",
+                },
+            ),
+        }
+
+    monkeypatch.setattr(gmail_api, "async_exchange_refresh_token", fake_exchange_refresh_token)
+    monkeypatch.setattr(gmail_api, "async_list_history", fake_list_history)
+    monkeypatch.setattr(gmail_api, "async_get_message_metadata", fake_get_message_metadata)
+    monkeypatch.setattr(gmail_api, "async_get_message_raw", fake_get_message_raw)
+
+    await GmailProvider().process_connector(connector_id)
+
+    with SessionLocal() as db:
+        conversation = ConversationService.list_conversations(
+            db,
+            owner_id=owner_id,
+            kind="email",
+            limit=10,
+        )[0]
+        messages = ConversationService.list_messages(
+            db,
+            owner_id=owner_id,
+            conversation_id=conversation.id,
+        )
+        refreshed_connector = db.get(Connector, connector_id)
+
+        assert conversation.title == "[Project] Nightly failed"
+        assert messages[0].direction == "incoming"
+        assert messages[0].content == "Patch posted to the list."
+        assert messages[0].message_metadata["email"]["reply_to_emails"] == ["project-list@example.com"]
+        assert messages[0].message_metadata["email"]["to_emails"] == ["owner+alerts@gmail.com"]
+        assert messages[0].message_metadata["email"]["cc_emails"] == ["project-team@example.com"]
+        assert messages[0].message_metadata["email"]["provider_metadata"]["references"] == (
+            "<root@example.com> <parent@example.com>"
+        )
+        assert messages[0].message_metadata["email"]["provider_metadata"]["in_reply_to"] == "<parent@example.com>"
+        assert refreshed_connector is not None
+        assert refreshed_connector.config["history_id"] == 101
+
+
+@pytest.mark.asyncio
 async def test_process_connector_dedupes_replayed_gmail_message_and_marks_outgoing(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     archive_root = tmp_path / "data"
@@ -282,3 +396,102 @@ async def test_process_connector_dedupes_replayed_gmail_message_and_marks_outgoi
         assert len(list(raw_dir.glob("*.eml"))) == 1
         assert refreshed_connector is not None
         assert refreshed_connector.config["history_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_process_connector_dedupes_duplicate_message_ids_within_same_history_replay(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    archive_root = tmp_path / "data"
+
+    with SessionLocal() as db:
+        user = _seed_user(db)
+        connector = _seed_connector(
+            db,
+            owner_id=user.id,
+            history_id=200,
+            email_address="owner@gmail.com",
+        )
+        owner_id = user.id
+        connector_id = connector.id
+
+    monkeypatch.setattr(database, "default_session_factory", SessionLocal)
+    monkeypatch.setattr(conversation_archive, "get_settings", lambda: SimpleNamespace(data_dir=archive_root))
+    monkeypatch.setattr(crypto, "decrypt", lambda value: "refresh-token")
+
+    async def fake_exchange_refresh_token(_refresh_token: str) -> str:
+        return "access-token"
+
+    async def fake_list_history(_access_token: str, start_history_id: int):
+        assert start_history_id == 200
+        return [
+            {
+                "id": "201",
+                "messagesAdded": [
+                    {"message": {"id": "gmail-msg-dup"}},
+                    {"message": {"id": "gmail-msg-dup"}},
+                ],
+            },
+            {
+                "id": "202",
+                "messagesAdded": [
+                    {"message": {"id": "gmail-msg-dup"}},
+                ],
+            },
+        ]
+
+    async def fake_get_message_metadata(_access_token: str, msg_id: str):
+        assert msg_id == "gmail-msg-dup"
+        return {
+            "id": msg_id,
+            "labelIds": ["INBOX"],
+            "headers": {
+                "From": "Friend <friend@example.com>",
+                "Subject": "Duplicate replay",
+            },
+        }
+
+    async def fake_get_message_raw(_access_token: str, msg_id: str):
+        assert msg_id == "gmail-msg-dup"
+        return {
+            "id": msg_id,
+            "threadId": "thread-dup",
+            "labelIds": ["INBOX"],
+            "historyId": "202",
+            "internalDate": "1773340500000",
+            "snippet": "Same Gmail message replayed.",
+            "raw_bytes": _build_email_bytes(
+                subject="Duplicate replay",
+                from_header="Friend <friend@example.com>",
+                to_header="owner@gmail.com",
+                body_text="Same Gmail message replayed.",
+                message_id="<gmail-msg-dup@example.com>",
+            ),
+        }
+
+    monkeypatch.setattr(gmail_api, "async_exchange_refresh_token", fake_exchange_refresh_token)
+    monkeypatch.setattr(gmail_api, "async_list_history", fake_list_history)
+    monkeypatch.setattr(gmail_api, "async_get_message_metadata", fake_get_message_metadata)
+    monkeypatch.setattr(gmail_api, "async_get_message_raw", fake_get_message_raw)
+
+    await GmailProvider().process_connector(connector_id)
+
+    with SessionLocal() as db:
+        conversation = ConversationService.list_conversations(
+            db,
+            owner_id=owner_id,
+            kind="email",
+            limit=10,
+        )[0]
+        messages = ConversationService.list_messages(
+            db,
+            owner_id=owner_id,
+            conversation_id=conversation.id,
+        )
+        raw_dir = archive_root / "conversations" / str(owner_id) / str(conversation.id) / "raw"
+        refreshed_connector = db.get(Connector, connector_id)
+
+        assert len(messages) == 1
+        assert messages[0].external_message_id == "gmail-msg-dup"
+        assert len(list(raw_dir.glob("*.eml"))) == 1
+        assert refreshed_connector is not None
+        assert refreshed_connector.config["history_id"] == 202
