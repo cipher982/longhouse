@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime
 from datetime import timezone
@@ -171,8 +172,21 @@ async def oikos_chat(
     if is_test_model(model_to_use):
         warn_if_test_model(model_to_use)
     else:
-        if not get_model_by_id(model_to_use):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid model: {model_to_use}")
+        model_cfg = get_model_by_id(model_to_use)
+        if not model_cfg:
+            # Unknown model (removed from config) — fall back to instance default
+            logger.warning(f"Saved model '{model_to_use}' not in config, falling back to default")
+            model_to_use = get_default_model_id()
+            model_cfg = get_model_by_id(model_to_use)
+        # Check that the required API key is actually available
+        if model_cfg:
+            from zerg.models_config import _get_api_key_env_var
+
+            key_env = _get_api_key_env_var(model_cfg)
+            if not os.getenv(key_env):
+                # Saved preference references a model whose key isn't configured — fall back
+                logger.warning(f"Model '{model_to_use}' requires {key_env} which is not set, falling back to default")
+                model_to_use = get_default_model_id()
 
     reasoning_effort = (request.reasoning_effort or saved_prefs.get("reasoning_effort") or "none").lower()
     if reasoning_effort not in {"none", "low", "medium", "high"}:
