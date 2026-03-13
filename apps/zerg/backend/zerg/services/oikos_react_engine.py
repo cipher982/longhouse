@@ -155,8 +155,10 @@ def _make_llm(
     if not kwargs["api_key"]:
         raise ValueError(f"{api_key_env_var} not configured but model '{model}' selected")
 
+    # reasoning_effort is an OpenAI-specific API parameter.
+    # Other providers (xAI, Groq, Anthropic) reject it with 400.
     capabilities = model_config.capabilities or {}
-    if capabilities.get("reasoning", False):
+    if capabilities.get("reasoning", False) and provider == ModelProvider.OPENAI:
         effort = reasoning_effort
         if effort == "none" and not capabilities.get("reasoningNone", False):
             effort = "low"

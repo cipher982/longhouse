@@ -62,8 +62,9 @@ def test_oikos_make_llm_uses_xai_api_key_and_base_url(monkeypatch):
     assert captured["tool_choice"] is None
 
 
-def test_xai_reasoning_model_does_not_send_reasoning_effort(monkeypatch):
-    """xAI does not support the reasoningEffort parameter — verify we never send it."""
+def test_reasoning_effort_only_sent_to_openai_provider(monkeypatch):
+    """reasoning_effort is OpenAI-specific. Non-OpenAI providers must never receive it,
+    even if the model declares reasoning: true in capabilities."""
     captured: dict[str, object] = {}
 
     class FakeOpenAIChat:
@@ -76,10 +77,10 @@ def test_xai_reasoning_model_does_not_send_reasoning_effort(monkeypatch):
     monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
     monkeypatch.setattr(oikos_react_engine, "OpenAIChat", FakeOpenAIChat)
 
-    # Even though this model has "reasoning" in the name, it must NOT get reasoning_effort
-    oikos_react_engine._make_llm(model="grok-4-1-fast-reasoning", tools=[], reasoning_effort="low")
+    # grok-4-1-fast-reasoning has reasoning: true but provider: xai
+    oikos_react_engine._make_llm(model="grok-4-1-fast-reasoning", tools=[], reasoning_effort="high")
 
     assert captured["kwargs"]["model"] == "grok-4-1-fast-reasoning"
     assert "reasoning_effort" not in captured["kwargs"], (
-        "xAI rejects reasoningEffort — models.json must have reasoning: false for xAI models"
+        "reasoning_effort is OpenAI-only — non-OpenAI providers reject it"
     )
