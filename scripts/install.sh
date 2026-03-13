@@ -203,7 +203,12 @@ update_shell_profile() {
             local profile="$HOME/.bashrc"
             [[ "$(uname -s)" == "Darwin" ]] && profile="$HOME/.bash_profile"
 
-            if [[ -f "$profile" ]] && ! grep -q ".local/bin" "$profile"; then
+            if [[ ! -f "$profile" ]]; then
+                mkdir -p "$(dirname "$profile")"
+                touch "$profile"
+            fi
+
+            if ! grep -q ".local/bin" "$profile"; then
                 echo "" >> "$profile"
                 echo "# Added by Longhouse installer" >> "$profile"
                 echo "$path_line" >> "$profile"
@@ -214,7 +219,12 @@ update_shell_profile() {
 
         zsh)
             local profile="$HOME/.zshrc"
-            if [[ -f "$profile" ]] && ! grep -q ".local/bin" "$profile"; then
+            if [[ ! -f "$profile" ]]; then
+                mkdir -p "$(dirname "$profile")"
+                touch "$profile"
+            fi
+
+            if ! grep -q ".local/bin" "$profile"; then
                 echo "" >> "$profile"
                 echo "# Added by Longhouse installer" >> "$profile"
                 echo "$path_line" >> "$profile"

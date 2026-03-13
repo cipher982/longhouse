@@ -81,10 +81,14 @@ packages = ["zerg"]
 # Bundle the frontend dist into the package for pip install deployment
 # This allows `longhouse serve` to serve the UI without needing the repo
 "../frontend-web/dist" = "zerg/_frontend_dist"
+# Bundle the shared model routing config so source/wheel installs can start
+# without requiring a sibling monorepo checkout.
+"../../../config/models.json" = "zerg/_config/models.json"
 
 [tool.hatch.build.targets.sdist.force-include]
 # Also include frontend in sdist so building from source works
 "../frontend-web/dist" = "zerg/_frontend_dist"
+"../../../config/models.json" = "zerg/_config/models.json"
 
 [tool.uv]
 # Keep cache inside repo for hermetic test runs

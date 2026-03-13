@@ -85,11 +85,16 @@ def _get_config_path() -> Path:
 
     Priority:
     1. MODELS_CONFIG_PATH env var (explicit override)
-    2. Default: relative to this file (works in monorepo and Docker)
+    2. Packaged copy bundled into the wheel/tool install
+    3. Default repo-relative path (works in monorepo and Docker)
     """
     env_path = os.getenv("MODELS_CONFIG_PATH")
     if env_path:
         return Path(env_path)
+
+    packaged_path = Path(__file__).resolve().parent / "_config" / "models.json"
+    if packaged_path.exists():
+        return packaged_path
 
     # Default: Find config relative to this file
     # Local monorepo: zerg/backend/zerg/models_config.py -> config/models.json
