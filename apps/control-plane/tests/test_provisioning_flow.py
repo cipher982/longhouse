@@ -7,17 +7,18 @@ Covers:
 - Full signup flow smoke test (signup -> verify -> checkout -> webhook -> provision)
 - Provisioning stall detection (duplicate webhook idempotency)
 """
+
 from __future__ import annotations
 
 import os
 import sys
 import time
 import urllib.parse
-from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -58,6 +59,7 @@ from control_plane.services.provisioner import (  # noqa: E402
 )
 from control_plane.routers.auth import _encode_jwt, _hash_password, _issue_session_token  # noqa: E402
 from control_plane.config import settings  # noqa: E402
+from control_plane.services.gmail_pubsub import HostedGmailPubSubError, ensure_instance_gmail_subscription  # noqa: E402
 
 ADMIN_HEADERS = {"X-Admin-Token": "test-admin"}
 
@@ -95,9 +97,7 @@ def _reset_stripe_mock():
     """Reset the stripe mock before each test so state doesn't leak."""
     _mock_stripe_module.reset_mock()
     _mock_stripe_module.Webhook = MagicMock()
-    _mock_stripe_module.error.SignatureVerificationError = type(
-        "SignatureVerificationError", (Exception,), {}
-    )
+    _mock_stripe_module.error.SignatureVerificationError = type("SignatureVerificationError", (Exception,), {})
     yield
 
 
@@ -176,6 +176,11 @@ def _post_webhook(client):
     )
 
 
+def _httpx_response(status_code: int, payload: dict[str, object] | None = None) -> httpx.Response:
+    request = httpx.Request("GET", "https://pubsub.googleapis.com/v1/projects/demo/subscriptions/gmail-push-testuser")
+    return httpx.Response(status_code=status_code, json=payload, request=request)
+
+
 def test_google_gmail_start_redirects_to_google_for_hosted_instance(client, db_session):
     user = _make_user(db_session, email="owner@test.com")
     _make_instance(db_session, user, subdomain="testuser")
@@ -227,7 +232,14 @@ def test_google_gmail_callback_posts_handoff_and_redirects_to_tenant(client, db_
     with (
         patch.object(settings, "google_client_id", "cp-google-client"),
         patch.object(settings, "google_client_secret", "cp-google-secret"),
-        patch("control_plane.routers.auth._exchange_code_with_redirect_uri", return_value={"refresh_token": "refresh-token"}),
+        patch(
+            "control_plane.routers.auth._exchange_code_with_redirect_uri",
+            return_value={"refresh_token": "refresh-token"},
+        ),
+        patch(
+            "control_plane.routers.auth.ensure_instance_gmail_subscription",
+            return_value="projects/demo/subscriptions/gmail-push-testuser",
+        ),
         patch("control_plane.routers.auth.httpx.post", return_value=handoff_response) as mock_post,
     ):
         response = client.get(
@@ -242,6 +254,182 @@ def test_google_gmail_callback_posts_handoff_and_redirects_to_tenant(client, db_
     _, kwargs = mock_post.call_args
     assert kwargs["headers"]["X-Internal-Token"] == settings.instance_internal_api_secret
     assert kwargs["json"]["refresh_token"] == "refresh-token"
+
+
+def test_google_gmail_callback_provisions_pubsub_before_handoff(client, db_session):
+    user = _make_user(db_session, email="owner@test.com")
+    _make_instance(db_session, user, subdomain="testuser")
+    state = _encode_jwt(
+        {
+            "sub": user.email,
+            "email": user.email,
+            "instance": "testuser",
+            "purpose": "hosted_gmail_connect_callback",
+            "exp": int(time.time()) + 300,
+        },
+        settings.jwt_secret,
+    )
+    events: list[str] = []
+
+    def _record_subscription(*, subdomain: str) -> str:
+        assert subdomain == "testuser"
+        events.append("subscription")
+        return "projects/demo/subscriptions/gmail-push-testuser"
+
+    def _record_handoff(**kwargs) -> None:
+        assert kwargs["subdomain"] == "testuser"
+        events.append("handoff")
+
+    with (
+        patch.object(settings, "google_client_id", "cp-google-client"),
+        patch.object(settings, "google_client_secret", "cp-google-secret"),
+        patch(
+            "control_plane.routers.auth._exchange_code_with_redirect_uri",
+            return_value={"refresh_token": "refresh-token"},
+        ),
+        patch("control_plane.routers.auth.ensure_instance_gmail_subscription", side_effect=_record_subscription),
+        patch("control_plane.routers.auth._post_hosted_gmail_handoff", side_effect=_record_handoff),
+    ):
+        response = client.get(
+            "/auth/google/gmail/callback",
+            params={"code": "auth-code", "state": state},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == f"https://testuser.{settings.root_domain}/conversations"
+    assert events == ["subscription", "handoff"]
+
+
+def test_google_gmail_callback_redirects_when_pubsub_provisioning_fails(client, db_session):
+    user = _make_user(db_session, email="owner@test.com")
+    _make_instance(db_session, user, subdomain="testuser")
+    state = _encode_jwt(
+        {
+            "sub": user.email,
+            "email": user.email,
+            "instance": "testuser",
+            "purpose": "hosted_gmail_connect_callback",
+            "exp": int(time.time()) + 300,
+        },
+        settings.jwt_secret,
+    )
+
+    with (
+        patch.object(settings, "google_client_id", "cp-google-client"),
+        patch.object(settings, "google_client_secret", "cp-google-secret"),
+        patch(
+            "control_plane.routers.auth._exchange_code_with_redirect_uri",
+            return_value={"refresh_token": "refresh-token"},
+        ),
+        patch(
+            "control_plane.routers.auth.ensure_instance_gmail_subscription",
+            side_effect=HostedGmailPubSubError("boom"),
+        ),
+        patch("control_plane.routers.auth.httpx.post") as mock_post,
+    ):
+        response = client.get(
+            "/auth/google/gmail/callback",
+            params={"code": "auth-code", "state": state},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    parsed = urllib.parse.urlparse(response.headers["location"])
+    assert parsed.path == "/conversations"
+    assert parsed.netloc == f"testuser.{settings.root_domain}"
+    query = urllib.parse.parse_qs(parsed.query)
+    assert query["gmail_error"] == ["Could not configure Gmail notifications for this instance."]
+    mock_post.assert_not_called()
+
+
+# ===========================================================================
+# Hosted Gmail Pub/Sub provisioning
+# ===========================================================================
+
+
+def test_ensure_instance_gmail_subscription_creates_missing_subscription():
+    with (
+        patch.object(settings, "instance_gmail_pubsub_topic", "projects/demo/topics/gmail"),
+        patch.object(settings, "instance_pubsub_sa_email", "pubsub-push@demo.iam.gserviceaccount.com"),
+        patch("control_plane.services.gmail_pubsub._google_access_token", return_value="pubsub-token"),
+        patch("control_plane.services.gmail_pubsub.httpx.get", return_value=_httpx_response(404)),
+        patch(
+            "control_plane.services.gmail_pubsub.httpx.put",
+            return_value=_httpx_response(200, {"name": "projects/demo/subscriptions/gmail-push-testuser"}),
+        ) as mock_put,
+    ):
+        subscription_name = ensure_instance_gmail_subscription(subdomain="testuser")
+
+    assert subscription_name == "projects/demo/subscriptions/gmail-push-testuser"
+    _, kwargs = mock_put.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer pubsub-token"
+    assert kwargs["json"]["topic"] == "projects/demo/topics/gmail"
+    assert (
+        kwargs["json"]["pushConfig"]["pushEndpoint"]
+        == f"https://testuser.{settings.root_domain}/api/email/webhook/google/pubsub"
+    )
+    assert (
+        kwargs["json"]["pushConfig"]["oidcToken"]["serviceAccountEmail"] == "pubsub-push@demo.iam.gserviceaccount.com"
+    )
+    assert kwargs["json"]["pushConfig"]["oidcToken"]["audience"] == f"https://testuser.{settings.root_domain}"
+
+
+def test_ensure_instance_gmail_subscription_updates_existing_push_config():
+    existing = {
+        "topic": "projects/demo/topics/gmail",
+        "pushConfig": {
+            "pushEndpoint": "https://old.longhouse.ai/api/email/webhook/google/pubsub",
+            "oidcToken": {
+                "serviceAccountEmail": "pubsub-push@demo.iam.gserviceaccount.com",
+                "audience": "https://old.longhouse.ai",
+            },
+        },
+    }
+
+    with (
+        patch.object(settings, "instance_gmail_pubsub_topic", "projects/demo/topics/gmail"),
+        patch.object(settings, "instance_pubsub_sa_email", "pubsub-push@demo.iam.gserviceaccount.com"),
+        patch("control_plane.services.gmail_pubsub._google_access_token", return_value="pubsub-token"),
+        patch("control_plane.services.gmail_pubsub.httpx.get", return_value=_httpx_response(200, existing)),
+        patch("control_plane.services.gmail_pubsub.httpx.put") as mock_put,
+        patch(
+            "control_plane.services.gmail_pubsub.httpx.post",
+            return_value=_httpx_response(200, {}),
+        ) as mock_post,
+    ):
+        subscription_name = ensure_instance_gmail_subscription(subdomain="testuser")
+
+    assert subscription_name == "projects/demo/subscriptions/gmail-push-testuser"
+    mock_put.assert_not_called()
+    _, kwargs = mock_post.call_args
+    assert (
+        kwargs["json"]["pushConfig"]["pushEndpoint"]
+        == f"https://testuser.{settings.root_domain}/api/email/webhook/google/pubsub"
+    )
+    assert kwargs["json"]["pushConfig"]["oidcToken"]["audience"] == f"https://testuser.{settings.root_domain}"
+
+
+def test_ensure_instance_gmail_subscription_rejects_topic_drift():
+    existing = {
+        "topic": "projects/demo/topics/other",
+        "pushConfig": {
+            "pushEndpoint": f"https://testuser.{settings.root_domain}/api/email/webhook/google/pubsub",
+            "oidcToken": {
+                "serviceAccountEmail": "pubsub-push@demo.iam.gserviceaccount.com",
+                "audience": f"https://testuser.{settings.root_domain}",
+            },
+        },
+    }
+
+    with (
+        patch.object(settings, "instance_gmail_pubsub_topic", "projects/demo/topics/gmail"),
+        patch.object(settings, "instance_pubsub_sa_email", "pubsub-push@demo.iam.gserviceaccount.com"),
+        patch("control_plane.services.gmail_pubsub._google_access_token", return_value="pubsub-token"),
+        patch("control_plane.services.gmail_pubsub.httpx.get", return_value=_httpx_response(200, existing)),
+    ):
+        with pytest.raises(HostedGmailPubSubError, match="points at"):
+            ensure_instance_gmail_subscription(subdomain="testuser")
 
 
 # ===========================================================================
@@ -702,7 +890,8 @@ class TestInstancesAPI:
     def test_reprovision_blocked_during_deploy(self, MockProv, client, db_session):
         user = _make_user(db_session)
         inst = _make_instance(
-            db_session, user,
+            db_session,
+            user,
             deploy_id="d-active",
             deploy_state="deploying",
         )
@@ -745,7 +934,6 @@ class TestInstancesAPI:
         _, call_kwargs = prov.provision_instance.call_args
         assert call_kwargs["custom_env"] == {"TELEGRAM_BOT_TOKEN": "tg-secret"}
         assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
-
 
     def test_my_instance(self, client, db_session):
         user = _make_user(db_session)
@@ -868,11 +1056,14 @@ class TestStripeWebhookProvisioning:
             patch.object(settings, "stripe_secret_key", "sk_test"),
             patch.object(settings, "stripe_webhook_secret", "whsec_test"),
         ):
-            _setup_stripe_webhook("checkout.session.completed", {
-                "client_reference_id": str(user.id),
-                "subscription": "sub_test",
-                "customer": "cus_test",
-            })
+            _setup_stripe_webhook(
+                "checkout.session.completed",
+                {
+                    "client_reference_id": str(user.id),
+                    "subscription": "sub_test",
+                    "customer": "cus_test",
+                },
+            )
             resp = _post_webhook(client)
 
         assert resp.status_code == 200
@@ -895,11 +1086,14 @@ class TestStripeWebhookProvisioning:
             patch.object(settings, "stripe_secret_key", "sk_test"),
             patch.object(settings, "stripe_webhook_secret", "whsec_test"),
         ):
-            _setup_stripe_webhook("checkout.session.completed", {
-                "client_reference_id": str(user.id),
-                "subscription": "sub_test",
-                "customer": "cus_test",
-            })
+            _setup_stripe_webhook(
+                "checkout.session.completed",
+                {
+                    "client_reference_id": str(user.id),
+                    "subscription": "sub_test",
+                    "customer": "cus_test",
+                },
+            )
             resp = _post_webhook(client)
 
         assert resp.status_code == 200
@@ -918,11 +1112,14 @@ class TestStripeWebhookProvisioning:
             patch.object(settings, "stripe_secret_key", "sk_test"),
             patch.object(settings, "stripe_webhook_secret", "whsec_test"),
         ):
-            _setup_stripe_webhook("checkout.session.completed", {
-                "client_reference_id": str(user.id),
-                "subscription": "sub_fail",
-                "customer": "cus_fail",
-            })
+            _setup_stripe_webhook(
+                "checkout.session.completed",
+                {
+                    "client_reference_id": str(user.id),
+                    "subscription": "sub_fail",
+                    "customer": "cus_fail",
+                },
+            )
             resp = _post_webhook(client)
 
         assert resp.status_code == 200  # Webhook always returns 200
@@ -947,9 +1144,14 @@ class TestStripeSubscriptionEvents:
         user.subscription_status = "active"
         db_session.commit()
 
-        resp = self._fire_event(client, "customer.subscription.updated", {
-            "customer": "cus_sub", "status": "past_due",
-        })
+        resp = self._fire_event(
+            client,
+            "customer.subscription.updated",
+            {
+                "customer": "cus_sub",
+                "status": "past_due",
+            },
+        )
         assert resp.status_code == 200
         db_session.refresh(user)
         assert user.subscription_status == "past_due"
@@ -1004,11 +1206,14 @@ class TestSubdomainDerivation:
             patch.object(settings, "stripe_secret_key", "sk_test"),
             patch.object(settings, "stripe_webhook_secret", "whsec_test"),
         ):
-            _setup_stripe_webhook("checkout.session.completed", {
-                "client_reference_id": str(user.id),
-                "subscription": "sub_test",
-                "customer": "cus_test",
-            })
+            _setup_stripe_webhook(
+                "checkout.session.completed",
+                {
+                    "client_reference_id": str(user.id),
+                    "subscription": "sub_test",
+                    "customer": "cus_test",
+                },
+            )
             resp = _post_webhook(client)
 
         assert resp.status_code == 200
@@ -1030,11 +1235,14 @@ class TestSubdomainDerivation:
             patch.object(settings, "stripe_secret_key", "sk_test"),
             patch.object(settings, "stripe_webhook_secret", "whsec_test"),
         ):
-            _setup_stripe_webhook("checkout.session.completed", {
-                "client_reference_id": str(user.id),
-                "subscription": "sub_test",
-                "customer": "cus_test2",
-            })
+            _setup_stripe_webhook(
+                "checkout.session.completed",
+                {
+                    "client_reference_id": str(user.id),
+                    "subscription": "sub_test",
+                    "customer": "cus_test2",
+                },
+            )
             resp = _post_webhook(client)
 
         assert resp.status_code == 200
@@ -1127,11 +1335,14 @@ class TestFullSignupFlow:
             patch.object(settings, "stripe_secret_key", "sk_test"),
             patch.object(settings, "stripe_webhook_secret", "whsec_test"),
         ):
-            _setup_stripe_webhook("checkout.session.completed", {
-                "client_reference_id": str(user.id),
-                "subscription": "sub_flow",
-                "customer": "cus_flow",
-            })
+            _setup_stripe_webhook(
+                "checkout.session.completed",
+                {
+                    "client_reference_id": str(user.id),
+                    "subscription": "sub_flow",
+                    "customer": "cus_flow",
+                },
+            )
             resp = _post_webhook(client)
 
         assert resp.status_code == 200
@@ -1315,7 +1526,14 @@ class TestMigrationStatusProbe:
         finally:
             conn.close()
 
-        inst = Instance(id=999, user_id=1, subdomain="legacy", container_name="longhouse-legacy", status="active", data_path=str(data_dir))
+        inst = Instance(
+            id=999,
+            user_id=1,
+            subdomain="legacy",
+            container_name="longhouse-legacy",
+            status="active",
+            data_path=str(data_dir),
+        )
         status = _build_migration_status(inst)
 
         assert status.state == "pending"
@@ -1373,7 +1591,14 @@ class TestMigrationStatusProbe:
         finally:
             conn.close()
 
-        inst = Instance(id=1000, user_id=1, subdomain="modern", container_name="longhouse-modern", status="active", data_path=str(data_dir))
+        inst = Instance(
+            id=1000,
+            user_id=1,
+            subdomain="modern",
+            container_name="longhouse-modern",
+            status="active",
+            data_path=str(data_dir),
+        )
         status = _build_migration_status(inst)
 
         assert status.state == "ok"

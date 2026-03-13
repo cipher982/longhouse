@@ -87,7 +87,9 @@ export default function ConversationsPage() {
   });
 
   const usesHostedGmailConnect = Boolean(authMethodsQuery.data?.sso_url);
-  const canConnectGmail = usesHostedGmailConnect || Boolean(config.googleClientId);
+  const gmailReady = authMethodsQuery.data?.gmail_ready ?? (usesHostedGmailConnect || Boolean(config.googleClientId));
+  const gmailSetupMessage = authMethodsQuery.data?.gmail_setup_message ?? null;
+  const canConnectGmail = gmailReady && (usesHostedGmailConnect || Boolean(config.googleClientId));
 
   useEffect(() => {
     setDraftQuery(searchQuery);
@@ -202,11 +204,12 @@ export default function ConversationsPage() {
       return {
         tone: "neutral",
         title: "Connect Gmail to start your inbox",
-        description: usesHostedGmailConnect
+        description: gmailSetupMessage
+          ?? (usesHostedGmailConnect
           ? "Longhouse will send you to control.longhouse.ai to connect your existing Gmail or Workspace mailbox, then bring you back here."
           : canConnectGmail
           ? "This page becomes your assistant email inbox once Gmail is connected. Oikos will search past threads and only reply inside existing conversations."
-          : "Google OAuth is not configured on this instance yet. Add a Google client first, then connect Gmail here.",
+          : "Google OAuth is not configured on this instance yet. Add a Google client first, then connect Gmail here."),
         actionLabel: "Connect Gmail",
         showAction: true,
         mailboxLabel: null,
@@ -237,7 +240,7 @@ export default function ConversationsPage() {
       showAction: true,
       mailboxLabel,
     };
-  }, [canConnectGmail, gmailErrorParam, gmailStatus, user, usesHostedGmailConnect]);
+  }, [canConnectGmail, gmailErrorParam, gmailSetupMessage, gmailStatus, user, usesHostedGmailConnect]);
 
   const handleSearch = (event: FormEvent) => {
     event.preventDefault();
@@ -275,17 +278,18 @@ export default function ConversationsPage() {
       return "Try a different search.";
     }
     if (!user?.gmail_connected) {
-      return usesHostedGmailConnect
+      return gmailSetupMessage
+        ?? (usesHostedGmailConnect
         ? "Connect Gmail above and Longhouse will finish the hosted authorization flow on control.longhouse.ai."
         : canConnectGmail
         ? "Connect Gmail above to turn this into your assistant inbox."
-        : "Ask the instance admin to configure Google OAuth, then connect Gmail here.";
+        : "Ask the instance admin to configure Google OAuth, then connect Gmail here.");
     }
     if (gmailStatus === "active") {
       return "Email sync is live. Your first Gmail thread will appear here automatically.";
     }
     return "Reconnect Gmail above to restore syncing before new mail can land here.";
-  }, [canConnectGmail, gmailStatus, searchQuery, user?.gmail_connected, usesHostedGmailConnect]);
+  }, [canConnectGmail, gmailSetupMessage, gmailStatus, searchQuery, user?.gmail_connected, usesHostedGmailConnect]);
 
   return (
     <PageShell size="full" className="conversations-page">

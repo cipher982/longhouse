@@ -101,6 +101,17 @@ cd longhouse && make dev
 
 Set `LONGHOUSE_PASSWORD` (plaintext) or `LONGHOUSE_PASSWORD_HASH` (recommended) for remote access authentication.
 
+### Gmail Inbox Setup (Self-hosted)
+
+The inbox Gmail flow is BYO Google config on self-hosted installs. Users will see setup errors until the instance has:
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GMAIL_PUBSUB_TOPIC`
+- `PUBSUB_AUDIENCE`
+
+Set `PUBSUB_SA_EMAIL` too if you want the webhook to pin Pub/Sub push auth to a specific service account.
+
 Generate a pbkdf2 hash:
 ```bash
 python - <<'PY'

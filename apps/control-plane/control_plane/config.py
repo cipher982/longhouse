@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     # Google OAuth (control plane login)
     google_client_id: str | None = None
     google_client_secret: str | None = None
+    google_cloud_credentials_json: str | None = None
 
     # Stripe
     stripe_secret_key: str | None = None

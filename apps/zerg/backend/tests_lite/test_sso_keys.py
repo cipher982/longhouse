@@ -12,7 +12,8 @@ Uses in-memory SQLite with inline setup (no shared conftest).
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -195,15 +196,17 @@ def test_env_var_fallback_when_cache_fully_expired():
 
 def test_accept_token_validates_with_cp_keys(tmp_path):
     """accept_token should validate tokens signed with CP-fetched keys."""
+    import base64
     import hashlib
     import hmac
     import json
-    import base64
-    import os
 
     from fastapi.testclient import TestClient
 
-    from zerg.database import Base, get_db, make_engine, make_sessionmaker
+    from zerg.database import Base
+    from zerg.database import get_db
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
     from zerg.main import api_app
     from zerg.models.models import User
 
@@ -266,10 +269,10 @@ def test_accept_token_validates_with_cp_keys(tmp_path):
 
 def _make_jwt(payload_dict: dict, secret: str) -> str:
     """Create a minimal HS256 JWT for testing."""
+    import base64
     import hashlib
     import hmac
     import json
-    import base64
 
     def _b64url(data: bytes) -> str:
         return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
@@ -283,8 +286,10 @@ def _make_jwt(payload_dict: dict, secret: str) -> str:
 
 def _setup_test_db(tmp_path):
     """Set up a test DB with a user, returning (override_fn, cleanup_fn)."""
-    from fastapi.testclient import TestClient
-    from zerg.database import Base, get_db, make_engine, make_sessionmaker
+    from zerg.database import Base
+    from zerg.database import get_db
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
     from zerg.main import api_app
     from zerg.models.models import User
 
@@ -413,10 +418,13 @@ def test_accept_token_accepts_instance_claim_when_no_instance_id_env(tmp_path):
 def test_auth_methods_returns_sso_when_cp_url_set():
     """/auth/methods should return sso: true when CONTROL_PLANE_URL is set."""
     from fastapi.testclient import TestClient
+
     from zerg.main import api_app
 
     mock_settings = MagicMock()
     mock_settings.google_client_id = None
+    mock_settings.google_client_secret = None
+    mock_settings.gmail_pubsub_topic = None
     mock_settings.longhouse_password = None
     mock_settings.longhouse_password_hash = None
     mock_settings.control_plane_url = "https://control.longhouse.ai"
@@ -431,14 +439,19 @@ def test_auth_methods_returns_sso_when_cp_url_set():
     assert data["sso_url"] == "https://control.longhouse.ai"
     assert data["google"] is False
     assert data["password"] is False
+    assert data["gmail_ready"] is False
+    assert "Reprovision" in data["gmail_setup_message"]
 
 
 def test_auth_methods_hide_google_when_control_plane_is_enabled():
     from fastapi.testclient import TestClient
+
     from zerg.main import api_app
 
     mock_settings = MagicMock()
     mock_settings.google_client_id = "google-client-id"
+    mock_settings.google_client_secret = "google-client-secret"
+    mock_settings.gmail_pubsub_topic = "projects/demo/topics/gmail"
     mock_settings.longhouse_password = None
     mock_settings.longhouse_password_hash = None
     mock_settings.control_plane_url = "https://control.longhouse.ai"
@@ -451,3 +464,32 @@ def test_auth_methods_hide_google_when_control_plane_is_enabled():
     data = resp.json()
     assert data["sso"] is True
     assert data["google"] is False
+    assert data["gmail_ready"] is True
+    assert data["gmail_setup_message"] is None
+
+
+def test_auth_methods_report_missing_oss_gmail_setup():
+    from fastapi.testclient import TestClient
+
+    from zerg.main import api_app
+
+    mock_settings = MagicMock()
+    mock_settings.google_client_id = "google-client-id"
+    mock_settings.google_client_secret = None
+    mock_settings.gmail_pubsub_topic = None
+    mock_settings.longhouse_password = None
+    mock_settings.longhouse_password_hash = None
+    mock_settings.control_plane_url = None
+
+    with patch("zerg.routers.auth.get_settings", return_value=mock_settings):
+        client = TestClient(api_app)
+        resp = client.get("/auth/methods")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["google"] is True
+    assert data["gmail_ready"] is False
+    assert data["gmail_setup_message"] == (
+        "This instance still needs BYO Google config before anyone can connect Gmail. "
+        "Missing: GOOGLE_CLIENT_SECRET, GMAIL_PUBSUB_TOPIC."
+    )

@@ -12,6 +12,7 @@ Flow:
   GET  /auth/status            → check if authenticated
   POST /auth/logout            → clear session cookie
 """
+
 from __future__ import annotations
 
 import base64
@@ -42,6 +43,8 @@ from control_plane.config import settings
 from control_plane.db import get_db
 from control_plane.models import Instance
 from control_plane.models import User
+from control_plane.services.gmail_pubsub import HostedGmailPubSubError
+from control_plane.services.gmail_pubsub import ensure_instance_gmail_subscription
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -319,10 +322,7 @@ def _load_hosted_gmail_instance(
     email: str,
 ) -> tuple[Instance, User]:
     row = (
-        db.query(Instance, User)
-        .join(User, Instance.user_id == User.id)
-        .filter(Instance.subdomain == subdomain)
-        .first()
+        db.query(Instance, User).join(User, Instance.user_id == User.id).filter(Instance.subdomain == subdomain).first()
     )
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instance not found")
@@ -382,18 +382,18 @@ def email_signup(
     if len(password) < 8:
         from fastapi.responses import RedirectResponse as _RR
 
-        return _RR(f"/signup?error=Password+must+be+at+least+8+characters", status_code=303)
+        return _RR("/signup?error=Password+must+be+at+least+8+characters", status_code=303)
 
     if password != password_confirm:
         from fastapi.responses import RedirectResponse as _RR
 
-        return _RR(f"/signup?error=Passwords+do+not+match", status_code=303)
+        return _RR("/signup?error=Passwords+do+not+match", status_code=303)
 
     existing = db.query(User).filter(User.email == email).first()
     if existing:
         from fastapi.responses import RedirectResponse as _RR
 
-        return _RR(f"/signup?error=An+account+with+this+email+already+exists", status_code=303)
+        return _RR("/signup?error=An+account+with+this+email+already+exists", status_code=303)
 
     user = User(email=email, password_hash=_hash_password(password), email_verified=False)
     db.add(user)
@@ -603,6 +603,15 @@ def google_gmail_callback(
             status_code=302,
         )
 
+    try:
+        ensure_instance_gmail_subscription(subdomain=subdomain)
+    except HostedGmailPubSubError as exc:
+        logger.error("Hosted Gmail Pub/Sub provisioning failed for %s: %s", subdomain, exc)
+        return RedirectResponse(
+            _tenant_conversations_url(subdomain, error="Could not configure Gmail notifications for this instance."),
+            status_code=302,
+        )
+
     handoff_token = _issue_hosted_gmail_handoff_token(email=email, instance=subdomain)
     try:
         _post_hosted_gmail_handoff(
@@ -807,7 +816,6 @@ def reset_password(
     user = db.query(User).filter(User.id == int(payload["sub"])).first()
     if not user:
         return RedirectResponse("/reset-password?error=User+not+found", status_code=303)
-
 
     # Reject replayed tokens: phash must match current password hash prefix
     expected_phash = user.password_hash[:8] if user.password_hash else ""
