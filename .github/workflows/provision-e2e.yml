@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   provision-e2e:
-    runs-on: cube
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
