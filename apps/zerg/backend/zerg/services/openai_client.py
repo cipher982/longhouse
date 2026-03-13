@@ -184,6 +184,7 @@ class OpenAIChat:
         base_url: str | None = None,
         streaming: bool = False,
         reasoning_effort: str | None = None,
+        extra_body: dict | None = None,
     ):
         """Initialize the OpenAI chat client.
 
@@ -193,12 +194,14 @@ class OpenAIChat:
             base_url: Optional base URL for API (for Groq, etc.).
             streaming: Whether to stream responses.
             reasoning_effort: Reasoning effort for o1/o3 models ("low", "medium", "high").
+            extra_body: Extra request body fields (e.g., OpenRouter reasoning config).
         """
         self._model = model
         self._api_key = api_key
         self._base_url = base_url
         self._streaming = streaming
         self._reasoning_effort = reasoning_effort
+        self._extra_body = extra_body
         self._tools: list[Tool] = []
         self._tool_choice: dict | str | None = None
 
@@ -229,6 +232,7 @@ class OpenAIChat:
             base_url=self._base_url,
             streaming=self._streaming,
             reasoning_effort=self._reasoning_effort,
+            extra_body=self._extra_body,
         )
         bound._tools = tools
         bound._tool_choice = tool_choice
@@ -282,9 +286,13 @@ class OpenAIChat:
             params["tools"] = tools_param
             params["tool_choice"] = self._get_tool_choice_param()
 
-        # Add reasoning effort for supported models
+        # Add reasoning effort for supported models (direct OpenAI)
         if self._reasoning_effort and self._reasoning_effort != "none":
             params["reasoning_effort"] = self._reasoning_effort
+
+        # Add extra body fields (e.g., OpenRouter reasoning config)
+        if self._extra_body:
+            params["extra_body"] = self._extra_body
 
         # Handle streaming
         if self._streaming and config and config.get("callbacks"):
