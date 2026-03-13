@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   provision-e2e:
     runs-on: cube
@@ -22,11 +26,46 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Docker gate
         run: |
           set -euo pipefail
           command -v docker
           docker info
 
+      - name: Select runtime image
+        id: runtime-image
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA::7}"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:latest"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]] && \
+             [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]] && \
+             git diff --name-only "${{ github.event.before }}" "${GITHUB_SHA}" -- \
+               .dockerignore \
+               bun.lock \
+               apps/zerg/backend \
+               apps/zerg/frontend-web \
+               config \
+               docker/entrypoint.sh \
+               docker/runtime.dockerfile \
+               .github/workflows/runtime-image.yml | grep -q .; then
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${short_sha}"
+          fi
+
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "Selected runtime image: $image"
+
       - name: Provisioning E2E (control plane + instance)
+        env:
+          PROVISION_E2E_RUNTIME_IMAGE: ${{ steps.runtime-image.outputs.image }}
+          PROVISION_E2E_RUNTIME_PLATFORM: linux/amd64
         run: ./scripts/ci/provision-e2e.sh

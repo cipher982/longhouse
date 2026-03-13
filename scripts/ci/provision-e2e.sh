@@ -9,6 +9,7 @@ INSTANCE_PORT=8000
 INSTANCE_URL="http://127.0.0.1:${INSTANCE_PORT}"
 CI_SUBDOMAIN="ci"
 CI_CONTAINER_NAME="longhouse-${CI_SUBDOMAIN}"
+IMAGE_TAG="longhouse-runtime:ci-${GITHUB_SHA:-local}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -42,10 +43,51 @@ fi
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
 
-IMAGE_TAG="longhouse-runtime:ci-${GITHUB_SHA:-local}"
+wait_for_runtime_image() {
+  local image_ref="$1"
+  local attempts="${2:-45}"
+  local sleep_seconds="${3:-4}"
+  local attempt=0
+  local platform="${PROVISION_E2E_RUNTIME_PLATFORM:-}"
+  local -a pull_cmd=(docker pull)
 
-printf "\n==> Building runtime image: %s\n" "$IMAGE_TAG"
-docker build -f "$ROOT_DIR/docker/runtime.dockerfile" -t "$IMAGE_TAG" "$ROOT_DIR"
+  if docker image inspect "$image_ref" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ -n "$platform" ]]; then
+    pull_cmd+=(--platform "$platform")
+  fi
+
+  printf "\n==> Waiting for published runtime image: %s\n" "$image_ref"
+  for attempt in $(seq 1 "$attempts"); do
+    if "${pull_cmd[@]}" "$image_ref" >/dev/null 2>&1; then
+      printf "  Pulled runtime image on attempt %s/%s\n" "$attempt" "$attempts"
+      return 0
+    fi
+    printf "  Not available yet (%s/%s); retrying in %ss\n" "$attempt" "$attempts" "$sleep_seconds"
+    sleep "$sleep_seconds"
+  done
+
+  echo "Timed out waiting for published runtime image: $image_ref" >&2
+  return 1
+}
+
+prepare_runtime_image() {
+  local published_image="${PROVISION_E2E_RUNTIME_IMAGE:-}"
+
+  if [[ -n "$published_image" ]]; then
+    printf "\n==> Using published runtime image: %s\n" "$published_image"
+    wait_for_runtime_image "$published_image"
+    docker tag "$published_image" "$IMAGE_TAG"
+    return 0
+  fi
+
+  printf "\n==> Building runtime image: %s\n" "$IMAGE_TAG"
+  docker build -f "$ROOT_DIR/docker/runtime.dockerfile" -t "$IMAGE_TAG" "$ROOT_DIR"
+}
+
+prepare_runtime_image
 
 make_secret() {
   "$PYTHON_BIN" - <<'PY'
@@ -80,6 +122,30 @@ else
 fi
 mkdir -p "$INSTANCE_DATA_ROOT"
 
+cleanup_instance_data_root() {
+  local data_root="$1"
+  local cleanup_image="${2:-}"
+
+  if [[ ! -d "$data_root" ]]; then
+    return 0
+  fi
+
+  if rm -rf "$data_root" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ -n "$cleanup_image" ]] && docker image inspect "$cleanup_image" >/dev/null 2>&1; then
+    docker run --rm -u 0:0 \
+      -v "$data_root:/cleanup" \
+      --entrypoint sh \
+      "$cleanup_image" \
+      -lc 'find /cleanup -mindepth 1 -maxdepth 1 -exec rm -rf {} +' \
+      >/dev/null 2>&1 || true
+  fi
+
+  rm -rf "$data_root" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   set +e
   if [[ -n "${INSTANCE_ID:-}" ]]; then
@@ -90,7 +156,7 @@ cleanup() {
     kill "$CONTROL_PLANE_PID" >/dev/null 2>&1 || true
   fi
   rm -f "$CONTROL_PLANE_DB" || true
-  rm -rf "$INSTANCE_DATA_ROOT" || true
+  cleanup_instance_data_root "$INSTANCE_DATA_ROOT" "$IMAGE_TAG"
 }
 trap cleanup EXIT
 
