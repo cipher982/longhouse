@@ -37,6 +37,25 @@ Notes:
 - Spec: `docs/specs/memory-system-consolidation.md`
 - Tasks: `docs/tasks/memory-system-consolidation.md`
 
+## [Launch][QA/Test] Deepen Gmail inbox confidence with real-world validation (size: 3)
+
+Status (2026-03-12): Planned. The current launch gate is green, but the highest-value follow-up work is now real mailbox coverage, connect-flow coverage, onboarding validation, and thread-correctness proof rather than more mocked tests.
+
+**Goal:** Push confidence beyond app-level smoke and narrow unit tests into the real trust boundaries of the Gmail-first inbox.
+
+- [ ] Add a dedicated real Gmail canary that proves receive -> ingest -> inbox render -> reply in thread on a controlled mailbox
+- [ ] Add cross-browser Gmail connect-flow coverage for popup/consent behavior on Chrome, Safari, and mobile Safari
+- [ ] Add onboarding validation for both fresh hosted instances and clean OSS installs, including missing or misconfigured Google OAuth states
+- [ ] Expand live thread-correctness coverage for reply, reply-all, duplicate delivery/idempotency, aliases, and list-style headers
+- [ ] Decide which of these checks are per-push, daily, or manual canaries and wire them into the existing QA surface
+
+Notes:
+- 2026-03-12: `make verify-prod` is now green, but it still does not prove the full real Gmail receive/reply loop.
+- 2026-03-12: Popup consent behavior and refresh-token return semantics are classic browser/provider edge cases that mocked tests will not catch.
+- 2026-03-12: The next confidence gains should come from fewer, more real tests rather than a larger pile of synthetic frontend mocks.
+- Spec: `docs/specs/oikos-conversations-email.md`
+- Tasks: `docs/tasks/oikos-conversations-email.md`
+
 ## [Launch][Product][QA/Test] Polish Gmail inbox onboarding and health UX (size: 1)
 
 Status (2026-03-12): Done. The inbox now exposes a direct Gmail connect/reconnect path, reports health from the real connector state instead of the stale legacy user field, and explains the reply boundary in-product.
@@ -54,20 +73,20 @@ Notes:
 
 ## [Launch][QA/Test][Docs/Drift] Harden Gmail connector watch bootstrap and retire legacy webhook drift (size: 1)
 
-Status (2026-03-12): In progress. Gmail connect currently can report success while watch bootstrap failed or never even ran, and the repo still teaches the old direct HTTPS webhook story even though production uses Pub/Sub.
+Status (2026-03-12): Done. Gmail connect now reports explicit watch/bootstrap state, production/runtime flow is Pub/Sub-only, and the misleading legacy HTTPS webhook path is no longer part of the normal first-party surface.
 
 **Goal:** Make Gmail connector setup/reporting honest, make production renewal/watch registration Pub/Sub-only, and remove misleading legacy webhook surface/docs from the normal runtime path.
 
-- [ ] Make `/auth/google/gmail` return explicit watch/mailbox bootstrap state instead of swallowing failures
-- [ ] Stop production watch registration/renewal from falling back to the legacy direct HTTPS webhook path
-- [ ] Fail fast when `GMAIL_PUBSUB_TOPIC` is configured without `PUBSUB_AUDIENCE`
-- [ ] Quarantine the legacy `/email/webhook/google` route to testing/local compatibility only
-- [ ] Add focused regression coverage for Gmail connect bootstrap and renewal state handling
-- [ ] Regenerate typed API artifacts and deploy/verify the hosted instance after the cleanup
+- [x] Make `/auth/google/gmail` return explicit watch/mailbox bootstrap state instead of swallowing failures
+- [x] Stop production watch registration/renewal from falling back to the legacy direct HTTPS webhook path
+- [x] Fail fast when `GMAIL_PUBSUB_TOPIC` is configured without `PUBSUB_AUDIENCE`
+- [x] Quarantine the legacy `/email/webhook/google` route to testing/local compatibility only
+- [x] Add focused regression coverage for Gmail connect bootstrap and renewal state handling
+- [x] Regenerate typed API artifacts and deploy/verify the hosted instance after the cleanup
 
 Notes:
-- 2026-03-12: `connect_gmail()` currently clears prior watch metadata before attempting bootstrap and swallows all exceptions, so reconnect can silently degrade a healthy connector.
-- 2026-03-12: The legacy direct HTTPS webhook/router is still mounted and still appears in generated API surface/docs, which keeps misleading future work.
+- 2026-03-12: This landed in the Gmail watch hardening pass and was verified with targeted backend tests plus hosted deploy validation.
+- 2026-03-12: Future Gmail work should build on the cleaner Pub/Sub-only production story rather than reopening the legacy webhook path.
 
 ## [Launch][Product][Docs/Drift] Tighten Longhouse tool surfaces for OSS/demo clarity (size: 5)
 

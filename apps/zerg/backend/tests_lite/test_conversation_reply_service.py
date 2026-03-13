@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from email import policy
+from email.parser import BytesParser
 import os
 from types import SimpleNamespace
 
@@ -200,6 +202,102 @@ def test_conversation_reply_service_reply_all_keeps_existing_thread_participants
         assert result.cc_emails == ("teammate@example.com", "manager@example.com")
         assert sent["to_emails"] == ("friend@example.com",)
         assert sent["cc_emails"] == ("teammate@example.com", "manager@example.com")
+
+
+def test_conversation_reply_service_reply_all_excludes_configured_mailbox_alias_variants(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    archive_root = tmp_path / "data"
+
+    monkeypatch.setattr(conversation_archive, "get_settings", lambda: SimpleNamespace(data_dir=archive_root))
+    monkeypatch.setattr(crypto, "decrypt", lambda value: "refresh-token")
+    monkeypatch.setattr(gmail_api, "exchange_refresh_token", lambda refresh_token: "access-token")
+
+    sent = {}
+
+    def fake_send_thread_reply(access_token, *, raw_bytes, thread_id, to_emails, cc_emails=None):
+        sent["to_emails"] = tuple(to_emails)
+        sent["cc_emails"] = tuple(cc_emails or ())
+        return {"id": "gmail-out-2b", "threadId": thread_id}
+
+    monkeypatch.setattr(gmail_api, "send_thread_reply", fake_send_thread_reply)
+
+    with SessionLocal() as db:
+        user = _seed_user(db)
+        connector = _seed_connector(db, owner_id=user.id, email_address="owner+ops@gmail.com")
+        conversation_id = _ingest_inbound_message(
+            db,
+            owner_id=user.id,
+            connector_id=connector.id,
+            archive_root=archive_root,
+            from_email="friend@example.com",
+            to_emails=("owner+ops@gmail.com", "OWNER+OPS@gmail.com", "teammate@example.com"),
+            cc_emails=("manager@example.com", "OWNER+OPS@gmail.com", "Manager@example.com"),
+        )
+
+        result = ConversationReplyService(db).reply(
+            ConversationReplyRequest(
+                owner_id=user.id,
+                conversation_id=conversation_id,
+                body_text="Handled.",
+                reply_all=True,
+            )
+        )
+
+        assert result.to_emails == ("friend@example.com",)
+        assert result.cc_emails == ("teammate@example.com", "manager@example.com")
+        assert sent["to_emails"] == ("friend@example.com",)
+        assert sent["cc_emails"] == ("teammate@example.com", "manager@example.com")
+
+
+def test_conversation_reply_service_uses_list_reply_target_for_alias_mailbox(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    archive_root = tmp_path / "data"
+
+    monkeypatch.setattr(conversation_archive, "get_settings", lambda: SimpleNamespace(data_dir=archive_root))
+    monkeypatch.setattr(crypto, "decrypt", lambda value: "refresh-token")
+    monkeypatch.setattr(gmail_api, "exchange_refresh_token", lambda refresh_token: "access-token")
+
+    sent = {}
+
+    def fake_send_thread_reply(access_token, *, raw_bytes, thread_id, to_emails, cc_emails=None):
+        sent["raw_bytes"] = raw_bytes
+        sent["to_emails"] = tuple(to_emails)
+        sent["cc_emails"] = tuple(cc_emails or ())
+        return {"id": "gmail-out-list", "threadId": thread_id}
+
+    monkeypatch.setattr(gmail_api, "send_thread_reply", fake_send_thread_reply)
+
+    with SessionLocal() as db:
+        user = _seed_user(db)
+        connector = _seed_connector(db, owner_id=user.id, email_address="owner+alerts@gmail.com")
+        conversation_id = _ingest_inbound_message(
+            db,
+            owner_id=user.id,
+            connector_id=connector.id,
+            archive_root=archive_root,
+            from_email="maintainer@example.com",
+            reply_to_emails=("project-list@example.com",),
+            to_emails=("owner+alerts@gmail.com",),
+            cc_emails=("watchers@example.com",),
+        )
+
+        result = ConversationReplyService(db).reply(
+            ConversationReplyRequest(
+                owner_id=user.id,
+                conversation_id=conversation_id,
+                body_text="I pushed the fix.",
+            )
+        )
+
+        parsed = BytesParser(policy=policy.default).parsebytes(sent["raw_bytes"])
+
+        assert result.to_emails == ("project-list@example.com",)
+        assert result.cc_emails == ()
+        assert sent["to_emails"] == ("project-list@example.com",)
+        assert sent["cc_emails"] == ()
+        assert parsed["To"] == "project-list@example.com"
+        assert parsed["In-Reply-To"] == "<gmail-msg-1@example.com>"
+        assert parsed["References"] == "<older-message@example.com> <gmail-msg-1@example.com>"
 
 
 def test_conversation_reply_service_rejects_non_email_conversations(tmp_path):
