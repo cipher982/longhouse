@@ -15,22 +15,26 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
-## [Launch][QA/Test] Deepen Gmail inbox confidence with real-world validation (size: 3)
+## [Launch][Product][Tech Debt] Consolidate memory into one optional Memory Files layer (size: 4)
 
-Status (2026-03-12): Planned. The current launch gate is green, but the highest-value follow-up work is now real mailbox coverage, connect-flow coverage, onboarding validation, and thread-correctness proof rather than more mocked tests.
+Status (2026-03-12): In progress. Longhouse currently still has one real file-backed memory system plus a separate Oikos note-memory stack and a dead `memory_strategy` thread surface. That overlap is product ambiguity and maintenance burden.
 
-**Goal:** Push confidence beyond app-level smoke and narrow unit tests into the real trust boundaries of the Gmail-first inbox.
+**Goal:** Keep one small, modular memory-files subsystem that can sit on top of recall when explicitly enabled, while removing overlapping memory concepts and ambient defaults.
 
-- [ ] Add a dedicated real Gmail canary that proves receive -> ingest -> inbox render -> reply in thread on a controlled mailbox
-- [ ] Add cross-browser Gmail connect-flow coverage for popup/consent behavior on Chrome, Safari, and mobile Safari
-- [ ] Add onboarding validation for both fresh hosted instances and clean OSS installs, including missing or misconfigured Google OAuth states
-- [ ] Expand live thread-correctness coverage for reply, reply-all, duplicate delivery/idempotency, aliases, and list-style headers
-- [ ] Decide which of these checks are per-push, daily, or manual canaries and wire them into the existing QA surface
+- [ ] Write and commit the cleanup spec/task docs with explicit keep/remove decisions
+- [ ] Remove the legacy Oikos note-memory stack (`save_memory` / `search_memory` / `list_memories` / `forget_memory`)
+- [ ] Remove the dead `memory_strategy` surface from backend, frontend, and generated API types
+- [ ] Keep only Memory Files, but gate it behind explicit feature flags so it is off by default
+- [ ] Harden Memory Files with path validation and lower-blast-radius automatic behavior
+- [ ] Update tool schemas/docs/tests/generated artifacts so the remaining memory story is consistent
+- [ ] Ship, reprovision, and verify the hosted instance post-change
 
 Notes:
-- 2026-03-12: `make verify-prod` is now green, but it still does not prove the full real Gmail receive/reply loop.
-- 2026-03-12: Popup consent behavior and refresh-token return semantics are classic browser/provider edge cases that mocked tests will not catch.
-- 2026-03-12: The next confidence gains should come from fewer, more real tests rather than a larger pile of synthetic frontend mocks.
+- 2026-03-12: The desired product shape is `recall` over session history plus an optional filesystem-like memory layer, not multiple competing memory products.
+- 2026-03-12: `memory_files` is the only real candidate to keep. The separate Oikos `memories` table is unused in prod and should be removed.
+- 2026-03-12: Default behavior should lean toward non-exposure: no ambient automatic memory context or auto-summary writes unless explicitly enabled.
+- Spec: `docs/specs/memory-system-consolidation.md`
+- Tasks: `docs/tasks/memory-system-consolidation.md`
 
 ## [Launch][Product][QA/Test] Polish Gmail inbox onboarding and health UX (size: 1)
 
@@ -49,20 +53,20 @@ Notes:
 
 ## [Launch][QA/Test][Docs/Drift] Harden Gmail connector watch bootstrap and retire legacy webhook drift (size: 1)
 
-Status (2026-03-12): Done. Gmail connect now reports explicit watch/bootstrap state, production/runtime flow is Pub/Sub-only, and the misleading legacy HTTPS webhook path is no longer part of the normal first-party surface.
+Status (2026-03-12): In progress. Gmail connect currently can report success while watch bootstrap failed or never even ran, and the repo still teaches the old direct HTTPS webhook story even though production uses Pub/Sub.
 
 **Goal:** Make Gmail connector setup/reporting honest, make production renewal/watch registration Pub/Sub-only, and remove misleading legacy webhook surface/docs from the normal runtime path.
 
-- [x] Make `/auth/google/gmail` return explicit watch/mailbox bootstrap state instead of swallowing failures
-- [x] Stop production watch registration/renewal from falling back to the legacy direct HTTPS webhook path
-- [x] Fail fast when `GMAIL_PUBSUB_TOPIC` is configured without `PUBSUB_AUDIENCE`
-- [x] Quarantine the legacy `/email/webhook/google` route to testing/local compatibility only
-- [x] Add focused regression coverage for Gmail connect bootstrap and renewal state handling
-- [x] Regenerate typed API artifacts and deploy/verify the hosted instance after the cleanup
+- [ ] Make `/auth/google/gmail` return explicit watch/mailbox bootstrap state instead of swallowing failures
+- [ ] Stop production watch registration/renewal from falling back to the legacy direct HTTPS webhook path
+- [ ] Fail fast when `GMAIL_PUBSUB_TOPIC` is configured without `PUBSUB_AUDIENCE`
+- [ ] Quarantine the legacy `/email/webhook/google` route to testing/local compatibility only
+- [ ] Add focused regression coverage for Gmail connect bootstrap and renewal state handling
+- [ ] Regenerate typed API artifacts and deploy/verify the hosted instance after the cleanup
 
 Notes:
-- 2026-03-12: This landed in the Gmail watch hardening pass and was verified with targeted backend tests plus hosted deploy validation.
-- 2026-03-12: Future Gmail work should build on the cleaner Pub/Sub-only production story rather than reopening the legacy webhook path.
+- 2026-03-12: `connect_gmail()` currently clears prior watch metadata before attempting bootstrap and swallows all exceptions, so reconnect can silently degrade a healthy connector.
+- 2026-03-12: The legacy direct HTTPS webhook/router is still mounted and still appears in generated API surface/docs, which keeps misleading future work.
 
 ## [Launch][Product][Docs/Drift] Tighten Longhouse tool surfaces for OSS/demo clarity (size: 5)
 

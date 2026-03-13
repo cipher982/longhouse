@@ -9014,11 +9014,6 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
-             * Memory Strategy
-             * @default buffer
-             */
-            memory_strategy: string | null;
-            /**
              * Active
              * @default true
              */
@@ -9056,11 +9051,6 @@ export interface components {
             fiche_state?: {
                 [key: string]: unknown;
             } | null;
-            /**
-             * Memory Strategy
-             * @default buffer
-             */
-            memory_strategy: string | null;
             /**
              * Active
              * @default true
@@ -9146,11 +9136,6 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
-             * Memory Strategy
-             * @default buffer
-             */
-            memory_strategy: string | null;
-            /**
              * Active
              * @default true
              */
@@ -9183,8 +9168,6 @@ export interface components {
             fiche_state?: {
                 [key: string]: unknown;
             } | null;
-            /** Memory Strategy */
-            memory_strategy?: string | null;
             /** Active */
             active?: boolean | null;
             /** Thread Type */
