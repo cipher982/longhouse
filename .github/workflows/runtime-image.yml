@@ -6,9 +6,12 @@ on:
     tags:
       - "runtime-v*"
     paths:
+      - ".dockerignore"
+      - "bun.lock"
       - "apps/zerg/backend/**"
       - "apps/zerg/frontend-web/**"
       - "config/**"
+      - "docker/entrypoint.sh"
       - "docker/runtime.dockerfile"
       - ".github/workflows/runtime-image.yml"
   workflow_dispatch: {}
