@@ -823,11 +823,14 @@ def sso_redirect(token: str, response: Response, db: Session = Depends(get_db)):
 def get_auth_methods():
     """Return available auth methods for frontend."""
     settings = get_settings()
+    gmail_ready, gmail_setup_message = _gmail_setup_state(settings)
     return {
         "google": bool(settings.google_client_id) and not bool(settings.control_plane_url),
         "password": bool(settings.longhouse_password or settings.longhouse_password_hash),
         "sso": bool(settings.control_plane_url),
         "sso_url": settings.control_plane_url if settings.control_plane_url else None,
+        "gmail_ready": gmail_ready,
+        "gmail_setup_message": gmail_setup_message,
     }
 
 
@@ -1016,6 +1019,33 @@ def _utc_now_iso() -> str:
     """Return an ISO8601 UTC timestamp string."""
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def _gmail_setup_state(settings: Any) -> tuple[bool, str | None]:
+    """Return whether Gmail connect is actually ready and, if not, why."""
+
+    missing: list[str] = []
+
+    if not getattr(settings, "google_client_id", None):
+        missing.append("GOOGLE_CLIENT_ID")
+    if not getattr(settings, "google_client_secret", None):
+        missing.append("GOOGLE_CLIENT_SECRET")
+    if not getattr(settings, "gmail_pubsub_topic", None):
+        missing.append("GMAIL_PUBSUB_TOPIC")
+
+    if not missing:
+        return True, None
+
+    if getattr(settings, "control_plane_url", None):
+        return (
+            False,
+            "Hosted Gmail is not ready on this instance yet. Reprovision it from the control plane so it picks up Google OAuth and Pub/Sub config.",
+        )
+
+    return (
+        False,
+        f"This instance still needs BYO Google config before anyone can connect Gmail. Missing: {', '.join(missing)}.",
+    )
 
 
 def _normalize_email_address(value: Any) -> str | None:

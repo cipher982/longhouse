@@ -347,6 +347,8 @@ export interface AuthMethods {
   password: boolean;
   sso: boolean;
   sso_url: string | null;
+  gmail_ready?: boolean;
+  gmail_setup_message?: string | null;
 }
 
 export interface PasswordLoginResult {
@@ -359,12 +361,12 @@ export async function getAuthMethods(): Promise<AuthMethods> {
   try {
     const response = await fetch(`${config.apiBaseUrl}/auth/methods`);
     if (!response.ok) {
-      return { google: true, password: true, sso: false, sso_url: null };
+      return { google: true, password: true, sso: false, sso_url: null, gmail_ready: true, gmail_setup_message: null };
     }
     return response.json();
   } catch {
     // Default to showing both on network errors
-    return { google: true, password: true, sso: false, sso_url: null };
+    return { google: true, password: true, sso: false, sso_url: null, gmail_ready: true, gmail_setup_message: null };
   }
 }
 

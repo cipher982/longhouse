@@ -97,6 +97,8 @@ describe("ConversationsPage", () => {
       password: false,
       sso: false,
       sso_url: null,
+      gmail_ready: true,
+      gmail_setup_message: null,
     });
     mockStartHostedGmailConnect.mockResolvedValue({
       url: "https://control.longhouse.ai/auth/google/gmail/start?token=test-token",
@@ -333,6 +335,8 @@ describe("ConversationsPage", () => {
       password: true,
       sso: true,
       sso_url: "https://control.longhouse.ai",
+      gmail_ready: true,
+      gmail_setup_message: null,
     });
     mockUseAuth.mockReturnValue({
       user: {
@@ -374,5 +378,38 @@ describe("ConversationsPage", () => {
     });
 
     vi.unstubAllGlobals();
+  });
+
+  it("shows honest OSS setup guidance when Gmail is not configured", async () => {
+    mockGetAuthMethods.mockResolvedValue({
+      google: true,
+      password: false,
+      sso: false,
+      sso_url: null,
+      gmail_ready: false,
+      gmail_setup_message:
+        "This instance still needs BYO Google config before anyone can connect Gmail. Missing: GOOGLE_CLIENT_SECRET, GMAIL_PUBSUB_TOPIC.",
+    });
+    mockUseAuth.mockReturnValue({
+      user: {
+        id: 1,
+        email: "owner@example.com",
+        display_name: "Owner",
+        is_active: true,
+        created_at: "2026-03-12T18:00:00Z",
+        gmail_connected: false,
+        gmail_mailbox_email: null,
+        gmail_watch_status: null,
+        gmail_watch_error: null,
+        gmail_watch_expiry: null,
+      },
+      refreshAuth: mockRefreshAuth,
+    });
+    mockFetchConversations.mockResolvedValue({ total: 0, conversations: [] });
+
+    renderConversationsPage("/conversations");
+
+    expect((await screen.findAllByText(/needs BYO Google config/i)).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Connect Gmail" })).toBeDisabled();
   });
 });
