@@ -1,0 +1,128 @@
+name: Launch Gate
+
+on:
+  push:
+    paths:
+      - '.github/workflows/launch-gate.yml'
+      - '.github/workflows/test-install.yml'
+      - '.github/workflows/runner-onboarding-validation.yml'
+      - 'apps/zerg/backend/pyproject.toml'
+      - 'apps/zerg/backend/zerg/cli/connect.py'
+      - 'apps/zerg/backend/zerg/cli/doctor.py'
+      - 'apps/zerg/backend/zerg/cli/onboard.py'
+      - 'apps/zerg/backend/zerg/cli/serve.py'
+      - 'apps/zerg/e2e/**'
+      - 'scripts/install.sh'
+      - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/qa-oss.sh'
+      - 'scripts/run-onboarding-funnel.sh'
+      - 'Makefile'
+      - 'README.md'
+  pull_request:
+    paths:
+      - '.github/workflows/launch-gate.yml'
+      - '.github/workflows/test-install.yml'
+      - '.github/workflows/runner-onboarding-validation.yml'
+      - 'apps/zerg/backend/pyproject.toml'
+      - 'apps/zerg/backend/zerg/cli/connect.py'
+      - 'apps/zerg/backend/zerg/cli/doctor.py'
+      - 'apps/zerg/backend/zerg/cli/onboard.py'
+      - 'apps/zerg/backend/zerg/cli/serve.py'
+      - 'apps/zerg/e2e/**'
+      - 'scripts/install.sh'
+      - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/qa-oss.sh'
+      - 'scripts/run-onboarding-funnel.sh'
+      - 'Makefile'
+      - 'README.md'
+  schedule:
+    - cron: '23 9 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  installer-first-run:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell_path: /bin/bash
+          - os: macos-latest
+            shell_path: /bin/zsh
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    name: "launch-gate--install--${{ matrix.os }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Run disposable installer smoke
+        run: |
+          chmod +x scripts/ci/installer-first-run.sh
+          ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}"
+
+  onboarding-funnel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: "launch-gate--onboarding-funnel"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Install Playwright browsers
+        run: |
+          cd apps/zerg/e2e
+          bun install --silent
+          bunx playwright install --with-deps chromium
+
+      - name: Run launch gate locally
+        run: make launch-gate-local
+
+      - name: Upload onboarding artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: launch-gate-onboarding-artifacts
+          if-no-files-found: ignore
+          path: |
+            /tmp/longhouse-onboarding/apps/zerg/e2e/test-results
+            /tmp/longhouse-onboarding/apps/zerg/e2e/playwright-report
