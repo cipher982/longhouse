@@ -15,8 +15,12 @@ from typing import Tuple
 # External catalog is merged on top of these defaults, so overrides win.
 MODEL_PRICES_USD_PER_1K: dict[str, Tuple[float, float]] = {
     "gpt-mock": (0.0, 0.0),
-    # xAI Grok (hosted instances) — prices per 1K tokens
-    # Source: x.ai/api ($0.20/1M in, $0.50/1M out for fast models)
+    # OpenRouter models (hosted instances) — pass-through pricing, no markup
+    # Source: openrouter.ai/models (prices per 1K tokens)
+    "x-ai/grok-4.1-fast": (0.0002, 0.0005),
+    "x-ai/grok-4": (0.003, 0.015),
+    "openai/gpt-5-mini": (0.0003, 0.0012),
+    # Direct xAI (legacy) — same underlying pricing
     "grok-4-1-fast-reasoning": (0.0002, 0.0005),
     "grok-4-1-fast-non-reasoning": (0.0002, 0.0005),
     # Groq (OSS fallback) — prices per 1K tokens
@@ -24,8 +28,7 @@ MODEL_PRICES_USD_PER_1K: dict[str, Tuple[float, float]] = {
     "meta-llama/llama-4-scout-17b-16e-instruct": (0.00011, 0.00034),
     "llama-3.3-70b-versatile": (0.00059, 0.00079),
     "llama-3.1-8b-instant": (0.00005, 0.00008),
-    # OpenAI (added when OpenAI key is provisioned) — approximate 2025 rates
-    # These are placeholders; actual gpt-5.x pricing should be loaded via PRICING_CATALOG_PATH
+    # OpenAI (direct) — approximate rates
     "gpt-4o": (0.0025, 0.01),
     "gpt-4o-mini": (0.00015, 0.0006),
 }

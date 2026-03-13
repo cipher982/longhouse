@@ -24,6 +24,7 @@ class ModelProvider(str, Enum):
     """Enum for different model providers."""
 
     OPENAI = "openai"
+    OPENROUTER = "openrouter"
     XAI = "xai"
     GROQ = "groq"
     ANTHROPIC = "anthropic"
@@ -31,6 +32,7 @@ class ModelProvider(str, Enum):
 
 _PROVIDER_DEFAULT_API_KEY_ENVS = {
     ModelProvider.OPENAI: "OPENAI_API_KEY",
+    ModelProvider.OPENROUTER: "OPENROUTER_API_KEY",
     ModelProvider.XAI: "XAI_API_KEY",
     ModelProvider.GROQ: "GROQ_API_KEY",
     ModelProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
@@ -385,6 +387,7 @@ EMBEDDING_DIMS: int = _EMBEDDING_DEFAULT.get("dims", 256)
 # OpenAI models). Maps provider_name -> model_id.
 _DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
+    "openrouter": "x-ai/grok-4.1-fast",
     "xai": "grok-4-1-fast-non-reasoning",
     "groq": "llama-3.3-70b-versatile",
     "ollama": "llama3.2",

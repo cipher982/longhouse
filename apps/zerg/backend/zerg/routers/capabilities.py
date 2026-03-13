@@ -43,6 +43,7 @@ _settings = get_settings()
 # Known provider base URLs (frontend also has these, but backend needs them for test)
 _KNOWN_PROVIDERS = {
     "openai": None,  # SDK default
+    "openrouter": "https://openrouter.ai/api/v1",
     "groq": "https://api.groq.com/openai/v1",
     "xai": "https://api.x.ai/v1",
     "ollama": "http://localhost:11434/v1",
@@ -175,6 +176,8 @@ def _resolve_capability(capability: str, db: Session, user: User) -> tuple[bool,
 
     # Fall through to env vars
     if capability == "text":
+        if os.getenv("OPENROUTER_API_KEY"):
+            return True, "environment", "openrouter"
         if os.getenv("OPENAI_API_KEY"):
             return True, "environment", "openai"
         if os.getenv("GROQ_API_KEY"):
@@ -197,6 +200,8 @@ def _resolve_capability_no_user(capability: str, db: Session) -> tuple[bool, str
 
     # Fall through to env vars
     if capability == "text":
+        if os.getenv("OPENROUTER_API_KEY"):
+            return True, "environment", "openrouter"
         if os.getenv("OPENAI_API_KEY"):
             return True, "environment", "openai"
         if os.getenv("GROQ_API_KEY"):

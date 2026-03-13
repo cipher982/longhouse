@@ -14,6 +14,7 @@ import { Badge, Button, Card, Input, Spinner } from "./ui";
 
 // Known providers with their default base URLs
 const KNOWN_PROVIDERS = [
+  { id: "openrouter", name: "OpenRouter (recommended)", baseUrl: "https://openrouter.ai/api/v1" },
   { id: "openai", name: "OpenAI", baseUrl: "" },
   { id: "groq", name: "Groq", baseUrl: "https://api.groq.com/openai/v1" },
   { id: "xai", name: "xAI", baseUrl: "https://api.x.ai/v1" },

@@ -201,6 +201,7 @@ jobs:
     name: "🔥 model-smoke--ping-all-models-json"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}

@@ -105,6 +105,20 @@ class TestLlmCapabilities:
             assert data["text"]["source"] is None
             assert data["embedding"]["available"] is True
 
+    def test_openrouter_env_var_makes_text_available_only(self, tmp_path):
+        """When OPENROUTER_API_KEY is set, text is available but embeddings stay unavailable."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-123"}, clear=False):
+                os.environ.pop("OPENAI_API_KEY", None)
+                os.environ.pop("GROQ_API_KEY", None)
+                os.environ.pop("XAI_API_KEY", None)
+                resp = client.get("/capabilities/llm")
+                data = resp.json()
+                assert data["text"]["available"] is True
+                assert data["text"]["source"] is None
+                assert data["embedding"]["available"] is False
+
     def test_xai_env_var_makes_text_available_only(self, tmp_path):
         """When XAI_API_KEY is set, text is available but embeddings stay unavailable."""
         sf = _make_db(tmp_path)
@@ -112,6 +126,7 @@ class TestLlmCapabilities:
             with patch.dict(os.environ, {"XAI_API_KEY": "xai-test-123"}, clear=False):
                 os.environ.pop("OPENAI_API_KEY", None)
                 os.environ.pop("GROQ_API_KEY", None)
+                os.environ.pop("OPENROUTER_API_KEY", None)
                 resp = client.get("/capabilities/llm")
                 data = resp.json()
                 assert data["text"]["available"] is True

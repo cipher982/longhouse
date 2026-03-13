@@ -68,11 +68,10 @@ class Settings(BaseSettings):
     instance_ssh_private_key_b64: str | None = None
 
     # LLM keys — injected into every instance (shared pool)
-    instance_xai_api_key: str | None = None
-    instance_groq_api_key: str | None = None
+    instance_openrouter_api_key: str | None = None
 
     # Models routing profile for new instances.
-    # "hosted" = xAI-first defaults (Grok 4.1 fast for quality + bulk)
+    # "hosted" = OpenRouter-routed defaults (unified provider access)
     # "oss"    = no overrides (expects caller to configure model keys)
     instance_models_profile: str = "hosted"
 

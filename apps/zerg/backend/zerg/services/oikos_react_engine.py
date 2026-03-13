@@ -155,14 +155,21 @@ def _make_llm(
     if not kwargs["api_key"]:
         raise ValueError(f"{api_key_env_var} not configured but model '{model}' selected")
 
-    # reasoning_effort is an OpenAI-specific API parameter.
-    # Other providers (xAI, Groq, Anthropic) reject it with 400.
+    # Reasoning effort handling — provider-aware
     capabilities = model_config.capabilities or {}
-    if capabilities.get("reasoning", False) and provider == ModelProvider.OPENAI:
+    if capabilities.get("reasoning", False):
         effort = reasoning_effort
         if effort == "none" and not capabilities.get("reasoningNone", False):
             effort = "low"
-        kwargs["reasoning_effort"] = effort
+
+        if provider == ModelProvider.OPENROUTER:
+            # OpenRouter normalizes reasoning across all providers via a unified object.
+            # It translates to each provider's native format (reasoning_effort, thinkingLevel, etc.)
+            kwargs["extra_body"] = {"reasoning": {"effort": effort}}
+        elif provider == ModelProvider.OPENAI:
+            # Direct OpenAI: native reasoning_effort parameter
+            kwargs["reasoning_effort"] = effort
+        # Other direct providers (xAI, Groq, Anthropic): no reasoning param — they reject it
 
     llm = OpenAIChat(**kwargs)
     if tool_choice is None:

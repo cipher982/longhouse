@@ -221,12 +221,10 @@ def _env_for(
     if settings.instance_ssh_private_key_b64:
         env["SSH_PRIVATE_KEY_B64"] = settings.instance_ssh_private_key_b64
 
-    # LLM shared pool — xAI and Groq injected into every instance (no allowlist needed;
-    # pricing is cheap enough to share and we enforce quotas via the limit vars below).
-    if settings.instance_xai_api_key:
-        env["XAI_API_KEY"] = settings.instance_xai_api_key
-    if settings.instance_groq_api_key:
-        env["GROQ_API_KEY"] = settings.instance_groq_api_key
+    # LLM shared pool — OpenRouter provides unified access to all providers.
+    # Single key replaces per-provider keys (xAI, Groq, etc.).
+    if settings.instance_openrouter_api_key:
+        env["OPENROUTER_API_KEY"] = settings.instance_openrouter_api_key
 
     # Models routing profile — determines default tiers for shared-pool users.
     env["MODELS_PROFILE"] = settings.instance_models_profile

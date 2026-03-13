@@ -21,6 +21,7 @@ from smoke_models import load_config, get_api_key, run_all  # noqa: E402
 
 _HAS_ANY_KEY = bool(
     os.getenv("OPENAI_API_KEY", "").strip()
+    or os.getenv("OPENROUTER_API_KEY", "").strip()
     or os.getenv("GROQ_API_KEY", "").strip()
     or os.getenv("XAI_API_KEY", "").strip()
     or os.getenv("ZAI_API_KEY", "").strip()
