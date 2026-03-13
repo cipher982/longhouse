@@ -164,6 +164,20 @@ def _validate_base_url(base_url: str | None, provider_name: str) -> str | None:
     return None
 
 
+def _check_env_text_provider() -> tuple[str, str] | None:
+    """Find the first text provider with a configured API key via env var.
+
+    Derives the provider list from models.json rather than hardcoding.
+    Returns (provider_name, env_var) or None.
+    """
+    from zerg.models_config import _PROVIDER_DEFAULT_API_KEY_ENVS
+
+    for provider, env_var in _PROVIDER_DEFAULT_API_KEY_ENVS.items():
+        if os.getenv(env_var):
+            return provider.value, env_var
+    return None
+
+
 def _resolve_capability(capability: str, db: Session, user: User) -> tuple[bool, str | None, str | None]:
     """Check if a capability is available via DB config or env var.
 
@@ -176,14 +190,9 @@ def _resolve_capability(capability: str, db: Session, user: User) -> tuple[bool,
 
     # Fall through to env vars
     if capability == "text":
-        if os.getenv("OPENROUTER_API_KEY"):
-            return True, "environment", "openrouter"
-        if os.getenv("OPENAI_API_KEY"):
-            return True, "environment", "openai"
-        if os.getenv("GROQ_API_KEY"):
-            return True, "environment", "groq"
-        if os.getenv("XAI_API_KEY"):
-            return True, "environment", "xai"
+        found = _check_env_text_provider()
+        if found:
+            return True, "environment", found[0]
     elif capability == "embedding":
         if os.getenv("OPENAI_API_KEY"):
             return True, "environment", "openai"
@@ -200,14 +209,9 @@ def _resolve_capability_no_user(capability: str, db: Session) -> tuple[bool, str
 
     # Fall through to env vars
     if capability == "text":
-        if os.getenv("OPENROUTER_API_KEY"):
-            return True, "environment", "openrouter"
-        if os.getenv("OPENAI_API_KEY"):
-            return True, "environment", "openai"
-        if os.getenv("GROQ_API_KEY"):
-            return True, "environment", "groq"
-        if os.getenv("XAI_API_KEY"):
-            return True, "environment", "xai"
+        found = _check_env_text_provider()
+        if found:
+            return True, "environment", found[0]
     elif capability == "embedding":
         if os.getenv("OPENAI_API_KEY"):
             return True, "environment", "openai"

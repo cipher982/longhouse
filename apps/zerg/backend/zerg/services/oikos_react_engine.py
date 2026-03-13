@@ -125,6 +125,7 @@ def _make_llm(
             return llm.bind_tools(tools)
 
     from zerg.models_config import ModelProvider
+    from zerg.models_config import _get_api_key_env_var
     from zerg.models_config import get_all_models
     from zerg.models_config import get_model_by_id
 
@@ -135,15 +136,8 @@ def _make_llm(
 
     settings = get_settings()
     provider = model_config.provider
-    api_key_env_var = model_config.api_key_env_var or ("GROQ_API_KEY" if provider == ModelProvider.GROQ else "OPENAI_API_KEY")
+    api_key_env_var = _get_api_key_env_var(model_config)
     api_key = os.getenv(api_key_env_var)
-    if not api_key:
-        if api_key_env_var == "GROQ_API_KEY":
-            api_key = settings.groq_api_key
-        elif api_key_env_var == "OPENAI_API_KEY":
-            api_key = settings.openai_api_key
-        elif api_key_env_var == "XAI_API_KEY":
-            api_key = settings.xai_api_key
 
     kwargs: dict = {
         "model": model,
