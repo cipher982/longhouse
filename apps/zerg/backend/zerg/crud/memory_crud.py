@@ -8,6 +8,8 @@ from typing import List
 from sqlalchemy.orm import Session
 
 from zerg.models.models import MemoryFile
+from zerg.services.memory_paths import normalize_memory_path
+from zerg.services.memory_paths import normalize_memory_prefix
 
 
 def upsert_memory_file(
@@ -21,7 +23,8 @@ def upsert_memory_file(
     metadata: dict | None = None,
 ) -> MemoryFile:
     """Create or update a memory file by (owner_id, path)."""
-    existing = get_memory_file_by_path(db, owner_id=owner_id, path=path)
+    normalized_path = normalize_memory_path(path)
+    existing = get_memory_file_by_path(db, owner_id=owner_id, path=normalized_path)
     tag_list = tags or []
     meta = metadata or {}
 
@@ -36,7 +39,7 @@ def upsert_memory_file(
 
     memory_file = MemoryFile(
         owner_id=owner_id,
-        path=path,
+        path=normalized_path,
         title=title,
         content=content,
         tags=tag_list,
@@ -50,7 +53,8 @@ def upsert_memory_file(
 
 def get_memory_file_by_path(db: Session, *, owner_id: int, path: str) -> MemoryFile | None:
     """Get a memory file by owner + path."""
-    return db.query(MemoryFile).filter(MemoryFile.owner_id == owner_id, MemoryFile.path == path).first()
+    normalized_path = normalize_memory_path(path)
+    return db.query(MemoryFile).filter(MemoryFile.owner_id == owner_id, MemoryFile.path == normalized_path).first()
 
 
 def get_memory_files_by_ids(db: Session, *, owner_id: int, ids: Iterable[int]) -> List[MemoryFile]:
@@ -72,7 +76,8 @@ def list_memory_files(
     """List memory files for a user, optionally filtered by path prefix."""
     query = db.query(MemoryFile).filter(MemoryFile.owner_id == owner_id)
     if prefix:
-        query = query.filter(MemoryFile.path.ilike(f"{prefix}%"))
+        normalized_prefix = normalize_memory_prefix(prefix)
+        query = query.filter(MemoryFile.path.ilike(f"{normalized_prefix}%"))
     return query.order_by(MemoryFile.updated_at.desc()).offset(skip).limit(limit).all()
 
 

@@ -493,7 +493,6 @@ def build_replay_thread(
                 "created_at": utc_now_naive().isoformat(),
             }
         },
-        memory_strategy="buffer",
         thread_type=ThreadType.MANUAL.value,
     )
 

@@ -19,7 +19,6 @@ from typing import Dict
 from typing import List
 from typing import Optional
 
-
 # Use native types for return values
 from zerg.types.messages import AIMessage
 
@@ -78,7 +77,7 @@ def _parse_memory_e2e_scenario(text: str) -> Optional[Dict[str, Any]]:
         content = save_match.group(1).strip()
         if not content:
             content = "E2E memory content"
-        return {"name": "memory_e2e", "action": "save", "content": content}
+        return {"name": "memory_e2e", "action": "save", "content": content, "path": "notes/e2e-memory.md"}
 
     search_match = re.search(r"memory_e2e_search\s*:\s*(.+)", text, re.IGNORECASE | re.DOTALL)
     if search_match:
@@ -90,11 +89,9 @@ def _parse_memory_e2e_scenario(text: str) -> Optional[Dict[str, Any]]:
     if "memory_e2e_list" in lowered:
         return {"name": "memory_e2e", "action": "list"}
 
-    forget_match = re.search(r"memory_e2e_forget\s*:\s*([a-f0-9-]{8,36})", lowered)
-    if not forget_match:
-        forget_match = re.search(r"([a-f0-9-]{8,36})", lowered)
+    forget_match = re.search(r"memory_e2e_forget\s*:\s*([a-z0-9_./-]+)", lowered)
     if forget_match:
-        return {"name": "memory_e2e", "action": "forget", "memory_id": forget_match.group(1)}
+        return {"name": "memory_e2e", "action": "forget", "path": forget_match.group(1)}
 
     return None
 
@@ -408,18 +405,22 @@ class ScriptedChatLLM:
             args: Dict[str, Any] = {}
 
             if action == "save":
-                tool_name = "save_memory"
-                args = {"content": scenario.get("content", "E2E memory content"), "type": "note"}
+                tool_name = "memory_write"
+                args = {
+                    "path": scenario.get("path", "notes/e2e-memory.md"),
+                    "content": scenario.get("content", "E2E memory content"),
+                    "title": "E2E Memory",
+                    "tags": ["e2e", "memory"],
+                }
             elif action == "search":
-                tool_name = "search_memory"
+                tool_name = "memory_search"
                 args = {"query": scenario.get("query", "E2E")}
             elif action == "list":
-                tool_name = "list_memories"
+                tool_name = "memory_ls"
                 args = {"limit": 10}
             elif action == "forget":
-                tool_name = "forget_memory"
-                memory_id = scenario.get("memory_id") or "00000000-0000-0000-0000-000000000000"
-                args = {"memory_id": memory_id}
+                tool_name = "memory_delete"
+                args = {"path": scenario.get("path", "notes/e2e-memory.md")}
 
             if tool_name:
                 tool_call = {
@@ -510,4 +511,3 @@ class ScriptedChatLLM:
             return AIMessage(content="", tool_calls=[tool_call])
 
         return AIMessage(content="ok", tool_calls=[])
-

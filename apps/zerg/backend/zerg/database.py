@@ -132,7 +132,6 @@ try:
     from zerg.models.models import ConversationMessage  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
-    from zerg.models.models import Memory  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import Run  # noqa: F401
@@ -390,7 +389,6 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import JobRun  # noqa: F401
-    from zerg.models.models import Memory  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import Run  # noqa: F401
@@ -745,29 +743,38 @@ def _migrate_agents_columns(engine: Engine) -> None:
 
 
 def _cleanup_legacy_agents_tables(engine: Engine) -> None:
-    """Drop removed SQLite-only agent tables so existing instances converge."""
+    """Drop removed legacy SQLite tables/columns so existing instances converge."""
     if engine.dialect.name != "sqlite":
         return
 
     try:
         with engine.connect() as conn:
-            exists = conn.execute(
-                text(
-                    """
-                    SELECT 1
-                    FROM sqlite_master
-                    WHERE type = 'table' AND name = 'file_reservations'
-                    LIMIT 1
-                    """
-                )
-            ).fetchone()
-            if exists is None:
-                return
-            conn.execute(text("DROP TABLE file_reservations"))
+            legacy_tables = ("file_reservations", "memories")
+            for table_name in legacy_tables:
+                exists = conn.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM sqlite_master
+                        WHERE type = 'table' AND name = :table_name
+                        LIMIT 1
+                        """
+                    ),
+                    {"table_name": table_name},
+                ).fetchone()
+                if exists is None:
+                    continue
+                conn.execute(text(f"DROP TABLE {table_name}"))
+                logger.info("Dropped legacy %s table", table_name)
+
+            thread_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(threads)"))}
+            if "memory_strategy" in thread_columns:
+                conn.execute(text("ALTER TABLE threads DROP COLUMN memory_strategy"))
+                logger.info("Dropped legacy threads.memory_strategy column")
+
             conn.commit()
-            logger.info("Dropped legacy file_reservations table")
     except Exception:
-        logger.debug("legacy file_reservations cleanup skipped", exc_info=True)
+        logger.debug("legacy memory cleanup skipped", exc_info=True)
 
 
 def _ensure_agents_fts(engine: Engine) -> None:

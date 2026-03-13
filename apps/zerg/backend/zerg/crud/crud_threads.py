@@ -54,7 +54,6 @@ def create_thread(
     title: str,
     active: bool = True,
     fiche_state: Optional[Dict[str, Any]] = None,
-    memory_strategy: Optional[str] = "buffer",
     thread_type: Optional[str] = "chat",
 ):
     """Create a new thread for a fiche"""
@@ -67,7 +66,6 @@ def create_thread(
         title=title,
         active=active,
         fiche_state=fiche_state,
-        memory_strategy=memory_strategy,
         thread_type=thread_type,
     )
     db.add(db_thread)
@@ -82,7 +80,6 @@ def update_thread(
     title: Optional[str] = None,
     active: Optional[bool] = None,
     fiche_state: Optional[Dict[str, Any]] = None,
-    memory_strategy: Optional[str] = None,
     thread_type: Optional[str] = None,
 ):
     """Update a thread"""
@@ -100,8 +97,6 @@ def update_thread(
         db_thread.active = active
     if fiche_state is not None:
         db_thread.fiche_state = fiche_state
-    if memory_strategy is not None:
-        db_thread.memory_strategy = memory_strategy
     if thread_type is not None:
         db_thread.thread_type = thread_type
 

@@ -42,7 +42,6 @@ _DEFAULT_ROOT = Path("/var/app-data/longhouse")
 # GUID-backed columns.
 GUID_COLUMN_SPECS: tuple[GuidColumnSpec, ...] = (
     GuidColumnSpec("device_tokens", "id", ("id",), "report_only"),
-    GuidColumnSpec("memories", "id", ("id",), "report_only"),
     GuidColumnSpec("runs", "trace_id", ("id",), "set_null"),
     GuidColumnSpec("runs", "assistant_message_id", ("id",), "set_null"),
     GuidColumnSpec("commis_jobs", "trace_id", ("id",), "set_null"),

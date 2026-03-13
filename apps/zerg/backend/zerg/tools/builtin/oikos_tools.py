@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from typing import List
 
+from zerg.config import get_settings
+from zerg.tools.builtin.memory_tools import MEMORY_FILE_TOOL_NAMES
 from zerg.tools.builtin.oikos_commis_artifact_tools import cancel_commis
 from zerg.tools.builtin.oikos_commis_artifact_tools import cancel_commis_async
 from zerg.tools.builtin.oikos_commis_artifact_tools import check_commis_status
@@ -173,11 +175,6 @@ _OIKOS_UTILITY_TOOL_LIST = [
     "send_telegram",
     # Knowledge
     "knowledge_search",
-    # Memory (persistent across sessions)
-    "save_memory",
-    "search_memory",
-    "list_memories",
-    "forget_memory",
     # Session discovery
     "search_sessions",
     "grep_sessions",
@@ -203,7 +200,10 @@ OIKOS_UTILITY_TOOLS: frozenset[str] = frozenset(_OIKOS_UTILITY_TOOL_LIST)
 
 def get_oikos_allowed_tools() -> list[str]:
     """Get the complete list of tools a oikos agent should have access to."""
-    return sorted(OIKOS_TOOL_NAMES | OIKOS_UTILITY_TOOLS)
+    allowed = OIKOS_TOOL_NAMES | OIKOS_UTILITY_TOOLS
+    if get_settings().memory_files_enabled:
+        allowed = allowed | MEMORY_FILE_TOOL_NAMES
+    return sorted(allowed)
 
 
 # ---------------------------------------------------------------------------
@@ -252,12 +252,6 @@ COMMIS_TOOL_NAMES: frozenset[str] = frozenset(
         "notion_search",
         "notion_query_database",
         "notion_append_blocks",
-        # Memory files (workspace-scoped persistent context)
-        "memory_write",
-        "memory_read",
-        "memory_ls",
-        "memory_search",
-        "memory_delete",
         # Knowledge
         "knowledge_search",
         # Session discovery (look up past work for context)
@@ -278,7 +272,10 @@ COMMIS_TOOL_NAMES: frozenset[str] = frozenset(
 
 def get_commis_allowed_tools() -> list[str]:
     """Get the complete list of tools a commis agent should have access to."""
-    return sorted(COMMIS_TOOL_NAMES)
+    allowed = COMMIS_TOOL_NAMES
+    if get_settings().memory_files_enabled:
+        allowed = allowed | MEMORY_FILE_TOOL_NAMES
+    return sorted(allowed)
 
 
 __all__ = [

@@ -13,6 +13,7 @@ Architecture note (2026-01):
 """
 
 from zerg.tools.builtin import BUILTIN_TOOLS
+from zerg.tools.builtin.memory_tools import MEMORY_FILE_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import COMMIS_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
 from zerg.tools.builtin.oikos_tools import OIKOS_UTILITY_TOOLS
@@ -83,10 +84,13 @@ def test_get_oikos_allowed_tools_complete():
     missing_utility = sorted(OIKOS_UTILITY_TOOLS - allowed)
     assert not missing_utility, f"get_oikos_allowed_tools() missing utility tools: {missing_utility}"
 
-    # Should be exactly the union (no extras)
+    # Memory files are opt-in, so default should be the base union only.
     expected = OIKOS_TOOL_NAMES | OIKOS_UTILITY_TOOLS
     extras = sorted(allowed - expected)
     assert not extras, f"get_oikos_allowed_tools() has unexpected tools: {extras}"
+
+    memory_overlap = sorted(MEMORY_FILE_TOOL_NAMES & allowed)
+    assert not memory_overlap, f"get_oikos_allowed_tools() should not expose memory files by default: {memory_overlap}"
 
 
 def test_oikos_service_uses_centralized_function():
@@ -166,20 +170,10 @@ def test_commis_tools_no_coordinator_tools():
     )
 
 
-def test_commis_tools_no_oikos_memory():
-    """Commis must NOT have oikos-level memory tools.
-
-    Oikos memory (save_memory, search_memory, etc.) is for the coordinator's
-    persistent context. Commis agents use memory files (memory_write/read)
-    for workspace-scoped context instead.
-    """
-    from zerg.tools.builtin.oikos_memory_tools import OIKOS_MEMORY_TOOL_NAMES
-
-    overlap = sorted(COMMIS_TOOL_NAMES & OIKOS_MEMORY_TOOL_NAMES)
-    assert not overlap, (
-        f"COMMIS_TOOL_NAMES includes oikos memory tools: {overlap}. "
-        "Commis should use memory files (memory_write/read), not oikos memory."
-    )
+def test_memory_files_not_in_base_tool_sets():
+    """Memory files are optional and should not appear in default base tool sets."""
+    assert not (COMMIS_TOOL_NAMES & MEMORY_FILE_TOOL_NAMES)
+    assert not (OIKOS_UTILITY_TOOLS & MEMORY_FILE_TOOL_NAMES)
 
 
 def test_commis_and_oikos_are_disjoint_where_expected():
@@ -214,6 +208,20 @@ def test_commis_core_tools_match_commis_tool_names():
         f"Missing: {sorted(COMMIS_TOOL_NAMES - COMMIS_CORE_TOOLS)}. "
         f"Extras: {sorted(COMMIS_CORE_TOOLS - COMMIS_TOOL_NAMES)}"
     )
+
+
+def test_memory_files_can_be_enabled_for_oikos(monkeypatch):
+    monkeypatch.setenv("MEMORY_FILES_ENABLED", "1")
+    allowed = set(get_oikos_allowed_tools())
+    missing = sorted(MEMORY_FILE_TOOL_NAMES - allowed)
+    assert not missing, f"Enabled oikos tool surface missing memory tools: {missing}"
+
+
+def test_memory_files_can_be_enabled_for_commis(monkeypatch):
+    monkeypatch.setenv("MEMORY_FILES_ENABLED", "1")
+    allowed = set(get_commis_allowed_tools())
+    missing = sorted(MEMORY_FILE_TOOL_NAMES - allowed)
+    assert not missing, f"Enabled commis tool surface missing memory tools: {missing}"
 
 
 def test_commis_has_essential_execution_tools():

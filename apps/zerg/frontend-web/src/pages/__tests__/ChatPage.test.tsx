@@ -75,7 +75,6 @@ describe("ChatPage", () => {
       fiche_id: 1,
       title: "Primary",
       fiche_state: null,
-      memory_strategy: "buffer",
       active: true,
       thread_type: "chat",
       created_at: now,

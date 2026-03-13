@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -105,40 +106,35 @@ def test_scan_and_repair_safe_guid_columns(tmp_path):
     assert row["trace_id"] is None
 
 
-def test_scan_reports_unsupported_guid_columns_without_mutating(tmp_path):
-    db_path, SessionLocal = _make_db(tmp_path, "unsupported.db")
+def test_scan_ignores_removed_legacy_memories_table(tmp_path):
+    db_path, _SessionLocal = _make_db(tmp_path, "legacy_memories.db")
 
-    with SessionLocal() as db:
-        user = User(email="memory@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        db.execute(
-            text(
-                """
-                INSERT INTO memories (id, user_id, fiche_id, content, type)
-                VALUES (:id, :user_id, NULL, :content, :type)
-                """
-            ),
-            {
-                "id": "not-a-real-uuid",
-                "user_id": user.id,
-                "content": "hello",
-                "type": "note",
-            },
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                fiche_id INTEGER,
+                content TEXT NOT NULL,
+                type TEXT
+            )
+            """
         )
-        db.commit()
+        conn.execute(
+            """
+            INSERT INTO memories (id, user_id, fiche_id, content, type)
+            VALUES ('not-a-real-uuid', 1, NULL, 'hello', 'note')
+            """
+        )
+        conn.commit()
 
     findings = scan_db(db_path)
-    assert len(findings) == 1
-    finding = findings[0]
-    assert finding.table == "memories"
-    assert finding.column == "id"
-    assert finding.action == "report_only"
+    assert findings == []
 
     summary = repair_db(db_path)
     assert summary.repaired_count == 0
-    assert summary.unsupported_count == 1
+    assert summary.unsupported_count == 0
 
 
 def test_find_db_paths_discovers_instance_dbs(tmp_path):
