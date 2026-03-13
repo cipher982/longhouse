@@ -7,3 +7,9 @@ export async function connectGmailInbox(authCode: string): Promise<GmailConnectR
     body: JSON.stringify({ auth_code: authCode }),
   });
 }
+
+export async function startHostedGmailConnect(): Promise<{ url: string }> {
+  return request<{ url: string }>("/auth/google/gmail/start", {
+    method: "POST",
+  });
+}

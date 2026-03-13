@@ -62,6 +62,7 @@ from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
+from zerg.routers.auth_internal import router as auth_internal_router
 from zerg.routers.capabilities import router as capabilities_router
 from zerg.routers.channels_webhooks import router as channels_webhooks_router
 from zerg.routers.commis_internal import router as commis_internal_router
@@ -1008,6 +1009,7 @@ api_app.include_router(knowledge_router)
 api_app.include_router(runs_router)
 api_app.include_router(runners_router)  # Runners execution infrastructure
 api_app.include_router(auth_router)
+api_app.include_router(auth_internal_router)  # Internal auth handoff endpoints
 api_app.include_router(oauth_router)  # OAuth for third-party connectors
 api_app.include_router(users_router)
 api_app.include_router(contacts_router)  # User approved contacts for email/SMS
@@ -1088,12 +1090,13 @@ async def serve_config_js():
             pass  # Fall through with env-only check
     _llm_avail = "true" if _llm_avail_bool else "false"
     _emb_avail = "true" if _emb_avail_bool else "false"
+    google_client_id = "" if _settings.control_plane_url else (_settings.google_client_id or "")
 
     js = (
         f'window.API_BASE_URL="/api";\n'
         f'window.WS_BASE_URL="{ws_host or ""}";\n'
         f'window.__APP_MODE__="{_settings.app_mode.value}";\n'
-        f'window.__GOOGLE_CLIENT_ID__="{_settings.google_client_id or ""}";\n'
+        f'window.__GOOGLE_CLIENT_ID__="{google_client_id}";\n'
         f'window.__SINGLE_TENANT__={"true" if _settings.single_tenant else "false"};\n'
         f'window.__LLM_AVAILABLE__={_llm_avail};\n'
         f'window.__EMBEDDINGS_AVAILABLE__={_emb_avail};\n'

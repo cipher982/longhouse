@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -54,7 +56,7 @@ from control_plane.services.provisioner import (  # noqa: E402
     normalize_custom_env_overrides,
     parse_custom_env_json,
 )
-from control_plane.routers.auth import _hash_password, _issue_session_token  # noqa: E402
+from control_plane.routers.auth import _encode_jwt, _hash_password, _issue_session_token  # noqa: E402
 from control_plane.config import settings  # noqa: E402
 
 ADMIN_HEADERS = {"X-Admin-Token": "test-admin"}
@@ -174,6 +176,74 @@ def _post_webhook(client):
     )
 
 
+def test_google_gmail_start_redirects_to_google_for_hosted_instance(client, db_session):
+    user = _make_user(db_session, email="owner@test.com")
+    _make_instance(db_session, user, subdomain="testuser")
+    start_token = _encode_jwt(
+        {
+            "sub": user.email,
+            "email": user.email,
+            "instance": "testuser",
+            "purpose": "hosted_gmail_connect_start",
+            "exp": int(time.time()) + 300,
+        },
+        settings.instance_jwt_secret,
+    )
+
+    with (
+        patch.object(settings, "google_client_id", "cp-google-client"),
+        patch.object(settings, "google_client_secret", "cp-google-secret"),
+    ):
+        response = client.get("/auth/google/gmail/start", params={"token": start_token}, follow_redirects=False)
+
+    assert response.status_code == 302
+    redirect_url = response.headers["location"]
+    parsed = urllib.parse.urlparse(redirect_url)
+    query = urllib.parse.parse_qs(parsed.query)
+    assert parsed.netloc == "accounts.google.com"
+    assert query["redirect_uri"] == [f"https://control.{settings.root_domain}/auth/google/gmail/callback"]
+    assert query["scope"] == ["https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send"]
+    assert query["access_type"] == ["offline"]
+    assert query["prompt"] == ["consent"]
+    assert "state" in query
+
+
+def test_google_gmail_callback_posts_handoff_and_redirects_to_tenant(client, db_session):
+    user = _make_user(db_session, email="owner@test.com")
+    _make_instance(db_session, user, subdomain="testuser")
+    state = _encode_jwt(
+        {
+            "sub": user.email,
+            "email": user.email,
+            "instance": "testuser",
+            "purpose": "hosted_gmail_connect_callback",
+            "exp": int(time.time()) + 300,
+        },
+        settings.jwt_secret,
+    )
+    handoff_response = MagicMock()
+    handoff_response.raise_for_status.return_value = None
+
+    with (
+        patch.object(settings, "google_client_id", "cp-google-client"),
+        patch.object(settings, "google_client_secret", "cp-google-secret"),
+        patch("control_plane.routers.auth._exchange_code_with_redirect_uri", return_value={"refresh_token": "refresh-token"}),
+        patch("control_plane.routers.auth.httpx.post", return_value=handoff_response) as mock_post,
+    ):
+        response = client.get(
+            "/auth/google/gmail/callback",
+            params={"code": "auth-code", "state": state},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == f"https://testuser.{settings.root_domain}/conversations"
+    mock_post.assert_called_once()
+    _, kwargs = mock_post.call_args
+    assert kwargs["headers"]["X-Internal-Token"] == settings.instance_internal_api_secret
+    assert kwargs["json"]["refresh_token"] == "refresh-token"
+
+
 # ===========================================================================
 # Provisioner unit tests
 # ===========================================================================
@@ -247,6 +317,23 @@ class TestEnvGeneration:
             assert env["AWS_SES_REGION"] == "us-west-2"
             assert env["FROM_EMAIL"] == "noreply@test.com"
             assert env["NOTIFY_EMAIL"] == "owner@test.com"
+
+    def test_gmail_env_injected_for_hosted_instances(self):
+        with (
+            patch.object(settings, "google_client_id", "cp-google-client"),
+            patch.object(settings, "google_client_secret", "cp-google-secret"),
+            patch.object(settings, "instance_google_client_id", None),
+            patch.object(settings, "instance_google_client_secret", None),
+            patch.object(settings, "instance_gmail_pubsub_topic", "projects/demo/topics/gmail"),
+            patch.object(settings, "instance_pubsub_sa_email", "pubsub-push@demo.iam.gserviceaccount.com"),
+        ):
+            env = _env_for("testuser", "owner@test.com")
+
+        assert env["GOOGLE_CLIENT_ID"] == "cp-google-client"
+        assert env["GOOGLE_CLIENT_SECRET"] == "cp-google-secret"
+        assert env["GMAIL_PUBSUB_TOPIC"] == "projects/demo/topics/gmail"
+        assert env["PUBSUB_AUDIENCE"] == f"https://testuser.{settings.root_domain}"
+        assert env["PUBSUB_SA_EMAIL"] == "pubsub-push@demo.iam.gserviceaccount.com"
 
     def test_custom_env_overrides_merge_into_instance_env(self):
         env = _env_for(

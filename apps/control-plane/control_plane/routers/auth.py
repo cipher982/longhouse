@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+import httpx
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
@@ -39,6 +40,7 @@ from sqlalchemy.orm import Session
 
 from control_plane.config import settings
 from control_plane.db import get_db
+from control_plane.models import Instance
 from control_plane.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -56,6 +58,8 @@ RESET_TOKEN_MAX_AGE = 60 * 60  # 1 hour
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+GMAIL_CONNECT_SCOPES = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send"
+HOSTED_GMAIL_STATE_MAX_AGE = 10 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -240,14 +244,18 @@ def _callback_url() -> str:
     return f"https://control.{settings.root_domain}/auth/google/callback"
 
 
-def _exchange_code(code: str) -> dict[str, Any]:
+def _gmail_callback_url() -> str:
+    return f"https://control.{settings.root_domain}/auth/google/gmail/callback"
+
+
+def _exchange_code_with_redirect_uri(code: str, redirect_uri: str) -> dict[str, Any]:
     """Exchange authorization code for tokens."""
     data = urllib.parse.urlencode(
         {
             "code": code,
             "client_id": settings.google_client_id,
             "client_secret": settings.google_client_secret,
-            "redirect_uri": _callback_url(),
+            "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         }
     ).encode()
@@ -264,6 +272,79 @@ def _exchange_code(code: str) -> dict[str, Any]:
     except Exception as exc:
         logger.error(f"Google token exchange failed: {exc}")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Google token exchange failed") from exc
+
+
+def _exchange_code(code: str) -> dict[str, Any]:
+    return _exchange_code_with_redirect_uri(code, _callback_url())
+
+
+def _issue_hosted_gmail_state(*, email: str, instance: str) -> str:
+    return _encode_jwt(
+        {
+            "sub": email,
+            "email": email,
+            "instance": instance,
+            "purpose": "hosted_gmail_connect_callback",
+            "exp": int(time.time()) + HOSTED_GMAIL_STATE_MAX_AGE,
+        },
+        settings.jwt_secret,
+    )
+
+
+def _issue_hosted_gmail_handoff_token(*, email: str, instance: str) -> str:
+    return _encode_jwt(
+        {
+            "sub": email,
+            "email": email,
+            "instance": instance,
+            "purpose": "hosted_gmail_connect_handoff",
+            "exp": int(time.time()) + HOSTED_GMAIL_STATE_MAX_AGE,
+        },
+        settings.instance_jwt_secret,
+    )
+
+
+def _tenant_conversations_url(subdomain: str, *, error: str | None = None) -> str:
+    base = f"https://{subdomain}.{settings.root_domain}/conversations"
+    if not error:
+        return base
+    encoded = urllib.parse.quote(error[:300], safe="")
+    return f"{base}?gmail_error={encoded}"
+
+
+def _load_hosted_gmail_instance(
+    db: Session,
+    *,
+    subdomain: str,
+    email: str,
+) -> tuple[Instance, User]:
+    row = (
+        db.query(Instance, User)
+        .join(User, Instance.user_id == User.id)
+        .filter(Instance.subdomain == subdomain)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instance not found")
+
+    instance, user = row
+    if user.email.strip().lower() != email.strip().lower():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Instance does not belong to this user")
+    return instance, user
+
+
+def _post_hosted_gmail_handoff(*, subdomain: str, refresh_token: str, handoff_token: str) -> None:
+    url = f"https://{subdomain}.{settings.root_domain}/api/internal/auth/google/gmail/handoff"
+    response = httpx.post(
+        url,
+        headers={"X-Internal-Token": settings.instance_internal_api_secret},
+        json={
+            "refresh_token": refresh_token,
+            "handoff_token": handoff_token,
+        },
+        timeout=20.0,
+    )
+    response.raise_for_status()
 
 
 def _get_userinfo(access_token: str) -> dict[str, Any]:
@@ -433,6 +514,110 @@ def google_callback(code: str | None = None, error: str | None = None, db: Sessi
     response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=302)
     _set_session(response, session_token)
     return response
+
+
+@router.get("/google/gmail/start")
+def google_gmail_start(token: str | None = None, db: Session = Depends(get_db)):
+    """Start hosted Gmail OAuth using a tenant-issued one-shot token."""
+
+    _require_oauth()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing connect token")
+
+    try:
+        payload = _decode_jwt(token, settings.instance_jwt_secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    if payload.get("purpose") != "hosted_gmail_connect_start":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid connect token purpose")
+
+    email = str(payload.get("email") or payload.get("sub") or "").strip().lower()
+    subdomain = str(payload.get("instance") or "").strip().lower()
+    if not email or not subdomain:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid connect token payload")
+
+    _load_hosted_gmail_instance(db, subdomain=subdomain, email=email)
+    state = _issue_hosted_gmail_state(email=email, instance=subdomain)
+
+    params = urllib.parse.urlencode(
+        {
+            "client_id": settings.google_client_id,
+            "redirect_uri": _gmail_callback_url(),
+            "response_type": "code",
+            "scope": GMAIL_CONNECT_SCOPES,
+            "access_type": "offline",
+            "prompt": "consent",
+            "include_granted_scopes": "true",
+            "state": state,
+        }
+    )
+    return RedirectResponse(f"{GOOGLE_AUTH_URL}?{params}", status_code=302)
+
+
+@router.get("/google/gmail/callback")
+def google_gmail_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Complete hosted Gmail OAuth and hand the refresh token to the tenant."""
+
+    _require_oauth()
+    if not state:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing state")
+
+    try:
+        state_payload = _decode_jwt(state, settings.jwt_secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    if state_payload.get("purpose") != "hosted_gmail_connect_callback":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid state purpose")
+
+    email = str(state_payload.get("email") or state_payload.get("sub") or "").strip().lower()
+    subdomain = str(state_payload.get("instance") or "").strip().lower()
+    if not email or not subdomain:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid state payload")
+
+    _load_hosted_gmail_instance(db, subdomain=subdomain, email=email)
+
+    if error:
+        return RedirectResponse(_tenant_conversations_url(subdomain, error=error), status_code=302)
+
+    if not code:
+        return RedirectResponse(
+            _tenant_conversations_url(subdomain, error="Missing authorization code."),
+            status_code=302,
+        )
+
+    token_data = _exchange_code_with_redirect_uri(code, _gmail_callback_url())
+    refresh_token = token_data.get("refresh_token")
+    if not refresh_token:
+        return RedirectResponse(
+            _tenant_conversations_url(
+                subdomain,
+                error="Google did not return a refresh token. Remove Longhouse from Google permissions, then try again.",
+            ),
+            status_code=302,
+        )
+
+    handoff_token = _issue_hosted_gmail_handoff_token(email=email, instance=subdomain)
+    try:
+        _post_hosted_gmail_handoff(
+            subdomain=subdomain,
+            refresh_token=str(refresh_token),
+            handoff_token=handoff_token,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Hosted Gmail handoff failed for %s: %s", subdomain, exc)
+        return RedirectResponse(
+            _tenant_conversations_url(subdomain, error="Could not finish Gmail connection on the instance."),
+            status_code=302,
+        )
+
+    return RedirectResponse(_tenant_conversations_url(subdomain), status_code=302)
 
 
 @router.get("/status")

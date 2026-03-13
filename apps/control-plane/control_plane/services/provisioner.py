@@ -196,10 +196,20 @@ def _env_for(
     if password:
         env["LONGHOUSE_PASSWORD"] = password
 
-    # NOTE: Google OAuth is NOT passed to instances — Google doesn't support
-    # wildcard redirect URIs, so *.longhouse.ai can't use Google OAuth directly.
-    # Instead, users authenticate via the control plane (which owns the OAuth
-    # client) and get SSO'd into their instance via /auth/sso?token=xxx.
+    # Hosted instances still need Google credentials server-side so they can
+    # refresh Gmail tokens and send mail after the control plane completes the
+    # stable-domain OAuth flow. The frontend does not use these directly.
+    hosted_google_client_id = settings.instance_google_client_id or settings.google_client_id
+    hosted_google_client_secret = settings.instance_google_client_secret or settings.google_client_secret
+    if hosted_google_client_id and hosted_google_client_secret:
+        env["GOOGLE_CLIENT_ID"] = hosted_google_client_id
+        env["GOOGLE_CLIENT_SECRET"] = hosted_google_client_secret
+
+    if settings.instance_gmail_pubsub_topic:
+        env["GMAIL_PUBSUB_TOPIC"] = settings.instance_gmail_pubsub_topic
+        env["PUBSUB_AUDIENCE"] = f"https://{_host_for(subdomain)}"
+        if settings.instance_pubsub_sa_email:
+            env["PUBSUB_SA_EMAIL"] = settings.instance_pubsub_sa_email
 
     # Email (SES) — platform-provided so jobs can send email out of the box
     if settings.instance_aws_ses_access_key_id and settings.instance_aws_ses_secret_access_key:

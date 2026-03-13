@@ -431,3 +431,23 @@ def test_auth_methods_returns_sso_when_cp_url_set():
     assert data["sso_url"] == "https://control.longhouse.ai"
     assert data["google"] is False
     assert data["password"] is False
+
+
+def test_auth_methods_hide_google_when_control_plane_is_enabled():
+    from fastapi.testclient import TestClient
+    from zerg.main import api_app
+
+    mock_settings = MagicMock()
+    mock_settings.google_client_id = "google-client-id"
+    mock_settings.longhouse_password = None
+    mock_settings.longhouse_password_hash = None
+    mock_settings.control_plane_url = "https://control.longhouse.ai"
+
+    with patch("zerg.routers.auth.get_settings", return_value=mock_settings):
+        client = TestClient(api_app)
+        resp = client.get("/auth/methods")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sso"] is True
+    assert data["google"] is False

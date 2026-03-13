@@ -8,6 +8,7 @@ import hmac
 import os
 import secrets
 import time
+import urllib.parse
 from collections import defaultdict
 from collections import deque
 from datetime import datetime
@@ -66,6 +67,7 @@ JWT_SECRET = _settings.jwt_secret
 # existing development setups.
 
 GOOGLE_CLIENT_SECRET = _settings.google_client_secret
+HOSTED_GMAIL_CONNECT_TOKEN_TTL_SECONDS = 10 * 60
 
 # Cookie configuration for browser auth
 SESSION_COOKIE_NAME = "longhouse_session"
@@ -261,35 +263,6 @@ def _issue_access_token(
     from datetime import timezone
 
     expiry = datetime.now(timezone.utc) + expires_delta
-    # Import python-jose lazily to avoid hard dependency during unit tests.
-    try:
-        from jose import jwt  # type: ignore
-    except ModuleNotFoundError:  # pragma: no cover – fallback minimal signer
-        import base64
-        import hashlib
-        import hmac
-        import json
-
-        class _MiniJWT:
-            @staticmethod
-            def _b64(data: bytes) -> bytes:
-                return base64.urlsafe_b64encode(data).rstrip(b"=")
-
-            @classmethod
-            def encode(cls, payload_: dict[str, Any], secret_: str, algorithm: str = "HS256") -> str:  # noqa: D401 – purpose
-                if algorithm != "HS256":
-                    raise ValueError("Only HS256 supported in fallback")
-
-                header = {"alg": algorithm, "typ": "JWT"}
-                header_b64 = cls._b64(json.dumps(header, separators=(",", ":")).encode())
-                payload_b64 = cls._b64(json.dumps(payload_, separators=(",", ":")).encode())
-                signing_input = header_b64 + b"." + payload_b64
-                signature = hmac.new(secret_.encode(), signing_input, hashlib.sha256).digest()
-                sig_b64 = cls._b64(signature)
-                return (signing_input + b"." + sig_b64).decode()
-
-        jwt = _MiniJWT  # type: ignore
-
     # ``exp`` must be an **integer** UNIX timestamp so that json.dumps (used
     # by the lightweight fallback encoder below) can serialise the payload
     # without hitting "Object of type datetime is not JSON serialisable".
@@ -305,7 +278,38 @@ def _issue_access_token(
 
     if avatar_url is not None:
         payload["avatar_url"] = avatar_url
-    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    return _encode_jwt(payload, JWT_SECRET)
+
+
+def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
+    """Encode a compact HS256 JWT with a lightweight fallback for tests."""
+
+    try:
+        from jose import jwt  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover – fallback minimal signer
+        import json
+
+        class _MiniJWT:
+            @staticmethod
+            def _b64(data: bytes) -> bytes:
+                return base64.urlsafe_b64encode(data).rstrip(b"=")
+
+            @classmethod
+            def encode(cls, payload_: dict[str, Any], secret_: str, algorithm: str = "HS256") -> str:
+                if algorithm != "HS256":
+                    raise ValueError("Only HS256 supported in fallback")
+
+                header = {"alg": algorithm, "typ": "JWT"}
+                header_b64 = cls._b64(json.dumps(header, separators=(",", ":")).encode())
+                payload_b64 = cls._b64(json.dumps(payload_, separators=(",", ":")).encode())
+                signing_input = header_b64 + b"." + payload_b64
+                signature = hmac.new(secret_.encode(), signing_input, hashlib.sha256).digest()
+                sig_b64 = cls._b64(signature)
+                return (signing_input + b"." + sig_b64).decode()
+
+        jwt = _MiniJWT  # type: ignore
+
+    return jwt.encode(payload, secret, algorithm="HS256")
 
 
 # ---------------------------------------------------------------------------
@@ -820,7 +824,7 @@ def get_auth_methods():
     """Return available auth methods for frontend."""
     settings = get_settings()
     return {
-        "google": bool(settings.google_client_id),
+        "google": bool(settings.google_client_id) and not bool(settings.control_plane_url),
         "password": bool(settings.longhouse_password or settings.longhouse_password_hash),
         "sso": bool(settings.control_plane_url),
         "sso_url": settings.control_plane_url if settings.control_plane_url else None,
@@ -848,6 +852,12 @@ class GmailConnectResponse(BaseModel):
     connector_id: int
     mailbox_email: str | None = None
     watch: GmailWatchStateResponse
+
+
+class HostedGmailConnectStartResponse(BaseModel):
+    """Short-lived control-plane redirect URL for hosted Gmail connect."""
+
+    url: str
 
 
 def _resolve_password_user(db: Session):
@@ -1089,63 +1099,39 @@ def _bootstrap_gmail_watch(refresh_token: str, callback_url: str | None) -> tupl
     )
 
 
-@router.post("/google/gmail", status_code=status.HTTP_200_OK, response_model=GmailConnectResponse)
-def connect_gmail(
-    body: dict[str, str],
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+def _store_gmail_connector(
+    db: Session,
+    *,
+    owner_id: int,
+    refresh_token: str,
+    callback_url: str | None,
 ) -> GmailConnectResponse:
-    """Connect Gmail via OAuth and create/update a Gmail connector.
+    """Create/update a Gmail connector and persist the latest watch state."""
 
-    Expected body: { "auth_code": "...", "callback_url": "https://.../api/email/webhook/google" }
-    where ``callback_url`` is optional and only used in tests/local legacy flows.
-
-    - Stores the encrypted refresh token in a Connector (type="email", provider="gmail").
-    - Registers a Gmail Pub/Sub watch when ``GMAIL_PUBSUB_TOPIC`` is configured.
-    - Uses direct HTTPS callbacks only in tests, never as the production path.
-    - Returns connector + watch bootstrap state so callers can surface partial failure.
-    """
-
-    auth_code = body.get("auth_code")
-    if not auth_code:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="auth_code missing")
-
-    callback_url = body.get("callback_url")
-
-    # Exchange code for tokens (patched to stub out in unit-tests)
-    token_payload = _exchange_google_auth_code(auth_code)
-    refresh_token: str = token_payload["refresh_token"]
-
-    # Create or update connector for this user
-    from zerg.utils import crypto  # lazy import
+    from zerg.utils import crypto
 
     enc = crypto.encrypt(refresh_token)
 
-    # Try to find an existing Gmail connector for this owner
-    existing = crud.get_connectors(db, owner_id=current_user.id, type="email", provider="gmail")
+    existing = crud.get_connectors(db, owner_id=owner_id, type="email", provider="gmail")
     if existing:
         conn = existing[0]
         cfg = dict(conn.config or {})
         cfg["refresh_token"] = enc
         conn = crud.update_connector(db, conn.id, config=cfg)  # type: ignore[assignment]
-        connector_id = conn.id if conn else None
     else:
         try:
             conn = crud.create_connector(
                 db,
-                owner_id=current_user.id,
+                owner_id=owner_id,
                 type="email",
                 provider="gmail",
                 config={"refresh_token": enc},
             )
-            connector_id = conn.id
         except Exception:
-            # Handle potential uniqueness race: fetch existing and reuse
-            existing = crud.get_connectors(db, owner_id=current_user.id, type="email", provider="gmail")
+            existing = crud.get_connectors(db, owner_id=owner_id, type="email", provider="gmail")
             if not existing:
                 raise
             conn = existing[0]
-            connector_id = conn.id
             cfg = dict(conn.config or {})
             cfg["refresh_token"] = enc
             conn = crud.update_connector(db, conn.id, config=cfg)  # type: ignore[assignment]
@@ -1186,7 +1172,90 @@ def connect_gmail(
 
     return GmailConnectResponse(
         status="connected",
-        connector_id=int(connector_id),
+        connector_id=int(conn.id),
         mailbox_email=effective_mailbox,
         watch=watch_state,
+    )
+
+
+def _issue_hosted_gmail_connect_token(email: str) -> str:
+    """Issue a short-lived token the control plane can validate for hosted connect."""
+
+    instance_id = os.getenv("INSTANCE_ID", "").strip()
+    if not instance_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Hosted Gmail connect is unavailable because INSTANCE_ID is missing.",
+        )
+
+    expires_at = int(time.time()) + HOSTED_GMAIL_CONNECT_TOKEN_TTL_SECONDS
+    return _encode_jwt(
+        {
+            "sub": email,
+            "email": email,
+            "instance": instance_id,
+            "purpose": "hosted_gmail_connect_start",
+            "exp": expires_at,
+        },
+        JWT_SECRET,
+    )
+
+
+@router.post("/google/gmail/start", response_model=HostedGmailConnectStartResponse)
+def start_hosted_gmail_connect(
+    current_user: Any = Depends(get_current_user),
+) -> HostedGmailConnectStartResponse:
+    """Return the control-plane Gmail connect URL for hosted instances."""
+
+    settings = get_settings()
+    if not settings.control_plane_url:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Hosted Gmail connect is not available on this instance.",
+        )
+
+    token = _issue_hosted_gmail_connect_token(str(getattr(current_user, "email", "")).strip().lower())
+    encoded = urllib.parse.quote(token, safe="")
+    url = f"{settings.control_plane_url.rstrip('/')}/auth/google/gmail/start?token={encoded}"
+    return HostedGmailConnectStartResponse(url=url)
+
+
+@router.post("/google/gmail", status_code=status.HTTP_200_OK, response_model=GmailConnectResponse)
+def connect_gmail(
+    body: dict[str, str],
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> GmailConnectResponse:
+    """Connect Gmail via OAuth and create/update a Gmail connector.
+
+    Expected body: { "auth_code": "...", "callback_url": "https://.../api/email/webhook/google" }
+    where ``callback_url`` is optional and only used in tests/local legacy flows.
+
+    - Stores the encrypted refresh token in a Connector (type="email", provider="gmail").
+    - Registers a Gmail Pub/Sub watch when ``GMAIL_PUBSUB_TOPIC`` is configured.
+    - Uses direct HTTPS callbacks only in tests, never as the production path.
+    - Returns connector + watch bootstrap state so callers can surface partial failure.
+    """
+
+    auth_code = body.get("auth_code")
+    if not auth_code:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="auth_code missing")
+
+    settings = get_settings()
+    if getattr(settings, "control_plane_url", None) and not settings.testing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Hosted Gmail connect must start on the control plane.",
+        )
+
+    callback_url = body.get("callback_url")
+
+    # Exchange code for tokens (patched to stub out in unit-tests)
+    token_payload = _exchange_google_auth_code(auth_code)
+    refresh_token: str = token_payload["refresh_token"]
+    return _store_gmail_connector(
+        db,
+        owner_id=current_user.id,
+        refresh_token=refresh_token,
+        callback_url=callback_url,
     )
