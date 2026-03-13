@@ -4,13 +4,22 @@ on:
   push:
     paths:
       - '.github/workflows/runner-onboarding-validation.yml'
+      - '.github/workflows/launch-gate.yml'
+      - '.github/workflows/test-install.yml'
       - 'apps/zerg/e2e/**'
+      - 'apps/zerg/backend/pyproject.toml'
+      - 'apps/zerg/backend/zerg/cli/connect.py'
+      - 'apps/zerg/backend/zerg/cli/doctor.py'
+      - 'apps/zerg/backend/zerg/cli/onboard.py'
+      - 'apps/zerg/backend/zerg/cli/serve.py'
       - 'apps/zerg/frontend-web/src/components/AddRunnerModal.tsx'
       - 'apps/zerg/frontend-web/src/components/chat/RunnerSetupCard.tsx'
       - 'apps/zerg/frontend-web/src/lib/runnerInstallCommands.ts'
       - 'apps/zerg/frontend-web/src/pages/RunnersPage.tsx'
       - 'apps/zerg/backend/zerg/routers/runners.py'
       - 'apps/zerg/backend/zerg/routers/templates/install.sh'
+      - 'scripts/install.sh'
+      - 'scripts/ci/installer-first-run.sh'
       - 'scripts/qa-oss.sh'
       - 'scripts/run-onboarding-funnel.sh'
       - 'Makefile'
@@ -18,13 +27,22 @@ on:
   pull_request:
     paths:
       - '.github/workflows/runner-onboarding-validation.yml'
+      - '.github/workflows/launch-gate.yml'
+      - '.github/workflows/test-install.yml'
       - 'apps/zerg/e2e/**'
+      - 'apps/zerg/backend/pyproject.toml'
+      - 'apps/zerg/backend/zerg/cli/connect.py'
+      - 'apps/zerg/backend/zerg/cli/doctor.py'
+      - 'apps/zerg/backend/zerg/cli/onboard.py'
+      - 'apps/zerg/backend/zerg/cli/serve.py'
       - 'apps/zerg/frontend-web/src/components/AddRunnerModal.tsx'
       - 'apps/zerg/frontend-web/src/components/chat/RunnerSetupCard.tsx'
       - 'apps/zerg/frontend-web/src/lib/runnerInstallCommands.ts'
       - 'apps/zerg/frontend-web/src/pages/RunnersPage.tsx'
       - 'apps/zerg/backend/zerg/routers/runners.py'
       - 'apps/zerg/backend/zerg/routers/templates/install.sh'
+      - 'scripts/install.sh'
+      - 'scripts/ci/installer-first-run.sh'
       - 'scripts/qa-oss.sh'
       - 'scripts/run-onboarding-funnel.sh'
       - 'Makefile'
@@ -207,7 +225,6 @@ jobs:
             qa-oss-server.log
 
   synthetic-first-user:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: "synthetic-first-user--fresh-clone"
