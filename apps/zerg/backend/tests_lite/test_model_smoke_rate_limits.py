@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent / "scripts"))
 
+from smoke_models import build_openai_smoke_request  # noqa: E402
 from smoke_models import classify_smoke_exception  # noqa: E402
 
 
@@ -23,3 +24,16 @@ def test_classify_smoke_exception_keeps_real_failures_red():
 
     assert status == "fail"
     assert detail == "Connection reset by peer"
+
+
+def test_build_openai_smoke_request_uses_minimal_reasoning_for_gpt5():
+    request = build_openai_smoke_request("gpt-5-nano")
+
+    assert request["reasoning_effort"] == "low"
+    assert request["max_completion_tokens"] == 64
+
+
+def test_build_openai_smoke_request_keeps_non_gpt5_plain():
+    request = build_openai_smoke_request("gpt-4.1-mini")
+
+    assert "reasoning_effort" not in request
