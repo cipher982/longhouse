@@ -1,6 +1,6 @@
 # Browser vs Machine Auth Boundary
 
-Status: In progress
+Status: Done
 
 ## Executive Summary
 
@@ -75,3 +75,4 @@ Acceptance criteria:
 - 2026-03-14: Updated `/api/auth/status`, `/api/auth/verify`, hosted Gmail browser entrypoints, and the Oikos browser auth helper to use the browser-session path.
 - 2026-03-14: `insights` and `proposals` read routes now use browser-session auth; `POST /api/insights` intentionally stays on the machine-auth path.
 - 2026-03-14: Removed the dead frontend `getToken()` API, removed the leftover `zerg_jwt` localStorage cleanup path, and cleaned the stale test mocks that still implied browser auth used JS-readable tokens.
+- 2026-03-14: Final verification and ship completed with `make test`, `make test-e2e`, runtime image build `23098091890`, Coolify deploys for the marketing site and control plane, reprovision of `david010`, and `make qa-live` passing 8/8.

@@ -57,7 +57,7 @@ Notes:
 
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
-Status (2026-03-14): In progress. Scoped to a bounded cleanup pass, not a full auth rewrite.
+Status (2026-03-14): Done. Kept to the bounded browser-vs-machine cleanup pass; not expanded into a full auth rewrite.
 
 **Goal:** Make the browser auth surface explicitly cookie-session based, stop routing human-only pages through the mixed machine-auth helper, and delete the dead frontend token baggage that still suggests the web app has a JS token model.
 
@@ -68,17 +68,18 @@ Status (2026-03-14): In progress. Scoped to a bounded cleanup pass, not a full a
 - Frontend auth context no longer exposes dead token-era APIs or `zerg_jwt` cleanup baggage
 - Focused auth/browser regression tests plus full ship checks pass
 
-- [ ] Write and commit a concise phase spec
+- [x] Write and commit a concise phase spec
 - [x] Add explicit browser-session auth helpers in the backend
 - [x] Move human-only routers off the mixed agents read-access dependency
 - [x] Remove dead frontend token-era baggage and stale tests
-- [ ] Ship and verify the hosted runtime after the boundary cleanup
+- [x] Ship and verify the hosted runtime after the boundary cleanup
 
 Notes:
 - 2026-03-14: Keep this pass bounded. Do not try to redesign hosted SSO, device tokens, runner auth, and internal auth all at once.
 - 2026-03-14: The main cleanup target is the blurry line between browser UI auth and machine/device auth, not the existence of multiple auth systems.
 - 2026-03-14: Backend browser-session helpers are now explicit, Oikos fetch/XHR now follows the browser-cookie path by default, and `insights` / `proposals` no longer lean on the mixed agents read helper.
 - 2026-03-14: Frontend auth context no longer advertises `getToken()`, the legacy `zerg_jwt` cleanup path is gone, and the remaining frontend auth story is consistently cookie-session based.
+- 2026-03-14: Final ship verification passed: `make test`, `make test-e2e`, GHCR runtime build `23098091890`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, and `make qa-live` (8/8).
 - Spec: `docs/specs/browser-machine-auth-boundary.md`
 
 ## [Tech Debt] Drop `zerg.crud.crud` facade shell (size: 2)
