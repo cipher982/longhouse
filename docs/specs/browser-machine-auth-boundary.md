@@ -54,7 +54,7 @@ Acceptance criteria:
 - Those routers no longer import `verify_agents_read_access`
 
 ### Phase 3: Frontend token baggage removal
-Status: In progress
+Status: Done
 
 Acceptance criteria:
 - Frontend auth context no longer exposes a dead `getToken()` API
@@ -74,3 +74,4 @@ Acceptance criteria:
 - 2026-03-14: Added `get_current_browser_user` and `get_optional_browser_user` so browser-owned routes can be explicit about cookie-session auth instead of leaning on mixed browser-or-machine helpers.
 - 2026-03-14: Updated `/api/auth/status`, `/api/auth/verify`, hosted Gmail browser entrypoints, and the Oikos browser auth helper to use the browser-session path.
 - 2026-03-14: `insights` and `proposals` read routes now use browser-session auth; `POST /api/insights` intentionally stays on the machine-auth path.
+- 2026-03-14: Removed the dead frontend `getToken()` API, removed the leftover `zerg_jwt` localStorage cleanup path, and cleaned the stale test mocks that still implied browser auth used JS-readable tokens.

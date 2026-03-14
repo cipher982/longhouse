@@ -34,26 +34,10 @@ interface AuthContextType {
   isLoading: boolean;
   login: (idToken: string) => Promise<TokenData>;
   logout: () => void;
-  getToken: () => string | null;
   refreshAuth?: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
-
-// Legacy localStorage key - kept for migration/cleanup only
-const LEGACY_TOKEN_STORAGE_KEY = 'zerg_jwt';
-
-/**
- * Clean up legacy localStorage token if present.
- * Called on app init to migrate from localStorage to cookie auth.
- */
-function cleanupLegacyToken(): void {
-  try {
-    localStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
-  } catch {
-    // Ignore storage errors
-  }
-}
 
 // Custom error class that includes HTTP status for retry logic
 class HttpError extends Error {
@@ -126,7 +110,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isLoading: false,
       login: async () => ({ access_token: '', expires_in: 0 }),
       logout: () => {},
-      getToken: () => null,
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -149,7 +132,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isLoading: false,
       login: async () => ({ access_token: '', expires_in: 0 }),
       logout: () => {},
-      getToken: () => null,
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -162,11 +144,6 @@ function AuthProviderInner({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const queryClient = useQueryClient();
-
-  // Clean up any legacy localStorage token on mount
-  useEffect(() => {
-    cleanupLegacyToken();
-  }, []);
 
   // Check auth status via cookie on mount (always enabled - cookie determines auth)
   const { data: userData, isLoading, error, refetch } = useQuery<User | null>({
@@ -220,12 +197,6 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     queryClient.clear();
   };
 
-  const getToken = () => {
-    // Deprecated: tokens are now in HttpOnly cookies (not JS-accessible)
-    // Kept for API compatibility but always returns null
-    return null;
-  };
-
   const refreshAuth = async () => {
     // Refetch auth status from server
     await refetch();
@@ -237,7 +208,6 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     isLoading,
     login,
     logout,
-    getToken,
     refreshAuth,
   };
 

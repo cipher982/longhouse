@@ -31,13 +31,14 @@ Status (2026-03-14): In progress. Scoped to a bounded cleanup pass, not a full a
 - [ ] Write and commit a concise phase spec
 - [x] Add explicit browser-session auth helpers in the backend
 - [x] Move human-only routers off the mixed agents read-access dependency
-- [ ] Remove dead frontend token-era baggage and stale tests
+- [x] Remove dead frontend token-era baggage and stale tests
 - [ ] Ship and verify the hosted runtime after the boundary cleanup
 
 Notes:
 - 2026-03-14: Keep this pass bounded. Do not try to redesign hosted SSO, device tokens, runner auth, and internal auth all at once.
 - 2026-03-14: The main cleanup target is the blurry line between browser UI auth and machine/device auth, not the existence of multiple auth systems.
 - 2026-03-14: Backend browser-session helpers are now explicit, Oikos fetch/XHR now follows the browser-cookie path by default, and `insights` / `proposals` no longer lean on the mixed agents read helper.
+- 2026-03-14: Frontend auth context no longer advertises `getToken()`, the legacy `zerg_jwt` cleanup path is gone, and the remaining frontend auth story is consistently cookie-session based.
 - Spec: `docs/specs/browser-machine-auth-boundary.md`
 
 ## [Tech Debt] Drop `zerg.crud.crud` facade shell (size: 2)

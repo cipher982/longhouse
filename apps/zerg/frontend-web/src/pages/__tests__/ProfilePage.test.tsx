@@ -21,7 +21,6 @@ const mockAuth = {
   isLoading: false,
   login: vi.fn(),
   logout: vi.fn(),
-  getToken: vi.fn(() => "mock-token"),
 };
 
 vi.mock("../../lib/auth", () => ({

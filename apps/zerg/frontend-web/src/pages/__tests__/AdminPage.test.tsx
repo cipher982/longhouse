@@ -22,7 +22,6 @@ const mockAuth = {
   isLoading: false,
   login: vi.fn(),
   logout: vi.fn(),
-  getToken: vi.fn(() => "mock-admin-token"),
 };
 
 vi.mock("../../lib/auth", () => ({
@@ -87,19 +86,6 @@ function buildOpsSummary(window: "today" | "7d" | "30d") {
 const mockOpsSummary = buildOpsSummary("30d");
 
 function renderAdminPage() {
-  // Mock localStorage.zerg_jwt that AdminPage expects
-  Object.defineProperty(window, 'localStorage', {
-    value: {
-      getItem: vi.fn((key: string) => {
-        if (key === 'zerg_jwt') return 'mock-jwt-token';
-        return null;
-      }),
-      setItem: vi.fn(),
-      removeItem: vi.fn(),
-    },
-    writable: true,
-  });
-
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
