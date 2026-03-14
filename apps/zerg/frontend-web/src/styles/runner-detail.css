@@ -431,36 +431,6 @@
       accent-color: var(--color-intent-success);
     }
 
-    @media (width <= 768px) {
-      .detail-section {
-        padding: var(--space-4);
-      }
-
-      .detail-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .section-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: var(--space-3);
-      }
-
-      .runner-detail-header-actions {
-        width: 100%;
-        flex-wrap: wrap;
-        justify-content: flex-start;
-      }
-
-      .runner-job-header {
-        flex-direction: column;
-      }
-
-      .runner-job-list {
-        gap: 0.875rem;
-      }
-    }
-
     .capability-info {
       display: flex;
       flex-direction: column;
@@ -592,45 +562,69 @@
     }
 
     /* Responsive */
+  }
 
-    @media (max-width: 768px) {
-      & {
-        padding: 1rem;
-      }
+  @media (max-width: 768px) {
+    .runner-detail-container {
+      padding: 1rem;
+    }
 
-      .detail-grid {
-        grid-template-columns: 1fr;
-      }
+    .runner-detail-container .detail-section {
+      padding: var(--space-4);
+    }
 
-      .runner-title-row {
-        flex-direction: column;
-        align-items: flex-start;
-      }
+    .runner-detail-container .detail-grid {
+      grid-template-columns: 1fr;
+    }
 
-      .capabilities-actions {
-        flex-direction: column;
-      }
+    .runner-detail-container .section-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-3);
+    }
 
-      .capabilities-actions .ui-button {
-        width: 100%;
-      }
+    .runner-detail-container .runner-detail-header-actions {
+      width: 100%;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+    }
 
-      .danger-item-header {
-        flex-direction: column;
-      }
+    .runner-detail-container .runner-job-header {
+      flex-direction: column;
+    }
 
-      .runner-warning-button,
-      .danger-item-header .ui-button {
-        width: 100%;
-      }
+    .runner-detail-container .runner-job-list {
+      gap: 0.875rem;
+    }
 
-      .secret-value-container {
-        flex-direction: column;
-      }
+    .runner-detail-container .runner-title-row {
+      flex-direction: column;
+      align-items: flex-start;
+    }
 
-      .secret-value-container .ui-button {
-        width: 100%;
-      }
+    .runner-detail-container .capabilities-actions {
+      flex-direction: column;
+    }
+
+    .runner-detail-container .capabilities-actions .ui-button {
+      width: 100%;
+    }
+
+    .runner-detail-container .danger-item-header {
+      flex-direction: column;
+    }
+
+    .runner-detail-container .runner-warning-button,
+    .runner-detail-container .danger-item-header .ui-button {
+      width: 100%;
+    }
+
+    .runner-detail-container .secret-value-container {
+      flex-direction: column;
+    }
+
+    .runner-detail-container .secret-value-container .ui-button {
+      width: 100%;
     }
   }
 }
