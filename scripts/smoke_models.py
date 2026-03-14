@@ -69,8 +69,6 @@ def get_api_key(model_info: dict) -> tuple[str, str | None]:
 
 async def smoke_text_openai(model_id: str, api_key: str, base_url: str | None) -> str:
     """Ping an OpenAI-compatible text model."""
-    import re
-
     from openai import AsyncOpenAI
 
     kwargs: dict = {"api_key": api_key, "timeout": 15.0}
@@ -78,11 +76,7 @@ async def smoke_text_openai(model_id: str, api_key: str, base_url: str | None) -
         kwargs["base_url"] = base_url
     client = AsyncOpenAI(**kwargs)
     try:
-        resp = await client.chat.completions.create(
-            model=model_id,
-            messages=[{"role": "user", "content": "What is 2+2? Reply with just the number."}],
-            max_completion_tokens=64,
-        )
+        resp = await client.chat.completions.create(**build_openai_smoke_request(model_id))
         msg = resp.choices[0].message
         content = msg.content or ""
         # Some reasoning models return output in a separate field
@@ -94,6 +88,22 @@ async def smoke_text_openai(model_id: str, api_key: str, base_url: str | None) -
         return "empty response"
     finally:
         await client.close()
+
+
+def build_openai_smoke_request(model_id: str) -> dict:
+    """Build a cheap, stable smoke payload for OpenAI chat models."""
+    request = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "What is 2+2? Reply with just the number."}],
+        "max_completion_tokens": 64,
+    }
+
+    # GPT-5 models default to a higher reasoning budget than this smoke probe
+    # needs. Keep the smoke call intentionally cheap and deterministic.
+    if model_id.startswith("gpt-5"):
+        request["reasoning_effort"] = "low"
+
+    return request
 
 
 async def smoke_text_anthropic(model_id: str, api_key: str, base_url: str | None) -> str:
