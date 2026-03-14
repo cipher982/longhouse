@@ -37,7 +37,7 @@ Notes:
 
 ## [Launch][Tech Debt] Refactor stream replay/live lifecycle state out of the router (size: 4)
 
-Status (2026-03-14): Pending. `_replay_and_stream()` still carries too much lifecycle and continuation state in one router-local function.
+Status (2026-03-14): In progress. The stream refactor is implemented and committed; final repo-wide verification is blocked by unrelated runner changes in the current dirty worktree.
 
 **Goal:** Shrink `stream.py` into a thinner router by extracting the replay/live lifecycle state machine into smaller, testable units without changing stream behavior.
 
