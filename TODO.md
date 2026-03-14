@@ -15,6 +15,30 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
+
+Status (2026-03-14): In progress. Scoped to a bounded cleanup pass, not a full auth rewrite.
+
+**Goal:** Make the browser auth surface explicitly cookie-session based, stop routing human-only pages through the mixed machine-auth helper, and delete the dead frontend token baggage that still suggests the web app has a JS token model.
+
+**Done when:**
+- Backend exposes an explicit browser-session auth dependency instead of relying on mixed auth helpers for browser-only routes
+- Human-only APIs no longer use `verify_agents_read_access`
+- Browser auth helpers and browser-owned routes stop advertising bearer-token semantics they do not need
+- Frontend auth context no longer exposes dead token-era APIs or `zerg_jwt` cleanup baggage
+- Focused auth/browser regression tests plus full ship checks pass
+
+- [ ] Write and commit a concise phase spec
+- [ ] Add explicit browser-session auth helpers in the backend
+- [ ] Move human-only routers off the mixed agents read-access dependency
+- [ ] Remove dead frontend token-era baggage and stale tests
+- [ ] Ship and verify the hosted runtime after the boundary cleanup
+
+Notes:
+- 2026-03-14: Keep this pass bounded. Do not try to redesign hosted SSO, device tokens, runner auth, and internal auth all at once.
+- 2026-03-14: The main cleanup target is the blurry line between browser UI auth and machine/device auth, not the existence of multiple auth systems.
+- Spec: `docs/specs/browser-machine-auth-boundary.md`
+
 ## [Tech Debt] Drop `zerg.crud.crud` facade shell (size: 2)
 
 Status (2026-03-14): Done. The `zerg.crud.crud` compatibility shell is gone, internal call-sites now import the package or direct CRUD helpers instead, and the repo verification/ship gates are green on the final tree.
