@@ -55,6 +55,30 @@ Notes:
 - 2026-03-14: Spec written in `docs/specs/run-stream-refactor.md`. The intended target is one new service module (`services/run_stream.py`), not a package or manager framework.
 - 2026-03-14: Guardrail characterization landed in `tests_lite/test_run_stream_service.py`.
 
+## [Tech Debt] Split auth by domain ownership (size: 4)
+
+Status (2026-03-14): In progress. This is phase 2 of the auth cleanup epic.
+
+**Goal:** Give each auth domain one obvious home so browser login/session auth, hosted SSO bridge auth, Gmail connect auth, and machine/device auth stop living as mixed concerns inside unrelated routers.
+
+**Done when:**
+- Tenant `/auth` code is split by domain without changing public routes
+- Oikos auth helpers live in a dependency module instead of under `routers/`
+- Agents/device auth dependencies live outside `routers/agents.py`
+- Imports/tests follow the new ownership cleanly
+- Focused auth coverage plus full ship verification pass
+
+- [ ] Write and commit the concise phase 2 spec
+- [ ] Split tenant `/auth` into browser-session, SSO bridge, and Gmail-connect modules
+- [ ] Move Oikos auth and agents/device auth helpers into dependency modules
+- [ ] Add focused regression coverage for the moved auth domains
+- [ ] Ship and verify the hosted runtime after the refactor
+
+Notes:
+- 2026-03-14: This is still a behavior-preserving cleanup pass, not the `/api/agents/*` product-boundary rewrite.
+- 2026-03-14: Keep the public route surface stable. The win here is ownership clarity, smaller modules, and safer next-step cleanup.
+- Spec: `docs/specs/auth-domain-split.md`
+
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
 Status (2026-03-14): Done. Kept to the bounded browser-vs-machine cleanup pass; not expanded into a full auth rewrite.
