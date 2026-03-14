@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -8,9 +9,37 @@ from typing import Iterator
 from zerg.database import db_session
 from zerg.database import reset_test_commis_id
 from zerg.database import set_test_commis_id
+from zerg.events import EventType
+from zerg.events.event_bus import EventBus
+from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
 from zerg.models.models import Run
 from zerg.services.event_store import EventStore
+
+STREAM_EVENT_TYPES = (
+    EventType.OIKOS_STARTED,
+    EventType.OIKOS_THINKING,
+    EventType.OIKOS_TOKEN,
+    EventType.OIKOS_COMPLETE,
+    EventType.OIKOS_DEFERRED,
+    EventType.OIKOS_WAITING,
+    EventType.OIKOS_RESUMED,
+    EventType.OIKOS_HEARTBEAT,
+    EventType.COMMIS_SPAWNED,
+    EventType.COMMIS_STARTED,
+    EventType.COMMIS_COMPLETE,
+    EventType.COMMIS_SUMMARY_READY,
+    EventType.ERROR,
+    EventType.COMMIS_TOOL_STARTED,
+    EventType.COMMIS_TOOL_COMPLETED,
+    EventType.COMMIS_TOOL_FAILED,
+    EventType.COMMIS_OUTPUT_CHUNK,
+    EventType.OIKOS_TOOL_STARTED,
+    EventType.OIKOS_TOOL_COMPLETED,
+    EventType.OIKOS_TOOL_FAILED,
+    EventType.SHOW_SESSION_PICKER,
+    EventType.STREAM_CONTROL,
+)
 
 TOOL_EVENTS_REQUIRING_RUN_ID = {
     "commis_tool_started",
@@ -183,6 +212,62 @@ def filter_stream_event(
         return None
 
     return event
+
+
+class RunEventSubscription:
+    def __init__(
+        self,
+        *,
+        queue: asyncio.Queue,
+        overflow_event: asyncio.Event,
+        owner_id: int,
+        run_id: int,
+        allow_continuation_runs: bool,
+        continuation_resolver: ContinuationAliasResolver | None = None,
+        event_bus_instance: EventBus = event_bus,
+    ) -> None:
+        self.queue = queue
+        self.overflow_event = overflow_event
+        self.owner_id = owner_id
+        self.run_id = run_id
+        self.allow_continuation_runs = allow_continuation_runs
+        self.continuation_resolver = continuation_resolver
+        self.event_bus = event_bus_instance
+        self._callback = self._handle_event
+
+    async def _handle_event(self, event: dict[str, Any]) -> None:
+        if self.overflow_event.is_set():
+            return
+
+        filtered_event = filter_stream_event(
+            event,
+            owner_id=self.owner_id,
+            run_id=self.run_id,
+            allow_continuation_runs=self.allow_continuation_runs,
+            continuation_resolver=self.continuation_resolver,
+        )
+        if filtered_event is None:
+            return
+
+        try:
+            self.queue.put_nowait(filtered_event)
+        except asyncio.QueueFull:
+            self.overflow_event.set()
+
+    def subscribe(self) -> None:
+        for event_type in STREAM_EVENT_TYPES:
+            self.event_bus.subscribe(event_type, self._callback)
+
+    def unsubscribe(self) -> None:
+        for event_type in STREAM_EVENT_TYPES:
+            self.event_bus.unsubscribe(event_type, self._callback)
+
+    def __enter__(self) -> "RunEventSubscription":
+        self.subscribe()
+        return self
+
+    def __exit__(self, _exc_type, exc, _tb) -> None:
+        self.unsubscribe()
 
 
 @contextmanager
