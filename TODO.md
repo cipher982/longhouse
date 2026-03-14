@@ -54,6 +54,8 @@ Status (2026-03-14): Pending. `_replay_and_stream()` still carries too much life
 Notes:
 - 2026-03-14: Spec written in `docs/specs/run-stream-refactor.md`. The intended target is one new service module (`services/run_stream.py`), not a package or manager framework.
 - 2026-03-14: Guardrail characterization landed in `tests_lite/test_run_stream_service.py`.
+- 2026-03-14: Slice 2 extracted historical replay loading and test-only DB routing into `services/run_stream.py`.
+- 2026-03-14: Slice 3 extracted `StreamLifecycleState` and direct lifecycle tests; one unrelated `test_runner_tools.py` failure flaked once during verification, then passed on a clean rerun of `make test`.
 
 ## [Tech Debt] Split auth by domain ownership (size: 4)
 

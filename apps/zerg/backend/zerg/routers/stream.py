@@ -29,6 +29,7 @@ from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
+from zerg.services.run_stream import StreamLifecycleState
 from zerg.services.run_stream import load_historical_run_events
 from zerg.services.run_stream import with_test_commis_routing
 
@@ -53,9 +54,6 @@ def _json_default(value):  # type: ignore[no-untyped-def]
 # Backpressure: max events to buffer per client before closing stream
 # Client should reconnect with Last-Event-ID for resumable replay
 STREAM_QUEUE_MAX_SIZE = 1000
-
-# Maximum TTL for stream_control:keep_open (5 minutes)
-MAX_STREAM_TTL_MS = 300_000
 
 
 async def _replay_and_stream(
@@ -103,95 +101,18 @@ async def _replay_and_stream(
     # Bounded queue for backpressure - overflow triggers graceful stream closure
     queue: asyncio.Queue = asyncio.Queue(maxsize=STREAM_QUEUE_MAX_SIZE)
     last_sent_event_id = 0
-    pending_commiss = 0
-    oikos_done = False
-    saw_oikos_complete = False
-    continuation_active = False
-    awaiting_continuation_until: float | None = None
-    commis_grace_seconds = 5.0
+    lifecycle = StreamLifecycleState()
     overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
     continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
 
-    # Stream control state (explicit lifecycle management)
-    close_event_id: int | None = None  # event_id of stream_control:close (if seen)
-    stream_lease_until: float | None = None  # TTL expiry timestamp from keep_open
-
     def _apply_event_state(event_type: str, event: dict, *, from_replay: bool = False) -> None:
         """Update stream lifecycle state from an event."""
-        nonlocal \
-            pending_commiss, \
-            oikos_done, \
-            saw_oikos_complete, \
-            continuation_active, \
-            awaiting_continuation_until, \
-            complete
-        nonlocal close_event_id, stream_lease_until
-
-        # Handle stream_control events (explicit lifecycle control)
-        if event_type == "stream_control":
-            action = event.get("action")
-            ttl_ms = event.get("ttl_ms")
-            current_event_id = event.get("event_id") or event.get("_event_id")
-
-            if action == "close":
-                close_event_id = current_event_id
-                logger.debug(f"Stream control: close marker set at event_id={close_event_id} for run {run_id}")
-                # Don't set complete=True yet - wait until we've streamed up to this event
-                return
-
-            if action == "keep_open":
-                # Extend lease (or set initial) - only for live events, not replay
-                if ttl_ms and not from_replay:
-                    capped_ttl = min(ttl_ms, MAX_STREAM_TTL_MS)
-                    stream_lease_until = time.monotonic() + (capped_ttl / 1000.0)
-                    logger.debug(f"Stream control: lease extended to {capped_ttl}ms for run {run_id}")
-                # Cancel any pending close from heuristics
-                awaiting_continuation_until = None
-                return
-
-        if event_type == "commis_spawned":
-            pending_commiss += 1
-            # Cancel any pending close while new commiss are active.
-            awaiting_continuation_until = None
-            return
-
-        if event_type in ("commis_complete", "commis_summary_ready"):
-            if pending_commiss > 0:
-                pending_commiss -= 1
-
-            # If oikos already finished, start a short grace window
-            # to allow the inbox continuation to begin streaming.
-            if pending_commiss == 0 and oikos_done and not continuation_active and not from_replay:
-                if awaiting_continuation_until is None:
-                    awaiting_continuation_until = time.monotonic() + commis_grace_seconds
-            return
-
-        if event_type == "oikos_started":
-            if saw_oikos_complete:
-                continuation_active = True
-            oikos_done = False
-            awaiting_continuation_until = None
-            return
-
-        if event_type == "oikos_complete":
-            saw_oikos_complete = True
-            oikos_done = True
-            if continuation_active:
-                continuation_active = False
-            # If commiss are still pending, keep stream open for their events.
-            if pending_commiss == 0 and not from_replay:
-                complete = True
-            return
-
-        if event_type == "oikos_deferred":
-            # DEFERRED states waiting for commis continuations may keep the
-            # stream open so the connected client receives the final answer.
-            if event.get("close_stream", True):
-                complete = True
-            return
-
-        if event_type == "error":
-            complete = True
+        lifecycle.apply(
+            event_type,
+            event,
+            from_replay=from_replay,
+            now_monotonic=time.monotonic(),
+        )
 
     def _is_continuation_of_run(candidate_run_id: int) -> bool:
         """Return True if candidate_run_id is a continuation of run_id (including chains).
@@ -327,21 +248,7 @@ async def _replay_and_stream(
             }
 
         # 4a. If we saw stream_control:close during replay and streamed past it, close now
-        if close_event_id is not None and last_sent_event_id >= close_event_id:
-            logger.debug(
-                f"Stream closed after replay - reached close marker (event_id={close_event_id}) for run {run_id}"
-            )
-            return
-
-        # 4b. If replay already includes a terminal oikos_complete and no pending commiss, close early
-        # (Heuristic fallback for runs without stream_control events)
-        if saw_oikos_complete and pending_commiss == 0 and not continuation_active and close_event_id is None:
-            logger.debug(f"Stream closed after replay for run {run_id} (no pending commiss, heuristic fallback)")
-            return
-
-        # 5. If run is complete (not RUNNING / DEFERRED / WAITING), close stream
-        if status not in (RunStatus.RUNNING, RunStatus.DEFERRED, RunStatus.WAITING):
-            logger.debug(f"Stream closed: run {run_id} is {status.value}, not streamable")
+        if lifecycle.should_close_after_replay(last_sent_event_id, status):
             return
 
         # 6. Stream live events (filtering out already-replayed ones)
@@ -383,12 +290,7 @@ async def _replay_and_stream(
                 return
 
             try:
-                timeout_s = 30.0
-                if awaiting_continuation_until is not None:
-                    remaining = awaiting_continuation_until - time.monotonic()
-                    # Wake up at grace expiry instead of waiting a full heartbeat interval.
-                    timeout_s = max(0.1, min(30.0, remaining))
-
+                timeout_s = lifecycle.next_timeout(time.monotonic())
                 event = await asyncio.wait_for(queue.get(), timeout=timeout_s)
 
                 event_type = event.get("event_type") or event.get("type") or "event"
@@ -410,11 +312,6 @@ async def _replay_and_stream(
 
                 # Track commis lifecycle for UI telemetry (stream no longer waits on commiss)
                 _apply_event_state(event_type, event)
-
-                # If we've drained commiss after a oikos_complete and no continuation
-                # started within the grace window, close the stream.
-                if awaiting_continuation_until is not None and time.monotonic() >= awaiting_continuation_until:
-                    complete = True
 
                 # Format payload (strip internal fields)
                 payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id", "event_id"}}
@@ -439,9 +336,7 @@ async def _replay_and_stream(
                     sse_event["id"] = str(event_id)
                 yield sse_event
 
-                # Check if we've reached the close marker (stream_control:close)
-                if close_event_id is not None and event_id and event_id >= close_event_id:
-                    logger.debug(f"Stream reached close marker (event_id={close_event_id}) for run {run_id}")
+                if lifecycle.should_close_after_live_event(event_id=event_id, now_monotonic=time.monotonic()):
                     complete = True
 
             except asyncio.TimeoutError:
@@ -455,12 +350,7 @@ async def _replay_and_stream(
                         default=_json_default,
                     ),
                 }
-                # Check TTL lease expiry (from stream_control:keep_open)
-                if stream_lease_until is not None and time.monotonic() >= stream_lease_until:
-                    logger.debug(f"Stream lease expired for run {run_id}")
-                    complete = True
-                # Legacy: heuristic fallback for runs without stream_control
-                elif awaiting_continuation_until is not None and time.monotonic() >= awaiting_continuation_until:
+                if lifecycle.should_close_on_timeout(time.monotonic()):
                     complete = True
 
     except asyncio.CancelledError:
