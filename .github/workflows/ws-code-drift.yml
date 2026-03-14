@@ -11,7 +11,7 @@ on:
 
 jobs:
   codegen-diff:
-    runs-on: cube
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

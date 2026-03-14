@@ -2,10 +2,21 @@ name: Test ARC Runner
 
 on:
   workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Runner lane to test"
+        required: false
+        default: "cube-maint"
+        type: choice
+        options:
+          - cube-maint
+          - cube-fast
+          - cube-browser
+          - cube-deploy
 
 jobs:
   test:
-    runs-on: cube
+    runs-on: ${{ inputs.runner_label || 'cube-maint' }}
     steps:
       - name: System info
         run: |

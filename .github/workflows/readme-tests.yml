@@ -21,7 +21,7 @@ on:
 jobs:
   readme-smoke:
     name: README smoke tests
-    runs-on: cube
+    runs-on: cube-fast
     timeout-minutes: 15
 
     steps:

@@ -14,7 +14,7 @@ concurrency:
 jobs:
   deploy:
     name: "Deploy + Smoke + Rollback"
-    runs-on: cube
+    runs-on: cube-deploy
     timeout-minutes: 20
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
 
