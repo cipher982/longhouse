@@ -11,15 +11,15 @@ from fastapi import status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.strategy import _decode_jwt_fallback
 from zerg.config import get_settings
 from zerg.crud import create_user
 from zerg.crud import get_user_by_email
 from zerg.database import get_db
 from zerg.dependencies.auth import require_internal_call
-from zerg.routers.auth import JWT_SECRET
-from zerg.routers.auth import GmailConnectResponse
-from zerg.routers.auth import _store_gmail_connector
+from zerg.routers.auth_gmail import GmailConnectResponse
+from zerg.routers.auth_gmail import _store_gmail_connector
 from zerg.services.sso_keys import get_sso_keys
 
 router = APIRouter(

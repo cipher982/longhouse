@@ -13,18 +13,18 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 from fastapi.testclient import TestClient
 
+from zerg.auth.session_tokens import JWT_SECRET
+from zerg.auth.session_tokens import _encode_jwt
 from zerg.auth.strategy import _decode_jwt_fallback
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.dependencies.auth import get_current_browser_user
 from zerg.dependencies.auth import get_current_user
+from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.main import api_app
 from zerg.models import Connector
 from zerg.models import User
-from zerg.routers.auth import JWT_SECRET
-from zerg.routers.auth import _encode_jwt
 from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
@@ -82,8 +82,10 @@ def test_connect_gmail_starts_pubsub_watch_without_callback_url(tmp_path):
 
     try:
         with (
-            patch("zerg.routers.auth.get_settings", return_value=settings),
-            patch("zerg.routers.auth._exchange_google_auth_code", return_value={"refresh_token": "refresh-token"}),
+            patch("zerg.routers.auth_gmail.get_settings", return_value=settings),
+            patch(
+                "zerg.routers.auth_gmail._exchange_google_auth_code", return_value={"refresh_token": "refresh-token"}
+            ),
             patch("zerg.services.gmail_api.exchange_refresh_token", return_value="access-token"),
             patch("zerg.services.gmail_api.get_profile", return_value={"emailAddress": "Owner@gmail.com"}),
             patch("zerg.services.gmail_api.start_watch", start_watch),
@@ -141,8 +143,8 @@ def test_connect_gmail_preserves_existing_watch_state_when_bootstrap_fails(tmp_p
 
     try:
         with (
-            patch("zerg.routers.auth.get_settings", return_value=settings),
-            patch("zerg.routers.auth._exchange_google_auth_code", return_value={"refresh_token": "new-refresh"}),
+            patch("zerg.routers.auth_gmail.get_settings", return_value=settings),
+            patch("zerg.routers.auth_gmail._exchange_google_auth_code", return_value={"refresh_token": "new-refresh"}),
             patch("zerg.services.gmail_api.exchange_refresh_token", return_value="access-token"),
             patch("zerg.services.gmail_api.get_profile", return_value={"emailAddress": "owner@gmail.com"}),
             patch("zerg.services.gmail_api.start_watch", side_effect=RuntimeError("pubsub boom")),
@@ -181,8 +183,10 @@ def test_connect_gmail_reports_pubsub_not_configured_in_production(tmp_path):
 
     try:
         with (
-            patch("zerg.routers.auth.get_settings", return_value=settings),
-            patch("zerg.routers.auth._exchange_google_auth_code", return_value={"refresh_token": "refresh-token"}),
+            patch("zerg.routers.auth_gmail.get_settings", return_value=settings),
+            patch(
+                "zerg.routers.auth_gmail._exchange_google_auth_code", return_value={"refresh_token": "refresh-token"}
+            ),
             patch("zerg.services.gmail_api.exchange_refresh_token", return_value="access-token"),
             patch("zerg.services.gmail_api.get_profile", return_value={"emailAddress": "owner@gmail.com"}),
             patch("zerg.services.gmail_api.start_watch", start_watch),
@@ -221,8 +225,10 @@ def test_connect_gmail_fails_pubsub_watch_when_mailbox_address_is_missing(tmp_pa
 
     try:
         with (
-            patch("zerg.routers.auth.get_settings", return_value=settings),
-            patch("zerg.routers.auth._exchange_google_auth_code", return_value={"refresh_token": "refresh-token"}),
+            patch("zerg.routers.auth_gmail.get_settings", return_value=settings),
+            patch(
+                "zerg.routers.auth_gmail._exchange_google_auth_code", return_value={"refresh_token": "refresh-token"}
+            ),
             patch("zerg.services.gmail_api.exchange_refresh_token", return_value="access-token"),
             patch("zerg.services.gmail_api.get_profile", return_value={}),
             patch("zerg.services.gmail_api.start_watch", return_value={"history_id": 321, "watch_expiry": 654321}),
@@ -259,7 +265,7 @@ def test_start_hosted_gmail_connect_returns_control_plane_redirect(tmp_path):
 
     try:
         with (
-            patch("zerg.routers.auth.get_settings", return_value=settings),
+            patch("zerg.routers.auth_gmail.get_settings", return_value=settings),
             patch.dict(os.environ, {"INSTANCE_ID": "hosted-owner"}, clear=False),
         ):
             response = client.post("/auth/google/gmail/start")
@@ -288,7 +294,7 @@ def test_connect_gmail_rejects_hosted_instances(tmp_path):
     settings = SimpleNamespace(control_plane_url="https://control.longhouse.ai", testing=False)
 
     try:
-        with patch("zerg.routers.auth.get_settings", return_value=settings):
+        with patch("zerg.routers.auth_gmail.get_settings", return_value=settings):
             response = client.post("/auth/google/gmail", json={"auth_code": "auth-code"})
 
         assert response.status_code == 409
@@ -331,7 +337,7 @@ def test_hosted_gmail_handoff_bootstraps_connector(tmp_path):
         with (
             patch("zerg.dependencies.auth.get_settings", return_value=settings),
             patch("zerg.routers.auth_internal.get_settings", return_value=settings),
-            patch("zerg.routers.auth.get_settings", return_value=settings),
+            patch("zerg.routers.auth_gmail.get_settings", return_value=settings),
             patch("zerg.routers.auth_internal.get_sso_keys", return_value=[]),
             patch("zerg.services.gmail_api.exchange_refresh_token", return_value="access-token"),
             patch("zerg.services.gmail_api.get_profile", return_value={"emailAddress": "Owner@gmail.com"}),

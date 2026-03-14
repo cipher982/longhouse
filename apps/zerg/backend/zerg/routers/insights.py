@@ -25,11 +25,11 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
-from zerg.dependencies.auth import get_current_browser_user
+from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
 from zerg.models.work import Insight
-from zerg.routers.agents import require_single_tenant
-from zerg.routers.agents import verify_agents_token
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)

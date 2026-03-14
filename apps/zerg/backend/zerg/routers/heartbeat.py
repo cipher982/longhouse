@@ -24,9 +24,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.device_token import DeviceToken
-from zerg.routers.agents import verify_agents_token
 
 logger = logging.getLogger(__name__)
 

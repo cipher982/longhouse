@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from zerg.config import get_settings
-from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.voice.stt_service import ALLOWED_AUDIO_TYPES
 from zerg.voice.stt_service import MAX_AUDIO_BYTES
 from zerg.voice.stt_service import get_stt_service
@@ -160,7 +160,9 @@ async def voice_turn(
 
     audio_bytes = await audio.read()
     if len(audio_bytes) > MAX_AUDIO_BYTES:
-        return _voice_turn_error(413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id_str)
+        return _voice_turn_error(
+            413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id_str
+        )
 
     if not message_id:
         return _voice_turn_error(400, "message_id is required for voice turns", message_id_str)
@@ -285,7 +287,9 @@ async def voice_transcribe(
 
     audio_bytes = await audio.read()
     if len(audio_bytes) > MAX_AUDIO_BYTES:
-        return _transcribe_error(413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id_str)
+        return _transcribe_error(
+            413, f"Audio file too large (max {MAX_AUDIO_BYTES // (1024 * 1024)}MB)", message_id_str
+        )
 
     stt_service = get_stt_service()
     result = await stt_service.transcribe_bytes(

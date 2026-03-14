@@ -43,13 +43,13 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.user import User
 from zerg.models.work import OikosWakeup
-from zerg.routers.agents import verify_agents_token
 
 # ---------------------------------------------------------------------------
 # DB + client fixtures (same pattern as other tests_lite tests)
@@ -430,9 +430,7 @@ def test_blocked_notification_then_permission_request_sets_tool_name(client, tmp
         db = SessionLocal()
         row = db.query(SessionPresence).filter(SessionPresence.session_id == sid).first()
         assert row is not None
-        assert row.tool_name == "Bash", (
-            f"tool_name should be set by PermissionRequest, got {row.tool_name!r}"
-        )
+        assert row.tool_name == "Bash", f"tool_name should be set by PermissionRequest, got {row.tool_name!r}"
         db.close()
     api_app.dependency_overrides.clear()
     engine.dispose()

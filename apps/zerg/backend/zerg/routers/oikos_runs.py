@@ -20,13 +20,13 @@ from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import get_db
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
 from zerg.models.run_event import RunEvent
 from zerg.models.work import OikosWakeup
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)

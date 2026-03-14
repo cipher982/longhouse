@@ -12,10 +12,10 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models import ThreadMessage
 from zerg.models import User
 from zerg.models.enums import UserRole
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.services.conversation_service import ConversationService
 from zerg.services.oikos_service import OikosService
 

@@ -405,6 +405,7 @@ def test_accept_token_accepts_instance_claim_when_no_instance_id_env(tmp_path):
     ):
         # Ensure INSTANCE_ID is not set
         import os
+
         os.environ.pop("INSTANCE_ID", None)
 
         client = TestClient(app)
@@ -429,7 +430,7 @@ def test_auth_methods_returns_sso_when_cp_url_set():
     mock_settings.longhouse_password_hash = None
     mock_settings.control_plane_url = "https://control.longhouse.ai"
 
-    with patch("zerg.routers.auth.get_settings", return_value=mock_settings):
+    with patch("zerg.routers.auth_browser.get_settings", return_value=mock_settings):
         client = TestClient(api_app)
         resp = client.get("/auth/methods")
 
@@ -456,7 +457,7 @@ def test_auth_methods_hide_google_when_control_plane_is_enabled():
     mock_settings.longhouse_password_hash = None
     mock_settings.control_plane_url = "https://control.longhouse.ai"
 
-    with patch("zerg.routers.auth.get_settings", return_value=mock_settings):
+    with patch("zerg.routers.auth_browser.get_settings", return_value=mock_settings):
         client = TestClient(api_app)
         resp = client.get("/auth/methods")
 
@@ -481,7 +482,7 @@ def test_auth_methods_report_missing_oss_gmail_setup():
     mock_settings.longhouse_password_hash = None
     mock_settings.control_plane_url = None
 
-    with patch("zerg.routers.auth.get_settings", return_value=mock_settings):
+    with patch("zerg.routers.auth_browser.get_settings", return_value=mock_settings):
         client = TestClient(api_app)
         resp = client.get("/auth/methods")
 

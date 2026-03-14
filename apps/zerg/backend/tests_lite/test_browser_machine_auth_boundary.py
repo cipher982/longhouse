@@ -6,21 +6,20 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import zerg.dependencies.auth as auth_deps
+from zerg.auth.session_tokens import JWT_SECRET
+from zerg.auth.session_tokens import SESSION_COOKIE_NAME
+from zerg.auth.session_tokens import _encode_jwt
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentsBase
 from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
-import zerg.dependencies.auth as auth_deps
-import zerg.routers.auth as auth_router
-from zerg.routers.agents import require_single_tenant
-from zerg.routers.auth import JWT_SECRET
-from zerg.routers.auth import SESSION_COOKIE_NAME
-from zerg.routers.auth import _encode_jwt
 
 
 def _make_db(tmp_path):
@@ -93,7 +92,7 @@ def _force_browser_jwt_mode():
     auth_deps._strategy_cache.clear()
     with (
         patch.object(auth_deps, "AUTH_DISABLED", False),
-        patch.object(auth_router._settings, "auth_disabled", False),
+        patch("zerg.routers.auth_browser.get_settings", return_value=type("S", (), {"auth_disabled": False})()),
     ):
         yield
     auth_deps._strategy_cache.clear()

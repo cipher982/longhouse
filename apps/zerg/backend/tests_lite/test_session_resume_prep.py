@@ -13,10 +13,10 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import get_db
 from zerg.database import make_engine
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.routers import session_chat
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest

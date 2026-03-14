@@ -20,6 +20,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from sse_starlette.sse import EventSourceResponse
 
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.routers import oikos_chat
@@ -29,7 +30,6 @@ from zerg.routers import oikos_fiches
 from zerg.routers import oikos_history
 from zerg.routers import oikos_internal
 from zerg.routers import oikos_runs
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.voice import router as oikos_voice
 
 logger = logging.getLogger(__name__)
