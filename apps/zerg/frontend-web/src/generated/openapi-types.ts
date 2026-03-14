@@ -307,7 +307,7 @@ export interface paths {
          *     This provides deterministic ordering regardless of timestamp precision or creation time.
          *     The client MUST NOT sort these messages client-side; the server ordering is authoritative.
          *
-         *     See crud.get_thread_messages() for implementation details on the .order_by(ThreadMessage.id) guarantee.
+         *     See get_thread_messages() for implementation details on the .order_by(ThreadMessage.id) guarantee.
          */
         get: operations["read_thread_messages_threads__thread_id__messages_get"];
         put?: never;
@@ -1341,6 +1341,46 @@ export interface paths {
         patch: operations["update_runner_runners__runner_id__patch"];
         trace?: never;
     };
+    "/api/runners/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Runner Preflight
+         * @description Authenticate runner credentials for local doctor flows.
+         */
+        post: operations["runner_preflight_runners_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runners/{runner_id}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runner Jobs
+         * @description List recent jobs for a specific runner.
+         */
+        get: operations["list_runner_jobs_runners__runner_id__jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runners/{runner_id}/doctor": {
         parameters: {
             query?: never;
@@ -1467,7 +1507,7 @@ export interface paths {
          * Verify Session
          * @description Fast auth check for nginx auth_request.
          *
-         *     Validates the session from cookie (preferred) or Authorization header.
+         *     Validates the browser session cookie.
          *     Returns 204 if valid, 401 if missing/invalid/expired/user-inactive.
          *
          *     In development mode (AUTH_DISABLED=1), always returns 204.
@@ -8191,6 +8231,56 @@ export interface components {
             checks?: components["schemas"]["RunnerDoctorCheck"][];
         };
         /**
+         * RunnerJobListResponse
+         * @description Response for listing recent runner jobs.
+         */
+        RunnerJobListResponse: {
+            /**
+             * Jobs
+             * @description Recent jobs for this runner
+             */
+            jobs: components["schemas"]["RunnerJobResponse"][];
+        };
+        /**
+         * RunnerJobResponse
+         * @description Response model for a runner job.
+         */
+        RunnerJobResponse: {
+            /** Id */
+            id: string;
+            /** Owner Id */
+            owner_id: number;
+            /** Commis Id */
+            commis_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Runner Id */
+            runner_id: number;
+            /** Command */
+            command: string;
+            /** Timeout Secs */
+            timeout_secs: number;
+            /** Status */
+            status: string;
+            /** Exit Code */
+            exit_code?: number | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Stdout Trunc */
+            stdout_trunc?: string | null;
+            /** Stderr Trunc */
+            stderr_trunc?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
          * RunnerListResponse
          * @description Response for listing runners.
          */
@@ -8200,6 +8290,63 @@ export interface components {
              * @description List of runners
              */
             runners: components["schemas"]["RunnerResponse"][];
+        };
+        /**
+         * RunnerPreflightRequest
+         * @description Unauthenticated runner credential check used by the local doctor.
+         */
+        RunnerPreflightRequest: {
+            /**
+             * Runner Id
+             * @description Runner ID if known
+             */
+            runner_id?: number | null;
+            /**
+             * Runner Name
+             * @description Runner name if RUNNER_ID is not configured
+             */
+            runner_name?: string | null;
+            /**
+             * Secret
+             * @description Runner secret used for websocket authentication
+             */
+            secret: string;
+        };
+        /**
+         * RunnerPreflightResponse
+         * @description Structured result from runner credential preflight.
+         */
+        RunnerPreflightResponse: {
+            /** Authenticated */
+            authenticated: boolean;
+            /** Reason Code */
+            reason_code: string;
+            /** Summary */
+            summary: string;
+            /** Runner Id */
+            runner_id?: number | null;
+            /** Runner Name */
+            runner_name?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Status Reason */
+            status_reason?: string | null;
+            /** Status Summary */
+            status_summary?: string | null;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+            /** Last Seen Age Seconds */
+            last_seen_age_seconds?: number | null;
+            /** Install Mode */
+            install_mode?: string | null;
+            /** Runner Version */
+            runner_version?: string | null;
+            /** Latest Runner Version */
+            latest_runner_version?: string | null;
+            /** Version Status */
+            version_status?: string | null;
+            /** Capabilities Match */
+            capabilities_match?: boolean | null;
         };
         /**
          * RunnerRegisterRequest
@@ -8223,6 +8370,11 @@ export interface components {
             labels?: {
                 [key: string]: string;
             } | null;
+            /**
+             * Capabilities
+             * @description Optional capabilities for the new runner
+             */
+            capabilities?: string[] | null;
             /**
              * Metadata
              * @description Runner metadata (hostname, os, arch, etc.)
@@ -8277,12 +8429,46 @@ export interface components {
             capabilities?: string[];
             /** Status */
             status: string;
+            /** Status Reason */
+            status_reason?: string | null;
+            /** Status Summary */
+            status_summary?: string | null;
             /** Last Seen At */
             last_seen_at?: string | null;
+            /** Last Seen Age Seconds */
+            last_seen_age_seconds?: number | null;
+            /**
+             * Heartbeat Interval Ms
+             * @description Reported heartbeat interval in milliseconds
+             * @default 30000
+             */
+            heartbeat_interval_ms: number;
+            /**
+             * Stale After Seconds
+             * @description Seconds after which a heartbeat is treated as stale
+             * @default 90
+             */
+            stale_after_seconds: number;
             /** Runner Metadata */
             runner_metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Install Mode */
+            install_mode?: string | null;
+            /** Runner Version */
+            runner_version?: string | null;
+            /** Latest Runner Version */
+            latest_runner_version?: string | null;
+            /**
+             * Version Status
+             * @description current|outdated|ahead|unknown
+             * @default unknown
+             */
+            version_status: string;
+            /** Reported Capabilities */
+            reported_capabilities?: string[] | null;
+            /** Capabilities Match */
+            capabilities_match?: boolean | null;
             /**
              * Created At
              * Format: date-time
@@ -8353,6 +8539,10 @@ export interface components {
             name: string;
             /** Status */
             status: string;
+            /** Status Reason */
+            status_reason?: string | null;
+            /** Status Summary */
+            status_summary?: string | null;
         };
         /**
          * RunnerStatusResponse
@@ -12324,6 +12514,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunnerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    runner_preflight_runners_preflight_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnerPreflightRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerPreflightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runner_jobs_runners__runner_id__jobs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                runner_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerJobListResponse"];
                 };
             };
             /** @description Validation Error */

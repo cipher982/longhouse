@@ -4,6 +4,7 @@ import {
   useCreateEnrollToken,
   useRunner,
   useRunnerDoctor,
+  useRunnerJobs,
   useRevokeRunner,
   useRotateRunnerSecret,
   useUpdateRunner,
@@ -23,7 +24,7 @@ import {
   describeRunnerNativeInstallMode,
   type RunnerNativeInstallMode,
 } from "../lib/runnerInstallCommands";
-import type { RunnerDoctorResponse } from "../services/api";
+import type { Runner, RunnerDoctorResponse, RunnerJob } from "../services/api";
 import "../styles/runner-detail.css";
 
 type RunnerMetadataSummary = {
@@ -32,6 +33,199 @@ type RunnerMetadataSummary = {
   hostname?: string;
   dockerAvailable?: boolean;
 };
+
+function getStatusVariant(status: string): "success" | "warning" | "error" | "neutral" {
+  switch (status) {
+    case "online":
+      return "success";
+    case "offline":
+      return "warning";
+    case "revoked":
+      return "error";
+    default:
+      return "neutral";
+  }
+}
+
+function getVersionVariant(status: string | null | undefined): "success" | "warning" | "neutral" {
+  switch (status) {
+    case "current":
+      return "success";
+    case "outdated":
+      return "warning";
+    default:
+      return "neutral";
+  }
+}
+
+function getJobStatusVariant(status: string): "success" | "warning" | "error" | "neutral" {
+  switch (status) {
+    case "success":
+      return "success";
+    case "running":
+      return "warning";
+    case "failed":
+    case "timeout":
+    case "canceled":
+      return "error";
+    default:
+      return "neutral";
+  }
+}
+
+function formatCompactDuration(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return `${seconds}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  const remSeconds = seconds % 60;
+  if (minutes < 60) {
+    return remSeconds > 0 ? `${minutes}m ${remSeconds}s` : `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  if (hours < 24) {
+    return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
+function formatTimestamp(timestamp: string | null | undefined) {
+  if (!timestamp) return "Never";
+
+  const date = parseUTC(timestamp);
+  return date.toLocaleString();
+}
+
+function formatRelativeTimestamp(timestamp: string | null | undefined): string {
+  if (!timestamp) return "Never";
+
+  const diffMs = Date.now() - parseUTC(timestamp).getTime();
+  const diffSeconds = Math.max(0, Math.floor(diffMs / 1000));
+  return `${formatCompactDuration(diffSeconds)} ago`;
+}
+
+function formatHeartbeatAge(runner: Runner): string {
+  if (typeof runner.last_seen_age_seconds === "number") {
+    return `${formatCompactDuration(runner.last_seen_age_seconds)} ago`;
+  }
+
+  return formatRelativeTimestamp(runner.last_seen_at);
+}
+
+function formatHeartbeatThreshold(staleAfterSeconds: number | null | undefined): string {
+  if (typeof staleAfterSeconds !== "number") {
+    return "Unknown";
+  }
+
+  return `Stale after ${formatCompactDuration(staleAfterSeconds)}`;
+}
+
+function formatHeartbeatInterval(intervalMs: number | null | undefined): string | null {
+  if (typeof intervalMs !== "number") {
+    return null;
+  }
+
+  return `Heartbeats every ${formatCompactDuration(Math.max(1, Math.round(intervalMs / 1000)))}`;
+}
+
+function versionStatusLabel(status: string | null | undefined): string | null {
+  switch (status) {
+    case "current":
+      return "up to date";
+    case "outdated":
+      return "update available";
+    case "ahead":
+      return "ahead of latest";
+    default:
+      return null;
+  }
+}
+
+function formatVersionValue(runner: Runner): string {
+  if (runner.runner_version && runner.latest_runner_version && runner.runner_version !== runner.latest_runner_version) {
+    return `v${runner.runner_version} (latest v${runner.latest_runner_version})`;
+  }
+  if (runner.runner_version) {
+    return `v${runner.runner_version}`;
+  }
+  if (runner.latest_runner_version) {
+    return `Latest v${runner.latest_runner_version}`;
+  }
+  return "Unknown";
+}
+
+function formatVersionHint(runner: Runner): string | null {
+  switch (runner.version_status) {
+    case "current":
+      return "Runner binary matches the latest expected build.";
+    case "outdated":
+      return runner.latest_runner_version
+        ? `Upgrade toward v${runner.latest_runner_version}.`
+        : "Upgrade the local runner binary.";
+    case "ahead":
+      return runner.latest_runner_version
+        ? `Runner is newer than configured latest v${runner.latest_runner_version}.`
+        : "Runner version is newer than the configured latest.";
+    default:
+      return null;
+  }
+}
+
+function capabilitySyncLabel(runner: Runner): string {
+  if (runner.capabilities_match === true) {
+    return "Aligned";
+  }
+  if (runner.capabilities_match === false) {
+    return "Mismatch";
+  }
+  if (runner.reported_capabilities && runner.reported_capabilities.length > 0) {
+    return "Reported";
+  }
+  return "Unknown";
+}
+
+function capabilitySyncHint(runner: Runner): string | null {
+  if (runner.capabilities_match === true) {
+    return "Local runner capabilities match Longhouse configuration.";
+  }
+  if (runner.capabilities_match === false) {
+    return "Local runner capabilities differ from Longhouse configuration.";
+  }
+  if (runner.reported_capabilities && runner.reported_capabilities.length > 0) {
+    return "Runner reported capabilities, but no comparison result is available yet.";
+  }
+  return "Runner has not reported capabilities yet.";
+}
+
+function jobDuration(job: RunnerJob): string | null {
+  if (!job.started_at || !job.finished_at) {
+    return null;
+  }
+
+  const start = parseUTC(job.started_at).getTime();
+  const end = parseUTC(job.finished_at).getTime();
+  const diffSeconds = Math.max(0, Math.round((end - start) / 1000));
+  return formatCompactDuration(diffSeconds);
+}
+
+function jobPreview(job: RunnerJob): string | null {
+  const text = job.error || job.stderr_trunc;
+  if (!text) {
+    return null;
+  }
+
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
+}
 
 function normalizeRunnerMetadata(metadata: unknown): RunnerMetadataSummary | null {
   if (!metadata || typeof metadata !== "object") {
@@ -60,7 +254,12 @@ export default function RunnerDetailPage() {
   const runnerId = id ? parseInt(id, 10) : 0;
   const confirm = useConfirm();
 
-  const { data: runner, isLoading, error } = useRunner(runnerId);
+  const { data: runner, isLoading, error } = useRunner(runnerId, { refetchInterval: 10_000 });
+  const {
+    data: recentJobs,
+    isLoading: jobsLoading,
+    error: jobsError,
+  } = useRunnerJobs(runnerId, { limit: 6, refetchInterval: 15_000 });
   const runnerMetadata = normalizeRunnerMetadata(runner?.runner_metadata);
   const updateRunnerMutation = useUpdateRunner();
   const revokeRunnerMutation = useRevokeRunner();
@@ -206,17 +405,6 @@ export default function RunnerDetailPage() {
     );
   };
 
-  const getStatusVariant = (status: string): "success" | "error" | "neutral" => {
-    switch (status) {
-      case "online":
-        return "success";
-      case "revoked":
-        return "error";
-      default:
-        return "neutral";
-    }
-  };
-
   const getDoctorVariant = (severity: RunnerDoctorResponse["severity"]): "success" | "warning" | "error" => {
     switch (severity) {
       case "healthy":
@@ -226,13 +414,6 @@ export default function RunnerDetailPage() {
       default:
         return "error";
     }
-  };
-
-  const formatTimestamp = (timestamp: string | null | undefined) => {
-    if (!timestamp) return "Never";
-
-    const date = parseUTC(timestamp);
-    return date.toLocaleString();
   };
 
   const getRepairCommand = () => {
@@ -282,10 +463,20 @@ export default function RunnerDetailPage() {
       <div className="runner-detail-page">
         <SectionHeader
           title={runner.name}
-          description="Manage runner capabilities, secrets, and status."
+          description={runner.status_summary ?? "Manage runner capabilities, secrets, and status."}
           actions={
             <div className="runner-detail-header-actions">
               <Badge variant={getStatusVariant(runner.status)}>{runner.status}</Badge>
+              {runner.status_reason && (
+                <Badge variant="neutral" className="runner-code-badge">
+                  {runner.status_reason}
+                </Badge>
+              )}
+              {versionStatusLabel(runner.version_status) && (
+                <Badge variant={getVersionVariant(runner.version_status)}>
+                  {versionStatusLabel(runner.version_status)}
+                </Badge>
+              )}
               <Button variant="ghost" size="sm" onClick={() => navigate("/runners")}>
                 ← Back
               </Button>
@@ -304,6 +495,112 @@ export default function RunnerDetailPage() {
 
         <div className="runner-detail-sections">
           <section className="detail-section">
+            <div className="section-header">
+              <div>
+                <h2 className="ui-section-title">Health</h2>
+                <p className="detail-help-text">Derived from runner heartbeats, reported metadata, and Longhouse policy.</p>
+              </div>
+            </div>
+
+            <div className={`runner-health-summary runner-health-summary--${runner.status}`}>
+              <div className="runner-health-summary-badges">
+                <Badge variant={getStatusVariant(runner.status)}>{runner.status}</Badge>
+                {versionStatusLabel(runner.version_status) && (
+                  <Badge variant={getVersionVariant(runner.version_status)}>
+                    {versionStatusLabel(runner.version_status)}
+                  </Badge>
+                )}
+                {runner.capabilities_match === false && (
+                  <Badge variant="warning">capability mismatch</Badge>
+                )}
+              </div>
+              <strong>{runner.status_summary ?? "No health summary reported."}</strong>
+              <span className="runner-health-summary-note">
+                {runner.last_seen_at
+                  ? `Last heartbeat ${formatHeartbeatAge(runner)}.`
+                  : "No heartbeat has been recorded yet."}
+              </span>
+            </div>
+
+            <div className="detail-grid">
+              <div className="detail-item">
+                <span className="detail-label">Reason Code</span>
+                <div className="detail-value-stack">
+                  <span className="detail-value detail-value--code">{runner.status_reason ?? "unknown"}</span>
+                </div>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Last Heartbeat</span>
+                <div className="detail-value-stack">
+                  <span className="detail-value">{formatHeartbeatAge(runner)}</span>
+                  <span className="detail-subvalue">{formatTimestamp(runner.last_seen_at)}</span>
+                </div>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Heartbeat Window</span>
+                <div className="detail-value-stack">
+                  <span className="detail-value">{formatHeartbeatThreshold(runner.stale_after_seconds)}</span>
+                  {formatHeartbeatInterval(runner.heartbeat_interval_ms) && (
+                    <span className="detail-subvalue">{formatHeartbeatInterval(runner.heartbeat_interval_ms)}</span>
+                  )}
+                </div>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Install Mode</span>
+                <span className="detail-value">{runner.install_mode ?? "Unknown"}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Version</span>
+                <div className="detail-value-stack">
+                  <span className="detail-value">{formatVersionValue(runner)}</span>
+                  {formatVersionHint(runner) && (
+                    <span className="detail-subvalue">{formatVersionHint(runner)}</span>
+                  )}
+                </div>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Capability Sync</span>
+                <div className="detail-value-stack">
+                  <span className="detail-value">{capabilitySyncLabel(runner)}</span>
+                  <span className="detail-subvalue">{capabilitySyncHint(runner)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="runner-health-capability-grid">
+              <div className="runner-health-capability-group">
+                <span className="detail-label">Longhouse capabilities</span>
+                {runner.capabilities && runner.capabilities.length > 0 ? (
+                  <div className="capabilities-list">
+                    {runner.capabilities.map((cap) => (
+                      <span key={cap} className="capability-chip">
+                        {cap}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="no-capabilities">No capabilities configured</p>
+                )}
+              </div>
+
+              <div className="runner-health-capability-group">
+                <span className="detail-label">Runner reported</span>
+                {runner.reported_capabilities && runner.reported_capabilities.length > 0 ? (
+                  <div className="capabilities-list">
+                    {runner.reported_capabilities.map((cap) => (
+                      <span key={cap} className="capability-chip capability-chip--reported">
+                        {cap}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="no-capabilities">No capability report yet</p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="detail-section">
             <h2 className="ui-section-title">Information</h2>
             <div className="detail-grid">
               <div className="detail-item">
@@ -317,6 +614,10 @@ export default function RunnerDetailPage() {
               <div className="detail-item">
                 <span className="detail-label">Last Seen:</span>
                 <span className="detail-value">{formatTimestamp(runner.last_seen_at)}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Updated:</span>
+                <span className="detail-value">{formatTimestamp(runner.updated_at)}</span>
               </div>
               {runnerMetadata && (
                 <>
@@ -341,6 +642,64 @@ export default function RunnerDetailPage() {
                 </>
               )}
             </div>
+          </section>
+
+          <section className="detail-section">
+            <div className="section-header">
+              <div>
+                <h2 className="ui-section-title">Recent Jobs</h2>
+                <p className="detail-help-text">Latest commands dispatched to this runner.</p>
+              </div>
+            </div>
+
+            {jobsLoading && (
+              <div className="doctor-loading">
+                <Spinner size="md" />
+                <span>Loading recent jobs...</span>
+              </div>
+            )}
+
+            {!jobsLoading && jobsError && (
+              <p className="no-capabilities">
+                {jobsError instanceof Error ? jobsError.message : "Failed to load recent jobs."}
+              </p>
+            )}
+
+            {!jobsLoading && !jobsError && (!recentJobs || recentJobs.length === 0) && (
+              <p className="no-capabilities">No jobs have been dispatched to this runner yet.</p>
+            )}
+
+            {!jobsLoading && !jobsError && recentJobs && recentJobs.length > 0 && (
+              <div className="runner-job-list" data-testid="runner-jobs-section">
+                {recentJobs.map((job) => (
+                  <div key={job.id} className={`runner-job-item runner-job-item--${job.status}`}>
+                    <div className="runner-job-header">
+                      <div className="runner-job-copy">
+                        <code className="runner-job-command">{job.command}</code>
+                        <div className="runner-job-meta">
+                          <span>{formatRelativeTimestamp(job.created_at)}</span>
+                          {job.started_at && <span>started {formatTimestamp(job.started_at)}</span>}
+                          {job.finished_at && <span>finished {formatTimestamp(job.finished_at)}</span>}
+                        </div>
+                      </div>
+                      <Badge variant={getJobStatusVariant(job.status)}>{job.status}</Badge>
+                    </div>
+
+                    <div className="runner-job-facts">
+                      <span>Timeout {formatCompactDuration(job.timeout_secs)}</span>
+                      {job.exit_code !== null && job.exit_code !== undefined && (
+                        <span>Exit {job.exit_code}</span>
+                      )}
+                      {jobDuration(job) && <span>Runtime {jobDuration(job)}</span>}
+                    </div>
+
+                    {jobPreview(job) && (
+                      <p className="runner-job-preview">{jobPreview(job)}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="detail-section">
