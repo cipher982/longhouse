@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 from contextlib import contextmanager
 from datetime import datetime
@@ -10,8 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from zerg.database import Base
+from zerg.database import get_test_commis_id
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.database import reset_test_commis_id
+from zerg.database import set_test_commis_id
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models import Fiche
@@ -24,6 +28,7 @@ from zerg.models.enums import UserRole
 from zerg.models.run_event import RunEvent
 from zerg.routers import stream as stream_router
 from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.services import run_stream as run_stream_service
 
 
 def _make_db(tmp_path):
@@ -91,7 +96,91 @@ def _patched_stream_db(monkeypatch, session_local):
             yield db
 
     monkeypatch.setattr(stream_router, "db_session", _db_session)
+    monkeypatch.setattr(run_stream_service, "db_session", _db_session)
     yield
+
+
+def test_load_historical_run_events_uses_test_commis_id_context(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    _, run_id = _seed_run(session_local)
+    seen_commis_ids = []
+
+    def fake_get_events_after(*, db, run_id, after_id, include_tokens):
+        seen_commis_ids.append(get_test_commis_id())
+        return []
+
+    outer_token = set_test_commis_id("outer-context")
+    monkeypatch.setattr(run_stream_service.EventStore, "get_events_after", staticmethod(fake_get_events_after))
+    try:
+        with _patched_stream_db(monkeypatch, session_local):
+            records = run_stream_service.load_historical_run_events(
+                run_id=run_id,
+                after_event_id=0,
+                include_tokens=True,
+                test_commis_id="replay-context",
+            )
+
+        assert records == []
+        assert seen_commis_ids == ["replay-context"]
+        assert get_test_commis_id() == "outer-context"
+    finally:
+        reset_test_commis_id(outer_token)
+
+
+def test_load_historical_run_events_returns_serializable_records_after_session_closes(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    _, run_id = _seed_run(session_local)
+    event_id = _append_run_event(
+        session_local,
+        run_id=run_id,
+        event_type="oikos_started",
+        payload={"message": "started"},
+    )
+
+    with _patched_stream_db(monkeypatch, session_local):
+        records = run_stream_service.load_historical_run_events(
+            run_id=run_id,
+            after_event_id=0,
+            include_tokens=True,
+        )
+
+    serialized = [asdict(record) for record in records]
+    assert json.loads(json.dumps(serialized)) == [
+        {
+            "event_id": event_id,
+            "event_type": "oikos_started",
+            "payload": {"message": "started"},
+            "timestamp": serialized[0]["timestamp"],
+        }
+    ]
+    assert isinstance(serialized[0]["timestamp"], str)
+    datetime.fromisoformat(serialized[0]["timestamp"].replace("Z", "+00:00"))
+
+
+@pytest.mark.asyncio
+async def test_stream_run_events_live_defaults_to_context_test_commis_id(monkeypatch):
+    captured_kwargs = {}
+
+    async def fake_replay_and_stream(**kwargs):
+        captured_kwargs.update(kwargs)
+        if False:
+            yield {}
+
+    monkeypatch.setattr(stream_router, "_replay_and_stream", fake_replay_and_stream)
+
+    token = set_test_commis_id("live-context")
+    try:
+        generator = stream_router.stream_run_events_live(run_id=77, owner_id=11)
+        connected = await anext(generator)
+
+        assert connected["event"] == "connected"
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(generator)
+
+        assert captured_kwargs["test_commis_id"] == "live-context"
+    finally:
+        reset_test_commis_id(token)
 
 
 @pytest.mark.asyncio

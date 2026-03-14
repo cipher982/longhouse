@@ -14,8 +14,6 @@ import logging
 import time
 from datetime import datetime
 from datetime import timezone
-from typing import List
-from typing import Tuple
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -25,15 +23,14 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import db_session
 from zerg.database import get_test_commis_id
-from zerg.database import reset_test_commis_id
-from zerg.database import set_test_commis_id
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
 from zerg.routers.oikos_auth import get_current_oikos_user
-from zerg.services.event_store import EventStore
+from zerg.services.run_stream import load_historical_run_events
+from zerg.services.run_stream import with_test_commis_routing
 
 logger = logging.getLogger(__name__)
 
@@ -51,55 +48,6 @@ def _json_default(value):  # type: ignore[no-untyped-def]
             return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         return value.isoformat()
     return str(value)
-
-
-def _load_historical_events(
-    run_id: int,
-    after_event_id: int,
-    include_tokens: bool,
-    test_commis_id: str | None = None,
-) -> List[Tuple[int, str, dict, str]]:
-    """Load historical events from DB using a SHORT-LIVED session.
-
-    This is critical for test isolation: the DB session is opened, events are
-    loaded into memory, and the session is immediately closed. This prevents
-    the streaming connection from holding a DB connection indefinitely.
-
-    Args:
-        run_id: Run identifier
-        after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include OIKOS_TOKEN events
-
-    Returns:
-        List of (event_id, event_type, payload, timestamp_str) tuples
-    """
-    events: List[Tuple[int, str, dict, str]] = []
-
-    commis_token = set_test_commis_id(test_commis_id) if test_commis_id else None
-    try:
-        with db_session() as db:
-            historical = EventStore.get_events_after(
-                db=db,
-                run_id=run_id,
-                after_id=after_event_id,
-                include_tokens=include_tokens,
-            )
-            # Load all events into memory before closing session
-            for event in historical:
-                events.append(
-                    (
-                        event.id,
-                        event.event_type,
-                        event.payload,
-                        event.created_at.isoformat().replace("+00:00", "Z"),
-                    )
-                )
-    finally:
-        if commis_token is not None:
-            reset_test_commis_id(commis_token)
-    # Session is now closed - no DB connection held during streaming
-
-    return events
 
 
 # Backpressure: max events to buffer per client before closing stream
@@ -252,8 +200,7 @@ async def _replay_and_stream(
             from zerg.database import db_session
             from zerg.models.models import Run
 
-            commis_token = set_test_commis_id(test_commis_id) if test_commis_id else None
-            try:
+            with with_test_commis_routing(test_commis_id):
                 with db_session() as db:
                     candidate = db.query(Run).filter(Run.id == candidate_run_id).first()
                     if not candidate:
@@ -263,9 +210,6 @@ async def _replay_and_stream(
                     is_cont = bool(candidate.root_run_id == run_id or candidate.continuation_of_run_id == run_id)
                     continuation_cache[candidate_run_id] = is_cont
                     return is_cont
-            finally:
-                if commis_token is not None:
-                    reset_test_commis_id(commis_token)
         except Exception:
             # Best-effort only; if lookup fails, do not leak events across runs.
             continuation_cache[candidate_run_id] = False
@@ -338,7 +282,7 @@ async def _replay_and_stream(
         if include_replay:
             # Load historical events using a SHORT-LIVED DB session
             # This ensures we don't hold a DB connection during streaming
-            historical_events = _load_historical_events(
+            historical_events = load_historical_run_events(
                 run_id,
                 after_event_id,
                 include_tokens,
@@ -346,20 +290,20 @@ async def _replay_and_stream(
             )
 
             # Yield historical events with SSE id: field
-            for event_id, event_type, payload, timestamp_str in historical_events:
-                last_sent_event_id = event_id
+            for historical_event in historical_events:
+                last_sent_event_id = historical_event.event_id
                 # Inject event_id for stream_control tracking
-                payload_with_id = {**payload, "_event_id": event_id}
-                _apply_event_state(event_type, payload_with_id, from_replay=True)
+                payload_with_id = {**historical_event.payload, "_event_id": historical_event.event_id}
+                _apply_event_state(historical_event.event_type, payload_with_id, from_replay=True)
 
                 yield {
-                    "id": str(event_id),  # SSE last-event-id for resumption
-                    "event": event_type,
+                    "id": str(historical_event.event_id),  # SSE last-event-id for resumption
+                    "event": historical_event.event_type,
                     "data": json.dumps(
                         {
-                            "type": event_type,
-                            "payload": payload,
-                            "timestamp": timestamp_str,
+                            "type": historical_event.event_type,
+                            "payload": historical_event.payload,
+                            "timestamp": historical_event.timestamp,
                         },
                         default=_json_default,
                     ),
