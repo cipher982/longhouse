@@ -37,6 +37,7 @@ interface TimelinePaneProps {
   selectedKey: string | null;
   onSelectKey: (key: string) => void;
   dock?: ReactNode;
+  listRef?: (node: HTMLDivElement | null) => void;
 }
 
 function MessageRow({
@@ -204,6 +205,7 @@ export function TimelinePane({
   selectedKey,
   onSelectKey,
   dock = null,
+  listRef,
 }: TimelinePaneProps) {
   const toolFilterLabel = `Tools (${toolRowCount})`;
   const showScopedLoading = loading && filteredItems.length === 0;
@@ -285,7 +287,11 @@ export function TimelinePane({
         </div>
       ) : null}
 
-      <div className="timeline-pane__list timeline-events" data-testid="session-timeline-list">
+      <div
+        ref={listRef}
+        className="timeline-pane__list timeline-events"
+        data-testid="session-timeline-list"
+      >
         {showScopedLoading ? (
           <EmptyState
             icon={<Spinner size="lg" />}

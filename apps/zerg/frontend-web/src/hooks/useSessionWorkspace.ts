@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentSession, useAgentSessionEventsInfinite, useAgentSessionThread } from "./useAgentSessions";
 import {
   buildTimelineModel,
@@ -8,6 +8,8 @@ import {
 } from "../lib/sessionWorkspace";
 
 const EVENTS_PAGE_SIZE = 1000;
+const AUTO_SCROLL_MAX_ATTEMPTS = 12;
+const AUTO_SCROLL_EPSILON_PX = 1;
 
 interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
@@ -39,8 +41,13 @@ export function useSessionWorkspace(
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [timelineListElement, setTimelineListElement] = useState<HTMLDivElement | null>(null);
   const highlightedEventRef = useRef<number | null>(null);
   const autoScrolledSelectionRef = useRef(false);
+
+  const registerTimelineList = useCallback((node: HTMLDivElement | null) => {
+    setTimelineListElement((current) => (current === node ? current : node));
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
@@ -218,31 +225,53 @@ export function useSessionWorkspace(
     const selection = model.selectionMap.get(targetKey);
     if (!selection) return;
 
-    const scrollToSelection = () => {
+    let frameId: number | null = null;
+    let attempts = 0;
+
+    const tryScrollToSelection = () => {
+      attempts += 1;
+
       if (!selectedKey) {
-        const list = document.querySelector('[data-testid="session-timeline-list"]');
+        const list = timelineListElement;
         if (list instanceof HTMLElement) {
-          list.scrollTop = list.scrollHeight;
+          const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+          if (maxScrollTop > AUTO_SCROLL_EPSILON_PX) {
+            list.scrollTop = maxScrollTop;
+            if (list.scrollTop > AUTO_SCROLL_EPSILON_PX) {
+              autoScrolledSelectionRef.current = true;
+              return;
+            }
+          }
+
+          if (attempts >= AUTO_SCROLL_MAX_ATTEMPTS) {
+            autoScrolledSelectionRef.current = maxScrollTop <= AUTO_SCROLL_EPSILON_PX;
+            return;
+          }
+        }
+      } else {
+        const target = document.getElementById(selection.rowId);
+        if (target) {
+          target.scrollIntoView({ behavior: "auto", block: "center" });
           autoScrolledSelectionRef.current = true;
+          return;
+        }
+
+        if (attempts >= AUTO_SCROLL_MAX_ATTEMPTS) {
           return;
         }
       }
 
-      const target = document.getElementById(selection.rowId);
-      if (!target) return;
-
-      target.scrollIntoView({ behavior: "auto", block: selectedKey ? "center" : "nearest" });
-      autoScrolledSelectionRef.current = true;
+      frameId = window.requestAnimationFrame(tryScrollToSelection);
     };
 
-    if (document.getElementById(selection.rowId)) {
-      scrollToSelection();
-      return;
-    }
+    tryScrollToSelection();
 
-    const frameId = window.requestAnimationFrame(scrollToSelection);
-    return () => window.cancelAnimationFrame(frameId);
-  }, [highlightEventId, eventsLoading, selectedKey, filteredItems, model.selectionMap]);
+    return () => {
+      if (frameId != null) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [highlightEventId, eventsLoading, selectedKey, filteredItems, model.selectionMap, timelineListElement]);
 
   const selectedSelection = useMemo(
     () => (selectedKey ? model.selectionMap.get(selectedKey) ?? null : null),
@@ -287,5 +316,6 @@ export function useSessionWorkspace(
     selectedKey,
     selectedSelection,
     selectKey,
+    registerTimelineList,
   };
 }
