@@ -1,23 +1,19 @@
-FROM python:3.12-slim
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
 
 WORKDIR /app
 
-# Install uv
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -Ls https://astral.sh/uv/install.sh | sh
+COPY pyproject.toml uv.lock README.md API.md /app/
+RUN uv sync --frozen --no-install-project --no-dev
 
-ENV PATH="/root/.local/bin:${PATH}"
-
-COPY requirements.txt /app/requirements.txt
-RUN uv pip install --system --no-cache -r /app/requirements.txt
-
-COPY pyproject.toml README.md API.md /app/
 COPY control_plane /app/control_plane
+RUN uv sync --frozen --no-dev
+
+ENV PATH="/app/.venv/bin:${PATH}"
 
 EXPOSE 8085
 

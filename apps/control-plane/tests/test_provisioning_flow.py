@@ -1490,8 +1490,8 @@ class TestProvisionerClass:
 
 
 class TestMigrationStatusProbe:
-    def test_build_migration_status_pending_for_legacy_schema(self, tmp_path):
-        data_dir = tmp_path / "legacy-instance"
+    def test_build_migration_status_pending_for_old_schema(self, tmp_path):
+        data_dir = tmp_path / "old-schema-instance"
         data_dir.mkdir(parents=True, exist_ok=True)
         db_path = data_dir / "longhouse.db"
 
@@ -1529,8 +1529,8 @@ class TestMigrationStatusProbe:
         inst = Instance(
             id=999,
             user_id=1,
-            subdomain="legacy",
-            container_name="longhouse-legacy",
+            subdomain="old-schema",
+            container_name="longhouse-old-schema",
             status="active",
             data_path=str(data_dir),
         )
