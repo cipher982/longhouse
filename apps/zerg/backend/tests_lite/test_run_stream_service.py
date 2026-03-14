@@ -88,6 +88,23 @@ def _append_run_event(session_local, *, run_id: int, event_type: str, payload: d
         return event.id
 
 
+def _append_continuation_run(session_local, *, source_run_id: int, root_run_id: int):
+    with session_local() as db:
+        source_run = db.query(Run).filter(Run.id == source_run_id).first()
+        run = Run(
+            fiche_id=source_run.fiche_id,
+            thread_id=source_run.thread_id,
+            continuation_of_run_id=source_run_id,
+            root_run_id=root_run_id,
+            status=RunStatus.RUNNING.value,
+            started_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        return run.id
+
+
 @contextmanager
 def _patched_stream_db(monkeypatch, session_local):
     @contextmanager
@@ -168,6 +185,136 @@ def test_lifecycle_oikos_deferred_respects_close_stream_flag():
         now_monotonic=0.0,
     )
     assert close_state.should_close_after_live_event(event_id=None, now_monotonic=0.0) is True
+
+
+def test_filter_stream_event_drops_wrong_owner():
+    filtered = run_stream_service.filter_stream_event(
+        {"owner_id": 99, "run_id": 7, "event_type": "oikos_thinking"},
+        owner_id=1,
+        run_id=7,
+        allow_continuation_runs=False,
+    )
+    assert filtered is None
+
+
+def test_filter_stream_event_drops_tool_event_missing_run_id():
+    filtered = run_stream_service.filter_stream_event(
+        {"owner_id": 1, "event_type": "commis_tool_started"},
+        owner_id=1,
+        run_id=7,
+        allow_continuation_runs=False,
+    )
+    assert filtered is None
+
+
+def test_filter_stream_event_aliases_direct_continuation_run_id_to_root(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    owner_id, root_run_id = _seed_run(session_local)
+    continuation_run_id = _append_continuation_run(
+        session_local,
+        source_run_id=root_run_id,
+        root_run_id=root_run_id,
+    )
+    resolver = run_stream_service.ContinuationAliasResolver(root_run_id=root_run_id)
+
+    with _patched_stream_db(monkeypatch, session_local):
+        filtered = run_stream_service.filter_stream_event(
+            {
+                "owner_id": owner_id,
+                "run_id": continuation_run_id,
+                "event_type": "oikos_started",
+            },
+            owner_id=owner_id,
+            run_id=root_run_id,
+            allow_continuation_runs=True,
+            continuation_resolver=resolver,
+        )
+
+    assert filtered is not None
+    assert filtered["run_id"] == root_run_id
+
+
+def test_filter_stream_event_aliases_chained_continuation_via_root_run_id(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    owner_id, root_run_id = _seed_run(session_local)
+    direct_continuation_id = _append_continuation_run(
+        session_local,
+        source_run_id=root_run_id,
+        root_run_id=root_run_id,
+    )
+    chained_continuation_id = _append_continuation_run(
+        session_local,
+        source_run_id=direct_continuation_id,
+        root_run_id=root_run_id,
+    )
+    resolver = run_stream_service.ContinuationAliasResolver(root_run_id=root_run_id)
+
+    with _patched_stream_db(monkeypatch, session_local):
+        filtered = run_stream_service.filter_stream_event(
+            {
+                "owner_id": owner_id,
+                "run_id": chained_continuation_id,
+                "event_type": "oikos_started",
+            },
+            owner_id=owner_id,
+            run_id=root_run_id,
+            allow_continuation_runs=True,
+            continuation_resolver=resolver,
+        )
+
+    assert filtered is not None
+    assert filtered["run_id"] == root_run_id
+
+
+def test_filter_stream_event_fails_closed_when_continuation_lookup_errors(monkeypatch):
+    @contextmanager
+    def _broken_db_session():
+        raise RuntimeError("db broke")
+        yield
+
+    monkeypatch.setattr(run_stream_service, "db_session", _broken_db_session)
+    resolver = run_stream_service.ContinuationAliasResolver(root_run_id=7)
+
+    filtered = run_stream_service.filter_stream_event(
+        {"owner_id": 1, "run_id": 99, "event_type": "oikos_started"},
+        owner_id=1,
+        run_id=7,
+        allow_continuation_runs=True,
+        continuation_resolver=resolver,
+    )
+
+    assert filtered is None
+
+
+def test_continuation_alias_resolver_uses_test_commis_id_context(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    _, root_run_id = _seed_run(session_local)
+    continuation_run_id = _append_continuation_run(
+        session_local,
+        source_run_id=root_run_id,
+        root_run_id=root_run_id,
+    )
+    seen_commis_ids = []
+
+    @contextmanager
+    def _observed_db_session():
+        seen_commis_ids.append(get_test_commis_id())
+        with session_local() as db:
+            yield db
+
+    monkeypatch.setattr(run_stream_service, "db_session", _observed_db_session)
+
+    outer_token = set_test_commis_id("outer-context")
+    try:
+        resolver = run_stream_service.ContinuationAliasResolver(
+            root_run_id=root_run_id,
+            test_commis_id="resolver-context",
+        )
+        assert resolver.is_continuation(continuation_run_id) is True
+        assert seen_commis_ids == ["resolver-context"]
+        assert get_test_commis_id() == "outer-context"
+    finally:
+        reset_test_commis_id(outer_token)
 
 
 def test_load_historical_run_events_uses_test_commis_id_context(monkeypatch, tmp_path):
