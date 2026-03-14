@@ -38,18 +38,24 @@ Out of scope:
 ## Implementation Phases
 
 ### Phase 1: Explicit browser-session helpers
+Status: Done
+
 Acceptance criteria:
 - Backend has explicit dependencies for required and optional browser-session auth
 - Browser session validation paths use the cookie-first helper rather than generic mixed auth language
 - Oikos browser-owned auth helper uses the browser-session path when it is not handling a special query-token case
 
 ### Phase 2: Human-only routes leave the mixed machine helper
+Status: Done
+
 Acceptance criteria:
 - `insights` read routes use browser-session auth
 - `proposals` routes use browser-session auth
 - Those routers no longer import `verify_agents_read_access`
 
 ### Phase 3: Frontend token baggage removal
+Status: In progress
+
 Acceptance criteria:
 - Frontend auth context no longer exposes a dead `getToken()` API
 - Legacy `zerg_jwt` cleanup code is removed
@@ -62,3 +68,9 @@ Acceptance criteria:
 - `make test`
 - `make test-e2e`
 - Push, deploy, reprovision, and `make qa-live`
+
+## Implementation Notes
+
+- 2026-03-14: Added `get_current_browser_user` and `get_optional_browser_user` so browser-owned routes can be explicit about cookie-session auth instead of leaning on mixed browser-or-machine helpers.
+- 2026-03-14: Updated `/api/auth/status`, `/api/auth/verify`, hosted Gmail browser entrypoints, and the Oikos browser auth helper to use the browser-session path.
+- 2026-03-14: `insights` and `proposals` read routes now use browser-session auth; `POST /api/insights` intentionally stays on the machine-auth path.

@@ -21,10 +21,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.auth import get_current_browser_user
 from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
 from zerg.routers.agents import require_single_tenant
-from zerg.routers.agents import verify_agents_read_access
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ async def list_proposals(
     project: Optional[str] = Query(None, description="Filter by project"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _browser_user=Depends(get_current_browser_user),
     _single: None = Depends(require_single_tenant),
 ) -> ProposalListResponse:
     """List action proposals with filters."""
@@ -149,7 +149,7 @@ async def list_proposals(
 async def approve_proposal(
     proposal_id: str,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _browser_user=Depends(get_current_browser_user),
     _single: None = Depends(require_single_tenant),
 ) -> ProposalActionResponse:
     """Approve a proposal — sets status to approved and generates a task description."""
@@ -197,7 +197,7 @@ async def approve_proposal(
 async def decline_proposal(
     proposal_id: str,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _browser_user=Depends(get_current_browser_user),
     _single: None = Depends(require_single_tenant),
 ) -> ProposalActionResponse:
     """Decline a proposal — sets status to declined."""

@@ -4,7 +4,8 @@ Provides endpoints for:
 - POST /api/insights — create or deduplicate insight (same title+project within 7 days → update)
 - GET /api/insights — query insights with filters
 
-Authentication uses the same agents token pattern as the agents router.
+`POST /api/insights` is machine-authenticated via the agents token path.
+`GET /api/insights` is browser-authenticated via the normal session cookie.
 """
 
 import logging
@@ -24,10 +25,10 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.auth import get_current_browser_user
 from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
 from zerg.models.work import Insight
 from zerg.routers.agents import require_single_tenant
-from zerg.routers.agents import verify_agents_read_access
 from zerg.routers.agents import verify_agents_token
 from zerg.utils.time import UTCBaseModel
 
@@ -205,7 +206,7 @@ async def list_insights(
     since_hours: int = Query(168, ge=1, le=8760, description="Hours to look back (default 168 = 7 days)"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _browser_user=Depends(get_current_browser_user),
     _single: None = Depends(require_single_tenant),
 ) -> InsightListResponse:
     """Query insights with filters."""

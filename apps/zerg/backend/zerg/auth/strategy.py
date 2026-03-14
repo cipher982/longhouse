@@ -117,6 +117,8 @@ class DevAuthStrategy(AuthStrategy):
     def _get_or_create_dev_user(self, db: Session):
         import os
 
+        from zerg.models.models import User
+
         # Skip database operations in unit test mode (NODE_ENV=test WITHOUT E2E)
         # E2E tests need real database operations for full integration testing
         env = os.getenv("ENVIRONMENT", "")
@@ -124,8 +126,6 @@ class DevAuthStrategy(AuthStrategy):
         is_unit_test = os.getenv("NODE_ENV") == "test" and not is_e2e_env
         if is_unit_test:
             # Return a mock user for unit tests to avoid database issues
-
-            from zerg.models.models import User
 
             mock_user = User()
             mock_user.id = 1

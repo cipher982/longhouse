@@ -17,6 +17,7 @@ from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.auth.strategy import DevAuthStrategy
 from zerg.auth.strategy import JWTAuthStrategy
 from zerg.auth.strategy import _decode_jwt_fallback as _decode_jwt_fallback  # type: ignore
@@ -85,7 +86,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     """
     # Check for either bearer token or session cookie
     has_bearer = "Authorization" in request.headers
-    has_cookie = "longhouse_session" in request.cookies
+    has_cookie = SESSION_COOKIE_NAME in request.cookies
 
     if not has_bearer and not has_cookie and not AUTH_DISABLED:
         raise HTTPException(
@@ -107,7 +108,7 @@ def get_optional_user(request: Request, db: Session = Depends(get_db)):
         return _get_strategy().get_current_user(request, db)
 
     has_bearer = "Authorization" in request.headers
-    has_cookie = "longhouse_session" in request.cookies
+    has_cookie = SESSION_COOKIE_NAME in request.cookies
 
     if not has_bearer and not has_cookie:
         return None
@@ -116,6 +117,43 @@ def get_optional_user(request: Request, db: Session = Depends(get_db)):
         return _get_strategy().get_current_user(request, db)
     except HTTPException:
         return None
+
+
+def _get_browser_session_user(request: Request, db: Session):
+    """Validate only the browser session cookie and return the authenticated user."""
+    if AUTH_DISABLED:
+        return _get_strategy().get_current_user(request, db)
+
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not session_token:
+        return None
+
+    return _get_strategy().validate_ws_token(session_token, db)
+
+
+def get_current_browser_user(request: Request, db: Session = Depends(get_db)):
+    """Return the authenticated browser user or raise **401**.
+
+    This dependency is intentionally cookie-session only. It does not accept
+    Authorization headers because browser-owned routes should not share the
+    mixed browser-or-machine auth surface.
+    """
+    user = _get_browser_session_user(request, db)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+    return user
+
+
+def get_optional_browser_user(request: Request, db: Session = Depends(get_db)):
+    """Return the authenticated browser user or **None**.
+
+    This is the non-throwing variant of ``get_current_browser_user`` for
+    browser-only routes such as `/api/auth/status`.
+    """
+    return _get_browser_session_user(request, db)
 
 
 def require_admin(current_user=Depends(get_current_user)):
@@ -202,6 +240,8 @@ _strategy = _get_strategy
 __all__ = [
     "get_current_user",
     "get_optional_user",
+    "get_current_browser_user",
+    "get_optional_browser_user",
     "require_admin",
     "require_super_admin",
     "require_internal_call",
