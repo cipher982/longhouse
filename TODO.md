@@ -57,7 +57,7 @@ Notes:
 
 ## [Tech Debt] Split auth by domain ownership (size: 4)
 
-Status (2026-03-14): In progress. This is phase 2 of the auth cleanup epic.
+Status (2026-03-14): Done. Phase 2 shipped with the tenant auth surface split into domain-owned modules, dependency ownership cleaned up, and the hosted runtime verified end to end.
 
 **Goal:** Give each auth domain one obvious home so browser login/session auth, hosted SSO bridge auth, Gmail connect auth, and machine/device auth stop living as mixed concerns inside unrelated routers.
 
@@ -68,15 +68,18 @@ Status (2026-03-14): In progress. This is phase 2 of the auth cleanup epic.
 - Imports/tests follow the new ownership cleanly
 - Focused auth coverage plus full ship verification pass
 
-- [ ] Write and commit the concise phase 2 spec
-- [ ] Split tenant `/auth` into browser-session, SSO bridge, and Gmail-connect modules
-- [ ] Move Oikos auth and agents/device auth helpers into dependency modules
-- [ ] Add focused regression coverage for the moved auth domains
-- [ ] Ship and verify the hosted runtime after the refactor
+- [x] Write and commit the concise phase 2 spec
+- [x] Split tenant `/auth` into browser-session, SSO bridge, and Gmail-connect modules
+- [x] Move Oikos auth and agents/device auth helpers into dependency modules
+- [x] Add focused regression coverage for the moved auth domains
+- [x] Ship and verify the hosted runtime after the refactor
 
 Notes:
 - 2026-03-14: This is still a behavior-preserving cleanup pass, not the `/api/agents/*` product-boundary rewrite.
 - 2026-03-14: Keep the public route surface stable. The win here is ownership clarity, smaller modules, and safer next-step cleanup.
+- 2026-03-14: Tenant auth now routes through `auth_browser.py`, `auth_sso.py`, and `auth_gmail.py`; shared browser cookies live in `auth/session_tokens.py`; Oikos/browser/device helpers now live under `zerg/dependencies/`.
+- 2026-03-14: Focused auth seam coverage landed in `tests_lite/test_auth_domain_split.py`, and the moved imports are covered across Gmail, SSO, Oikos, agents, heartbeat, and session-resume tests.
+- 2026-03-14: Final verification passed: `make test-lite`, `make test-e2e`, GHCR runtime build `23098760543`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, and `make qa-live` (8/8).
 - Spec: `docs/specs/auth-domain-split.md`
 
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
