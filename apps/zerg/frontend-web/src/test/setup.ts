@@ -50,7 +50,6 @@ vi.mock("../lib/auth", () => {
       isLoading: false,
       login: noop,
       logout: noop,
-      getToken: () => "test-token",
     }),
     AuthProvider: ({ children }: { children: ReactNode }) => children,
   };
