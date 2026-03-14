@@ -10,7 +10,8 @@ from fastapi import Depends
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import get_fiche
+from zerg.crud import list_runs as list_fiche_runs
 from zerg.database import get_db
 
 # Auth dependency
@@ -36,7 +37,7 @@ def list_runs(
 ):
     """Return latest *limit* runs for the given fiche (descending)."""
 
-    fiche = crud.get_fiche(db, fiche_id)
+    fiche = get_fiche(db, fiche_id)
     if fiche is None:
         raise HTTPException(status_code=404, detail="Fiche not found")
 
@@ -45,7 +46,7 @@ def list_runs(
     if not is_admin and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Forbidden: not fiche owner")
 
-    return crud.list_runs(db, fiche_id, limit=limit)
+    return list_fiche_runs(db, fiche_id, limit=limit)
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)

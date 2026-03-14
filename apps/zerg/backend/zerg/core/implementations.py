@@ -18,7 +18,17 @@ from zerg.core.interfaces import AuthProvider
 from zerg.core.interfaces import Database
 from zerg.core.interfaces import EventBus
 from zerg.core.interfaces import ModelRegistry
-from zerg.crud import crud
+from zerg.crud import create_fiche
+from zerg.crud import create_fiche_message
+from zerg.crud import create_thread
+from zerg.crud import create_user
+from zerg.crud import delete_fiche
+from zerg.crud import get_fiche
+from zerg.crud import get_fiche_messages
+from zerg.crud import get_fiches
+from zerg.crud import get_threads
+from zerg.crud import get_user_by_email
+from zerg.crud import update_fiche
 from zerg.database import db_session
 from zerg.database import get_session_factory
 from zerg.models.models import Fiche
@@ -40,12 +50,12 @@ class SQLAlchemyDatabase(Database):
     def get_fiches(self, owner_id: Optional[int] = None, skip: int = 0, limit: int = 100) -> List[Fiche]:
         """Get list of fiches, optionally filtered by owner."""
         with db_session(self.session_factory) as db:
-            return crud.get_fiches(db, owner_id=owner_id, skip=skip, limit=limit)
+            return get_fiches(db, owner_id=owner_id, skip=skip, limit=limit)
 
     def get_fiche(self, fiche_id: int) -> Optional[Fiche]:
         """Get single fiche by ID."""
         with db_session(self.session_factory) as db:
-            return crud.get_fiche(db, fiche_id)
+            return get_fiche(db, fiche_id)
 
     def create_fiche(
         self,
@@ -59,7 +69,7 @@ class SQLAlchemyDatabase(Database):
     ) -> Fiche:
         """Create new fiche."""
         with db_session(self.session_factory) as db:
-            return crud.create_fiche(
+            return create_fiche(
                 db=db,
                 owner_id=owner_id,
                 name=name,
@@ -83,7 +93,7 @@ class SQLAlchemyDatabase(Database):
     ) -> Optional[Fiche]:
         """Update existing fiche."""
         with db_session(self.session_factory) as db:
-            return crud.update_fiche(
+            return update_fiche(
                 db=db,
                 fiche_id=fiche_id,
                 name=name,
@@ -98,37 +108,37 @@ class SQLAlchemyDatabase(Database):
     def delete_fiche(self, fiche_id: int) -> bool:
         """Delete fiche by ID."""
         with db_session(self.session_factory) as db:
-            return crud.delete_fiche(db, fiche_id)
+            return delete_fiche(db, fiche_id)
 
     def get_user_by_email(self, email: str) -> Optional[User]:
         """Get user by email address."""
         with db_session(self.session_factory) as db:
-            return crud.get_user_by_email(db, email)
+            return get_user_by_email(db, email)
 
     def create_user(self, email: str, **kwargs) -> User:
         """Create new user."""
         with db_session(self.session_factory) as db:
-            return crud.create_user(db, email=email, **kwargs)
+            return create_user(db, email=email, **kwargs)
 
     def get_threads(self, fiche_id: Optional[int] = None, owner_id: Optional[int] = None) -> List[Thread]:
         """Get threads, optionally filtered by fiche or owner."""
         with db_session(self.session_factory) as db:
-            return crud.get_threads(db, fiche_id=fiche_id, owner_id=owner_id)
+            return get_threads(db, fiche_id=fiche_id, owner_id=owner_id)
 
     def create_thread(self, fiche_id: int, title: str) -> Thread:
         """Create new thread."""
         with db_session(self.session_factory) as db:
-            return crud.create_thread(db, fiche_id=fiche_id, title=title)
+            return create_thread(db, fiche_id=fiche_id, title=title)
 
     def get_fiche_messages(self, fiche_id: int, skip: int = 0, limit: int = 100) -> List[FicheMessage]:
         """Get messages for a fiche."""
         with db_session(self.session_factory) as db:
-            return crud.get_fiche_messages(db, fiche_id=fiche_id, skip=skip, limit=limit)
+            return get_fiche_messages(db, fiche_id=fiche_id, skip=skip, limit=limit)
 
     def create_fiche_message(self, fiche_id: int, role: str, content: str) -> FicheMessage:
         """Create new fiche message."""
         with db_session(self.session_factory) as db:
-            return crud.create_fiche_message(db, fiche_id=fiche_id, role=role, content=content)
+            return create_fiche_message(db, fiche_id=fiche_id, role=role, content=content)
 
 
 class ProductionAuthProvider(AuthProvider):
@@ -147,7 +157,7 @@ class ProductionAuthProvider(AuthProvider):
 
             session_factory = get_session_factory()
             with session_factory() as db:
-                return crud.get_user_by_email(db, email)
+                return get_user_by_email(db, email)
         except Exception:
             return None
 

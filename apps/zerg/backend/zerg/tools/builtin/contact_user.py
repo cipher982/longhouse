@@ -5,7 +5,7 @@ from typing import Any
 from typing import Dict
 
 from zerg.context import get_commis_context
-from zerg.crud import crud
+from zerg.crud import get_user
 from zerg.database import db_session
 from zerg.tools.builtin.email_tools import send_email
 from zerg.tools.error_envelope import ErrorType
@@ -216,7 +216,7 @@ def contact_user(
 
         # Look up user
         with db_session() as db:
-            user = crud.get_user(db, owner_id)
+            user = get_user(db, owner_id)
             if not user:
                 logger.error(f"User {owner_id} not found")
                 return tool_error(

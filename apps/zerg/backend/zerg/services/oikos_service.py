@@ -23,7 +23,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import create_fiche
+from zerg.crud import create_thread_message
+from zerg.crud import get_fiches
+from zerg.crud import get_threads
+from zerg.crud import get_user
 from zerg.managers.fiche_runner import FicheInterrupted
 from zerg.managers.fiche_runner import Runner
 from zerg.models.enums import RunStatus
@@ -423,8 +427,7 @@ class OikosService:
         """
         from zerg.models_config import DEFAULT_MODEL_ID
 
-        # Look for existing oikos fiche
-        fiches = crud.get_fiches(self.db, owner_id=owner_id)
+        fiches = get_fiches(self.db, owner_id=owner_id)
         for fiche in fiches:
             config = fiche.config or {}
             if config.get("is_oikos"):
@@ -433,7 +436,7 @@ class OikosService:
                 # "I searched but found nothing" hallucinations because the model is
                 # running with outdated tool descriptions.
                 changed = False
-                user = crud.get_user(self.db, owner_id)
+                user = get_user(self.db, owner_id)
                 if user:
                     desired_prompt = build_oikos_prompt(user)
                     if fiche.system_instructions != desired_prompt:
@@ -463,7 +466,7 @@ class OikosService:
         logger.info(f"Creating oikos fiche for user {owner_id}")
 
         # Fetch user for context-aware prompt composition
-        user = crud.get_user(self.db, owner_id)
+        user = get_user(self.db, owner_id)
         if not user:
             raise ValueError(f"User {owner_id} not found")
 
@@ -478,9 +481,11 @@ class OikosService:
         # Use centralized tool list from oikos_tools.py (single source of truth)
         oikos_tools = get_oikos_allowed_tools()
 
-        task_instructions = "You are helping the user accomplish their goals. " "Analyze their request and decide how to handle it."
+        task_instructions = (
+            "You are helping the user accomplish their goals. Analyze their request and decide how to handle it."
+        )
 
-        fiche = crud.create_fiche(
+        fiche = create_fiche(
             db=self.db,
             owner_id=owner_id,
             name="Oikos",
@@ -489,7 +494,7 @@ class OikosService:
             task_instructions=task_instructions,
             config=oikos_config,
         )
-        # Set allowed_tools (not supported in crud.create_fiche)
+        # Set allowed_tools (not supported in create_fiche)
         fiche.allowed_tools = oikos_tools
         self.db.commit()
         self.db.refresh(fiche)
@@ -518,7 +523,7 @@ class OikosService:
             fiche = self.get_or_create_oikos_fiche(owner_id)
 
         # Look for existing oikos thread
-        threads = crud.get_threads(self.db, fiche_id=fiche.id)
+        threads = get_threads(self.db, fiche_id=fiche.id)
         for thread in threads:
             if thread.thread_type == OIKOS_THREAD_TYPE:
                 logger.debug(f"Found existing oikos thread {thread.id} for user {owner_id}")
@@ -567,7 +572,9 @@ class OikosService:
             conversation_id=conversation.id,
         )
         cleared_thread_messages = (
-            self.db.query(ThreadMessageModel).filter(ThreadMessageModel.thread_id == thread.id).delete(synchronize_session=False)
+            self.db.query(ThreadMessageModel)
+            .filter(ThreadMessageModel.thread_id == thread.id)
+            .delete(synchronize_session=False)
         )
         self.db.commit()
 
@@ -695,9 +702,9 @@ class OikosService:
         fiche = self.get_or_create_oikos_fiche(owner_id)
 
         # Always refresh oikos prompt from current templates + user context.
-        # The oikos fiche is long-lived; without this, prompt updates (and user profile changes)
-        # won't take effect until the fiche row is recreated.
-        user = crud.get_user(self.db, owner_id)
+        # The oikos fiche is long-lived; without this, prompt updates (and
+        # user profile changes) won't take effect until the backing row is recreated.
+        user = get_user(self.db, owner_id)
         if not user:
             raise ValueError(f"User {owner_id} not found")
         fiche.system_instructions = build_oikos_prompt(user)
@@ -813,7 +820,7 @@ class OikosService:
             recent_commis_context, jobs_to_acknowledge = self._build_recent_commis_context(owner_id)
             if recent_commis_context:
                 logger.debug(f"Injecting recent commis context for user {owner_id}")
-                crud.create_thread_message(
+                create_thread_message(
                     db=self.db,
                     thread_id=thread.id,
                     role="system",
@@ -824,7 +831,7 @@ class OikosService:
             # Add task as user message
             # Continuation tasks are internal orchestration messages - they should be
             # stored for LLM context but NOT shown to users in chat history
-            user_message_row = crud.create_thread_message(
+            user_message_row = create_thread_message(
                 db=self.db,
                 thread_id=thread.id,
                 role="user",
@@ -953,7 +960,9 @@ class OikosService:
                     },
                 )
 
-                deferred_message = f"Oikos run {run.id} deferred after {timeout}s timeout " "(continuing in background until completion)"
+                deferred_message = (
+                    f"Oikos run {run.id} deferred after {timeout}s timeout (continuing in background until completion)"
+                )
                 logger.info(deferred_message)
 
                 if return_on_deferred:
@@ -1092,7 +1101,9 @@ class OikosService:
                             )
 
                     if already_completed:
-                        completed_message = f"{already_completed}/{len(job_ids)} commiss already completed " "- scheduled barrier checks"
+                        completed_message = (
+                            f"{already_completed}/{len(job_ids)} commiss already completed - scheduled barrier checks"
+                        )
                         logger.info(completed_message)
 
                 else:
@@ -1550,7 +1561,8 @@ class OikosService:
                     )
                 elif barrier_result["status"] == "waiting":
                     waiting_status = (
-                        f"Immediate barrier check for run {run_id}: " f"{barrier_result['completed']}/{barrier_result['expected']} complete"
+                        f"Immediate barrier check for run {run_id}: "
+                        f"{barrier_result['completed']}/{barrier_result['expected']} complete"
                     )
                     logger.info(waiting_status)
                 else:

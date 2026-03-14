@@ -14,13 +14,15 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 # Legacy FicheManager no longer required – all logic goes through TaskRunner
-from zerg.crud import crud
+from zerg.crud import get_fiche
+from zerg.crud import update_fiche
 from zerg.database import db_session
 from zerg.database import default_session_factory
 
 # EventBus remains for UI notifications
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
+from zerg.models import Fiche
 
 # New unified task runner helper
 from zerg.services.task_runner import execute_fiche_task
@@ -120,7 +122,7 @@ class SchedulerService:
         # If we can't determine schedule, load from DB
         if schedule is None:
             with db_session(self.session_factory) as db:
-                fiche = crud.get_fiche(db, fiche_id)
+                fiche = get_fiche(db, fiche_id)
                 if fiche:
                     schedule = fiche.schedule
 
@@ -166,9 +168,7 @@ class SchedulerService:
             with db_session(self.session_factory) as db:
                 # Query as plain tuples so ORM instances are never leaked outside
                 # this helper – allows us to close the session safely.
-                fiche_rows: list[tuple[int, str]] = (
-                    db.query(crud.Fiche.id, crud.Fiche.schedule).filter(crud.Fiche.schedule.isnot(None)).all()
-                )
+                fiche_rows: list[tuple[int, str]] = db.query(Fiche.id, Fiche.schedule).filter(Fiche.schedule.isnot(None)).all()
         except Exception as exc:  # noqa: BLE001
             logger.error("Error loading scheduled fiches: %s", exc)
             fiche_rows = []
@@ -211,7 +211,7 @@ class SchedulerService:
                 next_run = job.next_run_time
 
                 with db_session(self.session_factory) as db:
-                    fiche = crud.get_fiche(db, fiche_id)
+                    fiche = get_fiche(db, fiche_id)
                     if fiche:
                         fiche.next_run_at = next_run
 
@@ -227,7 +227,7 @@ class SchedulerService:
 
         # Clear next_run_at in DB as it's no longer scheduled
         with db_session(self.session_factory) as db:
-            fiche = crud.get_fiche(db, fiche_id)
+            fiche = get_fiche(db, fiche_id)
             if fiche:
                 fiche.next_run_at = None
 
@@ -251,7 +251,7 @@ class SchedulerService:
         """
         try:
             with db_session(self.session_factory) as db:
-                fiche = crud.get_fiche(db, fiche_id)
+                fiche = get_fiche(db, fiche_id)
                 if fiche is None:
                     logger.error("Fiche %s not found", fiche_id)
                     return
@@ -278,7 +278,7 @@ class SchedulerService:
                 job = self.scheduler.get_job(f"fiche_{fiche_id}")
                 next_run_time = getattr(job, "next_run_time", None) if job else None
                 if next_run_time:
-                    crud.update_fiche(db, fiche_id, next_run_at=next_run_time)
+                    update_fiche(db, fiche_id, next_run_at=next_run_time)
 
                     await event_bus.publish(
                         EventType.FICHE_UPDATED,

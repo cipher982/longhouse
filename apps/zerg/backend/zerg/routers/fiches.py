@@ -22,7 +22,14 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.crud import crud
+from zerg.crud import create_fiche as create_fiche_record
+from zerg.crud import create_fiche_message as create_fiche_message_record
+from zerg.crud import delete_fiche as delete_fiche_record
+from zerg.crud import get_fiche
+from zerg.crud import get_fiche_messages
+from zerg.crud import get_fiches
+from zerg.crud import list_runs as list_fiche_runs
+from zerg.crud import update_fiche as update_fiche_record
 from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.decorators import publish_event
@@ -148,16 +155,16 @@ def _get_fiches_for_scope(
     limit: int = 100,
 ):
     if scope == "my":
-        return crud.get_fiches(db, skip=skip, limit=limit, owner_id=current_user.id)
+        return get_fiches(db, skip=skip, limit=limit, owner_id=current_user.id)
 
     from zerg.dependencies.auth import AUTH_DISABLED  # local import to avoid cycle
 
     if AUTH_DISABLED:
-        return crud.get_fiches(db, skip=skip, limit=limit)
+        return get_fiches(db, skip=skip, limit=limit)
 
     if getattr(current_user, "role", "USER") != "ADMIN":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required for scope=all")
-    return crud.get_fiches(db, skip=skip, limit=limit)
+    return get_fiches(db, skip=skip, limit=limit)
 
 
 def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Fiche]:
@@ -169,7 +176,7 @@ def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Fi
         if _now() - created_at > IDEMPOTENCY_TTL_SECS:
             IDEMPOTENCY_CACHE.pop(cache_key, None)
             return None
-        fiche = crud.get_fiche(db, fiche_id)
+        fiche = get_fiche(db, fiche_id)
         if fiche:
             logger.info(f"Idempotency: Returning existing fiche {fiche_id} for key {key}")
             return fiche
@@ -222,7 +229,7 @@ def read_dashboard_snapshot(
 
         if runs_limit > 0:
             for fiche in fiches:
-                runs = crud.list_runs(db, fiche.id, limit=runs_limit)
+                runs = list_fiche_runs(db, fiche.id, limit=runs_limit)
                 bundles.append(RunBundle(fiche_id=fiche.id, runs=runs))
         else:
             bundles = [RunBundle(fiche_id=fiche.id, runs=[]) for fiche in fiches]
@@ -283,7 +290,7 @@ async def create_fiche(
             return cached_fiche
 
     try:
-        created_fiche = crud.create_fiche(
+        created_fiche = create_fiche_record(
             db=db,
             owner_id=current_user.id,
             # name removed - backend auto-generates
@@ -305,7 +312,7 @@ async def create_fiche(
 
 @router.get("/{fiche_id}", response_model=Fiche)
 def read_fiche(fiche_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    row = crud.get_fiche(db, fiche_id)
+    row = get_fiche(db, fiche_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
@@ -330,7 +337,7 @@ async def update_fiche(
         fiche_model_validated = None
 
     # Authorization: only owner or admin may update a fiche
-    existing = crud.get_fiche(db, fiche_id)
+    existing = get_fiche(db, fiche_id)
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
@@ -338,7 +345,7 @@ async def update_fiche(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
 
     try:
-        row = crud.update_fiche(
+        row = update_fiche_record(
             db=db,
             fiche_id=fiche_id,
             name=fiche.name,
@@ -371,7 +378,7 @@ def read_fiche_details(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    row = crud.get_fiche(db, fiche_id)
+    row = get_fiche(db, fiche_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
@@ -383,7 +390,7 @@ def read_fiche_details(
     if "threads" in include_set:
         payload["threads"] = []
     if "runs" in include_set:
-        payload["runs"] = crud.list_runs(db, fiche_id)  # type: ignore[assignment]
+        payload["runs"] = list_fiche_runs(db, fiche_id)  # type: ignore[assignment]
     if "stats" in include_set:
         payload["stats"] = {}
     return payload
@@ -396,14 +403,14 @@ def read_fiche_details(
 
 @router.delete("/{fiche_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_fiche(fiche_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    row = crud.get_fiche(db, fiche_id)
+    row = get_fiche(db, fiche_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and row.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
 
-    if not crud.delete_fiche(db, fiche_id):
+    if not delete_fiche_record(db, fiche_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
     payload = {c.name: getattr(row, c.name) for c in row.__table__.columns}
@@ -420,13 +427,13 @@ def read_fiche_messages(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    fiche = crud.get_fiche(db, fiche_id)
+    fiche = get_fiche(db, fiche_id)
     if fiche is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
-    return crud.get_fiche_messages(db, fiche_id=fiche_id, skip=skip, limit=limit) or []
+    return get_fiche_messages(db, fiche_id=fiche_id, skip=skip, limit=limit) or []
 
 
 @router.post("/{fiche_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
@@ -436,18 +443,18 @@ def create_fiche_message(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    fiche = crud.get_fiche(db, fiche_id)
+    fiche = get_fiche(db, fiche_id)
     if fiche is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
-    return crud.create_fiche_message(db=db, fiche_id=fiche_id, role=message.role, content=message.content)
+    return create_fiche_message_record(db=db, fiche_id=fiche_id, role=message.role, content=message.content)
 
 
 @router.post("/{fiche_id}/task", status_code=status.HTTP_202_ACCEPTED)
 async def run_fiche_task(fiche_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    fiche = crud.get_fiche(db, fiche_id)
+    fiche = get_fiche(db, fiche_id)
     if fiche is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 

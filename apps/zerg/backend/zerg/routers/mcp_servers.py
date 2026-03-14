@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import get_fiche
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.schemas.schemas import Fiche
@@ -129,7 +129,7 @@ async def list_mcp_servers(
 ):
     """List all MCP servers configured for a fiche."""
     # Get fiche and check permissions
-    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    fiche = get_fiche(db, fiche_id=fiche_id)
     if not fiche:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
@@ -214,7 +214,7 @@ async def add_mcp_server(
 ):
     """Add an MCP server to a fiche."""
     # Get fiche and check permissions
-    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    fiche = get_fiche(db, fiche_id=fiche_id)
     if not fiche:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
@@ -311,7 +311,7 @@ async def remove_mcp_server(
 ):
     """Remove an MCP server from a fiche."""
     # Get fiche and check permissions
-    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    fiche = get_fiche(db, fiche_id=fiche_id)
     if not fiche:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
@@ -377,7 +377,7 @@ async def test_mcp_connection(
 ):
     """Test connection to an MCP server without saving it."""
     # Get fiche and check permissions (for context)
-    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    fiche = get_fiche(db, fiche_id=fiche_id)
     if not fiche:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
@@ -459,7 +459,7 @@ async def get_available_tools(
 ):
     """Get all available tools for a fiche (built-in + MCP)."""
     # Get fiche and check permissions
-    fiche = crud.get_fiche(db, fiche_id=fiche_id)
+    fiche = get_fiche(db, fiche_id=fiche_id)
     if not fiche:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 

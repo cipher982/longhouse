@@ -26,11 +26,11 @@ from pathlib import Path
 from typing import Optional
 
 from zerg.config import get_settings
-from zerg.crud import crud
 from zerg.database import db_session
 from zerg.database import list_test_commis_ids
 from zerg.database import reset_test_commis_id
 from zerg.database import set_test_commis_id
+from zerg.models import CommisJob
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.commis_job_queue import HEARTBEAT_INTERVAL_SECONDS
 from zerg.services.commis_job_queue import claim_jobs
@@ -455,7 +455,7 @@ class CommisJobProcessor:
         job_task_preview = ""
 
         with db_session() as db:
-            job = db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
+            job = db.query(CommisJob).filter(CommisJob.id == job_id).first()
             if not job:
                 logger.warning(f"Job {job_id} not found - may have been deleted")
                 return
@@ -510,7 +510,7 @@ class CommisJobProcessor:
 
         # Extract all needed data from job in a short-lived session
         with db_session() as db:
-            job = db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
+            job = db.query(CommisJob).filter(CommisJob.id == job_id).first()
             if not job:
                 logger.error(f"Job {job_id} not found when starting workspace execution")
                 return
@@ -718,7 +718,7 @@ class CommisJobProcessor:
 
         # 9. Open NEW short-lived session to update final job status
         with db_session() as update_db:
-            update_job = update_db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
+            update_job = update_db.query(CommisJob).filter(CommisJob.id == job_id).first()
             if not update_job:
                 logger.error(f"Job {job_id} not found when updating final status")
                 return
@@ -858,7 +858,7 @@ class CommisJobProcessor:
             True if job was found and processed, False otherwise
         """
         with db_session() as db:
-            job = db.query(crud.CommisJob).filter(crud.CommisJob.id == job_id).first()
+            job = db.query(CommisJob).filter(CommisJob.id == job_id).first()
             if not job:
                 return False
 

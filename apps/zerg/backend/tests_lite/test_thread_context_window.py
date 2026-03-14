@@ -4,7 +4,7 @@ Ensures Oikos/FicheRunner context loading uses the latest N thread messages
 in chronological order, not the oldest N.
 """
 
-from zerg.crud import crud
+from zerg.crud import create_fiche, create_thread_message, get_fiche
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -28,7 +28,7 @@ def _seed_thread(db):
     db.commit()
     db.refresh(user)
 
-    fiche = crud.create_fiche(
+    fiche = create_fiche(
         db,
         owner_id=user.id,
         name="Thread Window Test",
@@ -47,7 +47,7 @@ def _seed_thread(db):
 
 def _seed_assistant_messages(db, thread_id: int, count: int):
     for i in range(1, count + 1):
-        crud.create_thread_message(
+        create_thread_message(
             db,
             thread_id=thread_id,
             role="assistant",
@@ -97,7 +97,7 @@ def test_message_builder_uses_latest_100_thread_messages(tmp_path):
         thread = _seed_thread(db)
         _seed_assistant_messages(db, thread.id, count=150)
 
-        fiche = crud.get_fiche(db, thread.fiche_id)
+        fiche = get_fiche(db, thread.fiche_id)
         assert fiche is not None
 
         runtime = RuntimeView(

@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import create_thread, create_thread_message, delete_thread
 from zerg.database import get_db
 from zerg.managers.fiche_runner import FicheRunner
 from zerg.models.enums import RunStatus
@@ -481,7 +481,7 @@ def build_replay_thread(
     max_context_messages: int | None,
 ) -> tuple[Thread, int]:
     """Create an isolated replay thread with a snapshot of the original thread context."""
-    replay_thread = crud.create_thread(
+    replay_thread = create_thread(
         db=db,
         fiche_id=replay_fiche.id,
         title=f"[REPLAY] original_run={original_run.id}",
@@ -527,7 +527,7 @@ def build_replay_thread(
         if row.role == "tool":
             kwargs["parent_id"] = last_assistant_id
 
-        created = crud.create_thread_message(db=db, thread_id=replay_thread.id, commit=False, **kwargs)
+        created = create_thread_message(db=db, thread_id=replay_thread.id, commit=False, **kwargs)
         if created.role == "assistant":
             last_assistant_id = created.id
 
@@ -668,7 +668,7 @@ async def replay_run(
     db.refresh(replay_run_row)
 
     # Add task as an unprocessed user message (FicheRunner will pick it up)
-    crud.create_thread_message(
+    create_thread_message(
         db=db,
         thread_id=replay_thread.id,
         role="user",
@@ -752,7 +752,7 @@ async def replay_run(
                 except Exception:
                     db.rollback()
                 try:
-                    crud.delete_thread(db, replay_thread.id)
+                    delete_thread(db, replay_thread.id)
                 except Exception:
                     db.rollback()
 

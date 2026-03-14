@@ -15,7 +15,7 @@ from pathlib import Path
 # Add parent directory to path so we can import zerg modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zerg.crud import crud
+from zerg.crud import create_user, get_user_by_email
 from zerg.database import get_db
 from zerg.models.enums import FicheStatus
 from zerg.models.models import Fiche
@@ -122,11 +122,11 @@ def seed_fiches():
 
     # Get or create Oikos user
     oikos_email = "oikos@swarm.local"
-    oikos_user = crud.get_user_by_email(db, oikos_email)
+    oikos_user = get_user_by_email(db, oikos_email)
 
     if not oikos_user:
         print(f"Creating Oikos user: {oikos_email}")
-        oikos_user = crud.create_user(
+        oikos_user = create_user(
             db,
             email=oikos_email,
             provider="oikos",

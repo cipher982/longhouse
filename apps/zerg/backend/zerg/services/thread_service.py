@@ -22,7 +22,12 @@ from typing import Type
 
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import create_thread
+from zerg.crud import create_thread_message
+from zerg.crud import get_recent_thread_messages
+from zerg.crud import get_thread
+from zerg.crud import mark_messages_processed_bulk
+from zerg.crud import update_thread
 from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
@@ -112,7 +117,7 @@ class LangChainMessageConverter:
 
     @classmethod
     def to_create_kwargs(cls, msg: BaseMessage) -> Dict[str, Any]:
-        """Convert a LangChain message to crud.create_thread_message kwargs."""
+        """Convert a LangChain message to create_thread_message kwargs."""
         message_type = type(msg)
 
         # Look up converter in registry
@@ -159,7 +164,7 @@ def _convert_tool_message(msg: ToolMessage) -> Dict[str, Any]:
 
 
 def _langchain_to_create_kwargs(msg: BaseMessage):  # pragma: no cover
-    """Convert a LangChain message into kwargs for *crud.create_thread_message*.
+    """Convert a LangChain message into kwargs for *create_thread_message*.
 
     CLEAN VERSION: Uses registry pattern instead of isinstance chain.
     """
@@ -201,7 +206,7 @@ class ThreadService:
             # Chat threads should be active by default; others not.
             active = thread_type == "chat"
 
-        thread = crud.create_thread(
+        thread = create_thread(
             db=db,
             fiche_id=fiche.id,
             title=title,
@@ -223,7 +228,7 @@ class ThreadService:
     def get_valid_thread_for_fiche(db: Session, *, thread_id: int, fiche_id: int) -> ThreadModel:
         """Return thread if it belongs to *fiche_id* else raise ValueError."""
 
-        thread = crud.get_thread(db, thread_id)
+        thread = get_thread(db, thread_id)
         if thread is None:
             raise ValueError("Thread not found")
 
@@ -245,7 +250,7 @@ class ThreadService:
         ordered chronologically.
         """
 
-        rows = crud.get_recent_thread_messages(db, thread_id=thread_id, limit=history_limit)
+        rows = get_recent_thread_messages(db, thread_id=thread_id, limit=history_limit)
         return [_db_to_langchain(row) for row in rows]
 
     # ------------------------------------------------------------------
@@ -280,7 +285,7 @@ class ThreadService:
             if kwargs.get("role") == "tool":
                 kwargs["parent_id"] = current_parent_id
 
-            row = crud.create_thread_message(db=db, thread_id=thread_id, commit=False, **kwargs)
+            row = create_thread_message(db=db, thread_id=thread_id, commit=False, **kwargs)
             created_rows.append(row)
 
             # Update parent tracker whenever we hit a new assistant row.
@@ -301,10 +306,10 @@ class ThreadService:
         if not mids:
             return
 
-        crud.mark_messages_processed_bulk(db, mids)
+        mark_messages_processed_bulk(db, mids)
 
     @staticmethod
     def touch_thread_timestamp(db: Session, thread_id: int):
         """Bump the thread.updated_at field to *now()*."""
 
-        crud.update_thread(db, thread_id)
+        update_thread(db, thread_id)

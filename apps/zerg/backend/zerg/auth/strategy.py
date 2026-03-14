@@ -30,7 +30,10 @@ from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 from zerg.config import get_settings
-from zerg.crud import crud
+from zerg.crud import count_users
+from zerg.crud import create_user
+from zerg.crud import get_user
+from zerg.crud import get_user_by_email
 from zerg.utils.time import utc_now
 from zerg.utils.time import utc_now_naive
 
@@ -150,21 +153,21 @@ class DevAuthStrategy(AuthStrategy):
             owner_email = get_owner_email()
 
             # First check if any user exists
-            user_count = crud.count_users(db)
+            user_count = count_users(db)
             if user_count > 0:
                 # Try to get the owner user
-                user = crud.get_user_by_email(db, owner_email)
+                user = get_user_by_email(db, owner_email)
                 if user is not None:
                     return user
                 # Fall back to first user if owner email doesn't match
                 # (handles migration scenarios)
-                first_user = db.query(crud.User).first()
+                first_user = db.query(User).first()
                 if first_user is not None:
                     return first_user
 
             # No users exist - create the owner user
             try:
-                return crud.create_user(
+                return create_user(
                     db,
                     email=owner_email,
                     provider="local" if owner_email == OSS_DEFAULT_EMAIL else None,
@@ -175,13 +178,13 @@ class DevAuthStrategy(AuthStrategy):
                 error_str = str(e).lower()
                 if "duplicate" in error_str or "unique" in error_str:
                     db.rollback()
-                    user = crud.get_user_by_email(db, owner_email)
+                    user = get_user_by_email(db, owner_email)
                     if user is not None:
                         return user
                 raise
 
         # Legacy multi-tenant dev mode: use dev@local user
-        user = crud.get_user_by_email(db, self.DEV_EMAIL)
+        user = get_user_by_email(db, self.DEV_EMAIL)
         if user is not None:
             if getattr(user, "role", "USER") != desired_role:
                 user.role = desired_role  # type: ignore[attr-defined]
@@ -193,13 +196,13 @@ class DevAuthStrategy(AuthStrategy):
         # get_user_by_email() check and create_user() call. Catch the integrity
         # error and re-fetch.
         try:
-            return crud.create_user(db, email=self.DEV_EMAIL, provider=None, role=desired_role)
+            return create_user(db, email=self.DEV_EMAIL, provider=None, role=desired_role)
         except Exception as e:  # noqa: BLE001 – catch IntegrityError from any DB driver
             # Check if it's a duplicate key error (concurrent creation race)
             error_str = str(e).lower()
             if "duplicate" in error_str or "unique" in error_str:
                 db.rollback()
-                user = crud.get_user_by_email(db, self.DEV_EMAIL)
+                user = get_user_by_email(db, self.DEV_EMAIL)
                 if user is not None:
                     return user
             raise
@@ -279,7 +282,7 @@ class JWTAuthStrategy(AuthStrategy):
         except Exception:  # noqa: BLE001
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
 
-        user = crud.get_user(db, user_id_int)
+        user = get_user(db, user_id_int)
         if user is None or not getattr(user, "is_active", True):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
@@ -303,7 +306,7 @@ class JWTAuthStrategy(AuthStrategy):
         except Exception:  # noqa: BLE001
             return None
 
-        user = crud.get_user(db, user_id_int)
+        user = get_user(db, user_id_int)
         if user is None or not getattr(user, "is_active", True):
             return None
 

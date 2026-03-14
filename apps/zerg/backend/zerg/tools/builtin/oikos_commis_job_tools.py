@@ -9,6 +9,7 @@ from datetime import timedelta
 from datetime import timezone
 
 from zerg.connectors.context import get_credential_resolver
+from zerg.models import CommisJob
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.oikos_context import get_oikos_context
 from zerg.tools.error_envelope import ErrorType
@@ -294,8 +295,6 @@ async def list_commiss_async(
     since_hours: int | None = None,
 ) -> str:
     """List recent commis jobs with compact summaries."""
-    from zerg.crud import crud
-
     resolver = get_credential_resolver()
     if not resolver:
         return tool_error(
@@ -306,16 +305,16 @@ async def list_commiss_async(
     db = resolver.db
 
     try:
-        query = db.query(crud.CommisJob).filter(crud.CommisJob.owner_id == resolver.owner_id)
+        query = db.query(CommisJob).filter(CommisJob.owner_id == resolver.owner_id)
 
         if status:
-            query = query.filter(crud.CommisJob.status == status)
+            query = query.filter(CommisJob.status == status)
 
         if since_hours is not None:
             since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-            query = query.filter(crud.CommisJob.created_at >= since)
+            query = query.filter(CommisJob.created_at >= since)
 
-        jobs = query.order_by(crud.CommisJob.created_at.desc()).limit(limit).all()
+        jobs = query.order_by(CommisJob.created_at.desc()).limit(limit).all()
 
         if not jobs:
             return "No commis jobs found matching criteria."
@@ -359,8 +358,6 @@ def list_commiss(
 
 async def grep_commiss_async(pattern: str, since_hours: int = 24) -> str:
     """Search completed commis job artifacts for a case-insensitive text pattern."""
-    from zerg.crud import crud
-
     resolver = get_credential_resolver()
     if not resolver:
         return tool_error(
@@ -372,15 +369,15 @@ async def grep_commiss_async(pattern: str, since_hours: int = 24) -> str:
     artifact_store = CommisArtifactStore()
 
     try:
-        query = db.query(crud.CommisJob).filter(
-            crud.CommisJob.owner_id == resolver.owner_id,
-            crud.CommisJob.commis_id.isnot(None),
-            crud.CommisJob.status.in_(["success", "failed"]),
+        query = db.query(CommisJob).filter(
+            CommisJob.owner_id == resolver.owner_id,
+            CommisJob.commis_id.isnot(None),
+            CommisJob.status.in_(["success", "failed"]),
         )
 
         if since_hours:
             cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-            query = query.filter(crud.CommisJob.created_at >= cutoff)
+            query = query.filter(CommisJob.created_at >= cutoff)
 
         jobs = query.all()
         case_insensitive_pattern = f"(?i){re.escape(pattern)}"
@@ -432,8 +429,6 @@ def grep_commiss(pattern: str, since_hours: int = 24) -> str:
 
 async def get_commis_metadata_async(job_id: str) -> str:
     """Get metadata for a commis job."""
-    from zerg.crud import crud
-
     resolver = get_credential_resolver()
     if not resolver:
         return tool_error(
@@ -447,10 +442,10 @@ async def get_commis_metadata_async(job_id: str) -> str:
         job_id_int = int(job_id)
 
         job = (
-            db.query(crud.CommisJob)
+            db.query(CommisJob)
             .filter(
-                crud.CommisJob.id == job_id_int,
-                crud.CommisJob.owner_id == resolver.owner_id,
+                CommisJob.id == job_id_int,
+                CommisJob.owner_id == resolver.owner_id,
             )
             .first()
         )
