@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -18,6 +19,7 @@ from zerg.database import reset_test_commis_id
 from zerg.database import set_test_commis_id
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.events import EventType
+from zerg.events.event_bus import EventBus
 from zerg.events.event_bus import event_bus
 from zerg.models import Fiche
 from zerg.models import Run
@@ -315,6 +317,105 @@ def test_continuation_alias_resolver_uses_test_commis_id_context(monkeypatch, tm
         assert get_test_commis_id() == "outer-context"
     finally:
         reset_test_commis_id(outer_token)
+
+
+@pytest.mark.asyncio
+async def test_run_event_subscription_subscribes_and_unsubscribes_all_stream_event_types():
+    local_bus = EventBus()
+    subscription = run_stream_service.RunEventSubscription(
+        queue=asyncio.Queue(),
+        overflow_event=asyncio.Event(),
+        owner_id=1,
+        run_id=7,
+        allow_continuation_runs=False,
+        event_bus_instance=local_bus,
+    )
+
+    subscription.subscribe()
+    assert set(local_bus._subscribers) == set(run_stream_service.STREAM_EVENT_TYPES)
+
+    subscription.unsubscribe()
+    assert local_bus._subscribers == {}
+
+
+@pytest.mark.asyncio
+async def test_run_event_subscription_sets_overflow_when_queue_is_full():
+    queue = asyncio.Queue(maxsize=1)
+    overflow_event = asyncio.Event()
+    subscription = run_stream_service.RunEventSubscription(
+        queue=queue,
+        overflow_event=overflow_event,
+        owner_id=1,
+        run_id=7,
+        allow_continuation_runs=False,
+    )
+
+    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "oikos_started"})
+    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "oikos_thinking"})
+
+    assert overflow_event.is_set() is True
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_run_event_subscription_drops_new_events_after_overflow():
+    queue = asyncio.Queue(maxsize=1)
+    overflow_event = asyncio.Event()
+    subscription = run_stream_service.RunEventSubscription(
+        queue=queue,
+        overflow_event=overflow_event,
+        owner_id=1,
+        run_id=7,
+        allow_continuation_runs=False,
+    )
+    overflow_event.set()
+
+    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "oikos_started"})
+
+    assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_run_events_emits_overflow_and_returns(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    owner_id, run_id = _seed_run(session_local)
+
+    monkeypatch.setattr(stream_router, "STREAM_QUEUE_MAX_SIZE", 1)
+
+    with _patched_stream_db(monkeypatch, session_local):
+        generator = stream_router.stream_run_events_live(run_id=run_id, owner_id=owner_id)
+
+        await anext(generator)
+        await anext(generator)
+
+        await event_bus.publish(
+            EventType.OIKOS_THINKING,
+            {
+                "event_type": "oikos_thinking",
+                "owner_id": owner_id,
+                "run_id": run_id,
+                "event_id": 1,
+                "message": "first",
+            },
+        )
+        await event_bus.publish(
+            EventType.OIKOS_THINKING,
+            {
+                "event_type": "oikos_thinking",
+                "owner_id": owner_id,
+                "run_id": run_id,
+                "event_id": 2,
+                "message": "second",
+            },
+        )
+
+        overflow = await anext(generator)
+
+        assert overflow["event"] == "overflow"
+        assert json.loads(overflow["data"])["type"] == "overflow"
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(generator)
 
 
 def test_load_historical_run_events_uses_test_commis_id_context(monkeypatch, tmp_path):
