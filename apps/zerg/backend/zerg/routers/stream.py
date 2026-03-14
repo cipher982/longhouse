@@ -8,12 +8,7 @@ Handles DEFERRED runs (streamable, not treated as complete).
 - SHORT-LIVED DB sessions for replay (critical for test isolation)
 """
 
-import asyncio
-import json
 import logging
-import time
-from datetime import datetime
-from datetime import timezone
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -23,33 +18,16 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import db_session
 from zerg.database import get_test_commis_id
-from zerg.dependencies.oikos_auth import get_current_oikos_user
-from zerg.events import EventType
-from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
-from zerg.services.run_stream import ContinuationAliasResolver
-from zerg.services.run_stream import RunEventSubscription
-from zerg.services.run_stream import StreamLifecycleState
-from zerg.services.run_stream import load_historical_run_events
+from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.services.run_stream import encode_connected_sse
+from zerg.services.run_stream import stream_run_events
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stream", tags=["stream"])
-
-
-def _json_default(value):  # type: ignore[no-untyped-def]
-    """Fallback serializer for SSE payloads.
-
-    Some event payloads may contain datetime objects (or other non-JSON-safe
-    values). We prefer emitting a string rather than crashing the SSE stream.
-    """
-    if isinstance(value, datetime):
-        if value.tzinfo is not None:
-            return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-        return value.isoformat()
-    return str(value)
 
 
 # Backpressure: max events to buffer per client before closing stream
@@ -68,205 +46,18 @@ async def _replay_and_stream(
     allow_continuation_runs: bool = False,
     test_commis_id: str | None = None,
 ):
-    """Generator that optionally replays historical events, then streams live.
-
-    This is the unified SSE streaming implementation used by both:
-    - /api/stream/runs/{run_id} - resumable SSE with replay
-    - /api/oikos/chat - live-only SSE for initial chat
-
-    The function can operate in two modes:
-    1. Replay + Live (include_replay=True): Load historical events, then stream live
-    2. Live-only (include_replay=False): Stream live events only (oikos chat)
-
-    IMPORTANT: This function does NOT hold a DB connection open during streaming.
-    Historical events are loaded into memory first, then the DB session is closed
-    before any SSE events are yielded.
-
-    Backpressure: The queue is bounded to STREAM_QUEUE_MAX_SIZE events. If a slow
-    client causes overflow, the stream closes gracefully. The client should reconnect
-    with Last-Event-ID to resume from the durable event store.
-
-    Args:
-        run_id: Run identifier
-        owner_id: Owner ID for security filtering
-        status: Current run status (RUNNING, DEFERRED, SUCCESS, etc.)
-        after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include OIKOS_TOKEN events
-        include_replay: If True, replay historical events before streaming live
-        allow_continuation_runs: If True, also stream events from continuation runs
-
-    Yields:
-        SSE events in format: {"id": str, "event": str, "data": str}
-    """
-    # 1. Subscribe to live events FIRST (before replaying) to avoid race condition
-    # Bounded queue for backpressure - overflow triggers graceful stream closure
-    queue: asyncio.Queue = asyncio.Queue(maxsize=STREAM_QUEUE_MAX_SIZE)
-    last_sent_event_id = 0
-    lifecycle = StreamLifecycleState()
-    overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
-    continuation_resolver = ContinuationAliasResolver(root_run_id=run_id, test_commis_id=test_commis_id)
-    subscription = RunEventSubscription(
-        queue=queue,
-        overflow_event=overflow_event,
-        owner_id=owner_id,
+    async for event in stream_run_events(
         run_id=run_id,
+        owner_id=owner_id,
+        status=status,
+        after_event_id=after_event_id,
+        include_tokens=include_tokens,
+        include_replay=include_replay,
         allow_continuation_runs=allow_continuation_runs,
-        continuation_resolver=continuation_resolver,
-    )
-
-    def _apply_event_state(event_type: str, event: dict, *, from_replay: bool = False) -> None:
-        """Update stream lifecycle state from an event."""
-        lifecycle.apply(
-            event_type,
-            event,
-            from_replay=from_replay,
-            now_monotonic=time.monotonic(),
-        )
-
-    try:
-        with subscription:
-            # 2. Optionally load and replay historical events
-            if include_replay:
-                # Load historical events using a SHORT-LIVED DB session
-                # This ensures we don't hold a DB connection during streaming
-                historical_events = load_historical_run_events(
-                    run_id,
-                    after_event_id,
-                    include_tokens,
-                    test_commis_id=test_commis_id,
-                )
-
-                # Yield historical events with SSE id: field
-                for historical_event in historical_events:
-                    last_sent_event_id = historical_event.event_id
-                    # Inject event_id for stream_control tracking
-                    payload_with_id = {**historical_event.payload, "_event_id": historical_event.event_id}
-                    _apply_event_state(historical_event.event_type, payload_with_id, from_replay=True)
-
-                    yield {
-                        "id": str(historical_event.event_id),  # SSE last-event-id for resumption
-                        "event": historical_event.event_type,
-                        "data": json.dumps(
-                            {
-                                "type": historical_event.event_type,
-                                "payload": historical_event.payload,
-                                "timestamp": historical_event.timestamp,
-                            },
-                            default=_json_default,
-                        ),
-                    }
-            else:
-                # Live-only mode: emit connected event for Oikos chat
-                connected_payload = {
-                    "type": "connected",
-                    "run_id": run_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                }
-                yield {
-                    "event": "connected",
-                    "data": json.dumps(connected_payload, default=_json_default),
-                }
-
-            # 4a. If we saw stream_control:close during replay and streamed past it, close now
-            if lifecycle.should_close_after_replay(last_sent_event_id, status):
-                return
-
-            # 6. Stream live events (filtering out already-replayed ones)
-            logger.debug(f"Starting live stream for run {run_id} (status={status.value}, last_sent_id={last_sent_event_id})")
-
-            # Send initial heartbeat to confirm we're in live mode
-            yield {
-                "event": "heartbeat",
-                "data": json.dumps(
-                    {
-                        "message": "Live stream started",
-                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    },
-                    default=_json_default,
-                ),
-            }
-
-            # Stream live events until oikos completes or errors
-            complete = False
-            while not complete:
-                # Check overflow signal (set by event_handler when queue is full)
-                if overflow_event.is_set():
-                    logger.warning(f"Stream overflow for run {run_id}, closing (client should reconnect with Last-Event-ID)")
-                    yield {
-                        "event": "overflow",
-                        "data": json.dumps(
-                            {
-                                "type": "overflow",
-                                "message": "Stream buffer full, please reconnect",
-                                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                            },
-                            default=_json_default,
-                        ),
-                    }
-                    return
-
-                try:
-                    timeout_s = lifecycle.next_timeout(time.monotonic())
-                    event = await asyncio.wait_for(queue.get(), timeout=timeout_s)
-
-                    event_type = event.get("event_type") or event.get("type") or "event"
-
-                    # Skip tokens if not requested
-                    if not include_tokens and event_type == "oikos_token":
-                        continue
-
-                    # CRITICAL: Skip events that were already in the replay
-                    # This prevents duplicates when events arrive between DB query and live streaming
-                    event_id = event.get("event_id")
-                    if event_id and event_id <= last_sent_event_id:
-                        logger.debug(f"Skipping duplicate event {event_id} (already replayed)")
-                        continue
-
-                    # Track commis lifecycle for UI telemetry (stream no longer waits on commiss)
-                    _apply_event_state(event_type, event)
-
-                    # Format payload (strip internal fields)
-                    payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id", "event_id"}}
-
-                    # Update last_sent_event_id if this event has an ID
-                    if event_id:
-                        last_sent_event_id = event_id
-
-                    # Build SSE data payload
-                    sse_data: dict = {
-                        "type": event_type,
-                        "payload": payload,
-                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    }
-
-                    sse_event = {
-                        "event": event_type,
-                        "data": json.dumps(sse_data, default=_json_default),
-                    }
-                    # Only include id field when event_id exists (omit for id=null)
-                    if event_id:
-                        sse_event["id"] = str(event_id)
-                    yield sse_event
-
-                    if lifecycle.should_close_after_live_event(event_id=event_id, now_monotonic=time.monotonic()):
-                        complete = True
-
-                except asyncio.TimeoutError:
-                    # Send heartbeat to keep connection alive
-                    yield {
-                        "event": "heartbeat",
-                        "data": json.dumps(
-                            {
-                                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                            },
-                            default=_json_default,
-                        ),
-                    }
-                    if lifecycle.should_close_on_timeout(time.monotonic()):
-                        complete = True
-
-    except asyncio.CancelledError:
-        logger.info(f"Stream disconnected for run {run_id}")
+        test_commis_id=test_commis_id,
+        queue_max_size=STREAM_QUEUE_MAX_SIZE,
+    ):
+        yield event
 
 
 async def stream_run_events_live(
@@ -298,17 +89,7 @@ async def stream_run_events_live(
     """
     effective_test_commis_id = test_commis_id if test_commis_id is not None else get_test_commis_id()
 
-    yield {
-        "event": "connected",
-        "data": json.dumps(
-            {
-                "type": "connected",
-                "run_id": run_id,
-                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            },
-            default=_json_default,
-        ),
-    }
+    yield encode_connected_sse(run_id)
 
     # Use RUNNING status to allow the helper to stream replay + live events.
     # The helper closes once the run reaches a terminal state.

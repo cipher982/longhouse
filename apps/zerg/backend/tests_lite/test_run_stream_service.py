@@ -633,3 +633,177 @@ def test_stream_run_replay_last_event_id_header_overrides_query_param(monkeypatc
                 api_app.dependency_overrides.pop(get_current_oikos_user, None)
             else:
                 api_app.dependency_overrides[get_current_oikos_user] = original_override
+
+
+def test_stream_run_replay_invalid_last_event_id_falls_back_to_query_param(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    owner_id, run_id = _seed_run(session_local, status=RunStatus.SUCCESS)
+    first_event_id = _append_run_event(session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"})
+    second_event_id = _append_run_event(session_local, run_id=run_id, event_type="oikos_complete", payload={"result": "done"})
+
+    with _patched_stream_db(monkeypatch, session_local):
+        from zerg.main import api_app
+
+        def override_current_user():
+            return SimpleNamespace(id=owner_id)
+
+        original_override = api_app.dependency_overrides.get(get_current_oikos_user)
+        api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+        client = TestClient(api_app)
+
+        try:
+            with client.stream(
+                "GET",
+                f"/stream/runs/{run_id}?after_event_id={first_event_id}",
+                headers={"Last-Event-ID": "not-an-int"},
+            ) as response:
+                body = "".join(response.iter_text())
+
+            assert response.status_code == 200
+            assert f"id: {first_event_id}" not in body
+            assert f"id: {second_event_id}" in body
+            assert "event: oikos_complete" in body
+        finally:
+            if original_override is None:
+                api_app.dependency_overrides.pop(get_current_oikos_user, None)
+            else:
+                api_app.dependency_overrides[get_current_oikos_user] = original_override
+
+
+def test_stream_run_replay_returns_404_for_unowned_run(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    _, run_id = _seed_run(session_local, status=RunStatus.SUCCESS)
+
+    with _patched_stream_db(monkeypatch, session_local):
+        from zerg.main import api_app
+
+        def override_current_user():
+            return SimpleNamespace(id=999)
+
+        original_override = api_app.dependency_overrides.get(get_current_oikos_user)
+        api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+        client = TestClient(api_app)
+
+        try:
+            response = client.get(f"/stream/runs/{run_id}")
+
+            assert response.status_code == 404
+            assert response.json()["detail"] == "Run not found"
+        finally:
+            if original_override is None:
+                api_app.dependency_overrides.pop(get_current_oikos_user, None)
+            else:
+                api_app.dependency_overrides[get_current_oikos_user] = original_override
+
+
+@pytest.mark.asyncio
+async def test_stream_run_replay_does_not_alias_continuations_by_default(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    owner_id, root_run_id = _seed_run(session_local)
+    continuation_run_id = _append_continuation_run(
+        session_local,
+        source_run_id=root_run_id,
+        root_run_id=root_run_id,
+    )
+
+    with _patched_stream_db(monkeypatch, session_local):
+        generator = stream_router._replay_and_stream(
+            run_id=root_run_id,
+            owner_id=owner_id,
+            status=RunStatus.RUNNING,
+            after_event_id=0,
+            include_tokens=True,
+            allow_continuation_runs=False,
+        )
+
+        await anext(generator)
+
+        await event_bus.publish(
+            EventType.OIKOS_THINKING,
+            {
+                "event_type": "oikos_thinking",
+                "owner_id": owner_id,
+                "run_id": root_run_id,
+                "event_id": 1,
+                "message": "root",
+            },
+        )
+        await event_bus.publish(
+            EventType.OIKOS_THINKING,
+            {
+                "event_type": "oikos_thinking",
+                "owner_id": owner_id,
+                "run_id": continuation_run_id,
+                "event_id": 2,
+                "message": "continuation",
+            },
+        )
+        await event_bus.publish(
+            EventType.ERROR,
+            {
+                "event_type": "error",
+                "owner_id": owner_id,
+                "run_id": root_run_id,
+                "event_id": 3,
+                "message": "done",
+            },
+        )
+
+        first_live_event = await anext(generator)
+        second_live_event = await anext(generator)
+
+        assert first_live_event["event"] == "oikos_thinking"
+        assert json.loads(first_live_event["data"])["payload"]["message"] == "root"
+        assert second_live_event["event"] == "error"
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(generator)
+
+
+@pytest.mark.asyncio
+async def test_stream_run_events_live_does_alias_continuations(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    owner_id, root_run_id = _seed_run(session_local)
+    continuation_run_id = _append_continuation_run(
+        session_local,
+        source_run_id=root_run_id,
+        root_run_id=root_run_id,
+    )
+
+    with _patched_stream_db(monkeypatch, session_local):
+        generator = stream_router.stream_run_events_live(run_id=root_run_id, owner_id=owner_id)
+
+        await anext(generator)
+        await anext(generator)
+
+        await event_bus.publish(
+            EventType.OIKOS_THINKING,
+            {
+                "event_type": "oikos_thinking",
+                "owner_id": owner_id,
+                "run_id": continuation_run_id,
+                "event_id": 1,
+                "message": "continuation",
+            },
+        )
+        await event_bus.publish(
+            EventType.ERROR,
+            {
+                "event_type": "error",
+                "owner_id": owner_id,
+                "run_id": root_run_id,
+                "event_id": 2,
+                "message": "done",
+            },
+        )
+
+        aliased_event = await anext(generator)
+        closing_event = await anext(generator)
+
+        assert aliased_event["event"] == "oikos_thinking"
+        assert json.loads(aliased_event["data"])["payload"]["run_id"] == root_run_id
+        assert json.loads(aliased_event["data"])["payload"]["message"] == "continuation"
+        assert closing_event["event"] == "error"
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(generator)
