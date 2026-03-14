@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy.orm import sessionmaker
 
-from zerg.crud import crud
+from zerg.crud import get_user_by_email
 from zerg.database import Base
 from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
@@ -32,7 +32,7 @@ from zerg.utils.time import utc_now_naive
 
 
 def ensure_owner(db, email: str) -> User:
-    user = crud.get_user_by_email(db, email)
+    user = get_user_by_email(db, email)
     if user is not None:
         return user
 

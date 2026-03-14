@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from zerg.config import get_settings
-from zerg.crud import crud
+from zerg.crud import get_user_by_email
 from zerg.database import get_session_factory
 from zerg.models.models import User
 from zerg.scenarios.seed import ScenarioError
@@ -30,7 +30,7 @@ from zerg.utils.time import utc_now_naive
 
 
 def ensure_owner(db, email: str) -> User:
-    user = crud.get_user_by_email(db, email)
+    user = get_user_by_email(db, email)
     if user is not None:
         return user
 

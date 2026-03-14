@@ -19,7 +19,7 @@ from pathlib import Path
 # Add parent directory to path so we can import zerg modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zerg.crud import crud
+from zerg.crud import create_user, get_fiches, get_user_by_email
 from zerg.database import get_db
 from zerg.models.enums import FicheStatus
 from zerg.models.models import Fiche
@@ -30,21 +30,21 @@ from zerg.prompts import build_oikos_prompt
 def get_or_create_user(db, email: str = None):
     """Get existing user or create one for development."""
     if email:
-        user = crud.get_user_by_email(db, email)
+        user = get_user_by_email(db, email)
         if not user:
             print(f"❌ User with email {email} not found")
             sys.exit(1)
         return user
 
     # Get first user or create dev user
-    users = crud.get_fiches(db, limit=1)
+    users = get_fiches(db, limit=1)
     if users:
         # Get owner of first fiche
         return users[0].owner
 
     # Create development user
     print("Creating development user: dev@local")
-    user = crud.create_user(
+    user = create_user(
         db,
         email="dev@local",
         provider="dev",

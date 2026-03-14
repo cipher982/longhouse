@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from zerg.callbacks.token_stream import set_current_thread_id
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.crud import crud
+from zerg.crud import get_fiche
+from zerg.crud import get_unprocessed_messages
 from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
@@ -90,7 +91,7 @@ class Runner:  # noqa: D401
     # ------------------------------------------------------------------
 
     def _load_agent_row(self, db: Session) -> FicheModel:
-        agent_row = crud.get_fiche(db, self.agent.id)
+        agent_row = get_fiche(db, self.agent.id)
         if not agent_row or not agent_row.system_instructions:
             raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
         return agent_row
@@ -249,7 +250,7 @@ class Runner:  # noqa: D401
 
         agent_row = self._load_agent_row(db)
 
-        unprocessed_rows = crud.get_unprocessed_messages(db, thread.id)
+        unprocessed_rows = get_unprocessed_messages(db, thread.id)
         if not unprocessed_rows:
             return []
 

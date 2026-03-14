@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from zerg.crud import create_thread_message
+
 
 def build_commis_update_content(
     *,
@@ -39,8 +41,6 @@ def queue_commis_update(
     commis_error: str | None,
 ) -> None:
     """Insert an internal user-role message so next continuation sees the update."""
-    from zerg.crud import crud
-
     context_content = build_commis_update_content(
         commis_job_id=commis_job_id,
         commis_task=commis_task,
@@ -49,7 +49,7 @@ def queue_commis_update(
         commis_error=commis_error,
     )
 
-    crud.create_thread_message(
+    create_thread_message(
         db=db,
         thread_id=thread_id,
         role="user",  # Use "user" role so Runner includes it

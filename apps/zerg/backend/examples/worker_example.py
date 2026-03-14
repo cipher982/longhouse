@@ -10,7 +10,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from zerg.crud import crud
+from zerg.crud import create_user
 from zerg.models.models import Base
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 from zerg.services.commis_artifact_store import CommisArtifactStore
@@ -27,7 +27,7 @@ async def main():
 
     try:
         # Create a test user
-        user = crud.create_user(db, email="demo@example.com", provider=None, role="USER")
+        user = create_user(db, email="demo@example.com", provider=None, role="USER")
         db.commit()
 
         # Setup commis storage (use temp directory for demo)

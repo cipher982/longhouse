@@ -20,7 +20,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.crud import crud
+from zerg.crud import update_connector
 from zerg.database import get_db
 from zerg.models.models import Connector
 
@@ -181,7 +181,7 @@ async def gmail_pubsub_webhook(
 
             if notified_history_id > last_notified_history_id:
                 config["last_notified_history_id"] = notified_history_id
-                crud.update_connector(db, matching_connector.id, config=config)
+                update_connector(db, matching_connector.id, config=config)
 
     # Trigger async processing
     from zerg.email.providers import get_provider

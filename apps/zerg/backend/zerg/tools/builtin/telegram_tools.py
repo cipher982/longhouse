@@ -7,7 +7,7 @@ from typing import Any
 from typing import Dict
 
 from zerg.context import get_commis_context
-from zerg.crud import crud
+from zerg.crud import get_user
 from zerg.database import db_session
 from zerg.services.telegram_bridge import _format_for_telegram
 from zerg.tools.error_envelope import ErrorType
@@ -35,7 +35,7 @@ def _resolve_chat_id() -> tuple[str | None, Dict[str, Any] | None]:
         )
 
     with db_session() as db:
-        user = crud.get_user(db, owner_id)
+        user = get_user(db, owner_id)
         if not user:
             return None, tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,

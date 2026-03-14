@@ -7,7 +7,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 import pytest
 from fastapi.testclient import TestClient
 
-from zerg.crud import crud
+from zerg.crud import create_thread_message
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -104,21 +104,21 @@ def test_oikos_thread_backfills_legacy_web_history_into_canonical_conversation(t
         fiche = service.get_or_create_oikos_fiche(user.id)
         thread = service.get_or_create_oikos_thread(user.id, fiche)
 
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="user",
             content="legacy web user",
             processed=True,
         )
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="assistant",
             content="legacy web assistant",
             processed=True,
         )
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="user",
@@ -182,7 +182,7 @@ def test_delete_oikos_thread_clears_web_conversation_and_thread(tmp_path):
             title="Oikos",
         )
 
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="user",
@@ -230,7 +230,7 @@ async def test_run_oikos_mirrors_new_web_turns_into_canonical_conversation(monke
 
         async def run_thread(self, inner_db, thread):
             type(self).call_count += 1
-            assistant = crud.create_thread_message(
+            assistant = create_thread_message(
                 db=inner_db,
                 thread_id=thread.id,
                 role="assistant",
@@ -300,7 +300,7 @@ async def test_run_oikos_mirrors_telegram_topic_turns_into_canonical_conversatio
             self.usage_reasoning_tokens = None
 
         async def run_thread(self, inner_db, thread):
-            assistant = crud.create_thread_message(
+            assistant = create_thread_message(
                 db=inner_db,
                 thread_id=thread.id,
                 role="assistant",

@@ -17,7 +17,8 @@ import os
 from typing import TYPE_CHECKING
 
 from zerg.config import get_settings
-from zerg.crud import crud
+from zerg.crud import count_users
+from zerg.crud import create_user
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -46,7 +47,7 @@ def validate_single_tenant(db: Session) -> None:
         return  # Multi-tenant mode, skip validation
 
     # Exclude service accounts (smoke test users) from the count
-    user_count = crud.count_users(db, exclude_service=True)
+    user_count = count_users(db, exclude_service=True)
     if user_count > 1:
         raise SingleTenantViolation(
             f"Single-tenant violation: {user_count} real users exist (expected 0 or 1). "
@@ -89,7 +90,7 @@ def bootstrap_owner_user(db: Session) -> None:
     if not settings.single_tenant:
         return  # Multi-tenant mode, no auto-bootstrap
 
-    user_count = crud.count_users(db)
+    user_count = count_users(db)
     if user_count > 0:
         logger.debug("Owner user already exists, skipping bootstrap")
         return
@@ -108,7 +109,7 @@ def bootstrap_owner_user(db: Session) -> None:
         provider_user_id = None
 
     try:
-        user = crud.create_user(
+        user = create_user(
             db,
             email=owner_email,
             provider=provider,
@@ -163,7 +164,7 @@ def can_create_user_locked(db: Session) -> bool:
     in the same transaction to maintain atomicity. Example:
         with db.begin():
             if can_create_user_locked(db):
-                crud.create_user(db, ...)
+                create_user(db, ...)
             # Lock released on commit/rollback
 
     Returns True if:
@@ -190,7 +191,7 @@ def can_create_user_locked(db: Session) -> bool:
         pass
 
     # Now safely check user count under the write lock
-    return crud.count_users(db) == 0
+    return count_users(db) == 0
 
 
 def can_create_user(db: Session) -> bool:
@@ -207,7 +208,7 @@ def can_create_user(db: Session) -> bool:
     if not settings.single_tenant:
         return True
 
-    return crud.count_users(db) == 0
+    return count_users(db) == 0
 
 
 def validate_single_tenant_config() -> str | None:

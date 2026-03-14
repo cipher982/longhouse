@@ -13,7 +13,10 @@ from pydantic import BaseModel
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import create_thread_message
+from zerg.crud import get_fiche
+from zerg.crud import get_thread
+from zerg.crud import get_user
 from zerg.dependencies.auth import DEV_EMAIL  # noqa: F401  # may be used in future gating
 
 # ---------------------------------------------------------------------------
@@ -50,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 async def handle_fiche_subscription(client_id: str, fiche_id: int, message_id: str, db: Session) -> None:
     """Subscribe to fiche events."""
-    fiche = crud.get_fiche(db, fiche_id)
+    fiche = get_fiche(db, fiche_id)
     if not fiche:
         return await send_subscribe_error(
             client_id, message_id, f"Fiche {fiche_id} not found", [f"fiche:{fiche_id}"], send_to_client, "NOT_FOUND"
@@ -83,7 +86,7 @@ async def handle_user_subscription(client_id: str, user_id: int, message_id: str
         await send_subscribe_ack(client_id, message_id, [topic], send_to_client)
         return
 
-    user = crud.get_user(db, user_id)
+    user = get_user(db, user_id)
     if not user:
         return await send_subscribe_error(client_id, message_id, f"User {user_id} not found", [topic], send_to_client, "NOT_FOUND")
 
@@ -105,7 +108,7 @@ async def handle_ops_subscription(client_id: str, message_id: str, db: Session) 
     if not user_id:
         return await send_subscribe_error(client_id, message_id, "Unauthorized", [topic], send_to_client, "UNAUTHORIZED")
 
-    user = crud.get_user(db, int(user_id))
+    user = get_user(db, int(user_id))
     if not user or getattr(user, "role", "USER") != "ADMIN":
         return await send_subscribe_error(client_id, message_id, "Admin privileges required", [topic], send_to_client, "FORBIDDEN")
 
@@ -127,7 +130,7 @@ async def _subscribe_ops_events(client_id: str, message_id: str, db: Session) ->
         await send_error(client_id, "Unauthorized", message_id, close_code=1008)
         return
 
-    user = crud.get_user(db, int(user_id))
+    user = get_user(db, int(user_id))
     if not user or getattr(user, "role", "USER") != "ADMIN":
         # For testing: simulate error response and close connection
         await send_error(client_id, "Admin privileges required", message_id, close_code=1008)
@@ -397,19 +400,19 @@ async def handle_send_message(client_id: str, envelope: Envelope, db: Session) -
         content = send_data.content
 
         # Validate thread exists and get fiche owner
-        thread = crud.get_thread(db, thread_id)
+        thread = get_thread(db, thread_id)
         if not thread:
             await send_error(client_id, f"Thread {thread_id} not found", message_id)
             return
 
         # Get fiche to find owner_id
-        fiche = crud.get_fiche(db, fiche_id=thread.fiche_id)
+        fiche = get_fiche(db, fiche_id=thread.fiche_id)
         if not fiche:
             await send_error(client_id, f"Fiche for thread {thread_id} not found", message_id)
             return
 
         # Persist the message
-        db_msg = crud.create_thread_message(
+        db_msg = create_thread_message(
             db,
             thread_id=thread_id,
             role="user",

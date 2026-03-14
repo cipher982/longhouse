@@ -26,6 +26,7 @@ from typing import Optional
 from typing import Sequence
 
 from zerg.config import get_settings
+from zerg.crud import get_user
 from zerg.types.messages import BaseMessage
 from zerg.types.messages import HumanMessage
 from zerg.types.messages import SystemMessage
@@ -306,8 +307,6 @@ class MessageArrayBuilder:
 
     def _resolve_skill_settings(self, fiche: FicheModel) -> tuple[Optional[List[str]], bool, Optional[int], Optional[str], bool]:
         """Resolve skill settings from agent config and user context."""
-        from zerg.crud import crud
-
         cfg = dict(getattr(fiche, "config", {}) or {})
         allowed = cfg.get("skills_allowlist")
         include_user = cfg.get("skills_include_user")
@@ -315,7 +314,7 @@ class MessageArrayBuilder:
         workspace_path = cfg.get("skills_workspace_path") or cfg.get("workspace_path")
         enabled = cfg.get("skills_enabled")
 
-        user = crud.get_user(self._db, self._agent.owner_id)
+        user = get_user(self._db, self._agent.owner_id)
         ctx = user.context if user and isinstance(user.context, dict) else {}
 
         if allowed is None:

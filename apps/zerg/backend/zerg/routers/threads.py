@@ -19,9 +19,16 @@ from sqlalchemy.orm import Session
 # New higher-level ThreadService façade
 # Auth dependency
 from zerg.callbacks.token_stream import set_current_user_id
+from zerg.crud import create_thread_message as create_thread_message_record
+from zerg.crud import delete_thread as delete_thread_record
 
 # DB/CRUD helpers
-from zerg.crud import crud
+from zerg.crud import get_fiche
+from zerg.crud import get_thread
+from zerg.crud import get_thread_messages
+from zerg.crud import get_threads
+from zerg.crud import get_unprocessed_messages
+from zerg.crud import update_thread as update_thread_record
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.generated.ws_messages import AssistantIdData
@@ -71,7 +78,7 @@ def read_threads(
     """
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     owner_id = None if is_admin else current_user.id
-    threads = crud.get_threads(
+    threads = get_threads(
         db,
         owner_id=owner_id,
         fiche_id=fiche_id,
@@ -90,7 +97,7 @@ def read_threads(
 def create_thread(thread: ThreadCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Create a new thread"""
     # Ensure fiche exists and fetch row
-    fiche_row = crud.get_fiche(db, fiche_id=thread.fiche_id)
+    fiche_row = get_fiche(db, fiche_id=thread.fiche_id)
     if fiche_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
@@ -113,7 +120,7 @@ def create_thread(thread: ThreadCreate, db: Session = Depends(get_db), current_u
     # thread accordingly (ThreadService currently doesn't take those extras
     # to keep the helper minimal).
     if thread.fiche_state:
-        _ = crud.update_thread(
+        _ = update_thread_record(
             db,
             thread_id=created_thread.id,
             fiche_state=thread.fiche_state,
@@ -125,11 +132,11 @@ def create_thread(thread: ThreadCreate, db: Session = Depends(get_db), current_u
 @router.get("/{thread_id}", response_model=Thread)
 def read_thread(thread_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Get a specific thread by ID"""
-    db_thread = crud.get_thread(db, thread_id=thread_id)
+    db_thread = get_thread(db, thread_id=thread_id)
     if db_thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     # Authorization: only owner or admin can read
-    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
+    fiche = get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
@@ -137,18 +144,23 @@ def read_thread(thread_id: int, db: Session = Depends(get_db), current_user=Depe
 
 
 @router.put("/{thread_id}", response_model=Thread)
-def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def update_thread(
+    thread_id: int,
+    thread: ThreadUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     """Update a thread"""
-    db_thread = crud.get_thread(db, thread_id=thread_id)
+    db_thread = get_thread(db, thread_id=thread_id)
     if db_thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
-    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
+    fiche = get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
-    db_thread = crud.update_thread(
+    db_thread = update_thread_record(
         db,
         thread_id=thread_id,
         title=thread.title,
@@ -162,16 +174,16 @@ def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(ge
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_thread(thread_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Delete a thread"""
-    db_thread = crud.get_thread(db, thread_id=thread_id)
+    db_thread = get_thread(db, thread_id=thread_id)
     if db_thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
-    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
+    fiche = get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
-    if not crud.delete_thread(db, thread_id=thread_id):
+    if not delete_thread_record(db, thread_id=thread_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     return None
 
@@ -191,21 +203,21 @@ def read_thread_messages(
     This provides deterministic ordering regardless of timestamp precision or creation time.
     The client MUST NOT sort these messages client-side; the server ordering is authoritative.
 
-    See crud.get_thread_messages() for implementation details on the .order_by(ThreadMessage.id) guarantee.
+    See get_thread_messages() for implementation details on the .order_by(ThreadMessage.id) guarantee.
     """
     # First check if thread exists
-    db_thread = crud.get_thread(db, thread_id=thread_id)
+    db_thread = get_thread(db, thread_id=thread_id)
     if not db_thread:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
     # Authorization: only owner or admin can read messages
-    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
+    fiche = get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     # Fetch ORM messages and map to response schema including tool metadata
-    orm_msgs = crud.get_thread_messages(db, thread_id=thread_id, skip=skip, limit=limit, include_internal=False)
+    orm_msgs = get_thread_messages(db, thread_id=thread_id, skip=skip, limit=limit, include_internal=False)
     if not orm_msgs:
         return []
     result: List[ThreadMessageResponse] = []
@@ -256,19 +268,19 @@ def create_thread_message(
     logger.info(f"Creating message in thread {thread_id}: role={message.role}, content={message.content}")
 
     # First check if thread exists
-    db_thread = crud.get_thread(db, thread_id=thread_id)
+    db_thread = get_thread(db, thread_id=thread_id)
     if not db_thread:
         logger.warning(f"Thread {thread_id} not found when creating message")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
     # Authorization: only owner or admin can post messages
-    fiche = crud.get_fiche(db, fiche_id=db_thread.fiche_id)
+    fiche = get_fiche(db, fiche_id=db_thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     # Create the message (note: by default, processed=False for user messages)
-    new_message = crud.create_thread_message(
+    new_message = create_thread_message_record(
         db=db,
         thread_id=thread_id,
         role=message.role,
@@ -289,15 +301,15 @@ async def start_thread_run(thread_id: int, db: Session = Depends(get_db), curren
     assert_can_start_run(db, user=current_user)
 
     # Validate thread & fiche and ownership
-    thread = crud.get_thread(db, thread_id=thread_id)
+    thread = get_thread(db, thread_id=thread_id)
     if thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
-    fiche = crud.get_fiche(db, fiche_id=thread.fiche_id)
+    fiche = get_fiche(db, fiche_id=thread.fiche_id)
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche and fiche.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
-    messages = crud.get_unprocessed_messages(db, thread_id=thread_id)
+    messages = get_unprocessed_messages(db, thread_id=thread_id)
     if not messages:
         return {"status": "No unprocessed messages"}
 

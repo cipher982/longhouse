@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from zerg.crud import crud
+from zerg.crud import get_user
 from zerg.database import default_session_factory
 from zerg.services.oikos_service import OikosService
 
@@ -18,7 +18,7 @@ def main():
     db = default_session_factory()
 
     # Get user and their context
-    user = crud.get_user(db, 1)
+    user = get_user(db, 1)
     print("=" * 60)
     print("USER CONTEXT")
     print("=" * 60)

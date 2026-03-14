@@ -15,6 +15,26 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Tech Debt] Drop `zerg.crud.crud` facade shell (size: 2)
+
+Status (2026-03-14): Done. The `zerg.crud.crud` compatibility shell is gone, internal call-sites now import the package or direct CRUD helpers instead, and the repo verification/ship gates are green on the final tree.
+
+**Goal:** Remove the odd `crud` facade layer so internal code imports `zerg.crud` directly and the dead `crud.py` shell can disappear.
+
+**Done when:**
+- Internal backend code, scripts, tests, and examples no longer import `from zerg.crud import crud`
+- Model-class references that were hanging off the facade (`crud.User`, `crud.Fiche`, `crud.CommisJob`) use direct model imports instead
+- `apps/zerg/backend/zerg/crud/crud.py` is deleted
+- Repo verification and ship cycle pass after the change
+
+- [x] Replace internal `from zerg.crud import crud` usage with direct package imports
+- [x] Remove the remaining facade-only model references
+- [x] Delete `apps/zerg/backend/zerg/crud/crud.py`
+- [x] Ship and verify the runtime after the import cleanup
+
+Notes:
+- 2026-03-14: Lowest-risk cleanup shape is `import zerg.crud as crud` for package-level functions, plus direct model imports for the few class references. That removes the odd shell without forcing a wide CRUD API rewrite.
+- 2026-03-14: Final sweep also flattened the last stray `import zerg.crud as crud` aliases in touched backend code, removed the dead local import in `routers/triggers.py`, and reran `make test` plus `make test-e2e` successfully on the final tree.
 ## [Launch][Product][Tech Debt] Consolidate memory into one optional Memory Files layer (size: 4)
 
 Status (2026-03-12): In progress. The codebase is down to one surviving Memory Files substrate with the overlapping Oikos note-memory stack removed, `memory_strategy` stripped from thread surfaces, and the remaining memory path gated behind explicit flags. Broader verification and hosted rollout remain.

@@ -8,7 +8,10 @@ from typing import Sequence
 
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import create_run
+from zerg.crud import mark_run_failed
+from zerg.crud import mark_run_finished
+from zerg.crud import mark_run_running
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.managers.fiche_runner import FicheRunner
@@ -30,7 +33,7 @@ async def execute_thread_run_with_history(
     Returns the sequence of created message rows from FicheRunner.run_thread().
     """
     # Create the Run (queued)
-    run_row = crud.create_run(
+    run_row = create_run(
         db,
         fiche_id=fiche.id,
         thread_id=thread.id,
@@ -51,7 +54,7 @@ async def execute_thread_run_with_history(
 
     # Mark running
     start_ts = datetime.now(timezone.utc)
-    crud.mark_run_running(db, run_row.id, started_at=start_ts)
+    mark_run_running(db, run_row.id, started_at=start_ts)
     await event_bus.publish(
         EventType.RUN_UPDATED,
         {
@@ -71,7 +74,7 @@ async def execute_thread_run_with_history(
         # Failure path
         end_ts = datetime.now(timezone.utc)
         duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-        crud.mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
+        mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
         await event_bus.publish(
             EventType.RUN_UPDATED,
             {
@@ -102,7 +105,7 @@ async def execute_thread_run_with_history(
             total_cost_usd = ((runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)) / 1000.0
 
     # Mark run as finished (summary auto-extracted)
-    finished_run = crud.mark_run_finished(
+    finished_run = mark_run_finished(
         db,
         run_row.id,
         finished_at=end_ts,

@@ -15,7 +15,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import update_connector
 from zerg.database import db_session
 from zerg.metrics import gmail_connector_watch_expiry
 from zerg.metrics import gmail_watch_renew_total
@@ -141,7 +141,7 @@ class WatchRenewalService:
             config["watch_method"] = config.get("watch_method")
             config["watch_error"] = "Missing Gmail refresh token"
             config["watch_checked_at"] = datetime.now(timezone.utc).isoformat()
-            crud.update_connector(session, connector.id, config=config)
+            update_connector(session, connector.id, config=config)
             logger.warning(
                 "No refresh token for connector",
                 extra={"connector_id": connector.id},
@@ -181,7 +181,7 @@ class WatchRenewalService:
                 config["watch_method"] = None
                 config["watch_error"] = "GMAIL_PUBSUB_TOPIC is not configured."
                 config["watch_checked_at"] = datetime.now(timezone.utc).isoformat()
-                crud.update_connector(session, connector.id, config=config)
+                update_connector(session, connector.id, config=config)
                 logger.warning(
                     "Skipping Gmail watch renewal because Pub/Sub is not configured",
                     extra={"connector_id": connector.id},
@@ -196,7 +196,7 @@ class WatchRenewalService:
             config["watch_error"] = None
             config["watch_checked_at"] = datetime.now(timezone.utc).isoformat()
 
-            crud.update_connector(session, connector.id, config=config)
+            update_connector(session, connector.id, config=config)
 
             # Update metrics
             gmail_watch_renew_total.inc()
@@ -218,7 +218,7 @@ class WatchRenewalService:
             config["watch_method"] = watch_method
             config["watch_error"] = f"Failed to renew Gmail watch: {e}"
             config["watch_checked_at"] = datetime.now(timezone.utc).isoformat()
-            crud.update_connector(session, connector.id, config=config)
+            update_connector(session, connector.id, config=config)
             logger.error(
                 "Failed to renew watch",
                 extra={"connector_id": connector.id, "error": str(e)},

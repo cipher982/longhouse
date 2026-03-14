@@ -26,7 +26,12 @@ from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import create_trigger as create_trigger_record
+from zerg.crud import delete_trigger as delete_trigger_record
+from zerg.crud import get_connector as get_connector_record
+from zerg.crud import get_fiche
+from zerg.crud import get_trigger
+from zerg.crud import get_triggers
 from zerg.database import get_db
 
 # Auth dependency
@@ -68,11 +73,11 @@ async def delete_trigger(
     deletion (watch lifecycle is per-connector).
     """
 
-    trg = crud.get_trigger(db, trigger_id)
+    trg = get_trigger(db, trigger_id)
     if trg is None:
         raise HTTPException(status_code=404, detail="Trigger not found")
 
-    crud.delete_trigger(db, trigger_id)
+    delete_trigger_record(db, trigger_id)
     return None
 
 
@@ -87,7 +92,7 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
     """
 
     # Ensure fiche exists -------------------------------------------------
-    fiche = crud.get_fiche(db, trigger_in.fiche_id)
+    fiche = get_fiche(db, trigger_in.fiche_id)
     if not fiche:
         raise HTTPException(status_code=404, detail="Fiche not found")
 
@@ -102,9 +107,8 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
         connector_id = cfg.get("connector_id")
         if connector_id is None:
             raise HTTPException(status_code=400, detail="Email triggers require connector_id in config")
-        from zerg.crud import crud as _crud  # local import
 
-        conn = _crud.get_connector(db, int(connector_id))
+        conn = get_connector_record(db, int(connector_id))
         if conn is None:
             raise HTTPException(status_code=404, detail="Connector not found")
         # Security: ensure connector belongs to same user as fiche
@@ -115,7 +119,7 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
         new_config = cfg
 
     # Persist trigger -----------------------------------------------------
-    trg = crud.create_trigger(
+    trg = create_trigger_record(
         db,
         fiche_id=trigger_in.fiche_id,
         trigger_type=trigger_in.type,
@@ -188,7 +192,7 @@ async def fire_trigger_event(
     bearer_token = authorization[7:]  # Strip "Bearer " prefix
 
     # 3) Fetch trigger and validate token (constant-time comparison)
-    trg = crud.get_trigger(db, trigger_id)
+    trg = get_trigger(db, trigger_id)
     if trg is None:
         # Return 404 for unknown trigger
         raise HTTPException(status_code=404, detail="Not found")
@@ -235,5 +239,5 @@ def list_triggers(
     """
     List all triggers, optionally filtered by fiche_id.
     """
-    triggers = crud.get_triggers(db, fiche_id=fiche_id)
+    triggers = get_triggers(db, fiche_id=fiche_id)
     return triggers

@@ -29,7 +29,13 @@ from sqlalchemy.orm import Session
 
 from zerg.callbacks.token_stream import set_current_user_id
 from zerg.config import get_settings
-from zerg.crud import crud
+from zerg.crud import create_run
+from zerg.crud import create_thread_message
+from zerg.crud import get_user
+from zerg.crud import mark_run_failed
+from zerg.crud import mark_run_finished
+from zerg.crud import mark_run_running
+from zerg.crud import update_fiche
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.managers.fiche_runner import FicheRunner
@@ -71,7 +77,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
     # Global kill switch – prevent outbound LLM calls when enabled
     # ------------------------------------------------------------------
     settings = get_settings()
-    owner = crud.get_user(db, fiche.owner_id)
+    owner = get_user(db, fiche.owner_id)
     if settings.llm_disabled:
         owner_role = getattr(owner, "role", "USER") if owner else "USER"
         if owner_role != "ADMIN":
@@ -98,7 +104,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
     async def _run_task_locked() -> ThreadModel:
         """Run the fiche task assuming exclusivity is already enforced."""
         # Persist status for UI/telemetry while the lock enforces exclusivity
-        crud.update_fiche(db, fiche.id, status="running")
+        update_fiche(db, fiche.id, status="running")
         db.commit()
         await event_bus.publish(
             EventType.FICHE_UPDATED,
@@ -120,7 +126,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
         )
 
         # Insert the user *task* prompt (unprocessed)
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="user",
@@ -133,7 +139,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
         # ------------------------------------------------------------------
         # Use explicit trigger if provided, otherwise infer from thread_type
         run_trigger = trigger if trigger else (thread_type if thread_type in {"manual", "schedule"} else "api")
-        run_row = crud.create_run(
+        run_row = create_run(
             db,
             fiche_id=fiche.id,
             thread_id=thread.id,
@@ -154,7 +160,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
 
         # Immediately mark as running (no async queue yet)
         start_ts = datetime.now(timezone.utc)
-        crud.mark_run_running(db, run_row.id, started_at=start_ts)
+        mark_run_running(db, run_row.id, started_at=start_ts)
         await event_bus.publish(
             EventType.RUN_UPDATED,
             {
@@ -183,7 +189,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                 # Persist run failure first
                 end_ts = datetime.now(timezone.utc)
                 duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-                crud.mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
+                mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
 
                 await event_bus.publish(
                     EventType.RUN_UPDATED,
@@ -200,7 +206,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                 )
 
                 # Persist fiche error state & broadcast so dashboards refresh
-                crud.update_fiche(db, fiche.id, status="error", last_error=str(exc))
+                update_fiche(db, fiche.id, status="error", last_error=str(exc))
                 db.commit()
 
                 await event_bus.publish(
@@ -235,7 +241,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                     total_cost_usd = ((runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)) / 1000.0
 
             # Mark run as finished (summary auto-extracted if not provided)
-            finished_run = crud.mark_run_finished(
+            finished_run = mark_run_finished(
                 db,
                 run_row.id,
                 finished_at=end_ts,
@@ -265,7 +271,7 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
             # For scheduled fiches, revert to idle (status enum only supports idle/running/error/processing)
             new_status = "idle"
 
-            crud.update_fiche(db, fiche.id, status=new_status, last_run_at=end_ts, last_error=None)
+            update_fiche(db, fiche.id, status=new_status, last_run_at=end_ts, last_error=None)
             db.commit()
 
             await event_bus.publish(

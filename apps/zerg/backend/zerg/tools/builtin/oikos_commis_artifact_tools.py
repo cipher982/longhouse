@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import timezone
 
 from zerg.connectors.context import get_credential_resolver
+from zerg.models import CommisJob
 from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.tool_output_store import ToolOutputStore
 from zerg.tools.error_envelope import ErrorType
@@ -15,8 +16,6 @@ logger = logging.getLogger(__name__)
 
 async def check_commis_status_async(job_id: str | None = None) -> str:
     """Check the status of a specific commis or list all active commiss."""
-    from zerg.crud import crud
-
     resolver = get_credential_resolver()
     if not resolver:
         return tool_error(
@@ -30,10 +29,10 @@ async def check_commis_status_async(job_id: str | None = None) -> str:
         if job_id is not None:
             job_id_int = int(job_id)
             job = (
-                db.query(crud.CommisJob)
+                db.query(CommisJob)
                 .filter(
-                    crud.CommisJob.id == job_id_int,
-                    crud.CommisJob.owner_id == resolver.owner_id,
+                    CommisJob.id == job_id_int,
+                    CommisJob.owner_id == resolver.owner_id,
                 )
                 .first()
             )
@@ -71,12 +70,12 @@ async def check_commis_status_async(job_id: str | None = None) -> str:
             return "\n".join(lines)
 
         active_jobs = (
-            db.query(crud.CommisJob)
+            db.query(CommisJob)
             .filter(
-                crud.CommisJob.owner_id == resolver.owner_id,
-                crud.CommisJob.status.in_(["queued", "running"]),
+                CommisJob.owner_id == resolver.owner_id,
+                CommisJob.status.in_(["queued", "running"]),
             )
-            .order_by(crud.CommisJob.created_at.desc())
+            .order_by(CommisJob.created_at.desc())
             .limit(20)
             .all()
         )
@@ -109,8 +108,6 @@ def check_commis_status(job_id: str | None = None) -> str:
 
 async def cancel_commis_async(job_id: str) -> str:
     """Cancel a running or queued commis job."""
-    from zerg.crud import crud
-
     resolver = get_credential_resolver()
     if not resolver:
         return tool_error(
@@ -123,10 +120,10 @@ async def cancel_commis_async(job_id: str) -> str:
     try:
         job_id_int = int(job_id)
         job = (
-            db.query(crud.CommisJob)
+            db.query(CommisJob)
             .filter(
-                crud.CommisJob.id == job_id_int,
-                crud.CommisJob.owner_id == resolver.owner_id,
+                CommisJob.id == job_id_int,
+                CommisJob.owner_id == resolver.owner_id,
             )
             .first()
         )
@@ -165,7 +162,6 @@ async def wait_for_commis_async(
     _tool_call_id: str | None = None,
 ) -> str:
     """Wait for a specific commis to complete (blocking)."""
-    from zerg.crud import crud
     from zerg.managers.fiche_runner import FicheInterrupted
 
     resolver = get_credential_resolver()
@@ -180,10 +176,10 @@ async def wait_for_commis_async(
     try:
         job_id_int = int(job_id)
         job = (
-            db.query(crud.CommisJob)
+            db.query(CommisJob)
             .filter(
-                crud.CommisJob.id == job_id_int,
-                crud.CommisJob.owner_id == resolver.owner_id,
+                CommisJob.id == job_id_int,
+                CommisJob.owner_id == resolver.owner_id,
             )
             .first()
         )
@@ -263,8 +259,6 @@ def format_duration(duration_ms: int) -> str:
 
 async def read_commis_result_async(job_id: str) -> str:
     """Read the final result from a completed commis job."""
-    from zerg.crud import crud
-
     resolver = get_credential_resolver()
     if not resolver:
         return tool_error(
@@ -277,10 +271,10 @@ async def read_commis_result_async(job_id: str) -> str:
     try:
         job_id_int = int(job_id)
         job = (
-            db.query(crud.CommisJob)
+            db.query(CommisJob)
             .filter(
-                crud.CommisJob.id == job_id_int,
-                crud.CommisJob.owner_id == resolver.owner_id,
+                CommisJob.id == job_id_int,
+                CommisJob.owner_id == resolver.owner_id,
             )
             .first()
         )
@@ -321,7 +315,6 @@ def read_commis_result(job_id: str) -> str:
 
 async def get_commis_evidence_async(job_id: str, budget_bytes: int = 32000) -> str:
     """Compile evidence for a commis job within a byte budget."""
-    from zerg.crud import crud
     from zerg.services.evidence_compiler import EvidenceCompiler
 
     resolver = get_credential_resolver()
@@ -341,10 +334,10 @@ async def get_commis_evidence_async(job_id: str, budget_bytes: int = 32000) -> s
 
     try:
         job = (
-            db.query(crud.CommisJob)
+            db.query(CommisJob)
             .filter(
-                crud.CommisJob.id == job_id_int,
-                crud.CommisJob.owner_id == resolver.owner_id,
+                CommisJob.id == job_id_int,
+                CommisJob.owner_id == resolver.owner_id,
             )
             .first()
         )
@@ -511,8 +504,6 @@ async def read_commis_file_async(job_id: str, file_path: str) -> str:
         - "thread.jsonl" - Full conversation history
         - "tool_calls/*.txt" - Individual tool outputs
     """
-    from zerg.crud import crud
-
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
@@ -529,10 +520,10 @@ async def read_commis_file_async(job_id: str, file_path: str) -> str:
 
         # Get job record
         job = (
-            db.query(crud.CommisJob)
+            db.query(CommisJob)
             .filter(
-                crud.CommisJob.id == job_id_int,
-                crud.CommisJob.owner_id == resolver.owner_id,
+                CommisJob.id == job_id_int,
+                CommisJob.owner_id == resolver.owner_id,
             )
             .first()
         )
@@ -572,8 +563,6 @@ async def peek_commis_output_async(job_id: str, max_bytes: int = 4000) -> str:
     Returns:
         Live output tail or a helpful status message.
     """
-    from zerg.crud import crud
-
     resolver = get_credential_resolver()
     if not resolver:
         return tool_error(
@@ -586,10 +575,10 @@ async def peek_commis_output_async(job_id: str, max_bytes: int = 4000) -> str:
     try:
         job_id_int = int(job_id)
         job = (
-            db.query(crud.CommisJob)
+            db.query(CommisJob)
             .filter(
-                crud.CommisJob.id == job_id_int,
-                crud.CommisJob.owner_id == resolver.owner_id,
+                CommisJob.id == job_id_int,
+                CommisJob.owner_id == resolver.owner_id,
             )
             .first()
         )

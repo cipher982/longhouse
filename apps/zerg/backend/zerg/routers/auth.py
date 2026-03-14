@@ -29,7 +29,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.crud import crud
+from zerg.crud import count_users
+from zerg.crud import create_connector
+from zerg.crud import create_user
+from zerg.crud import get_connectors
+from zerg.crud import get_user
+from zerg.crud import get_user_by_email
+from zerg.crud import update_connector
+from zerg.crud import update_user
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import get_optional_user
@@ -393,9 +400,9 @@ def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenOut:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dev login only available when AUTH_DISABLED=1")
 
     # Get or create dev@local user
-    user = crud.get_user_by_email(db, "dev@local")
+    user = get_user_by_email(db, "dev@local")
     if not user:
-        user = crud.create_user(db, email="dev@local", provider="dev", provider_user_id="dev-user-1", role="ADMIN", skip_notification=True)
+        user = create_user(db, email="dev@local", provider="dev", provider_user_id="dev-user-1", role="ADMIN", skip_notification=True)
 
     # Issue platform JWT
     expires_in = 30 * 60  # 30 minutes
@@ -437,10 +444,10 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
     display_name = "Smoke Test" + (f" ({run_id[:20]})" if run_id else "")
 
     # Get or create service user (handles race condition)
-    user = crud.get_user_by_email(db, email)
+    user = get_user_by_email(db, email)
     if not user:
         try:
-            user = crud.create_user(
+            user = create_user(
                 db,
                 email=email,
                 provider="service",
@@ -451,7 +458,7 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
         except Exception:
             # Race condition - another request created it
             db.rollback()
-            user = crud.get_user_by_email(db, email)
+            user = get_user_by_email(db, email)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -501,7 +508,7 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
                 detail="This Zerg instance is configured for a specific owner. Sign-in with the owner email.",
             )
 
-    user = crud.get_user_by_email(db, email)
+    user = get_user_by_email(db, email)
     admin_emails = {e.strip().lower() for e in (settings.admin_emails or "").split(",") if e.strip()}
     is_admin = email.lower() in admin_emails
 
@@ -521,7 +528,7 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
         # When not testing and not admin, stop creating new users once MAX_USERS reached
         if not settings.testing and not is_admin:
             try:
-                total = crud.count_users(db)
+                total = count_users(db)
             except Exception:  # pragma: no cover – extremely unlikely
                 total = 0
             if settings.max_users and total >= settings.max_users:
@@ -530,12 +537,12 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
 
         # Create user; grant ADMIN role if email is in admin list
         role = "ADMIN" if is_admin else "USER"
-        user = crud.create_user(db, email=email, provider="google", provider_user_id=sub, role=role)
+        user = create_user(db, email=email, provider="google", provider_user_id=sub, role=role)
     else:
         # Existing user – promote to ADMIN if configured and not already admin
         if is_admin and getattr(user, "role", None) != "ADMIN":
             try:
-                _ = crud.update_user(db, user.id, display_name=user.display_name)
+                _ = update_user(db, user.id, display_name=user.display_name)
                 # direct SQLAlchemy update for role (update_user doesn't expose role)
                 user.role = "ADMIN"  # type: ignore[assignment]
                 db.commit()
@@ -600,7 +607,7 @@ def verify_session(request: Request, db: Session = Depends(get_db)):
     except (TypeError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
 
-    user = crud.get_user(db, user_id)
+    user = get_user(db, user_id)
     if user is None or not getattr(user, "is_active", True):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
@@ -614,7 +621,7 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
     if not user:
         return {"authenticated": False, "user": None}
 
-    gmail_connectors = crud.get_connectors(db, owner_id=user.id, type="email", provider="gmail")
+    gmail_connectors = get_connectors(db, owner_id=user.id, type="email", provider="gmail")
     gmail_connector = gmail_connectors[0] if gmail_connectors else None
     gmail_config = dict(gmail_connector.config or {}) if gmail_connector else {}
     gmail_connector_connected = bool(gmail_config.get("refresh_token"))
@@ -724,7 +731,7 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
     if not has_email_claim:
         try:
             user_id = int(sub_raw)
-            user = crud.get_user(db, user_id)
+            user = get_user(db, user_id)
         except (TypeError, ValueError):
             pass
 
@@ -740,7 +747,7 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
         email = str(email).strip().lower()
 
         # Look up or create user by email (control-plane-issued token flow)
-        user = crud.get_user_by_email(db, email)
+        user = get_user_by_email(db, email)
         if user is None:
             # Single-tenant mode: enforce owner email binding
             _st = get_settings()
@@ -753,7 +760,7 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
                         detail="This instance is configured for a specific owner.",
                     )
 
-            user = crud.create_user(
+            user = create_user(
                 db,
                 email=email,
                 provider="control-plane",
@@ -881,7 +888,7 @@ def _resolve_password_user(db: Session):
 
         owner_email = get_owner_email().strip().lower()
         if owner_email:
-            user = crud.get_user_by_email(db, owner_email)
+            user = get_user_by_email(db, owner_email)
             if user:
                 return user
 
@@ -896,12 +903,12 @@ def _resolve_password_user(db: Session):
 
         # No users yet — create the owner user
         if owner_email:
-            return crud.create_user(db, email=owner_email, provider="password", skip_notification=True)
+            return create_user(db, email=owner_email, provider="password", skip_notification=True)
 
     # OSS / legacy behavior
-    user = crud.get_user_by_email(db, "local@longhouse")
+    user = get_user_by_email(db, "local@longhouse")
     if not user:
-        user = crud.create_user(db, email="local@longhouse", provider="password", skip_notification=True)
+        user = create_user(db, email="local@longhouse", provider="password", skip_notification=True)
     return user
 
 
@@ -1142,15 +1149,15 @@ def _store_gmail_connector(
 
     enc = crypto.encrypt(refresh_token)
 
-    existing = crud.get_connectors(db, owner_id=owner_id, type="email", provider="gmail")
+    existing = get_connectors(db, owner_id=owner_id, type="email", provider="gmail")
     if existing:
         conn = existing[0]
         cfg = dict(conn.config or {})
         cfg["refresh_token"] = enc
-        conn = crud.update_connector(db, conn.id, config=cfg)  # type: ignore[assignment]
+        conn = update_connector(db, conn.id, config=cfg)  # type: ignore[assignment]
     else:
         try:
-            conn = crud.create_connector(
+            conn = create_connector(
                 db,
                 owner_id=owner_id,
                 type="email",
@@ -1158,13 +1165,13 @@ def _store_gmail_connector(
                 config={"refresh_token": enc},
             )
         except Exception:
-            existing = crud.get_connectors(db, owner_id=owner_id, type="email", provider="gmail")
+            existing = get_connectors(db, owner_id=owner_id, type="email", provider="gmail")
             if not existing:
                 raise
             conn = existing[0]
             cfg = dict(conn.config or {})
             cfg["refresh_token"] = enc
-            conn = crud.update_connector(db, conn.id, config=cfg)  # type: ignore[assignment]
+            conn = update_connector(db, conn.id, config=cfg)  # type: ignore[assignment]
 
     mailbox_email, watch_state = _bootstrap_gmail_watch(refresh_token, callback_url)
 
@@ -1198,7 +1205,7 @@ def _store_gmail_connector(
         cfg["watch_expiry"] = watch_state.watch_expiry
         cfg.pop("last_notified_history_id", None)
 
-    crud.update_connector(db, conn.id, config=cfg)
+    update_connector(db, conn.id, config=cfg)
 
     return GmailConnectResponse(
         status="connected",

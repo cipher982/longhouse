@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from zerg.crud import crud
+from zerg.crud import create_thread_message
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -90,7 +90,7 @@ async def test_run_oikos_marks_enqueued_wakeup_ignored_when_no_follow_up(monkeyp
                 ctx = get_oikos_context()
                 assert ctx is not None
                 _append_enqueued_wakeup(inner_db, owner_id=user.id, run_id=ctx.run_id)
-                assistant = crud.create_thread_message(
+                assistant = create_thread_message(
                     db=inner_db,
                     thread_id=thread.id,
                     role="assistant",

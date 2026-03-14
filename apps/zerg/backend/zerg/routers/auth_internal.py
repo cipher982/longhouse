@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.strategy import _decode_jwt_fallback
 from zerg.config import get_settings
-from zerg.crud import crud
+from zerg.crud import create_user
+from zerg.crud import get_user_by_email
 from zerg.database import get_db
 from zerg.dependencies.auth import require_internal_call
 from zerg.routers.auth import JWT_SECRET
@@ -92,7 +93,7 @@ def hosted_gmail_connect_handoff(
     """Persist a hosted Gmail connector after control-plane OAuth succeeds."""
 
     email = _decode_handoff_token(payload.handoff_token)
-    user = crud.get_user_by_email(db, email)
+    user = get_user_by_email(db, email)
     if user is None:
         settings = get_settings()
         if settings.single_tenant and not settings.testing:
@@ -104,7 +105,7 @@ def hosted_gmail_connect_handoff(
                     detail="This instance is configured for a specific owner.",
                 )
 
-        user = crud.create_user(
+        user = create_user(
             db,
             email=email,
             provider="control-plane",

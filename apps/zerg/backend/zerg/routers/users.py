@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import update_user
 from zerg.database import get_db
 
 # Auth guard ---------------------------------------------------------------
@@ -134,7 +134,7 @@ async def update_current_user(
 ):
     """Patch the authenticated user's profile (display name, avatar, prefs)."""
 
-    updated = crud.update_user(
+    updated = update_user(
         db,
         current_user.id,
         display_name=patch.display_name,
@@ -166,7 +166,7 @@ async def upload_current_user_avatar(
 
     avatar_url = store_avatar_for_user(file)
 
-    updated_user = crud.update_user(db, current_user.id, avatar_url=avatar_url)
+    updated_user = update_user(db, current_user.id, avatar_url=avatar_url)
     if updated_user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 

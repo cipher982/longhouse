@@ -25,7 +25,7 @@ def test_queue_commis_update_creates_internal_thread_message(monkeypatch):
     def _fake_create_thread_message(**kwargs):
         calls.append(kwargs)
 
-    monkeypatch.setattr("zerg.crud.crud.create_thread_message", _fake_create_thread_message)
+    monkeypatch.setattr("zerg.services.commis_updates.create_thread_message", _fake_create_thread_message)
 
     db = object()
     queue_commis_update(
