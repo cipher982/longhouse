@@ -39,10 +39,10 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.user import User
-from zerg.routers.agents import verify_agents_token
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.oikos_operator_policy import operator_master_switch_enabled
 from zerg.services.oikos_service import invoke_oikos

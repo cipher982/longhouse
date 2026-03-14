@@ -33,7 +33,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
-from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
@@ -76,7 +76,9 @@ def _get_session_chat_backend() -> str:
     if not backend:
         return SESSION_CHAT_BACKEND_AMBIENT
     if backend not in SUPPORTED_SESSION_CHAT_BACKENDS:
-        raise RuntimeError(f"{SESSION_CHAT_BACKEND_ENV} must be one of {sorted(SUPPORTED_SESSION_CHAT_BACKENDS)} (got {backend!r})")
+        raise RuntimeError(
+            f"{SESSION_CHAT_BACKEND_ENV} must be one of {sorted(SUPPORTED_SESSION_CHAT_BACKENDS)} (got {backend!r})"
+        )
     return backend
 
 
@@ -575,7 +577,9 @@ async def chat_with_session(
                     target_session_id=str(target_session.id),
                     thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
                     continued_from_session_id=(
-                        str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
+                        str(target_session.continued_from_session_id)
+                        if target_session.continued_from_session_id
+                        else None
                     ),
                     created_continuation=created_continuation,
                     branched_from_event_id=target_session.branched_from_event_id,

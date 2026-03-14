@@ -13,8 +13,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
-from zerg.routers.oikos_auth import _is_tool_enabled
-from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.dependencies.oikos_auth import _is_tool_enabled
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.services.oikos_operator_policy import policy_from_user_context
 
 logger = logging.getLogger(__name__)

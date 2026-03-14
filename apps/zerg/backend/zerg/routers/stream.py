@@ -23,12 +23,12 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import db_session
 from zerg.database import get_test_commis_id
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.services.run_stream import load_historical_run_events
 from zerg.services.run_stream import with_test_commis_routing
 
@@ -118,7 +118,13 @@ async def _replay_and_stream(
 
     def _apply_event_state(event_type: str, event: dict, *, from_replay: bool = False) -> None:
         """Update stream lifecycle state from an event."""
-        nonlocal pending_commiss, oikos_done, saw_oikos_complete, continuation_active, awaiting_continuation_until, complete
+        nonlocal \
+            pending_commiss, \
+            oikos_done, \
+            saw_oikos_complete, \
+            continuation_active, \
+            awaiting_continuation_until, \
+            complete
         nonlocal close_event_id, stream_lease_until
 
         # Handle stream_control events (explicit lifecycle control)
@@ -322,7 +328,9 @@ async def _replay_and_stream(
 
         # 4a. If we saw stream_control:close during replay and streamed past it, close now
         if close_event_id is not None and last_sent_event_id >= close_event_id:
-            logger.debug(f"Stream closed after replay - reached close marker (event_id={close_event_id}) for run {run_id}")
+            logger.debug(
+                f"Stream closed after replay - reached close marker (event_id={close_event_id}) for run {run_id}"
+            )
             return
 
         # 4b. If replay already includes a terminal oikos_complete and no pending commiss, close early
@@ -337,7 +345,9 @@ async def _replay_and_stream(
             return
 
         # 6. Stream live events (filtering out already-replayed ones)
-        logger.debug(f"Starting live stream for run {run_id} (status={status.value}, last_sent_id={last_sent_event_id})")
+        logger.debug(
+            f"Starting live stream for run {run_id} (status={status.value}, last_sent_id={last_sent_event_id})"
+        )
 
         # Send initial heartbeat to confirm we're in live mode
         yield {
@@ -356,7 +366,9 @@ async def _replay_and_stream(
         while not complete:
             # Check overflow signal (set by event_handler when queue is full)
             if overflow_event.is_set():
-                logger.warning(f"Stream overflow for run {run_id}, closing (client should reconnect with Last-Event-ID)")
+                logger.warning(
+                    f"Stream overflow for run {run_id}, closing (client should reconnect with Last-Event-ID)"
+                )
                 yield {
                     "event": "overflow",
                     "data": json.dumps(
@@ -588,7 +600,13 @@ async def stream_run_replay(
     # CRITICAL: Don't use Depends(get_db) here - it holds the session open
     # for the entire SSE stream duration, blocking TRUNCATE during E2E resets.
     with db_session() as db:
-        run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
+        run = (
+            db.query(Run)
+            .join(Fiche, Fiche.id == Run.fiche_id)
+            .filter(Run.id == run_id)
+            .filter(Fiche.owner_id == current_user.id)
+            .first()
+        )
 
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -608,7 +626,9 @@ async def stream_run_replay(
             logger.warning(f"Invalid Last-Event-ID header: {last_event_id_header}")
 
     logger.info(
-        f"Streaming run {run_id} (status={run_status.value}, " f"after_event_id={after_event_id}, " f"include_tokens={include_tokens})"
+        f"Streaming run {run_id} (status={run_status.value}, "
+        f"after_event_id={after_event_id}, "
+        f"include_tokens={include_tokens})"
     )
 
     return EventSourceResponse(

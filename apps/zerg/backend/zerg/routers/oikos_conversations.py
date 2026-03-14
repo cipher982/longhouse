@@ -14,10 +14,10 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.conversation import Conversation
 from zerg.models.conversation import ConversationBinding
 from zerg.models.conversation import ConversationMessage
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.services.conversation_service import ConversationService
 from zerg.utils.time import UTCBaseModel
 
@@ -151,7 +151,10 @@ def get_oikos_conversation(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
     bindings = (
-        db.query(ConversationBinding).filter(ConversationBinding.conversation_id == row.id).order_by(ConversationBinding.id.asc()).all()
+        db.query(ConversationBinding)
+        .filter(ConversationBinding.conversation_id == row.id)
+        .order_by(ConversationBinding.id.asc())
+        .all()
     )
 
     return ConversationDetail(

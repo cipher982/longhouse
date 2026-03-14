@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import get_fiches
 from zerg.database import get_db
-from zerg.routers.oikos_auth import get_current_oikos_user
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)

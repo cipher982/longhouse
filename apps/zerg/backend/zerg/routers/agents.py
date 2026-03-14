@@ -22,8 +22,6 @@ Concurrency:
 
 import asyncio
 import gzip
-import hashlib
-import hmac
 import logging
 import re
 from datetime import datetime
@@ -50,6 +48,9 @@ from sqlalchemy.orm import sessionmaker as _sessionmaker
 
 from zerg.config import get_settings
 from zerg.database import get_db
+from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_read_access
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
@@ -65,134 +66,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 _settings = get_settings()
-
-
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Auth Dependency
-# ---------------------------------------------------------------------------
-
-
-def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> DeviceToken | None:
-    """Verify the agents API token for write operations (ingest).
-
-    Accepts two types of tokens:
-    1. Per-device tokens (zdt_...) created via /api/devices/tokens
-    2. Legacy AGENTS_API_TOKEN env var (for backwards compatibility)
-
-    In dev mode (AUTH_DISABLED=1), allows all requests.
-
-    Raises:
-        HTTPException(401): If token is missing, invalid, or revoked
-        HTTPException(403): If no auth method is configured in production
-    """
-    # Dev mode - allow all
-    if _settings.auth_disabled:
-        return
-
-    # Try X-Agents-Token header first, then Authorization: Bearer
-    provided_token = request.headers.get("X-Agents-Token")
-    if not provided_token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            provided_token = auth_header[7:]
-
-    if not provided_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authentication - provide X-Agents-Token header",
-        )
-
-    # Check if this is a per-device token (starts with zdt_)
-    if provided_token.startswith("zdt_"):
-        from zerg.routers.device_tokens import validate_device_token
-
-        device_token = validate_device_token(provided_token, db)
-        if device_token:
-            # Valid device token - auth successful
-            logger.debug(f"Device token validated for device {device_token.device_id}")
-            request.state.agents_rate_key = f"device:{device_token.id}"
-            return device_token
-
-        # Device token exists but is invalid/revoked
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or revoked device token",
-        )
-
-    # Fall back to legacy AGENTS_API_TOKEN comparison
-    expected_token = _settings.agents_api_token
-    if not expected_token:
-        # In production without any auth method configured, deny access
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Agents API not configured - create a device token or set AGENTS_API_TOKEN env var",
-        )
-
-    # Constant-time comparison to prevent timing attacks
-    if not hmac.compare_digest(provided_token, expected_token):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid agents API token",
-        )
-
-    token_hash = hashlib.sha256(provided_token.encode()).hexdigest()
-    request.state.agents_rate_key = f"token:{token_hash}"
-
-
-def verify_agents_read_access(request: Request, db: Session = Depends(get_db)) -> None:
-    """Verify read access for agents endpoints (sessions list, detail, events).
-
-    Accepts:
-    1. Browser cookie auth (longhouse_session) - for UI access
-    2. Device tokens (zdt_...) - for programmatic access
-
-    In dev mode (AUTH_DISABLED=1), allows all requests.
-    """
-    # Dev mode - allow all
-    if _settings.auth_disabled:
-        return
-
-    # Check for browser cookie auth first
-    if "longhouse_session" in request.cookies:
-        from zerg.dependencies.auth import get_current_user
-
-        try:
-            # This will validate the cookie and return user or raise 401
-            get_current_user(request, db)
-            return  # Cookie auth successful
-        except HTTPException:
-            pass  # Fall through to token auth
-
-    # Fall back to device token / API token auth
-    verify_agents_token(request, db)
-
-
-def require_single_tenant(db: Session = Depends(get_db)) -> None:
-    """Enforce single-tenant mode for agents endpoints.
-
-    In single-tenant mode (SINGLE_TENANT=1, the default), agents endpoints are
-    accessible without owner scoping - the deployment is trusted to have one owner.
-
-    In multi-tenant mode (SINGLE_TENANT=0), agents endpoints require owner scoping
-    which isn't implemented yet, so we block access.
-    """
-    settings = get_settings()
-
-    # Testing mode: always allow
-    if settings.testing:
-        return
-
-    # Single-tenant mode (default): trust the deployment, allow access
-    if settings.single_tenant:
-        return
-
-    # Multi-tenant mode: agents tables aren't owner-scoped yet, block access
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Multi-tenant agents API not implemented. Set SINGLE_TENANT=1 or contact support.",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +96,9 @@ class SessionResponse(UTCBaseModel):
     match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role for matching event")
-    match_score: Optional[float] = Field(None, description="Semantic similarity score (0–1) when result is from vector search")
+    match_score: Optional[float] = Field(
+        None, description="Semantic similarity score (0–1) when result is from vector search"
+    )
     thread_root_session_id: str = Field(..., description="Logical thread root session UUID")
     thread_head_session_id: str = Field(..., description="Current writable head session UUID")
     thread_continuation_count: int = Field(..., description="Number of concrete continuations in this logical thread")
@@ -265,7 +140,8 @@ class SessionsListResponse(BaseModel):
     total: int
     has_real_sessions: bool = Field(
         True,
-        description="True if any non-demo sessions exist (device_id != 'demo-mac'). " "False means only demo-seeded data is present.",
+        description="True if any non-demo sessions exist (device_id != 'demo-mac'). "
+        "False means only demo-seeded data is present.",
     )
 
 
@@ -277,7 +153,9 @@ class SessionThreadResponse(BaseModel):
     sessions: List[SessionResponse]
 
 
-def _get_thread_meta(store: AgentsStore, session: AgentSession, thread_cache: Dict[str, tuple[str, int]]) -> tuple[str, int]:
+def _get_thread_meta(
+    store: AgentsStore, session: AgentSession, thread_cache: Dict[str, tuple[str, int]]
+) -> tuple[str, int]:
     root_id = str(session.thread_root_session_id or session.id)
     cached = thread_cache.get(root_id)
     if cached is not None:
@@ -328,7 +206,9 @@ def _build_session_response(
         thread_root_session_id=str(session.thread_root_session_id or session.id),
         thread_head_session_id=thread_head_session_id,
         thread_continuation_count=thread_continuation_count,
-        continued_from_session_id=(str(session.continued_from_session_id) if session.continued_from_session_id else None),
+        continued_from_session_id=(
+            str(session.continued_from_session_id) if session.continued_from_session_id else None
+        ),
         continuation_kind=session.continuation_kind,
         origin_label=session.origin_label,
         branched_from_event_id=session.branched_from_event_id,
@@ -671,7 +551,10 @@ async def _generate_summary_impl(session_id: str) -> None:
         cursor_id = session.last_summarized_event_id
         if cursor_id is not None:
             new_events = (
-                db.query(AgentEvent).filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id).order_by(AgentEvent.id).all()
+                db.query(AgentEvent)
+                .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
+                .order_by(AgentEvent.id)
+                .all()
             )
         else:
             old_count = session.summary_event_count or 0
@@ -685,7 +568,9 @@ async def _generate_summary_impl(session_id: str) -> None:
         # Throttle: skip if fewer than 2 new user/assistant messages.
         # Do NOT advance cursor — let events accumulate until threshold is met.
         new_event_dicts = _events_to_dicts(new_events)
-        meaningful_count = sum(1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text"))
+        meaningful_count = sum(
+            1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text")
+        )
         if meaningful_count < 2:
             logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
             # Set a structured title so the session doesn't show "Generating summary..." forever
@@ -748,7 +633,9 @@ async def _generate_summary_impl(session_id: str) -> None:
                 )
             else:
                 old_count = session.summary_event_count or 0
-                all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+                all_events = (
+                    db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+                )
                 new_events = all_events[old_count:]
             if not new_events:
                 return
@@ -1235,7 +1122,12 @@ async def _run_backfill(
                             _backfill_state["skipped"] += 1
                             return
 
-                        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+                        events = (
+                            db.query(AgentEvent)
+                            .filter(AgentEvent.session_id == session_id)
+                            .order_by(AgentEvent.timestamp)
+                            .all()
+                        )
                         if not events:
                             _backfill_state["skipped"] += 1
                             return
@@ -1325,10 +1217,11 @@ async def backfill_embeddings(
     from zerg.models_config import get_embedding_config_with_db_fallback
 
     if _embedding_backfill_state["running"]:
+        progress = f"{_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']}"
         return BackfillEmbeddingsResponse(
             status="already_running",
             total=_embedding_backfill_state["total"],
-            message=f"Backfill in progress: {_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done",
+            message=f"Backfill in progress: {progress} done",
         )
 
     config = get_embedding_config_with_db_fallback(db=db)
@@ -1416,10 +1309,17 @@ async def _run_embedding_backfill(
                                 _embedding_backfill_state["skipped"] += 1
                                 return
 
-                            events = db.query(AgentEvent).filter(AgentEvent.session_id == sid).order_by(AgentEvent.timestamp).all()
+                            events = (
+                                db.query(AgentEvent)
+                                .filter(AgentEvent.session_id == sid)
+                                .order_by(AgentEvent.timestamp)
+                                .all()
+                            )
                             if not events:
                                 # Mark as done even with no events
-                                db.execute(sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"), {"sid": sid})
+                                db.execute(
+                                    sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"), {"sid": sid}
+                                )
                                 db.commit()
                                 _embedding_backfill_state["skipped"] += 1
                                 return
@@ -1601,7 +1501,9 @@ async def semantic_search_sessions(
                     .first()
                 )
             boundary = store.get_active_context_boundary(session.id)
-            if boundary is not None and (matched_event is None or not store.is_event_in_active_context(matched_event, boundary)):
+            if boundary is not None and (
+                matched_event is None or not store.is_event_in_active_context(matched_event, boundary)
+            ):
                 continue
 
             snippet_source = ""
@@ -1681,7 +1583,11 @@ async def recall_sessions(
     matches = []
     for session_id, chunk_index, score, event_start, event_end in results:
         # Fetch context window
-        events_query = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
+        events_query = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.timestamp, AgentEvent.id)
+        )
         all_events = events_query.all()
         total_events = len(all_events)
         if total_events == 0:
@@ -1804,7 +1710,9 @@ async def get_usage_stats(
         {"since": since.isoformat()},
     ).fetchall()
 
-    by_provider = [UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0) for r in rows]
+    by_provider = [
+        UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0) for r in rows
+    ]
 
     return UsageStatsResponse(
         total_sessions=sum(r.sessions for r in by_provider),
@@ -1820,14 +1728,17 @@ async def list_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
-    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
+    hide_autonomous: bool = Query(
+        True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"
+    ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     sort: Optional[str] = Query(
-        None, description="Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present."
+        None,
+        description="Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present.",
     ),
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
@@ -2106,7 +2017,9 @@ async def list_session_summaries(
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
+    hide_autonomous: bool = Query(
+        True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"
+    ),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_read_access),
     _single: None = Depends(require_single_tenant),
@@ -2169,7 +2082,9 @@ async def list_session_summaries(
 @router.get("/sessions/active", response_model=ActiveSessionsResponse)
 async def list_active_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, idle, completed)"),
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Filter by status (working, idle, completed)"
+    ),
     attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
@@ -2204,7 +2119,11 @@ async def list_active_sessions(
         # session_ids contains UUID objects; SessionPresence.session_id is String —
         # convert to str so the IN comparison matches across types.
         str_session_ids = [str(sid) for sid in session_ids]
-        presence_rows = (db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()) if str_session_ids else []
+        presence_rows = (
+            (db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all())
+            if str_session_ids
+            else []
+        )
         presence_map = {p.session_id: p for p in presence_rows}
         presence_stale_threshold = timedelta(minutes=10)
 
@@ -2233,7 +2152,9 @@ async def list_active_sessions(
             # response (Stop hook ships transcript), so a session with fresh presence is
             # actively in progress even though ended_at is non-null.
             if presence_fresh:
-                derived_status = "working" if presence.state in ("thinking", "running", "needs_user", "blocked") else "idle"
+                derived_status = (
+                    "working" if presence.state in ("thinking", "running", "needs_user", "blocked") else "idle"
+                )
             elif s.ended_at:
                 derived_status = "completed"
             else:
@@ -2247,7 +2168,11 @@ async def list_active_sessions(
             if attention and attention_level != attention:
                 continue
 
-            _started = s.started_at.replace(tzinfo=timezone.utc) if s.started_at and s.started_at.tzinfo is None else s.started_at
+            _started = (
+                s.started_at.replace(tzinfo=timezone.utc)
+                if s.started_at and s.started_at.tzinfo is None
+                else s.started_at
+            )
             _ended = s.ended_at.replace(tzinfo=timezone.utc) if s.ended_at and s.ended_at.tzinfo is None else s.ended_at
             end_time = _ended or now
             duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0

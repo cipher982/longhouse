@@ -1,12 +1,15 @@
 """Tests for password auth user binding in single-tenant mode."""
 
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
-import os
 
 from fastapi.testclient import TestClient
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
+from zerg.database import Base
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
 from zerg.models import User
 
 
@@ -49,7 +52,7 @@ def test_password_login_binds_owner_email(tmp_path):
 
     with (
         patch.dict(os.environ, {"OWNER_EMAIL": "alice@example.com"}, clear=False),
-        patch("zerg.routers.auth.get_settings", return_value=settings),
+        patch("zerg.routers.auth_browser.get_settings", return_value=settings),
     ):
         for client in _get_client(sf):
             resp = client.post("/auth/password", json={"password": "secret"})
@@ -78,7 +81,7 @@ def test_password_login_migrates_legacy_user(tmp_path):
 
     with (
         patch.dict(os.environ, {"OWNER_EMAIL": "owner@example.com"}, clear=False),
-        patch("zerg.routers.auth.get_settings", return_value=settings),
+        patch("zerg.routers.auth_browser.get_settings", return_value=settings),
     ):
         for client in _get_client(sf):
             resp = client.post("/auth/password", json={"password": "secret"})

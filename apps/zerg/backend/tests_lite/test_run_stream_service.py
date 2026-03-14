@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
 from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
@@ -16,6 +16,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.database import reset_test_commis_id
 from zerg.database import set_test_commis_id
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models import Fiche
@@ -27,7 +28,6 @@ from zerg.models.enums import ThreadType
 from zerg.models.enums import UserRole
 from zerg.models.run_event import RunEvent
 from zerg.routers import stream as stream_router
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.services import run_stream as run_stream_service
 
 
@@ -212,7 +212,9 @@ async def test_stream_run_events_live_emits_connected_then_replay(monkeypatch, t
 async def test_stream_run_events_replays_before_live_and_skips_duplicate_live_event_ids(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     owner_id, run_id = _seed_run(session_local)
-    replay_event_id = _append_run_event(session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"})
+    replay_event_id = _append_run_event(
+        session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"}
+    )
 
     with _patched_stream_db(monkeypatch, session_local):
         generator = stream_router.stream_run_events_live(run_id=run_id, owner_id=owner_id)
@@ -279,8 +281,12 @@ async def test_stream_run_events_closes_after_replay_close_marker(monkeypatch, t
 def test_stream_run_replay_last_event_id_header_overrides_query_param(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     owner_id, run_id = _seed_run(session_local, status=RunStatus.SUCCESS)
-    first_event_id = _append_run_event(session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"})
-    second_event_id = _append_run_event(session_local, run_id=run_id, event_type="oikos_complete", payload={"result": "done"})
+    first_event_id = _append_run_event(
+        session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"}
+    )
+    second_event_id = _append_run_event(
+        session_local, run_id=run_id, event_type="oikos_complete", payload={"result": "done"}
+    )
 
     with _patched_stream_db(monkeypatch, session_local):
         from zerg.main import api_app

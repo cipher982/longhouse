@@ -1,9 +1,6 @@
-"""Oikos authentication helpers.
+"""Authentication helpers for browser-owned Oikos routes."""
 
-Authentication dependency and helpers for Oikos endpoints.
-"""
-
-import logging
+from __future__ import annotations
 
 from fastapi import Depends
 from fastapi import HTTPException
@@ -13,9 +10,8 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
-from zerg.dependencies.auth import get_current_browser_user
-
-logger = logging.getLogger(__name__)
+from zerg.dependencies.auth import _get_strategy
+from zerg.dependencies.browser_auth import get_current_browser_user
 
 
 def get_current_oikos_user(
@@ -35,8 +31,6 @@ def get_current_oikos_user(
     - For SSE/EventSource: pass `token=<jwt>` as a query param when cookies
       are not available
     """
-    from zerg.dependencies.auth import _get_strategy
-
     if token:
         user = _get_strategy().validate_ws_token(token, db)
         if user is not None:
@@ -50,3 +44,9 @@ def _is_tool_enabled(ctx: dict, tool_key: str) -> bool:
     """Check if a tool is enabled in user context."""
     tool_config = (ctx or {}).get("tools", {}) or {}
     return bool(tool_config.get(tool_key, True))
+
+
+__all__ = [
+    "_is_tool_enabled",
+    "get_current_oikos_user",
+]

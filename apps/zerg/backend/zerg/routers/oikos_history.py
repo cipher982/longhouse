@@ -15,8 +15,8 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.models import ThreadMessage
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)

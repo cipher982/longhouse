@@ -19,12 +19,12 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import get_db
 from zerg.database import get_test_commis_id
+from zerg.dependencies.oikos_auth import _is_tool_enabled
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
-from zerg.routers.oikos_auth import _is_tool_enabled
-from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.routers.stream import stream_run_events_live
 from zerg.services.oikos_context import reset_seq
 
@@ -190,7 +190,9 @@ async def oikos_chat(
 
     reasoning_effort = (request.reasoning_effort or saved_prefs.get("reasoning_effort") or "none").lower()
     if reasoning_effort not in {"none", "low", "medium", "high"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid reasoning_effort: {reasoning_effort}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid reasoning_effort: {reasoning_effort}"
+        )
 
     message_id = str(request.message_id)
     test_commis_id = get_test_commis_id()
@@ -212,7 +214,10 @@ async def oikos_chat(
             model=model_to_use,
             reasoning_effort=reasoning_effort,
         )
-        logger.info(f"Oikos chat: REPLAY MODE for run {setup.run_id}, scenario={request.replay_scenario}", extra={"tag": "OIKOS"})
+        logger.info(
+            f"Oikos chat: REPLAY MODE for run {setup.run_id}, scenario={request.replay_scenario}",
+            extra={"tag": "OIKOS"},
+        )
         return EventSourceResponse(
             _replay_stream_generator(
                 setup.run_id,

@@ -16,7 +16,6 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
@@ -24,7 +23,6 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentsBase
-
 
 # ---------------------------------------------------------------------------
 # DB helper
@@ -42,9 +40,9 @@ def _make_db(tmp_path):
 
 def _make_client(SessionLocal):
     """Create TestClient with get_db override + auth bypass."""
+    from zerg.dependencies.agents_auth import verify_agents_token
     from zerg.main import api_app
     from zerg.main import app
-    from zerg.routers.agents import verify_agents_token
 
     def override_get_db():
         with SessionLocal() as db:
@@ -133,16 +131,18 @@ def test_heartbeat_prunes_old_rows(tmp_path):
     # Insert an old row directly
     old_ts = datetime.now(timezone.utc) - timedelta(days=31)
     with SessionLocal() as db:
-        db.add(AgentHeartbeat(
-            device_id="testclient",  # matches fallback IP in test
-            received_at=old_ts,
-            version="0.4.0",
-            spool_pending=0,
-            parse_errors_1h=0,
-            consecutive_failures=0,
-            disk_free_bytes=0,
-            is_offline=0,
-        ))
+        db.add(
+            AgentHeartbeat(
+                device_id="testclient",  # matches fallback IP in test
+                received_at=old_ts,
+                version="0.4.0",
+                spool_pending=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                disk_free_bytes=0,
+                is_offline=0,
+            )
+        )
         db.commit()
         assert db.query(AgentHeartbeat).count() == 1
 

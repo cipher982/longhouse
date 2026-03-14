@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.models import User
 from zerg.models.sync import SyncOperation
 
@@ -30,12 +31,8 @@ router = APIRouter(prefix="/oikos/sync", tags=["sync"])
 
 
 # ---------------------------------------------------------------------------
-# Authentication - Import from oikos router
+# Authentication
 # ---------------------------------------------------------------------------
-
-
-# Import the actual dependency function from oikos router
-from zerg.routers.oikos import get_current_oikos_user  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Request/Response Models
@@ -186,7 +183,13 @@ def pull_sync_operations(
         )
 
     # Query operations for this user after cursor
-    operations = db.query(SyncOperation).filter(SyncOperation.user_id == current_user.id).order_by(SyncOperation.id).offset(cursor).all()
+    operations = (
+        db.query(SyncOperation)
+        .filter(SyncOperation.user_id == current_user.id)
+        .order_by(SyncOperation.id)
+        .offset(cursor)
+        .all()
+    )
 
     # Format operations for response
     ops = []

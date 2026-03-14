@@ -119,43 +119,6 @@ def get_optional_user(request: Request, db: Session = Depends(get_db)):
         return None
 
 
-def _get_browser_session_user(request: Request, db: Session):
-    """Validate only the browser session cookie and return the authenticated user."""
-    if AUTH_DISABLED:
-        return _get_strategy().get_current_user(request, db)
-
-    session_token = request.cookies.get(SESSION_COOKIE_NAME)
-    if not session_token:
-        return None
-
-    return _get_strategy().validate_ws_token(session_token, db)
-
-
-def get_current_browser_user(request: Request, db: Session = Depends(get_db)):
-    """Return the authenticated browser user or raise **401**.
-
-    This dependency is intentionally cookie-session only. It does not accept
-    Authorization headers because browser-owned routes should not share the
-    mixed browser-or-machine auth surface.
-    """
-    user = _get_browser_session_user(request, db)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
-    return user
-
-
-def get_optional_browser_user(request: Request, db: Session = Depends(get_db)):
-    """Return the authenticated browser user or **None**.
-
-    This is the non-throwing variant of ``get_current_browser_user`` for
-    browser-only routes such as `/api/auth/status`.
-    """
-    return _get_browser_session_user(request, db)
-
-
 def require_admin(current_user=Depends(get_current_user)):
     """FastAPI dependency that ensures the user has role == ``ADMIN``."""
 
@@ -210,7 +173,9 @@ def require_internal_call(request: Request):
 
     if not expected_token:
         # INTERNAL_API_SECRET not configured - fail secure
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal API secret not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal API secret not configured"
+        )
 
     if internal_token and hmac.compare_digest(internal_token, expected_token):
         return True
@@ -228,6 +193,9 @@ def validate_ws_jwt(token: str | None, db: Session):
 
     return _get_strategy().validate_ws_token(token, db)
 
+
+from zerg.dependencies.browser_auth import get_current_browser_user  # noqa: E402
+from zerg.dependencies.browser_auth import get_optional_browser_user  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Re-export strategy so tests can monkey-patch
