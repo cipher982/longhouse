@@ -42,6 +42,22 @@
     border-color: color-mix(in srgb, var(--color-intent-success) 55%, transparent);
   }
 
+  .runner-card--offline {
+    border-color: color-mix(in srgb, var(--color-intent-warning) 26%, transparent);
+  }
+
+  .runner-card--offline:hover {
+    border-color: color-mix(in srgb, var(--color-intent-warning) 46%, transparent);
+  }
+
+  .runner-card--revoked {
+    border-color: color-mix(in srgb, var(--color-intent-error) 24%, transparent);
+  }
+
+  .runner-card--revoked:hover {
+    border-color: color-mix(in srgb, var(--color-intent-error) 42%, transparent);
+  }
+
   .runner-card-header {
     display: flex;
     justify-content: space-between;
@@ -129,6 +145,60 @@
     gap: 0.6rem;
   }
 
+  .runner-card-health {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    margin-bottom: 0.9rem;
+  }
+
+  .runner-card-summary {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
+  .runner-card-flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .runner-inline-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border: 1px solid var(--color-border-primary);
+    color: var(--color-text-secondary);
+    background: var(--color-surface-section);
+  }
+
+  .runner-inline-pill--success {
+    color: var(--color-intent-success);
+    background: color-mix(in srgb, var(--color-intent-success) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-intent-success) 26%, transparent);
+  }
+
+  .runner-inline-pill--warning {
+    color: var(--color-intent-warning);
+    background: color-mix(in srgb, var(--color-intent-warning) 14%, transparent);
+    border-color: color-mix(in srgb, var(--color-intent-warning) 28%, transparent);
+  }
+
+  .runner-inline-pill--neutral {
+    color: var(--color-text-secondary);
+  }
+
+  .runner-inline-pill--code {
+    font-family: var(--font-family-mono);
+    color: var(--color-text-primary);
+  }
+
   .runner-detail-row {
     display: flex;
     justify-content: space-between;
@@ -147,6 +217,27 @@
     color: var(--color-text-primary);
     font-size: 0.8125rem;
     text-align: right;
+  }
+
+  .runner-detail-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+
+  .runner-detail-subvalue {
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    text-align: right;
+    max-width: 18rem;
+  }
+
+  .runner-detail-value--inline-list {
+    max-width: 18rem;
+    line-height: 1.5;
   }
 
   .capabilities-list {
@@ -171,6 +262,22 @@
   @media (max-width: 768px) {
     .runners-grid {
       grid-template-columns: 1fr;
+    }
+
+    .runner-detail-row {
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .runner-detail-stack {
+      align-items: flex-start;
+    }
+
+    .runner-detail-value,
+    .runner-detail-subvalue,
+    .runner-detail-value--inline-list {
+      text-align: left;
+      max-width: none;
     }
   }
 }

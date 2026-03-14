@@ -5,6 +5,8 @@ import type {
   RunnerUpdate,
   RunnerListResponse,
   RunnerDoctorResponse,
+  RunnerJob,
+  RunnerJobListResponse,
   RotateSecretResponse,
   RunnerStatusResponse,
 } from "./types";
@@ -26,6 +28,17 @@ export async function fetchRunner(runnerId: number): Promise<Runner> {
 
 export async function fetchRunnerDoctor(runnerId: number): Promise<RunnerDoctorResponse> {
   return request<RunnerDoctorResponse>(`/runners/${runnerId}/doctor`);
+}
+
+export async function fetchRunnerJobs(runnerId: number, limit = 6): Promise<RunnerJob[]> {
+  const params = new URLSearchParams();
+  if (limit > 0) {
+    params.set("limit", String(limit));
+  }
+
+  const query = params.size ? `?${params.toString()}` : "";
+  const response = await request<RunnerJobListResponse>(`/runners/${runnerId}/jobs${query}`);
+  return response.jobs;
 }
 
 export async function updateRunner(runnerId: number, payload: RunnerUpdate): Promise<Runner> {

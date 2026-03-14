@@ -9,7 +9,7 @@ Last updated: 2026-03-14
 - [x] Add `TODO.md` tracking entry
 - [x] Write V2 runner health spec
 - [x] Write granular task checklist
-- [ ] Commit Phase 0 artifacts
+- [x] Commit Phase 0 artifacts
 
 ## Phase 1: Health truth and enrollment contract
 
@@ -20,7 +20,7 @@ Last updated: 2026-03-14
 - [x] Use effective health in runner list/status responses
 - [x] Use effective health in `runner_list`, `runner_exec`, and prompt composition
 - [x] Add backend tests for health assessment and capability enrollment
-- [ ] Commit Phase 1
+- [x] Commit Phase 1
 
 ## Phase 2: Doctor chain of custody
 
@@ -28,7 +28,7 @@ Last updated: 2026-03-14
 - [x] Upgrade local `longhouse-runner doctor` to verify credentials against the configured instance
 - [x] Refresh server-side doctor to surface version drift and health-derived reasons
 - [x] Add backend/Bun tests for preflight and doctor upgrades
-- [ ] Commit Phase 2
+- [x] Commit Phase 2
 
 ## Phase 3: Reconciliation, incidents, and attention
 
@@ -39,24 +39,24 @@ Last updated: 2026-03-14
 - [x] Send deduped Telegram or email alerts for prolonged offline incidents
 - [x] Trigger deduped Oikos wakeups for prolonged offline incidents
 - [x] Add backend tests for reconciliation, alerts, and wakeups
-- [ ] Commit Phase 3
+- [x] Commit Phase 3
 
 ## Phase 4: Oikos and UI
 
 - [x] Expose a runner doctor tool to Oikos
 - [x] Improve `runner_list` output with health/version context
 - [x] Add runner recent-jobs API route
-- [ ] Update Runners page with honest health + version data
-- [ ] Update runner detail with richer health/version/recent jobs
-- [ ] Regenerate OpenAPI frontend types
-- [ ] Run targeted frontend validation
+- [x] Update Runners page with honest health + version data
+- [x] Update runner detail with richer health/version/recent jobs
+- [x] Regenerate OpenAPI frontend types
+- [x] Run targeted frontend validation
 - [ ] Commit Phase 4
 
 ## Phase 5: Verification and ship
 
-- [ ] Run targeted backend tests
-- [ ] Run runner Bun tests
-- [ ] Run broader verification (`make test` and any necessary follow-on checks)
+- [x] Run targeted backend tests
+- [x] Run runner Bun tests
+- [x] Run broader verification (`make test` and any necessary follow-on checks)
 - [ ] Push `main`
 - [ ] Wait for CI/build workflows to finish successfully
 - [ ] Deploy hosted surfaces if needed
@@ -68,3 +68,5 @@ Last updated: 2026-03-14
 Notes:
 - 2026-03-14: The central V2 decision is to treat heartbeat freshness as runner liveness truth and use DB `status` only as a reconciled cache plus the `revoked` administrative state.
 - 2026-03-14: Health truth now also treats live websocket presence as an availability requirement. Fresh heartbeats without a live connection are surfaced as `disconnected_recently` rather than pretending the runner is available.
+- 2026-03-14: Phase 4 UI work now exposes effective health summaries, version drift, stale-heartbeat windows, and recent runner jobs directly in the runners list/detail surfaces instead of hiding that context behind doctor only.
+- 2026-03-14: Local verification currently includes targeted backend runner suites, `make test-runner-unit`, frontend typecheck/lint, `make test`, and `make test-e2e`.

@@ -184,6 +184,8 @@ export type RunnerUpdate = Schemas["RunnerUpdate"];
 export type RunnerListResponse = Schemas["RunnerListResponse"];
 export type RunnerDoctorCheck = Schemas["RunnerDoctorCheck"];
 export type RunnerDoctorResponse = Schemas["RunnerDoctorResponse"];
+export type RunnerJob = Schemas["RunnerJobResponse"];
+export type RunnerJobListResponse = Schemas["RunnerJobListResponse"];
 
 export type RotateSecretResponse = {
   runner_id: number;
@@ -191,17 +193,8 @@ export type RotateSecretResponse = {
   message: string;
 };
 
-export type RunnerStatusItem = {
-  name: string;
-  status: string;
-};
-
-export type RunnerStatusResponse = {
-  total: number;
-  online: number;
-  offline: number;
-  runners: RunnerStatusItem[];
-};
+export type RunnerStatusItem = Schemas["RunnerStatusItem"];
+export type RunnerStatusResponse = Schemas["RunnerStatusResponse"];
 
 export type KnowledgeSource = Schemas["KnowledgeSource"];
 export type KnowledgeSourceCreate = Schemas["KnowledgeSourceCreate"];

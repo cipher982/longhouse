@@ -199,3 +199,5 @@ Decision for V2:
 - 2026-03-14: Shipped the health-assessment + enrollment-contract slice, including explicit capability registration, derived health responses, and heartbeat interval reporting from the runner hello payload.
 - 2026-03-14: Shipped the doctor chain-of-custody slice: unauthenticated `/api/runners/preflight`, local doctor credential validation, and server-side doctor version/offline reasoning.
 - 2026-03-14: Shipped the reconciliation slice: durable `RunnerHealthIncident`, builtin `runner-health-reconcile` job, deduped Telegram/email alerts, and deduped Oikos wakeups for prolonged outages.
+- 2026-03-14: Shipped the UI slice: Runners and runner detail pages now surface effective health reasons, heartbeat windows, version drift, capability sync state, and recent jobs.
+- 2026-03-14: Local verification passed for `make test-runner-unit`, frontend typecheck/lint, `make test`, and `make test-e2e`.

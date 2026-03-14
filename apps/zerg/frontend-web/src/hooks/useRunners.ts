@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createEnrollToken,
   fetchRunner,
-  fetchRunners,
   fetchRunnerDoctor,
+  fetchRunnerJobs,
+  fetchRunners,
   revokeRunner,
   rotateRunnerSecret,
   updateRunner,
@@ -11,6 +12,7 @@ import {
   type RotateSecretResponse,
   type Runner,
   type RunnerDoctorResponse,
+  type RunnerJob,
   type RunnerUpdate,
 } from "../services/api";
 
@@ -24,11 +26,26 @@ export function useRunners(options?: { refetchInterval?: number }) {
 }
 
 // Get single runner
-export function useRunner(id: number) {
+export function useRunner(id: number, options?: { refetchInterval?: number }) {
   return useQuery<Runner>({
     queryKey: ["runners", id],
     queryFn: () => fetchRunner(id),
     enabled: id > 0,
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
+export function useRunnerJobs(
+  id: number,
+  options?: { limit?: number; refetchInterval?: number },
+) {
+  const limit = options?.limit ?? 6;
+
+  return useQuery<RunnerJob[]>({
+    queryKey: ["runners", id, "jobs", limit],
+    queryFn: () => fetchRunnerJobs(id, limit),
+    enabled: id > 0,
+    refetchInterval: options?.refetchInterval,
   });
 }
 
