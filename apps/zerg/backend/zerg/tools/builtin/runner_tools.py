@@ -20,6 +20,8 @@ from zerg.context import get_commis_context
 from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.services.command_validator import CommandValidator
+from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.runner_health import assess_runner_health
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
@@ -229,10 +231,15 @@ def runner_exec(
                 f"Runner '{runner_name}' has been revoked",
             )
 
-        if runner.status == "offline":
+        connection_manager = get_runner_connection_manager()
+        health = assess_runner_health(
+            runner,
+            is_connected=connection_manager.is_online(owner_id, runner_id),
+        )
+        if health.effective_status == "offline" or not connection_manager.is_online(owner_id, runner_id):
             return tool_error(
                 ErrorType.EXECUTION_ERROR,
-                f"Runner '{runner_name}' is offline",
+                f"Runner '{runner_name}' is offline. {health.status_summary}",
             )
 
         # Validate command against runner capabilities

@@ -82,11 +82,31 @@ parse_json() {
 
 # Register runner with backend
 echo "Registering runner '$RUNNER_NAME' with Longhouse..."
+RUNNER_REQUESTED_CAPABILITIES="${RUNNER_REQUESTED_CAPABILITIES:-__REQUESTED_CAPABILITIES__}"
+case "$RUNNER_REQUESTED_CAPABILITIES" in
+  "" ) RUNNER_REQUESTED_CAPABILITIES="exec.full" ;;
+  *[!A-Za-z0-9,._-]* ) echo "Error: Invalid RUNNER_REQUESTED_CAPABILITIES value" >&2; exit 1 ;;
+esac
+REQUESTED_CAPS_JSON="["
+IFS=',' read -r -a _cap_array <<EOF
+$RUNNER_REQUESTED_CAPABILITIES
+EOF
+for _cap in "${_cap_array[@]}"; do
+  _trimmed="$(printf "%s" "$_cap" | tr -d '[:space:]')"
+  if [ -z "$_trimmed" ]; then
+    continue
+  fi
+  if [ "$REQUESTED_CAPS_JSON" != "[" ]; then
+    REQUESTED_CAPS_JSON="${REQUESTED_CAPS_JSON},"
+  fi
+  REQUESTED_CAPS_JSON="${REQUESTED_CAPS_JSON}\"$_trimmed\""
+done
+REQUESTED_CAPS_JSON="${REQUESTED_CAPS_JSON}]"
 
 REGISTER_URL="${LONGHOUSE_URL}/api/runners/register"
 RESPONSE=$(curl -sf -X POST "$REGISTER_URL" \
   -H "Content-Type: application/json" \
-  -d "{\"enroll_token\": \"$ENROLL_TOKEN\", \"name\": \"$RUNNER_NAME\"}" 2>&1) || {
+  -d "{\"enroll_token\": \"$ENROLL_TOKEN\", \"name\": \"$RUNNER_NAME\", \"capabilities\": $REQUESTED_CAPS_JSON}" 2>&1) || {
   echo "Error: Failed to register runner. Check your enrollment token." >&2
   # Don't print response - may contain secrets on partial success
   exit 1

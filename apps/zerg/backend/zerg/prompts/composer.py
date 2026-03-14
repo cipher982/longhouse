@@ -10,6 +10,8 @@ from zerg.prompts.templates import BASE_COMMIS_PROMPT
 from zerg.prompts.templates import BASE_OIKOS_ASSISTANT_PROMPT
 from zerg.prompts.templates import BASE_OIKOS_PROMPT
 from zerg.services.oikos_operator_policy import policy_from_user_context
+from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.runner_health import assess_runner_health
 
 
 def format_user_context(ctx: dict) -> str:
@@ -129,7 +131,16 @@ def format_online_runners(owner_id: int) -> str:
     db = next(get_db())
     try:
         runners = runner_crud.get_runners(db, owner_id=owner_id)
-        runner_names = [r.name for r in runners if r.status == "online"]
+        connection_manager = get_runner_connection_manager()
+        runner_names = [
+            runner.name
+            for runner in runners
+            if assess_runner_health(
+                runner,
+                is_connected=connection_manager.is_online(runner.owner_id, runner.id),
+            ).effective_status
+            == "online"
+        ]
     finally:
         db.close()
 

@@ -18,6 +18,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Path
+from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import WebSocket
@@ -33,7 +34,11 @@ from zerg.dependencies.auth import get_current_user
 from zerg.models.models import User
 from zerg.schemas.runner_schemas import EnrollTokenResponse
 from zerg.schemas.runner_schemas import RunnerDoctorResponse
+from zerg.schemas.runner_schemas import RunnerJobListResponse
+from zerg.schemas.runner_schemas import RunnerJobResponse
 from zerg.schemas.runner_schemas import RunnerListResponse
+from zerg.schemas.runner_schemas import RunnerPreflightRequest
+from zerg.schemas.runner_schemas import RunnerPreflightResponse
 from zerg.schemas.runner_schemas import RunnerRegisterRequest
 from zerg.schemas.runner_schemas import RunnerRegisterResponse
 from zerg.schemas.runner_schemas import RunnerResponse
@@ -42,8 +47,10 @@ from zerg.schemas.runner_schemas import RunnerStatusItem
 from zerg.schemas.runner_schemas import RunnerStatusResponse
 from zerg.schemas.runner_schemas import RunnerSuccessResponse
 from zerg.schemas.runner_schemas import RunnerUpdate
+from zerg.services.runner_auth import authenticate_runner_identity
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_doctor import diagnose_runner
+from zerg.services.runner_health import build_runner_response
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.utils.time import utc_now_naive
 
@@ -280,6 +287,7 @@ def get_install_script(
     safe_binary_url = shlex.quote(binary_url)
 
     safe_install_mode = mode or "desktop"
+    safe_requested_capabilities = shlex.quote("exec.full")
 
     template_path = Path(__file__).parent / "templates" / "install.sh"
     script = template_path.read_text()
@@ -294,6 +302,7 @@ def get_install_script(
         "__API_URL__": safe_api_url,
         "__BINARY_URL__": safe_binary_url,
         "__INSTALL_MODE__": safe_install_mode,
+        "__REQUESTED_CAPABILITIES__": safe_requested_capabilities,
     }
     _pattern = _re.compile("|".join(_re.escape(k) for k in _substitutions))
     script = _pattern.sub(lambda m: _substitutions[m.group()], script)
@@ -371,13 +380,14 @@ def create_enroll_token(
         api_url = str(request.base_url).rstrip("/")
 
     runner_image = settings.runner_docker_image
+    requested_capabilities = "exec.full"
 
     # Generate two-step setup instructions (legacy, for manual setup)
     docker_command = (
         f"# Step 1: Register runner (one-time)\n"
         f"curl -X POST {api_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
-        f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner"}}\'\n\n'
+        f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner", "capabilities": ["{requested_capabilities}"]}}\'\n\n'
         f"# Step 2: Save the runner_secret from the response, then run:\n"
         f"docker run -d --name longhouse-runner \\\n"
         f"  -e LONGHOUSE_URL={api_url} \\\n"
@@ -387,7 +397,10 @@ def create_enroll_token(
     )
 
     # Generate one-liner install command (env var method - avoids token in shell history)
-    one_liner_install_command = f"ENROLL_TOKEN={plaintext_token} bash -c 'curl -fsSL {api_url}/api/runners/install.sh | bash'"
+    one_liner_install_command = (
+        f"RUNNER_REQUESTED_CAPABILITIES={requested_capabilities} "
+        f"ENROLL_TOKEN={plaintext_token} bash -c 'curl -fsSL {api_url}/api/runners/install.sh | bash'"
+    )
 
     return EnrollTokenResponse(
         enroll_token=plaintext_token,
@@ -433,6 +446,7 @@ async def register_runner(
 
     # Generate auth secret (used for both create and re-enroll)
     auth_secret = runner_crud.generate_token()
+    requested_capabilities = runner_crud.normalize_capabilities(request.capabilities)
 
     # If a runner with this name already exists, rotate its secret (re-enroll path).
     # This handles DB wipes, instance migrations, and lost-credential recovery without
@@ -480,6 +494,7 @@ async def register_runner(
             name=request.name,
             auth_secret=auth_secret,
             labels=request.labels,
+            capabilities=requested_capabilities,
             metadata=request.metadata,
         )
     except IntegrityError as e:
@@ -514,15 +529,31 @@ def get_runner_status(
     Useful for detecting broken runner connections early.
     """
     runners = runner_crud.get_runners(db=db, owner_id=current_user.id)
+    connection_manager = get_runner_connection_manager()
+    serialized = [
+        build_runner_response(
+            runner,
+            is_connected=connection_manager.is_online(runner.owner_id, runner.id),
+        )
+        for runner in runners
+    ]
 
-    online_count = sum(1 for r in runners if r.status == "online")
-    offline_count = sum(1 for r in runners if r.status in ("offline", "revoked"))
+    online_count = sum(1 for runner in serialized if runner.status == "online")
+    offline_count = sum(1 for runner in serialized if runner.status in ("offline", "revoked"))
 
     return RunnerStatusResponse(
         total=len(runners),
         online=online_count,
         offline=offline_count,
-        runners=[RunnerStatusItem(name=r.name, status=r.status) for r in runners],
+        runners=[
+            RunnerStatusItem(
+                name=runner.name,
+                status=runner.status,
+                status_reason=runner.status_reason,
+                status_summary=runner.status_summary,
+            )
+            for runner in serialized
+        ],
     )
 
 
@@ -533,8 +564,16 @@ def list_runners(
 ) -> RunnerListResponse:
     """List all runners for the authenticated user."""
     runners = runner_crud.get_runners(db=db, owner_id=current_user.id)
-
-    return RunnerListResponse(runners=[RunnerResponse.model_validate(r) for r in runners])
+    connection_manager = get_runner_connection_manager()
+    return RunnerListResponse(
+        runners=[
+            build_runner_response(
+                runner,
+                is_connected=connection_manager.is_online(runner.owner_id, runner.id),
+            )
+            for runner in runners
+        ]
+    )
 
 
 @router.get("/{runner_id}", response_model=RunnerResponse)
@@ -552,7 +591,76 @@ def get_runner(
             detail="Runner not found",
         )
 
-    return RunnerResponse.model_validate(runner)
+    connection_manager = get_runner_connection_manager()
+    return build_runner_response(
+        runner,
+        is_connected=connection_manager.is_online(runner.owner_id, runner.id),
+    )
+
+
+@router.post("/preflight", response_model=RunnerPreflightResponse)
+def runner_preflight(
+    request: RunnerPreflightRequest,
+    db: Session = Depends(get_db),
+) -> RunnerPreflightResponse:
+    """Authenticate runner credentials for local doctor flows."""
+    auth = authenticate_runner_identity(
+        db,
+        runner_id=request.runner_id,
+        runner_name=request.runner_name,
+        secret=request.secret,
+    )
+    if not auth.authenticated or auth.runner is None:
+        return RunnerPreflightResponse(
+            authenticated=False,
+            reason_code=auth.reason_code,
+            summary=auth.summary,
+            runner_id=request.runner_id,
+            runner_name=request.runner_name,
+        )
+
+    connection_manager = get_runner_connection_manager()
+    runner_response = build_runner_response(
+        auth.runner,
+        is_connected=connection_manager.is_online(auth.runner.owner_id, auth.runner.id),
+    )
+    return RunnerPreflightResponse(
+        authenticated=True,
+        reason_code=auth.reason_code,
+        summary=auth.summary,
+        runner_id=runner_response.id,
+        runner_name=runner_response.name,
+        status=runner_response.status,
+        status_reason=runner_response.status_reason,
+        status_summary=runner_response.status_summary,
+        last_seen_at=runner_response.last_seen_at,
+        last_seen_age_seconds=runner_response.last_seen_age_seconds,
+        install_mode=runner_response.install_mode,
+        runner_version=runner_response.runner_version,
+        latest_runner_version=runner_response.latest_runner_version,
+        version_status=runner_response.version_status,
+        capabilities_match=runner_response.capabilities_match,
+    )
+
+
+@router.get("/{runner_id}/jobs", response_model=RunnerJobListResponse)
+def list_runner_jobs(
+    runner_id: int = Path(..., gt=0),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> RunnerJobListResponse:
+    """List recent jobs for a specific runner."""
+    runner = runner_crud.get_runner(db=db, runner_id=runner_id)
+    if not runner or runner.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Runner not found",
+        )
+
+    jobs = runner_crud.get_runner_jobs(db=db, runner_id=runner_id, skip=offset, limit=limit)
+    return RunnerJobListResponse(jobs=[RunnerJobResponse.model_validate(job) for job in jobs])
 
 
 @router.get("/{runner_id}/doctor", response_model=RunnerDoctorResponse)
@@ -570,7 +678,11 @@ def get_runner_doctor(
             detail="Runner not found",
         )
 
-    return diagnose_runner(runner)
+    connection_manager = get_runner_connection_manager()
+    return diagnose_runner(
+        runner,
+        is_connected=connection_manager.is_online(runner.owner_id, runner.id),
+    )
 
 
 @router.patch("/{runner_id}", response_model=RunnerResponse)
@@ -625,7 +737,11 @@ def update_runner(
             detail="Failed to update runner",
         )
 
-    return RunnerResponse.model_validate(updated_runner)
+    connection_manager = get_runner_connection_manager()
+    return build_runner_response(
+        updated_runner,
+        is_connected=connection_manager.is_online(updated_runner.owner_id, updated_runner.id),
+    )
 
 
 @router.post("/{runner_id}/revoke", response_model=RunnerSuccessResponse)
@@ -787,52 +903,29 @@ async def runner_websocket(
             await _safe_close_runner_websocket(websocket, code=1008, reason="Missing runner_id or runner_name")
             return
 
-        computed_hash = runner_crud.hash_token(secret)
-
-        # Look up runner by ID or name
-        # Name-based auth requires iterating users, but since the secret is unique
-        # per runner, we can validate after finding by name across all users
-        # Import here for use in heartbeat updates (needed regardless of auth path)
-        from sqlalchemy import select
+        # Import here for use in heartbeat updates
         from sqlalchemy import update
 
         from zerg.models.models import Runner as RunnerModel
 
-        runner = None
-        if runner_id:
-            runner = runner_crud.get_runner(db, runner_id)
-        elif runner_name:
-            # Name-based auth: names are only unique per-owner, so we bind name+secret.
-            # Note: if two owners have runners with same name AND same secret hash,
-            # this returns the first match. This is a config error but shouldn't crash.
-            stmt = select(RunnerModel).where(RunnerModel.name == runner_name, RunnerModel.auth_secret_hash == computed_hash)
-            results = db.execute(stmt).scalars().all()
-            if len(results) > 1:
-                logger.warning(f"Multiple runners found with name '{runner_name}' and same secret hash - using first match")
-            runner = results[0] if results else None
-            if not runner:
-                logger.warning(f"Runner not found by name: {runner_name}")
-                await _safe_close_runner_websocket(websocket, code=1008, reason="Invalid runner_name or secret")
-                return
-
-        if not runner:
-            logger.warning(f"Runner not found: {runner_id}")
-            await _safe_close_runner_websocket(websocket, code=1008, reason="Invalid runner_id")
+        auth = authenticate_runner_identity(
+            db,
+            runner_id=runner_id,
+            runner_name=runner_name,
+            secret=secret,
+        )
+        runner = auth.runner
+        if not auth.authenticated or not runner:
+            logger.warning(
+                "Runner websocket auth failed for id=%s name=%s: %s",
+                runner_id,
+                runner_name,
+                auth.reason_code,
+            )
+            await _safe_close_runner_websocket(websocket, code=1008, reason=auth.summary)
             return
 
         runner_id = runner.id  # Ensure runner_id is set for name-based auth
-
-        # Check secret using constant-time comparison
-        if not secrets.compare_digest(computed_hash, runner.auth_secret_hash):
-            logger.warning(f"Invalid secret for runner {runner_id}")
-            await _safe_close_runner_websocket(websocket, code=1008, reason="Invalid secret")
-            return
-
-        # Check if runner is revoked
-        if runner.status == "revoked":
-            logger.warning(f"Revoked runner attempted to connect: {runner_id}")
-            await _safe_close_runner_websocket(websocket, code=1008, reason="Runner has been revoked")
-            return
 
         owner_id = runner.owner_id
 

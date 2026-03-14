@@ -70,6 +70,7 @@ export interface RunnerMetadata {
   platform: string;
   arch: string;
   runner_version: string;
+  heartbeat_interval_ms?: number;
   docker_available?: boolean;
   capabilities?: string[];
   install_mode?: string;

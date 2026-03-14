@@ -495,17 +495,18 @@ Status (2026-03-14): In progress.
 **Goal:** Make runner liveness, diagnosis, and escalation trustworthy across David's fleet, hosted single-tenant users, and OSS self-installers by deriving health from heartbeats instead of trusting cached DB status.
 
 - [x] Write V2 spec + persistent task doc
-- [ ] Fix capability registration so install paths can request explicit capabilities
-- [ ] Add shared runner health assessment and use it across API/tool/prompt surfaces
-- [ ] Add authenticated runner preflight so the local doctor can distinguish wrong instance vs bad secret vs healthy config
-- [ ] Add durable offline incidents plus a builtin reconciliation/attention job
-- [ ] Wire prolonged offline incidents into Telegram/email alerts and Oikos wakeups
+- [x] Fix capability registration so install paths can request explicit capabilities
+- [x] Add shared runner health assessment and use it across API/tool/prompt surfaces
+- [x] Add authenticated runner preflight so the local doctor can distinguish wrong instance vs bad secret vs healthy config
+- [x] Add durable offline incidents plus a builtin reconciliation/attention job
+- [x] Wire prolonged offline incidents into Telegram/email alerts and Oikos wakeups
 - [ ] Improve Oikos + runners UI with health reasons, version drift, and recent jobs
 - [ ] Run local verification, ship, and verify live behavior
 
 Notes:
 - 2026-03-14: Startup already resets stale `online` rows to `offline`; the real bug is that `last_seen_at` is not used as the product-wide source of truth once the app stays up.
 - 2026-03-14: Spec: `docs/specs/runner-health-v2.md`. Task doc: `docs/tasks/runner-health-v2.md`.
+- 2026-03-14: Backend slices now include health assessment + capability contract, doctor preflight validation, and the builtin `runner-health-reconcile` job with durable incidents, external alerts, and Oikos wakeups.
 
 ## [Infra] Honest degraded job status for scheduled jobs (size: 2)
 
