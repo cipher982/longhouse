@@ -29,9 +29,10 @@ from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
+from zerg.services.run_stream import ContinuationAliasResolver
 from zerg.services.run_stream import StreamLifecycleState
+from zerg.services.run_stream import filter_stream_event
 from zerg.services.run_stream import load_historical_run_events
-from zerg.services.run_stream import with_test_commis_routing
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ async def _replay_and_stream(
     last_sent_event_id = 0
     lifecycle = StreamLifecycleState()
     overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
-    continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
+    continuation_resolver = ContinuationAliasResolver(root_run_id=run_id, test_commis_id=test_commis_id)
 
     def _apply_event_state(event_type: str, event: dict, *, from_replay: bool = False) -> None:
         """Update stream lifecycle state from an event."""
@@ -114,66 +115,24 @@ async def _replay_and_stream(
             now_monotonic=time.monotonic(),
         )
 
-    def _is_continuation_of_run(candidate_run_id: int) -> bool:
-        """Return True if candidate_run_id is a continuation of run_id (including chains).
-
-        Uses root_run_id for chain traversal so continuation-of-continuation
-        chains alias back to the original run's SSE stream.
-        """
-        if candidate_run_id in continuation_cache:
-            return continuation_cache[candidate_run_id]
-
-        try:
-            from zerg.database import db_session
-            from zerg.models.models import Run
-
-            with with_test_commis_routing(test_commis_id):
-                with db_session() as db:
-                    candidate = db.query(Run).filter(Run.id == candidate_run_id).first()
-                    if not candidate:
-                        continuation_cache[candidate_run_id] = False
-                        return False
-                    # Check root_run_id first (handles chains), fall back to continuation_of_run_id
-                    is_cont = bool(candidate.root_run_id == run_id or candidate.continuation_of_run_id == run_id)
-                    continuation_cache[candidate_run_id] = is_cont
-                    return is_cont
-        except Exception:
-            # Best-effort only; if lookup fails, do not leak events across runs.
-            continuation_cache[candidate_run_id] = False
-            return False
-
     async def event_handler(event):
         """Filter and queue relevant events (non-blocking)."""
         if overflow_event.is_set():
             return  # Already overflowed, drop subsequent events
 
-        # Security: only emit events for this owner
-        if event.get("owner_id") != owner_id:
+        filtered_event = filter_stream_event(
+            event,
+            owner_id=owner_id,
+            run_id=run_id,
+            allow_continuation_runs=allow_continuation_runs,
+            continuation_resolver=continuation_resolver,
+        )
+        if filtered_event is None:
             return
-
-        # Filter by run_id, with optional continuation run support
-        if "run_id" in event and event.get("run_id") != run_id:
-            if allow_continuation_runs:
-                candidate_run_id = event.get("run_id")
-                if isinstance(candidate_run_id, int) and _is_continuation_of_run(candidate_run_id):
-                    # Alias continuation run_id back to the original for UI stability
-                    event = dict(event)
-                    event["run_id"] = run_id
-                else:
-                    return
-            else:
-                return
-
-        # Tool events MUST have run_id to prevent leaking across runs
-        event_type = event.get("event_type") or event.get("type")
-        if event_type in ("commis_tool_started", "commis_tool_completed", "commis_tool_failed", "commis_output_chunk"):
-            if "run_id" not in event:
-                logger.warning(f"Tool event missing run_id, dropping: {event_type}")
-                return
 
         # Non-blocking put with overflow handling
         try:
-            queue.put_nowait(event)
+            queue.put_nowait(filtered_event)
         except asyncio.QueueFull:
             overflow_event.set()  # Signal overflow via Event (no sentinel needed)
             logger.warning(f"Stream queue overflow for run {run_id}, signaling client to reconnect")

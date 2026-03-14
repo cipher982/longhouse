@@ -2,13 +2,22 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 from typing import Iterator
 
 from zerg.database import db_session
 from zerg.database import reset_test_commis_id
 from zerg.database import set_test_commis_id
 from zerg.models.enums import RunStatus
+from zerg.models.models import Run
 from zerg.services.event_store import EventStore
+
+TOOL_EVENTS_REQUIRING_RUN_ID = {
+    "commis_tool_started",
+    "commis_tool_completed",
+    "commis_tool_failed",
+    "commis_output_chunk",
+}
 
 
 @dataclass(frozen=True)
@@ -118,6 +127,62 @@ class StreamLifecycleState:
         if self.awaiting_continuation_until is not None and now_monotonic >= self.awaiting_continuation_until:
             return True
         return self.close_event_id is not None and bool(event_id) and event_id >= self.close_event_id
+
+
+class ContinuationAliasResolver:
+    def __init__(self, *, root_run_id: int, test_commis_id: str | None = None) -> None:
+        self.root_run_id = root_run_id
+        self.test_commis_id = test_commis_id
+        self._cache: dict[int, bool] = {}
+
+    def is_continuation(self, candidate_run_id: int) -> bool:
+        if candidate_run_id in self._cache:
+            return self._cache[candidate_run_id]
+
+        try:
+            with with_test_commis_routing(self.test_commis_id):
+                with db_session() as db:
+                    candidate = db.query(Run).filter(Run.id == candidate_run_id).first()
+                    if not candidate:
+                        self._cache[candidate_run_id] = False
+                        return False
+                    is_continuation = bool(
+                        candidate.root_run_id == self.root_run_id or candidate.continuation_of_run_id == self.root_run_id
+                    )
+                    self._cache[candidate_run_id] = is_continuation
+                    return is_continuation
+        except Exception:
+            self._cache[candidate_run_id] = False
+            return False
+
+
+def filter_stream_event(
+    event: dict[str, Any],
+    *,
+    owner_id: int,
+    run_id: int,
+    allow_continuation_runs: bool,
+    continuation_resolver: ContinuationAliasResolver | None = None,
+) -> dict[str, Any] | None:
+    if event.get("owner_id") != owner_id:
+        return None
+
+    if "run_id" in event and event.get("run_id") != run_id:
+        if not allow_continuation_runs or continuation_resolver is None:
+            return None
+        candidate_run_id = event.get("run_id")
+        if not isinstance(candidate_run_id, int):
+            return None
+        if not continuation_resolver.is_continuation(candidate_run_id):
+            return None
+        event = dict(event)
+        event["run_id"] = run_id
+
+    event_type = event.get("event_type") or event.get("type")
+    if event_type in TOOL_EVENTS_REQUIRING_RUN_ID and "run_id" not in event:
+        return None
+
+    return event
 
 
 @contextmanager
