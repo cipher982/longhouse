@@ -51,6 +51,9 @@ Status (2026-03-14): Pending. `_replay_and_stream()` still carries too much life
 - [ ] Implement the refactor in small verified slices
 - [ ] Finish with green make-based verification
 
+Notes:
+- 2026-03-14: Spec written in `docs/specs/run-stream-refactor.md`. The intended target is one new service module (`services/run_stream.py`), not a package or manager framework.
+
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
 Status (2026-03-14): In progress. Scoped to a bounded cleanup pass, not a full auth rewrite.
