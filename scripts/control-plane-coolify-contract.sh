@@ -7,7 +7,6 @@ COOLIFY_API_HOST="${COOLIFY_API_HOST:-$COOLIFY_DB_HOST}"
 APP_HOST="${APP_HOST:-zerg}"
 TARGET_DB_URL="${TARGET_DB_URL:-sqlite:////data/control-plane.db}"
 TARGET_DB_DIR="${TARGET_DB_DIR:-/var/app-data/longhouse-control-plane}"
-LEGACY_DB_DIR="${LEGACY_DB_DIR:-/var/lib/docker/data/longhouse-control-plane}"
 BACKUP_DB_GLOB="${BACKUP_DB_GLOB:-/var/app-data/longhouse-backups/control-plane/control-plane-*.db}"
 TARGET_INSTANCE_DATA_ROOT="${TARGET_INSTANCE_DATA_ROOT:-/var/app-data/longhouse}"
 DATA_MOUNT_PATH="/data"
@@ -180,19 +179,12 @@ latest_backup_db() {
 
 stage_control_plane_db() {
   local target_db="$TARGET_DB_DIR/control-plane.db"
-  local legacy_db="$LEGACY_DB_DIR/control-plane.db"
   local backup_db=""
 
   ssh "$APP_HOST" "sudo install -d -m 755 '$TARGET_DB_DIR'"
 
   if db_has_instances "$target_db"; then
     say "Target DB already populated; leaving it in place."
-    return 0
-  fi
-
-  if db_has_instances "$legacy_db"; then
-    say "Copying populated legacy DB into $TARGET_DB_DIR..."
-    ssh "$APP_HOST" "sudo rsync -a '$LEGACY_DB_DIR/' '$TARGET_DB_DIR/'"
     return 0
   fi
 
@@ -204,17 +196,9 @@ stage_control_plane_db() {
   fi
 
   warn "Target DB is empty and no populated source was found."
-  warn "Checked legacy DB: $legacy_db"
   warn "Checked backup glob: $BACKUP_DB_GLOB"
   echo "ERROR: refusing to stage an empty control-plane DB" >&2
   exit 1
-}
-
-remove_legacy_db_dir() {
-  if [[ "$LEGACY_DB_DIR" == "$TARGET_DB_DIR" ]]; then
-    return
-  fi
-  ssh "$APP_HOST" "if [ -d '$LEGACY_DB_DIR' ]; then sudo rm -rf '$LEGACY_DB_DIR'; fi"
 }
 
 apply_contract() {
@@ -243,9 +227,6 @@ apply_contract() {
   say "Verifying control-plane health and DB location..."
   curl -fsS https://control.longhouse.ai/health >/dev/null
   ssh "$APP_HOST" "sudo test -f '$TARGET_DB_DIR/control-plane.db'"
-
-  say "Removing legacy root-mounted DB dir..."
-  remove_legacy_db_dir
 
   ENVS_JSON="$(load_envs_json)"
   check_contract
