@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from uuid import uuid4
 
-import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from zerg.crud import crud
+from zerg.crud import create_thread_message
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -73,7 +73,7 @@ def test_oikos_history_filters_by_surface_and_defaults_to_web(tmp_path):
 
         base_ts = datetime(2026, 3, 4, 12, 0, 0, tzinfo=timezone.utc)
         # Legacy row with no metadata should be treated as web.
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="user",
@@ -81,7 +81,7 @@ def test_oikos_history_filters_by_surface_and_defaults_to_web(tmp_path):
             sent_at=base_ts,
             processed=True,
         )
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="assistant",
@@ -90,7 +90,7 @@ def test_oikos_history_filters_by_surface_and_defaults_to_web(tmp_path):
             processed=True,
             message_metadata=_surface_metadata("web", "web:main"),
         )
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="user",
@@ -99,7 +99,7 @@ def test_oikos_history_filters_by_surface_and_defaults_to_web(tmp_path):
             processed=True,
             message_metadata=_surface_metadata("telegram", "telegram:6311583060"),
         )
-        crud.create_thread_message(
+        create_thread_message(
             db=db,
             thread_id=thread.id,
             role="assistant",
@@ -164,7 +164,7 @@ async def test_run_oikos_persists_surface_metadata_on_user_and_assistant(monkeyp
                 self.usage_reasoning_tokens = None
 
             async def run_thread(self, inner_db, thread):
-                assistant = crud.create_thread_message(
+                assistant = create_thread_message(
                     db=inner_db,
                     thread_id=thread.id,
                     role="assistant",
@@ -257,7 +257,7 @@ async def test_run_oikos_serializes_concurrent_runs_per_owner(monkeypatch, tmp_p
                 type(self).max_active = max(type(self).max_active, type(self).active_count)
                 try:
                     await asyncio.sleep(0.01)
-                    assistant = crud.create_thread_message(
+                    assistant = create_thread_message(
                         db=inner_db,
                         thread_id=thread.id,
                         role="assistant",
