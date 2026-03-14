@@ -47,12 +47,13 @@ Status (2026-03-14): Pending. `_replay_and_stream()` still carries too much life
 - Test-only `test_commis` routing remains intact during the refactor
 - `make test` passes after each implementation slice
 
-- [ ] Write the concrete extraction plan and guardrail test matrix
+- [x] Write the concrete extraction plan and guardrail test matrix
 - [ ] Implement the refactor in small verified slices
 - [ ] Finish with green make-based verification
 
 Notes:
 - 2026-03-14: Spec written in `docs/specs/run-stream-refactor.md`. The intended target is one new service module (`services/run_stream.py`), not a package or manager framework.
+- 2026-03-14: Guardrail characterization landed in `tests_lite/test_run_stream_service.py`.
 
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
@@ -452,6 +453,25 @@ Notes:
 - 2026-03-08: Live probing showed `cube` is `x86_64`, not ARM, so the disposable canary uses Ubuntu `amd64` cloud images there.
 - 2026-03-08: `cube` mounts both `/tmp` and `/var/tmp` as 2 GiB tmpfs, so `uvtool` image sync must use a disk-backed temp dir; the host harness now uses `/var/lib/longhouse-vm/tmp`.
 - 2026-03-08: Disposable `cube` canary now proves the full hosted contract: Ubuntu `noble` VM -> `RUNNER_INSTALL_MODE=server` install -> reboot -> Oikos `hostname -s` -> promote runner to `exec.full` -> re-enroll -> reboot -> Oikos `bash -lc 'hostname -s'` -> revoke -> destroy.
+
+## [Infra][Product] Runner health truth, diagnosis, and attention (size: 5)
+
+Status (2026-03-14): In progress.
+
+**Goal:** Make runner liveness, diagnosis, and escalation trustworthy across David's fleet, hosted single-tenant users, and OSS self-installers by deriving health from heartbeats instead of trusting cached DB status.
+
+- [x] Write V2 spec + persistent task doc
+- [ ] Fix capability registration so install paths can request explicit capabilities
+- [ ] Add shared runner health assessment and use it across API/tool/prompt surfaces
+- [ ] Add authenticated runner preflight so the local doctor can distinguish wrong instance vs bad secret vs healthy config
+- [ ] Add durable offline incidents plus a builtin reconciliation/attention job
+- [ ] Wire prolonged offline incidents into Telegram/email alerts and Oikos wakeups
+- [ ] Improve Oikos + runners UI with health reasons, version drift, and recent jobs
+- [ ] Run local verification, ship, and verify live behavior
+
+Notes:
+- 2026-03-14: Startup already resets stale `online` rows to `offline`; the real bug is that `last_seen_at` is not used as the product-wide source of truth once the app stays up.
+- 2026-03-14: Spec: `docs/specs/runner-health-v2.md`. Task doc: `docs/tasks/runner-health-v2.md`.
 
 ## [Infra] Honest degraded job status for scheduled jobs (size: 2)
 
