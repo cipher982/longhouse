@@ -9,7 +9,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
+from zerg.crud import get_fiches
 from zerg.database import get_db
 from zerg.routers.oikos_auth import get_current_oikos_user
 from zerg.utils.time import UTCBaseModel
@@ -37,7 +37,7 @@ def list_oikos_fiches(
 ) -> List[OikosFicheSummary]:
     """List the current user's fiches with schedule and status summaries."""
     # Multi-tenant SaaS: Oikos shows only the logged-in user's fiches.
-    fiches = crud.get_fiches(db, owner_id=current_user.id)
+    fiches = get_fiches(db, owner_id=current_user.id)
 
     summaries = []
     for fiche in fiches:
