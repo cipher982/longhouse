@@ -100,6 +100,76 @@ def _patched_stream_db(monkeypatch, session_local):
     yield
 
 
+def test_lifecycle_keep_open_extends_lease_only_for_live_events():
+    state = run_stream_service.StreamLifecycleState()
+
+    state.apply(
+        "stream_control",
+        {"action": "keep_open", "ttl_ms": 900_000},
+        from_replay=True,
+        now_monotonic=10.0,
+    )
+    assert state.stream_lease_until is None
+
+    state.apply(
+        "stream_control",
+        {"action": "keep_open", "ttl_ms": 900_000},
+        from_replay=False,
+        now_monotonic=10.0,
+    )
+    assert state.stream_lease_until == 310.0
+
+
+def test_lifecycle_close_waits_until_close_marker_is_streamed():
+    state = run_stream_service.StreamLifecycleState()
+
+    state.apply(
+        "stream_control",
+        {"action": "close", "event_id": 5},
+        from_replay=False,
+        now_monotonic=0.0,
+    )
+
+    assert state.should_close_after_live_event(event_id=4, now_monotonic=0.0) is False
+    assert state.should_close_after_live_event(event_id=5, now_monotonic=0.0) is True
+
+
+def test_lifecycle_starts_grace_window_after_oikos_complete_and_last_commis():
+    state = run_stream_service.StreamLifecycleState()
+
+    state.apply("commis_spawned", {}, from_replay=False, now_monotonic=1.0)
+    state.apply("oikos_complete", {}, from_replay=False, now_monotonic=2.0)
+
+    assert state.close_after_current_event is False
+
+    state.apply("commis_complete", {}, from_replay=False, now_monotonic=3.0)
+
+    assert state.awaiting_continuation_until == 8.0
+    assert state.next_timeout(3.0) == 5.0
+    assert state.should_close_on_timeout(7.9) is False
+    assert state.should_close_on_timeout(8.0) is True
+
+
+def test_lifecycle_oikos_deferred_respects_close_stream_flag():
+    keep_open_state = run_stream_service.StreamLifecycleState()
+    keep_open_state.apply(
+        "oikos_deferred",
+        {"close_stream": False},
+        from_replay=False,
+        now_monotonic=0.0,
+    )
+    assert keep_open_state.should_close_after_live_event(event_id=None, now_monotonic=0.0) is False
+
+    close_state = run_stream_service.StreamLifecycleState()
+    close_state.apply(
+        "oikos_deferred",
+        {},
+        from_replay=False,
+        now_monotonic=0.0,
+    )
+    assert close_state.should_close_after_live_event(event_id=None, now_monotonic=0.0) is True
+
+
 def test_load_historical_run_events_uses_test_commis_id_context(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     _, run_id = _seed_run(session_local)
