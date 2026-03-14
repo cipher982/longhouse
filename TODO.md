@@ -48,7 +48,7 @@ Status (2026-03-14): Pending. `_replay_and_stream()` still carries too much life
 - `make test` passes after each implementation slice
 
 - [x] Write the concrete extraction plan and guardrail test matrix
-- [ ] Implement the refactor in small verified slices
+- [x] Implement the refactor in small verified slices
 - [ ] Finish with green make-based verification
 
 Notes:
@@ -58,6 +58,8 @@ Notes:
 - 2026-03-14: Slice 3 extracted `StreamLifecycleState` and direct lifecycle tests; one unrelated `test_runner_tools.py` failure flaked once during verification, then passed on a clean rerun of `make test`.
 - 2026-03-14: Slice 4 extracted continuation alias resolution and event filtering into `services/run_stream.py` with direct continuation/chain/fail-closed coverage.
 - 2026-03-14: Slice 5 extracted event-bus subscription and overflow handling into `RunEventSubscription` with direct queue/subscriber coverage.
+- 2026-03-14: Slice 6 moved SSE encoding and the replay/live orchestration loop into `services/run_stream.py`, leaving `routers/stream.py` as thin request/response glue plus compatibility wrappers.
+- 2026-03-14: Final `make test` in the current dirty worktree is blocked by an unrelated runner failure: `tests_lite/test_runner_doctor.py::test_runner_doctor_reports_healthy_online_runner` expects `severity == "healthy"` but the active runner code in this tree returns `error`.
 
 ## [Tech Debt] Split auth by domain ownership (size: 4)
 

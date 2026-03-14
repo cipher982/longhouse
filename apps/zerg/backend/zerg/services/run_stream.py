@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from typing import Any
 from typing import Iterator
 
@@ -15,6 +20,8 @@ from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
 from zerg.models.models import Run
 from zerg.services.event_store import EventStore
+
+logger = logging.getLogger(__name__)
 
 STREAM_EVENT_TYPES = (
     EventType.OIKOS_STARTED,
@@ -308,3 +315,191 @@ def load_historical_run_events(
                 )
 
     return events
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return value.isoformat()
+    return str(value)
+
+
+def encode_connected_sse(run_id: int) -> dict[str, str]:
+    return {
+        "event": "connected",
+        "data": json.dumps(
+            {
+                "type": "connected",
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            },
+            default=_json_default,
+        ),
+    }
+
+
+def encode_replay_sse(event: HistoricalRunEvent) -> dict[str, str]:
+    return {
+        "id": str(event.event_id),
+        "event": event.event_type,
+        "data": json.dumps(
+            {
+                "type": event.event_type,
+                "payload": event.payload,
+                "timestamp": event.timestamp,
+            },
+            default=_json_default,
+        ),
+    }
+
+
+def encode_live_sse(event: dict[str, Any]) -> dict[str, str]:
+    event_type = event.get("event_type") or event.get("type") or "event"
+    event_id = event.get("event_id")
+    payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id", "event_id"}}
+    sse_event = {
+        "event": event_type,
+        "data": json.dumps(
+            {
+                "type": event_type,
+                "payload": payload,
+                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            },
+            default=_json_default,
+        ),
+    }
+    if event_id:
+        sse_event["id"] = str(event_id)
+    return sse_event
+
+
+def encode_heartbeat_sse(*, message: str | None = None) -> dict[str, str]:
+    payload: dict[str, str] = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    if message:
+        payload["message"] = message
+    return {
+        "event": "heartbeat",
+        "data": json.dumps(payload, default=_json_default),
+    }
+
+
+def encode_overflow_sse() -> dict[str, str]:
+    return {
+        "event": "overflow",
+        "data": json.dumps(
+            {
+                "type": "overflow",
+                "message": "Stream buffer full, please reconnect",
+                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            },
+            default=_json_default,
+        ),
+    }
+
+
+async def stream_run_events(
+    run_id: int,
+    owner_id: int,
+    status: RunStatus,
+    after_event_id: int,
+    include_tokens: bool,
+    *,
+    include_replay: bool = True,
+    allow_continuation_runs: bool = False,
+    test_commis_id: str | None = None,
+    queue_max_size: int = 1000,
+):
+    queue: asyncio.Queue = asyncio.Queue(maxsize=queue_max_size)
+    last_sent_event_id = 0
+    lifecycle = StreamLifecycleState()
+    overflow_event = asyncio.Event()
+    continuation_resolver = ContinuationAliasResolver(root_run_id=run_id, test_commis_id=test_commis_id)
+    subscription = RunEventSubscription(
+        queue=queue,
+        overflow_event=overflow_event,
+        owner_id=owner_id,
+        run_id=run_id,
+        allow_continuation_runs=allow_continuation_runs,
+        continuation_resolver=continuation_resolver,
+    )
+
+    def apply_event_state(event_type: str, event: dict[str, Any], *, from_replay: bool = False) -> None:
+        lifecycle.apply(
+            event_type,
+            event,
+            from_replay=from_replay,
+            now_monotonic=time.monotonic(),
+        )
+
+    try:
+        with subscription:
+            if include_replay:
+                historical_events = load_historical_run_events(
+                    run_id,
+                    after_event_id,
+                    include_tokens,
+                    test_commis_id=test_commis_id,
+                )
+                for historical_event in historical_events:
+                    last_sent_event_id = historical_event.event_id
+                    apply_event_state(
+                        historical_event.event_type,
+                        {**historical_event.payload, "_event_id": historical_event.event_id},
+                        from_replay=True,
+                    )
+                    yield encode_replay_sse(historical_event)
+
+            if lifecycle.should_close_after_replay(last_sent_event_id, status):
+                return
+
+            logger.debug(
+                "Starting live stream for run %s (status=%s, last_sent_id=%s)",
+                run_id,
+                status.value,
+                last_sent_event_id,
+            )
+
+            yield encode_heartbeat_sse(message="Live stream started")
+
+            complete = False
+            while not complete:
+                if overflow_event.is_set():
+                    logger.warning(
+                        "Stream overflow for run %s, closing (client should reconnect with Last-Event-ID)",
+                        run_id,
+                    )
+                    yield encode_overflow_sse()
+                    return
+
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=lifecycle.next_timeout(time.monotonic()))
+                    event_type = event.get("event_type") or event.get("type") or "event"
+
+                    if not include_tokens and event_type == "oikos_token":
+                        continue
+
+                    event_id = event.get("event_id")
+                    if event_id and event_id <= last_sent_event_id:
+                        logger.debug("Skipping duplicate event %s (already replayed)", event_id)
+                        continue
+
+                    apply_event_state(event_type, event)
+
+                    if event_id:
+                        last_sent_event_id = event_id
+
+                    yield encode_live_sse(event)
+
+                    if lifecycle.should_close_after_live_event(event_id=event_id, now_monotonic=time.monotonic()):
+                        complete = True
+
+                except asyncio.TimeoutError:
+                    yield encode_heartbeat_sse()
+                    if lifecycle.should_close_on_timeout(time.monotonic()):
+                        complete = True
+
+    except asyncio.CancelledError:
+        logger.info("Stream disconnected for run %s", run_id)
