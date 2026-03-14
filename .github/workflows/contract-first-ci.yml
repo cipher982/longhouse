@@ -20,7 +20,9 @@ env:
 
 jobs:
   validate:
-    runs-on: cube
+    # Public repo safety: do not run untrusted fork PR code on self-hosted runners.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: cube-fast
     name: "🔍 validate--make-validate--ws-sse-makefile-lints"
 
     steps:
@@ -74,8 +76,8 @@ jobs:
       run: make test-install-runner
 
   frontend-tests:
-    runs-on: cube
-    needs: validate
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: cube-fast
     name: "⚛️ unit-frontend--bun-validate-types--bun-test--make-test-runner-unit"
 
     steps:
@@ -107,8 +109,8 @@ jobs:
       run: make test-runner-unit
 
   e2e:
-    runs-on: cube
-    needs: [sqlite-tests, frontend-tests]
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: cube-browser
     name: "🎭 e2e-core-a11y--make-test-e2e"
     env:
       # E2E tests use per-backend SQLite databases (no Postgres needed)

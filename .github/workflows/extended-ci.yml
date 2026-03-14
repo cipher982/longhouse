@@ -17,7 +17,7 @@ env:
 
 jobs:
   extended:
-    runs-on: cube
+    runs-on: cube-browser
     name: "🧪 Extended CI (Full Suite)"
     env:
       # E2E tests use per-backend SQLite databases (no Postgres needed)

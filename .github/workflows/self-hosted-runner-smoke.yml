@@ -11,8 +11,16 @@ concurrency:
 
 jobs:
   smoke:
-    name: "🧪 Canary (self-hosted on cube)"
-    runs-on: cube
+    strategy:
+      fail-fast: false
+      matrix:
+        label:
+          - cube-fast
+          - cube-browser
+          - cube-deploy
+          - cube-maint
+    name: "🧪 Canary (${{ matrix.label }})"
+    runs-on: ${{ matrix.label }}
     timeout-minutes: 10
     if: ${{ github.event_name != 'schedule' || vars.CUBE_RUNNER_CANARY_ENABLED != 'false' }}
 

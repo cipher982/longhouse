@@ -274,9 +274,9 @@ jobs:
 
   self-hosted-cube-linux-x64:
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted) }}
-    runs-on: cube
+    runs-on: cube-browser
     timeout-minutes: 30
-    name: "self-hosted-onboarding--linux-x64--cube"
+    name: "self-hosted-onboarding--linux-x64--cube-browser"
 
     steps:
       - uses: actions/checkout@v4
@@ -311,7 +311,7 @@ jobs:
       - name: Run runner install contract tests
         run: make test-install-runner
 
-      - name: Run onboarding smoke on cube Linux x64
+      - name: Run onboarding smoke on cube browser lane
         run: make test-e2e-onboarding PROJECT=onboarding-chromium
 
       - name: Upload self-hosted cube Linux x64 artifacts

@@ -34,7 +34,7 @@ env:
 
 jobs:
   run:
-    runs-on: cube
+    runs-on: ${{ contains(fromJSON('["e2e-core","e2e-a11y","e2e-single","full"]'), inputs.suite) && 'cube-browser' || 'cube-fast' }}
     name: "🧪 ci-test--${{ inputs.suite }}--${{ inputs.ref }}"
     env:
       SUITE: ${{ inputs.suite }}

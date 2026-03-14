@@ -20,7 +20,7 @@ concurrency:
 jobs:
   smoke:
     name: "🧪 Post-Deploy Smoke Test"
-    runs-on: cube
+    runs-on: cube-deploy
     timeout-minutes: 10
     if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
     env:
