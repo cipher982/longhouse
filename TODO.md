@@ -15,6 +15,42 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Product][QA/Test] Fix session workspace initial auto-scroll regression (size: 2)
+
+Status (2026-03-14): Done. Long session detail pages now retry auto-scroll until the timeline pane is actually ready, and the session-detail browser spec is green again.
+
+**Goal:** Make long session detail pages reliably auto-scroll to the latest context on first open, without brittle DOM querying or timing races.
+
+**Done when:**
+- Opening a long session reliably scrolls the timeline list near the latest context instead of leaving `scrollTop === 0`
+- The scroll behavior no longer depends on a one-shot global `document.querySelector(...)` race
+- Focused frontend coverage exists for the retry/late-layout path that caused the regression
+- `make test-frontend-unit` and the targeted session E2E spec pass
+
+- [x] Replace the current one-shot session workspace auto-scroll logic with a ref-based retry path
+- [x] Add focused frontend coverage for late scroll-container readiness
+- [x] Rerun unit + targeted E2E verification
+
+Notes:
+- 2026-03-14: The regression came from marking auto-scroll complete before the timeline list was actually scrollable. The fix moved the hook off `document.querySelector(...)` onto a real list ref and retries for a few animation frames before giving up.
+- 2026-03-14: `make test-frontend-unit` passed with new `useSessionWorkspace` coverage, and `make test-e2e-single TEST=tests/core/sessions.spec.ts` passed after the fix.
+
+## [Launch][Tech Debt] Refactor stream replay/live lifecycle state out of the router (size: 4)
+
+Status (2026-03-14): Pending. `_replay_and_stream()` still carries too much lifecycle and continuation state in one router-local function.
+
+**Goal:** Shrink `stream.py` into a thinner router by extracting the replay/live lifecycle state machine into smaller, testable units without changing stream behavior.
+
+**Done when:**
+- Replay/live lifecycle state is modeled by smaller functions or a dedicated state object instead of one large mutable router function
+- Continuation aliasing, `stream_control` keep-open/close, backpressure, and completion heuristics are covered by focused tests
+- Test-only `test_commis` routing remains intact during the refactor
+- `make test` passes after each implementation slice
+
+- [ ] Write the concrete extraction plan and guardrail test matrix
+- [ ] Implement the refactor in small verified slices
+- [ ] Finish with green make-based verification
+
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
 Status (2026-03-14): In progress. Scoped to a bounded cleanup pass, not a full auth rewrite.

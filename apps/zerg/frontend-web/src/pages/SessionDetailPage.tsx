@@ -73,6 +73,7 @@ export default function SessionDetailPage() {
     selectedKey,
     selectedSelection,
     selectKey,
+    registerTimelineList,
   } = workspace;
 
   const returnTo = (location.state as { from?: string } | null)?.from;
@@ -307,6 +308,7 @@ export default function SessionDetailPage() {
             error={eventsError}
             selectedKey={selectedKey}
             onSelectKey={selectKey}
+            listRef={registerTimelineList}
             dock={
               canContinueInCloud && activeSessionForChat ? (
                 <SessionChat
