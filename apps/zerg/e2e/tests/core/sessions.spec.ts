@@ -449,13 +449,19 @@ test.describe('Session Detail Page', () => {
     await page.getByRole('button', { name: 'Start in Cloud' }).click();
 
     await expect(page.locator('.session-chat-error')).toHaveCount(0);
-    await expect(page.locator('.session-chat-message--user')).toContainText('anything else?');
 
     await expect
       .poll(() => page.url(), { timeout: 10000 })
       .not.toContain(`/timeline/${rootId}`);
 
     await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
+    // The dock swaps to the new cloud head as soon as the continuation is created,
+    // so assert on the post-redirect branch state rather than the transient draft bubble.
+    await expect(page.getByTestId('session-continuation-panel')).toContainText(
+      'Continue on the current cloud branch',
+    );
+    await expect(page.getByRole('button', { name: 'Start in Cloud' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
 
     const sessionsResp = await request.get(`/api/agents/sessions?project=${project}&days_back=1`);
     expect(sessionsResp.ok()).toBe(true);
