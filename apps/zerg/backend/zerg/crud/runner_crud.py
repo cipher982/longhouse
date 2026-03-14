@@ -160,13 +160,14 @@ def create_runner(
         Created runner record
     """
     secret_hash = hash_token(auth_secret)
+    normalized_capabilities = normalize_capabilities(capabilities)
 
     db_runner = Runner(
         owner_id=owner_id,
         name=name,
         auth_secret_hash=secret_hash,
         labels=labels,
-        capabilities=capabilities or ["exec.readonly"],
+        capabilities=normalized_capabilities or ["exec.readonly"],
         runner_metadata=metadata,
         status="offline",
     )
@@ -236,12 +237,29 @@ def update_runner(
     if labels is not None:
         db_runner.labels = labels
     if capabilities is not None:
-        db_runner.capabilities = capabilities
+        db_runner.capabilities = normalize_capabilities(capabilities) or ["exec.readonly"]
 
     db.commit()
     db.refresh(db_runner)
 
     return db_runner
+
+
+def normalize_capabilities(capabilities: Optional[list[str]]) -> list[str]:
+    """Normalize capabilities while preserving caller order."""
+    if not capabilities:
+        return []
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw in capabilities:
+        if not isinstance(raw, str):
+            continue
+        item = raw.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
 
 
 def revoke_runner(db: Session, runner_id: int) -> Optional[Runner]:
@@ -564,4 +582,6 @@ def get_runner_jobs(
     Returns:
         List of runner jobs
     """
-    return db.query(RunnerJob).filter(RunnerJob.runner_id == runner_id).offset(skip).limit(limit).all()
+    return (
+        db.query(RunnerJob).filter(RunnerJob.runner_id == runner_id).order_by(RunnerJob.created_at.desc()).offset(skip).limit(limit).all()
+    )

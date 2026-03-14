@@ -29,6 +29,14 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
     }),
     runCommand: () => ({ status: 0, stdout: '', stderr: '' }),
     fetchHealth: async () => true,
+    fetchPreflight: async () => ({
+      ok: true,
+      authenticated: true,
+      reasonCode: 'authenticated',
+      summary: 'Longhouse accepted the configured runner credentials.',
+      status: 'online',
+      statusSummary: 'Online. Heartbeats are current.',
+    }),
     ...overrides,
   };
 }
@@ -88,5 +96,34 @@ describe('collectDoctorReport', () => {
     expect(report.severity).toBe('error');
     expect(report.summary).toContain('warnings');
     expect(report.checks.some((check) => check.key === 'config' && check.status === 'fail')).toBe(true);
+  });
+
+  it('flags invalid runner secrets from Longhouse preflight', async () => {
+    const report = await collectDoctorReport({}, deps({
+      fetchPreflight: async () => ({
+        ok: true,
+        authenticated: false,
+        reasonCode: 'invalid_secret',
+        summary: 'Longhouse rejected the configured runner secret.',
+      }),
+    }));
+    expect(report.severity).toBe('error');
+    expect(report.summary).toContain('rejected');
+  });
+
+  it('flags when Longhouse still sees the runner offline', async () => {
+    const report = await collectDoctorReport({}, deps({
+      fetchPreflight: async () => ({
+        ok: true,
+        authenticated: true,
+        reasonCode: 'authenticated',
+        summary: 'Longhouse accepted the configured runner credentials.',
+        status: 'offline',
+        statusReason: 'disconnected_recently',
+        statusSummary: 'Offline. The runner has no active websocket connection.',
+      }),
+    }));
+    expect(report.severity).toBe('error');
+    expect(report.summary).toContain('Longhouse still sees the runner as offline');
   });
 });

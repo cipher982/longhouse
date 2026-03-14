@@ -43,6 +43,7 @@ class RunnerRegisterRequest(BaseModel):
     enroll_token: str = Field(..., description="One-time enrollment token")
     name: Optional[str] = Field(None, description="Optional runner name (auto-generated if not provided)")
     labels: Optional[dict[str, str]] = Field(None, description="Optional labels for runner targeting")
+    capabilities: Optional[list[str]] = Field(None, description="Optional capabilities for the new runner")
     metadata: Optional[dict[str, Any]] = Field(None, description="Runner metadata (hostname, os, arch, etc.)")
 
 
@@ -56,6 +57,34 @@ class RunnerRegisterResponse(BaseModel):
         default="exec.readonly",
         description="Comma-separated runner capabilities for installer env files",
     )
+
+
+class RunnerPreflightRequest(BaseModel):
+    """Unauthenticated runner credential check used by the local doctor."""
+
+    runner_id: Optional[int] = Field(None, description="Runner ID if known")
+    runner_name: Optional[str] = Field(None, description="Runner name if RUNNER_ID is not configured")
+    secret: str = Field(..., description="Runner secret used for websocket authentication")
+
+
+class RunnerPreflightResponse(UTCBaseModel):
+    """Structured result from runner credential preflight."""
+
+    authenticated: bool
+    reason_code: str
+    summary: str
+    runner_id: Optional[int] = None
+    runner_name: Optional[str] = None
+    status: Optional[str] = None
+    status_reason: Optional[str] = None
+    status_summary: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
+    last_seen_age_seconds: Optional[int] = None
+    install_mode: Optional[str] = None
+    runner_version: Optional[str] = None
+    latest_runner_version: Optional[str] = None
+    version_status: Optional[str] = None
+    capabilities_match: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -74,8 +103,19 @@ class RunnerResponse(UTCBaseModel):
     labels: Optional[dict[str, str]] = None
     capabilities: list[str] = Field(default_factory=lambda: ["exec.readonly"])
     status: str  # online|offline|revoked
+    status_reason: Optional[str] = None
+    status_summary: Optional[str] = None
     last_seen_at: Optional[datetime] = None
+    last_seen_age_seconds: Optional[int] = None
+    heartbeat_interval_ms: int = Field(default=30_000, description="Reported heartbeat interval in milliseconds")
+    stale_after_seconds: int = Field(default=90, description="Seconds after which a heartbeat is treated as stale")
     runner_metadata: Optional[dict[str, Any]] = None
+    install_mode: Optional[str] = None
+    runner_version: Optional[str] = None
+    latest_runner_version: Optional[str] = None
+    version_status: str = Field(default="unknown", description="current|outdated|ahead|unknown")
+    reported_capabilities: Optional[list[str]] = None
+    capabilities_match: Optional[bool] = None
     created_at: datetime
     updated_at: datetime
 
@@ -121,6 +161,12 @@ class RunnerJobResponse(UTCBaseModel):
     created_at: datetime
 
 
+class RunnerJobListResponse(BaseModel):
+    """Response for listing recent runner jobs."""
+
+    jobs: list[RunnerJobResponse] = Field(..., description="Recent jobs for this runner")
+
+
 # ---------------------------------------------------------------------------
 # Secret Rotation
 # ---------------------------------------------------------------------------
@@ -150,6 +196,8 @@ class RunnerStatusItem(BaseModel):
 
     name: str
     status: str  # online|offline|revoked
+    status_reason: Optional[str] = None
+    status_summary: Optional[str] = None
 
 
 class RunnerStatusResponse(BaseModel):

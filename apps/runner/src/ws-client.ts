@@ -149,6 +149,7 @@ export class RunnerWebSocketClient {
       secret: this.config.runnerSecret,
       metadata: {
         ...metadata,
+        heartbeat_interval_ms: this.config.heartbeatIntervalMs,
         capabilities: this.config.capabilities,
       },
     };

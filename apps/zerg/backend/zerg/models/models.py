@@ -389,6 +389,42 @@ class RunnerJob(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
+class RunnerHealthIncident(Base):
+    """Durable runner health incident for deduped alerts and wakeups."""
+
+    __tablename__ = "runner_health_incidents"
+    __table_args__ = (
+        Index("ix_runner_health_incidents_runner_status", "runner_id", "status"),
+        Index("ix_runner_health_incidents_owner_status", "owner_id", "status"),
+        Index("ix_runner_health_incidents_opened", "opened_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner = relationship("User", backref=backref("runner_health_incidents", cascade="all, delete-orphan"))
+
+    runner_id = Column(Integer, ForeignKey("runners.id", ondelete="CASCADE"), nullable=False, index=True)
+    runner = relationship("Runner", backref=backref("health_incidents", cascade="all, delete-orphan"))
+
+    incident_type = Column(String, nullable=False, default="offline")
+    status = Column(String, nullable=False, default="open")  # open|resolved
+    reason_code = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    context = Column(MutableDict.as_mutable(JSON), nullable=True)
+
+    opened_at = Column(DateTime, server_default=func.now(), nullable=False)
+    last_observed_at = Column(DateTime, server_default=func.now(), nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
+
+    alert_sent_at = Column(DateTime, nullable=True)
+    alert_channel = Column(String, nullable=True)
+    alert_count = Column(Integer, nullable=False, default=0)
+
+    wakeup_sent_at = Column(DateTime, nullable=True)
+    wakeup_count = Column(Integer, nullable=False, default=0)
+
+
 # ---------------------------------------------------------------------------
 # Knowledge Base – Sources and Documents (Phase 0)
 # ---------------------------------------------------------------------------

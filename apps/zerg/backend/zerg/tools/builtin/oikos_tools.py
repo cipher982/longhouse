@@ -168,6 +168,7 @@ _OIKOS_UTILITY_TOOL_LIST = [
     "web_fetch",
     # Infrastructure
     "runner_list",
+    "runner_doctor",
     "runner_create_enroll_token",
     "runner_exec",
     # Communication
