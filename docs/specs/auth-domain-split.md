@@ -1,6 +1,6 @@
 # Auth Domain Split
 
-Status: In progress
+Status: Done
 
 ## Scope
 
@@ -43,3 +43,4 @@ Out of scope:
 ## Notes
 
 - 2026-03-14: Keep this as structural cleanup. Phase 3 is where `/api/agents/*` becomes machine-only.
+- 2026-03-14: Shipped with `make test-lite`, `make test-e2e`, GHCR runtime build `23098760543`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, and `make qa-live` all green.
