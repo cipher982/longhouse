@@ -13,6 +13,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.auth import get_current_browser_user
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,12 @@ def get_current_oikos_user(
 ):
     """Resolve the authenticated user for Oikos endpoints.
 
-    SaaS model: Oikos is just another client UI and uses standard auth.
+    Oikos is a browser-owned product surface and uses the normal browser
+    session cookie for fetch/XHR traffic.
 
-    - For normal fetch/XHR: use `Authorization: Bearer <token>`
-    - For SSE/EventSource: pass `token=<jwt>` as a query param
+    - For normal fetch/XHR: use the `longhouse_session` cookie
+    - For SSE/EventSource: pass `token=<jwt>` as a query param when cookies
+      are not available
     """
     from zerg.dependencies.auth import _get_strategy
 
@@ -40,7 +43,7 @@ def get_current_oikos_user(
             return user
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    return _get_strategy().get_current_user(request, db)
+    return get_current_browser_user(request, db)
 
 
 def _is_tool_enabled(ctx: dict, tool_key: str) -> bool:

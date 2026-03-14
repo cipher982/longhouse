@@ -38,8 +38,8 @@ from zerg.crud import get_user_by_email
 from zerg.crud import update_connector
 from zerg.crud import update_user
 from zerg.database import get_db
-from zerg.dependencies.auth import get_current_user
-from zerg.dependencies.auth import get_optional_user
+from zerg.dependencies.auth import get_current_browser_user
+from zerg.dependencies.auth import get_optional_browser_user
 from zerg.schemas.schemas import TokenOut
 
 # Use override=True to ensure proper quote stripping even if vars are inherited from parent process.
@@ -570,54 +570,21 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
 def verify_session(request: Request, db: Session = Depends(get_db)):
     """Fast auth check for nginx auth_request.
 
-    Validates the session from cookie (preferred) or Authorization header.
+    Validates the browser session cookie.
     Returns 204 if valid, 401 if missing/invalid/expired/user-inactive.
 
     In development mode (AUTH_DISABLED=1), always returns 204.
     """
     if _settings.auth_disabled:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    from zerg.auth.strategy import _decode_jwt_fallback
-
-    # Try to extract token: prefer cookie, fall back to bearer
-    token: str | None = None
-
-    # 1. Check cookie first (browser auth)
-    token = request.cookies.get(SESSION_COOKIE_NAME)
-
-    # 2. Fall back to Authorization header (API clients)
-    if not token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No session")
-
-    # Validate the token (checks signature and expiry)
-    try:
-        payload = _decode_jwt_fallback(token, JWT_SECRET)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
-
-    # Extract user_id and verify user exists and is active
-    try:
-        user_id = int(payload.get("sub"))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
-
-    user = get_user(db, user_id)
-    if user is None or not getattr(user, "is_active", True):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
-
-    # Valid token and user - 204 response handled by status_code
+    get_current_browser_user(request, db)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/status")
 def auth_status(request: Request, db: Session = Depends(get_db)):
     """Return auth status without throwing 401 (browser-friendly)."""
-    user = get_optional_user(request, db)
+    user = get_optional_browser_user(request, db)
     if not user:
         return {"authenticated": False, "user": None}
 
@@ -1240,7 +1207,7 @@ def _issue_hosted_gmail_connect_token(email: str) -> str:
 
 @router.post("/google/gmail/start", response_model=HostedGmailConnectStartResponse)
 def start_hosted_gmail_connect(
-    current_user: Any = Depends(get_current_user),
+    current_user: Any = Depends(get_current_browser_user),
 ) -> HostedGmailConnectStartResponse:
     """Return the control-plane Gmail connect URL for hosted instances."""
 
@@ -1261,7 +1228,7 @@ def start_hosted_gmail_connect(
 def connect_gmail(
     body: dict[str, str],
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: Any = Depends(get_current_browser_user),
 ) -> GmailConnectResponse:
     """Connect Gmail via OAuth and create/update a Gmail connector.
 

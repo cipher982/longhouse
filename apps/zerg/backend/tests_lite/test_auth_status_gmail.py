@@ -70,7 +70,7 @@ def test_auth_status_reports_real_gmail_connector_health(tmp_path):
     try:
         with session_local() as db:
             owner = db.get(User, 1)
-            with patch("zerg.routers.auth.get_optional_user", return_value=owner):
+            with patch("zerg.routers.auth.get_optional_browser_user", return_value=owner):
                 response = client.get("/auth/status")
 
         assert response.status_code == 200
@@ -112,7 +112,7 @@ def test_auth_status_flags_legacy_connector_without_watch_bootstrap(tmp_path):
     try:
         with session_local() as db:
             owner = db.get(User, 1)
-            with patch("zerg.routers.auth.get_optional_user", return_value=owner):
+            with patch("zerg.routers.auth.get_optional_browser_user", return_value=owner):
                 response = client.get("/auth/status")
 
         assert response.status_code == 200

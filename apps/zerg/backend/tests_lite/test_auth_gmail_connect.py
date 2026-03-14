@@ -18,6 +18,7 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.auth import get_current_browser_user
 from zerg.dependencies.auth import get_current_user
 from zerg.main import api_app
 from zerg.models import Connector
@@ -66,6 +67,7 @@ def _make_client(session_local, current_user: User):
 
     api_app.dependency_overrides[get_db] = override_db
     api_app.dependency_overrides[get_current_user] = override_user
+    api_app.dependency_overrides[get_current_browser_user] = override_user
     return TestClient(api_app)
 
 
