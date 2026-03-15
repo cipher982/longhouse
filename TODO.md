@@ -490,7 +490,7 @@ Notes:
 
 ## [Infra][Product] Runner health truth, diagnosis, and attention (size: 5)
 
-Status (2026-03-14): In progress.
+Status (2026-03-15): Done.
 
 **Goal:** Make runner liveness, diagnosis, and escalation trustworthy across David's fleet, hosted single-tenant users, and OSS self-installers by deriving health from heartbeats instead of trusting cached DB status.
 
@@ -501,13 +501,14 @@ Status (2026-03-14): In progress.
 - [x] Add durable offline incidents plus a builtin reconciliation/attention job
 - [x] Wire prolonged offline incidents into Telegram/email alerts and Oikos wakeups
 - [x] Improve Oikos + runners UI with health reasons, version drift, and recent jobs
-- [ ] Run local verification, ship, and verify live behavior
+- [x] Run local verification, ship, and verify live behavior
 
 Notes:
 - 2026-03-14: Startup already resets stale `online` rows to `offline`; the real bug is that `last_seen_at` is not used as the product-wide source of truth once the app stays up.
 - 2026-03-14: Spec: `docs/specs/runner-health-v2.md`. Task doc: `docs/tasks/runner-health-v2.md`.
 - 2026-03-14: Backend slices now include health assessment + capability contract, doctor preflight validation, and the builtin `runner-health-reconcile` job with durable incidents, external alerts, and Oikos wakeups.
 - 2026-03-14: The runners list/detail UI now shows effective health summaries, stale-heartbeat windows, version drift, capability sync state, and recent jobs; local verification is green through `make test` + `make test-e2e`.
+- 2026-03-15: Final ship closed across `454a7d82` -> `0180f3ae`. Runtime build `23099091822` and deploy workflow `23099120591` succeeded, `push-pr-ci` `23099226637` finished green after rerunning a transient `glm-4.7-flash` model-smoke timeout, `make qa-live` passed 8/8, and live `david010` runner API verification showed fresh-heartbeat health summaries for `cinder`, `clifford`, `cube`, `zerg`, and `slim`.
 
 ## [Infra] Honest degraded job status for scheduled jobs (size: 2)
 

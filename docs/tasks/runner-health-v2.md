@@ -1,8 +1,8 @@
 # Runner Health V2 Tasks
 
-Status: In progress
+Status: Done
 Spec: `docs/specs/runner-health-v2.md`
-Last updated: 2026-03-14
+Last updated: 2026-03-15
 
 ## Phase 0: Spec and task framing
 
@@ -50,23 +50,26 @@ Last updated: 2026-03-14
 - [x] Update runner detail with richer health/version/recent jobs
 - [x] Regenerate OpenAPI frontend types
 - [x] Run targeted frontend validation
-- [ ] Commit Phase 4
+- [x] Commit Phase 4
 
 ## Phase 5: Verification and ship
 
 - [x] Run targeted backend tests
 - [x] Run runner Bun tests
 - [x] Run broader verification (`make test` and any necessary follow-on checks)
-- [ ] Push `main`
-- [ ] Wait for CI/build workflows to finish successfully
-- [ ] Deploy hosted surfaces if needed
-- [ ] Reprovision the `david010` instance
-- [ ] Verify health and live runner behavior
-- [ ] Update this task doc with final notes
-- [ ] Commit any final doc/status updates
+- [x] Push `main`
+- [x] Wait for CI/build workflows to finish successfully
+- [x] Deploy hosted surfaces if needed
+- [x] Reprovision the `david010` instance
+- [x] Verify health and live runner behavior
+- [x] Update this task doc with final notes
+- [x] Commit any final doc/status updates
 
 Notes:
 - 2026-03-14: The central V2 decision is to treat heartbeat freshness as runner liveness truth and use DB `status` only as a reconciled cache plus the `revoked` administrative state.
 - 2026-03-14: Health truth now also treats live websocket presence as an availability requirement. Fresh heartbeats without a live connection are surfaced as `disconnected_recently` rather than pretending the runner is available.
 - 2026-03-14: Phase 4 UI work now exposes effective health summaries, version drift, stale-heartbeat windows, and recent runner jobs directly in the runners list/detail surfaces instead of hiding that context behind doctor only.
 - 2026-03-14: Local verification currently includes targeted backend runner suites, `make test-runner-unit`, frontend typecheck/lint, `make test`, and `make test-e2e`.
+- 2026-03-15: Final ship required two follow-up fixes on top of the main runner-health work: `3c90b2e5` fixed the frontend CSS production-build regression and triggered runtime deploy `23099120591`, and `0180f3ae` updated the Gmail onboarding Playwright harness to mock `/api/auth/methods` so OSS QA matched the new inbox auth-methods contract.
+- 2026-03-15: Final verification is green: `make test`, `make test-e2e`, `make test-e2e-onboarding`, CI runs `23099091822`, `23099120591`, `23099226627`, `23099226633`, `23099226636`, `23099226640`, `23099226646`, and `23099226637` (after rerunning a transient `glm-4.7-flash` model-smoke timeout), plus `make qa-live` (8/8).
+- 2026-03-15: Live `david010` verification showed the deployed runner API returning heartbeat-derived summaries and version drift in production; `cinder`, `clifford`, `cube`, `zerg`, and `slim` were all online with `fresh_heartbeat`, while stale VM canaries remained honestly offline/revoked.
