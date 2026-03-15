@@ -17,6 +17,15 @@ type GmailUser = {
   gmail_watch_expiry: number | null;
 };
 
+type AuthMethods = {
+  google: boolean;
+  password: boolean;
+  sso: boolean;
+  sso_url: string | null;
+  gmail_ready: boolean;
+  gmail_setup_message: string | null;
+};
+
 type GoogleClientMode = "success" | "cancel";
 
 function buildUser(overrides: Partial<GmailUser> = {}): GmailUser {
@@ -49,6 +58,18 @@ function buildRuntimeConfig(googleClientId: string): string {
     "window.__LLM_AVAILABLE__=true;",
     "window.__EMBEDDINGS_AVAILABLE__=true;",
   ].join("\n");
+}
+
+function buildAuthMethods(overrides: Partial<AuthMethods> = {}): AuthMethods {
+  return {
+    google: true,
+    password: true,
+    sso: false,
+    sso_url: null,
+    gmail_ready: true,
+    gmail_setup_message: null,
+    ...overrides,
+  };
 }
 
 async function mockRuntimeConfig(page: Page, googleClientId: string): Promise<void> {
@@ -98,9 +119,18 @@ async function mockInboxApis(
   options: {
     getUser: () => GmailUser;
     onConnect?: (requestBody: unknown) => { responseBody: Record<string, unknown> };
+    authMethods?: AuthMethods;
   },
 ): Promise<{ connectBodies: unknown[] }> {
   const connectBodies: unknown[] = [];
+
+  await page.route("**/api/auth/methods", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(options.authMethods ?? buildAuthMethods()),
+    });
+  });
 
   await page.route("**/api/auth/status", async (route) => {
     await route.fulfill({
@@ -186,6 +216,10 @@ test.describe("Gmail inbox onboarding", () => {
     await mockRuntimeConfig(page, "");
     await mockInboxApis(page, {
       getUser: () => currentUser,
+      authMethods: buildAuthMethods({
+        gmail_ready: false,
+        gmail_setup_message: null,
+      }),
     });
 
     await openInbox(page);
