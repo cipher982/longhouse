@@ -1,7 +1,7 @@
 # Runner Health V2
 
-Status: In progress
-Last updated: 2026-03-14
+Status: Done
+Last updated: 2026-03-15
 
 ## Goal
 
@@ -201,3 +201,5 @@ Decision for V2:
 - 2026-03-14: Shipped the reconciliation slice: durable `RunnerHealthIncident`, builtin `runner-health-reconcile` job, deduped Telegram/email alerts, and deduped Oikos wakeups for prolonged outages.
 - 2026-03-14: Shipped the UI slice: Runners and runner detail pages now surface effective health reasons, heartbeat windows, version drift, capability sync state, and recent jobs.
 - 2026-03-14: Local verification passed for `make test-runner-unit`, frontend typecheck/lint, `make test`, and `make test-e2e`.
+- 2026-03-15: Final ship is complete. Runtime build `23099091822` and deploy workflow `23099120591` shipped the CSS/build fix needed to keep the new runner UI in the production bundle, and CI run `23099226637` finished green after the Gmail onboarding harness was updated for the new `/api/auth/methods` contract and a transient `glm-4.7-flash` model-smoke timeout was rerun.
+- 2026-03-15: Live hosted verification passed: `make qa-live` succeeded 8/8, `/api/health` on `david010.longhouse.ai` was healthy, and the production `/api/runners` payload showed heartbeat-derived status summaries for the real fleet with stale canaries no longer pretending to be online.
