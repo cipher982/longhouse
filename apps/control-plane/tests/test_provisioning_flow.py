@@ -487,6 +487,7 @@ class TestEnvGeneration:
         assert env["DATABASE_URL"] == "sqlite:////data/longhouse.db"
         assert env["LONGHOUSE_PASSWORD"] == "secret123"
         assert env["CONTROL_PLANE_URL"] == f"https://control.{settings.root_domain}"
+        assert "CONTROL_PLANE_JWT_SECRET" not in env
 
     def test_no_password_env_when_not_provided(self):
         env = _env_for("testuser", "owner@test.com")

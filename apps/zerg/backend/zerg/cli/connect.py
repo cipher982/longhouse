@@ -322,8 +322,7 @@ def ship(
         None,
         "--token",
         "-t",
-        envvar="AGENTS_API_TOKEN",
-        help="API token (uses stored token if not specified)",
+        help="Device token (uses stored token if not specified)",
     ),
     file: str = typer.Option(
         None,
@@ -419,8 +418,7 @@ def connect(
         None,
         "--token",
         "-t",
-        envvar="AGENTS_API_TOKEN",
-        help="API token (uses stored token if not specified)",
+        help="Device token (uses stored token if not specified)",
     ),
     poll: bool = typer.Option(
         False,
@@ -534,7 +532,9 @@ def connect(
         return
 
     if install:
-        _handle_install(url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval, machine_name=machine_name)
+        _handle_install(
+            url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval, machine_name=machine_name
+        )
         return
 
     # Normal connect mode — exec longhouse-engine (replaces this process)
@@ -553,7 +553,8 @@ def connect(
 
     if poll:
         typer.secho(
-            "Warning: --poll is deprecated and ignored. The Rust engine always uses " "file watching plus a periodic fallback scan.",
+            "Warning: --poll is deprecated and ignored. The Rust engine always uses "
+            "file watching plus a periodic fallback scan.",
             fg=typer.colors.YELLOW,
         )
 
@@ -616,8 +617,7 @@ def recall(
         None,
         "--token",
         "-t",
-        envvar="AGENTS_API_TOKEN",
-        help="API token (uses stored token if not specified)",
+        help="Device token (uses stored token if not specified)",
     ),
     claude_dir: str = typer.Option(
         None,

@@ -40,7 +40,7 @@ impl Default for ShipperConfig {
 }
 
 impl ShipperConfig {
-    /// Load config from standard file locations + env vars.
+    /// Load config from standard file locations.
     pub fn from_env() -> Result<Self> {
         let claude_dir = get_claude_dir()?;
         let mut config = Self::default();
@@ -75,13 +75,6 @@ impl ShipperConfig {
                 .with_context(|| format!("reading {}", token_path.display()))?
                 .trim()
                 .to_string();
-            if !token.is_empty() {
-                config.api_token = Some(token);
-            }
-        }
-
-        // Env var override for token
-        if let Ok(token) = std::env::var("AGENTS_API_TOKEN") {
             if !token.is_empty() {
                 config.api_token = Some(token);
             }

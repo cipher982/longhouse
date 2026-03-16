@@ -91,7 +91,7 @@ def _force_agents_token_mode():
     return patch.object(
         agents_auth_deps,
         "get_settings",
-        return_value=type("S", (), {"auth_disabled": False, "agents_api_token": None})(),
+        return_value=type("S", (), {"auth_disabled": False})(),
     )
 
 
@@ -152,4 +152,40 @@ def test_agents_sessions_reject_browser_cookie_without_agents_token(tmp_path):
         assert response.json()["detail"] == "Missing authentication - provide X-Agents-Token header"
     finally:
         auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_agents_sessions_reject_bearer_device_token_without_agents_header(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        _seed_session(db)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_agents_token_mode():
+            response = client.get("/agents/sessions", headers={"Authorization": "Bearer zdt_fake"})
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Missing authentication - provide X-Agents-Token header"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_agents_sessions_reject_legacy_non_device_token(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        _seed_session(db)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_agents_token_mode():
+            response = client.get("/agents/sessions", headers={"X-Agents-Token": "legacy-token"})
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Invalid or revoked device token"
+    finally:
         api_app.dependency_overrides.clear()

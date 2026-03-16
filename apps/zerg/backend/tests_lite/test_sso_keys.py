@@ -1,7 +1,7 @@
 """Tests for runtime SSO key fetching (services/sso_keys.py).
 
 Covers:
-- Cache returns env var fallback when no CONTROL_PLANE_URL
+- Returns no hosted SSO keys when no CONTROL_PLANE_URL is configured
 - Cache TTL expiry triggers refetch
 - Stale cache used on fetch failure
 - accept_token validates with CP-fetched keys (HTTP-level)
@@ -33,23 +33,10 @@ def _reset_cache():
 # ---------------------------------------------------------------------------
 
 
-def test_fallback_to_env_var_when_no_cp_url():
-    """When CONTROL_PLANE_URL is unset, return CONTROL_PLANE_JWT_SECRET."""
+def test_empty_when_no_cp_url():
+    """Without CONTROL_PLANE_URL there is no hosted SSO key source."""
     mock_settings = MagicMock()
     mock_settings.control_plane_url = None
-    mock_settings.control_plane_jwt_secret = "env-secret-123"
-
-    with patch.object(sso_keys_mod, "get_settings", return_value=mock_settings):
-        keys = sso_keys_mod.get_sso_keys()
-
-    assert keys == ["env-secret-123"]
-
-
-def test_empty_when_no_cp_url_and_no_env_var():
-    """When neither CONTROL_PLANE_URL nor CONTROL_PLANE_JWT_SECRET is set."""
-    mock_settings = MagicMock()
-    mock_settings.control_plane_url = None
-    mock_settings.control_plane_jwt_secret = None
 
     with patch.object(sso_keys_mod, "get_settings", return_value=mock_settings):
         keys = sso_keys_mod.get_sso_keys()
@@ -63,7 +50,6 @@ def test_fetches_from_cp_on_first_call():
     mock_settings.control_plane_url = "https://control.example.com"
     mock_settings.app_public_url = "https://test.example.com"
     mock_settings.internal_api_secret = "internal-secret"
-    mock_settings.control_plane_jwt_secret = "fallback"
 
     with (
         patch.object(sso_keys_mod, "get_settings", return_value=mock_settings),
@@ -85,7 +71,6 @@ def test_cache_hit_avoids_refetch():
     mock_settings.control_plane_url = "https://control.example.com"
     mock_settings.app_public_url = "https://test.example.com"
     mock_settings.internal_api_secret = "internal-secret"
-    mock_settings.control_plane_jwt_secret = "fallback"
 
     with (
         patch.object(sso_keys_mod, "get_settings", return_value=mock_settings),
@@ -107,7 +92,6 @@ def test_ttl_expiry_triggers_refetch():
     mock_settings.control_plane_url = "https://control.example.com"
     mock_settings.app_public_url = "https://test.example.com"
     mock_settings.internal_api_secret = "internal-secret"
-    mock_settings.control_plane_jwt_secret = "fallback"
 
     with (
         patch.object(sso_keys_mod, "get_settings", return_value=mock_settings),
@@ -132,7 +116,6 @@ def test_stale_cache_on_fetch_failure():
     mock_settings.control_plane_url = "https://control.example.com"
     mock_settings.app_public_url = "https://test.example.com"
     mock_settings.internal_api_secret = "internal-secret"
-    mock_settings.control_plane_jwt_secret = "fallback"
 
     call_count = 0
 
@@ -159,13 +142,12 @@ def test_stale_cache_on_fetch_failure():
         assert keys == ["fresh-key"]
 
 
-def test_env_var_fallback_when_cache_fully_expired():
-    """When cache + grace period both expired and fetch fails, fall back to env var."""
+def test_empty_when_cache_fully_expired_and_fetch_fails():
+    """When cache + grace period both expire and refresh fails, return no hosted SSO keys."""
     mock_settings = MagicMock()
     mock_settings.control_plane_url = "https://control.example.com"
     mock_settings.app_public_url = "https://test.example.com"
     mock_settings.internal_api_secret = "internal-secret"
-    mock_settings.control_plane_jwt_secret = "env-fallback"
 
     call_count = 0
 
@@ -186,7 +168,7 @@ def test_env_var_fallback_when_cache_fully_expired():
         sso_keys_mod._cached_at = time.monotonic() - 500.0
 
         keys = sso_keys_mod.get_sso_keys()
-        assert keys == ["env-fallback"]
+        assert keys == []
 
 
 # ---------------------------------------------------------------------------

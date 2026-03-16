@@ -3,10 +3,9 @@
 Instances fetch signing keys from the control plane at runtime (cached with
 TTL) so that secret rotations propagate automatically without reprovisioning.
 
-Fallback chain:
+Fetch strategy:
   1. Fresh fetch from control plane
   2. Stale cache (extended 60s grace period on fetch failure)
-  3. CONTROL_PLANE_JWT_SECRET env var (backward compat)
 """
 
 from __future__ import annotations
@@ -65,17 +64,14 @@ def get_sso_keys() -> list[str]:
     """Return current SSO signing keys (cached, auto-refreshing).
 
     Thread-safe.  On fetch failure, serves stale cache for up to
-    ``_stale_grace`` seconds beyond normal TTL, then falls back to
-    the CONTROL_PLANE_JWT_SECRET env var.
+    ``_stale_grace`` seconds beyond normal TTL.
     """
     global _cached_keys, _cached_at, _cache_ttl
 
     settings = get_settings()
 
-    # No control plane URL configured — use env var directly
+    # No control plane URL configured — there is no hosted SSO key source.
     if not settings.control_plane_url:
-        if settings.control_plane_jwt_secret:
-            return [settings.control_plane_jwt_secret]
         return []
 
     now = time.monotonic()
@@ -107,11 +103,6 @@ def get_sso_keys() -> list[str]:
             if _cached_keys is not None and now < stale_deadline:
                 logger.info("Serving stale SSO keys (within grace period)")
                 return list(_cached_keys)
-
-    # Final fallback: env var
-    if settings.control_plane_jwt_secret:
-        logger.info("SSO keys: falling back to CONTROL_PLANE_JWT_SECRET env var")
-        return [settings.control_plane_jwt_secret]
 
     return []
 

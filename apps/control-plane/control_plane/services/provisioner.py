@@ -28,13 +28,13 @@ _CORE_OWNED_ENV_KEYS = {
     "PUBLIC_SITE_URL",
     "DATABASE_URL",
     "JWT_SECRET",
-    "CONTROL_PLANE_JWT_SECRET",
     "INTERNAL_API_SECRET",
     "FERNET_SECRET",
     "TRIGGER_SIGNING_SECRET",
     "CONTROL_PLANE_URL",
     "LONGHOUSE_PASSWORD",
 }
+
 
 def _generate_fernet_key() -> str:
     """Generate a throwaway URL-safe base64-encoded 32-byte key (Fernet-compatible)."""
@@ -186,7 +186,6 @@ def _env_for(
         "PUBLIC_SITE_URL": settings.public_site_url,
         "DATABASE_URL": "sqlite:////data/longhouse.db",
         "JWT_SECRET": settings.instance_jwt_secret,
-        "CONTROL_PLANE_JWT_SECRET": settings.instance_jwt_secret,
         "INTERNAL_API_SECRET": settings.instance_internal_api_secret,
         "FERNET_SECRET": settings.instance_fernet_secret,
         "TRIGGER_SIGNING_SECRET": settings.instance_trigger_signing_secret,
@@ -317,8 +316,12 @@ class Provisioner:
         except docker.errors.ContainerError as exc:
             stderr_value = getattr(exc, "stderr", None)
             stdout_value = getattr(exc, "stdout", None)
-            stderr = stderr_value.decode("utf-8", errors="replace") if isinstance(stderr_value, (bytes, bytearray)) else ""
-            stdout = stdout_value.decode("utf-8", errors="replace") if isinstance(stdout_value, (bytes, bytearray)) else ""
+            stderr = (
+                stderr_value.decode("utf-8", errors="replace") if isinstance(stderr_value, (bytes, bytearray)) else ""
+            )
+            stdout = (
+                stdout_value.decode("utf-8", errors="replace") if isinstance(stdout_value, (bytes, bytearray)) else ""
+            )
             detail = "\n".join(part for part in [stderr, stdout] if part).strip() or str(exc)
             raise RuntimeError(f"Migration preflight failed for {subdomain}: {detail}") from exc
 
@@ -342,7 +345,9 @@ class Provisioner:
 
         try:
             container = self.client.containers.get(container_name)
-            return ProvisionResult(container_name=container.name, data_path=resolve_instance_data_path(subdomain, data_path=data_path))
+            return ProvisionResult(
+                container_name=container.name, data_path=resolve_instance_data_path(subdomain, data_path=data_path)
+            )
         except docker.errors.NotFound:
             pass
 

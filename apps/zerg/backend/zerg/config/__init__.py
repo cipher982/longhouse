@@ -151,13 +151,9 @@ class Settings:  # noqa: D401 – simple data container
 
     # Control plane connection (runtime SSO key fetching) -----------------
     control_plane_url: str | None  # e.g. https://control.longhouse.ai
-    control_plane_jwt_secret: str | None
 
     # Smoke testing -----------------------------------------------------
     smoke_test_secret: str | None  # Service account login for smoke tests
-
-    # Agents API -------------------------------------------------------
-    agents_api_token: str | None  # Token for shipper/agents API auth
 
     # Job queue settings -----------------------------------------------
     job_queue_enabled: bool  # Enable durable job queue (uses DATABASE_URL)
@@ -195,7 +191,9 @@ class Settings:  # noqa: D401 – simple data container
 
     # Telegram channel integration ------------------------------------
     telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
-    telegram_webhook_url: str | None = None  # TELEGRAM_WEBHOOK_URL (e.g. https://your-domain/api/webhooks/channels/telegram)
+    telegram_webhook_url: str | None = (
+        None  # TELEGRAM_WEBHOOK_URL (e.g. https://your-domain/api/webhooks/channels/telegram)
+    )
     telegram_webhook_secret: str | None = None  # TELEGRAM_WEBHOOK_SECRET for request validation
 
     # Memory Files -----------------------------------------------------
@@ -364,12 +362,14 @@ def validate_public_origin_config(settings: Settings, cors_origins: list[str]) -
     public_site_origin = _origin_from_url(settings.public_site_url)
     if public_site_origin and public_site_origin not in cors_origins:
         warnings.append(
-            "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. " "Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
+            "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. "
+            "Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
         )
 
     if not public_site_origin and not settings.allowed_cors_origins and not settings.auth_disabled:
         warnings.append(
-            "PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. " "CORS will default to localhost."
+            "PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. "
+            "CORS will default to localhost."
         )
 
     return warnings
@@ -491,9 +491,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         memory_files_auto_summary_enabled=_truthy(os.getenv("MEMORY_FILES_AUTO_SUMMARY_ENABLED")),
         notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         control_plane_url=os.getenv("CONTROL_PLANE_URL"),
-        control_plane_jwt_secret=os.getenv("CONTROL_PLANE_JWT_SECRET"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
-        agents_api_token=os.getenv("AGENTS_API_TOKEN"),
         job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
         # Git sync settings
         jobs_git_repo_url=os.getenv("JOBS_GIT_REPO_URL"),
@@ -588,7 +586,10 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
         if weak:
             missing_vars.append("JWT_SECRET (must be >=16 chars, not 'dev-secret')")
 
-        weak_internal = settings.internal_api_secret.strip() in {"", "dev-internal-secret"} or len(settings.internal_api_secret) < 16
+        weak_internal = (
+            settings.internal_api_secret.strip() in {"", "dev-internal-secret"}
+            or len(settings.internal_api_secret) < 16
+        )
         if weak_internal:
             missing_vars.append("INTERNAL_API_SECRET (must be >=16 chars, not 'dev-internal-secret')")
 
