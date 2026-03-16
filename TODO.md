@@ -63,7 +63,7 @@ Notes:
 
 ## [Tech Debt] Make `/api/agents/*` machine-only (size: 4)
 
-Status (2026-03-16): In progress. This is phase 3 of the auth cleanup epic.
+Status (2026-03-16): Done. Phase 3 shipped with a browser-owned `/api/timeline/*` archive API, `/api/agents/*` tightened to machine auth, and hosted live QA passing on `david010`.
 
 **Goal:** Stop serving browser UI reads from the machine/device API surface. Browser pages should use a dedicated cookie-session archive API, while `/api/agents/*` becomes explicitly device-token auth only.
 
@@ -74,15 +74,16 @@ Status (2026-03-16): In progress. This is phase 3 of the auth cleanup epic.
 - Core + live E2E reflect the split auth model cleanly
 - Full ship verification passes
 
-- [ ] Write and commit the concise phase 3 spec
-- [ ] Add a browser-owned archive/timeline API for the current session UI
-- [ ] Switch frontend and browser E2E off `/api/agents/*`
-- [ ] Tighten `/api/agents/*` read routes to machine auth only
-- [ ] Ship and verify the hosted runtime after the split
+- [x] Write and commit the concise phase 3 spec
+- [x] Add a browser-owned archive/timeline API for the current session UI
+- [x] Switch frontend and browser E2E off `/api/agents/*`
+- [x] Tighten `/api/agents/*` read routes to machine auth only
+- [x] Ship and verify the hosted runtime after the split
 
 Notes:
 - 2026-03-16: Keep this bounded to auth/API ownership. Do not fold in broader naming cleanup for `agents` vs `sessions` vs `timeline` yet.
 - 2026-03-16: Live QA should still keep direct device-token coverage for `/api/agents/*`; the browser should stop depending on that surface.
+- 2026-03-16: Verification passed locally (`make test`, `make test-e2e`, `make generate-sdk`, `make test-frontend-unit`, `bun run validate:types`) and live (`make qa-live`) after deploying `longhouse-demo`, `longhouse-control-plane`, and reprovisioning `david010`.
 
 ## [Tech Debt] Split auth by domain ownership (size: 4)
 
@@ -204,6 +205,7 @@ Notes:
 - 2026-03-13: The spawn path is multi-backend only at the dispatch layer; continuity, ingest, hooks, and presence are still mostly Claude-first. The launch story should reflect that explicitly instead of implying parity.
 - 2026-03-13: Do the naming/capability truth pass first. Avoid a large internal rename or harness rewrite before launch.
 - 2026-03-13: Phase 1 truth pass landed across Oikos prompt/tool copy, shared provider capability helpers, and the most visible launch/admin `commis` labels. `make test-frontend-unit` and `make test` are green. `make test-e2e-core` still has three unrelated chat/thread failures (`useAuth` / missing `create-fiche-btn`) that should be addressed during launch-surface cleanup.
+- 2026-03-16: Restored the missing spec at `docs/specs/launch-runtime-simplification.md` so the bounded launch cleanup has an explicit vocabulary contract, provider matrix, and acceptance criteria again.
 - 2026-03-16: Current implementation scope for this pass is:
   1. restore the missing spec and lock the bounded cleanup plan,
   2. make the Oikos prompt/tool contract truthful about cloud sessions and provider support,
