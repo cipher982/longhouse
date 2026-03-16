@@ -1,6 +1,6 @@
 # Auth Fallback Deletion
 
-Status: In progress
+Status: Done
 
 ## Scope
 
@@ -41,3 +41,5 @@ Out of scope:
 
 - 2026-03-16: The control plane still provisions an explicit instance JWT secret; this phase only removes the tenant-side legacy fallback helper, not the hosted SSO model itself.
 - 2026-03-16: Keep docs honest about device-token auth. Browser pages are cookie-session auth; `/api/agents/*` is machine auth only.
+- 2026-03-16: `AGENTS_API_TOKEN` is gone from tenant auth and CLI env handling; `/api/agents/*` now accepts only device tokens via `X-Agents-Token`.
+- 2026-03-16: Tenant SSO key resolution now depends on control-plane fetch plus stale-cache grace only; the control plane no longer injects `CONTROL_PLANE_JWT_SECRET` into instances for that fallback path.
