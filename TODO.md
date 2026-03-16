@@ -182,7 +182,7 @@ Notes:
 
 ## [Launch][Product][Docs/Drift][Tech Debt] Simplify runtime story to sessions + cloud work (size: 5)
 
-Status (2026-03-13): In progress. Architecture audit complete, Phase 1 truth pass active.
+Status (2026-03-16): In progress. This phase is now narrowed to contract truth, launch-facing copy/capability cleanup, and non-auth Oikos run/task naming. It explicitly avoids the active `/api/agents/*` auth-boundary split.
 
 **Goal:** Make the launch and onboarding story match the actual product: Longhouse as a timeline/search/continuation platform for CLI sessions, Oikos as an assistant inside it, and cloud work as managed CLI sessions rather than custom `commis` agents.
 
@@ -204,6 +204,13 @@ Notes:
 - 2026-03-13: The spawn path is multi-backend only at the dispatch layer; continuity, ingest, hooks, and presence are still mostly Claude-first. The launch story should reflect that explicitly instead of implying parity.
 - 2026-03-13: Do the naming/capability truth pass first. Avoid a large internal rename or harness rewrite before launch.
 - 2026-03-13: Phase 1 truth pass landed across Oikos prompt/tool copy, shared provider capability helpers, and the most visible launch/admin `commis` labels. `make test-frontend-unit` and `make test` are green. `make test-e2e-core` still has three unrelated chat/thread failures (`useAuth` / missing `create-fiche-btn`) that should be addressed during launch-surface cleanup.
+- 2026-03-16: Current implementation scope for this pass is:
+  1. restore the missing spec and lock the bounded cleanup plan,
+  2. make the Oikos prompt/tool contract truthful about cloud sessions and provider support,
+  3. publish the same provider-capability story in launch-facing docs/UI,
+  4. add compatibility `task_*` fields to Oikos run summaries and move the non-auth Oikos UI toward task/cloud-session wording,
+  5. rerun make-based verification and close what is actually done.
+- 2026-03-16: Do not overlap with the active auth work on browser archive routes, `/api/agents/*` machine-only enforcement, legacy auth fallback deletion, `AUTH_DISABLED`, or control-plane ↔ tenant auth handoff docs.
 - Spec: `docs/specs/launch-runtime-simplification.md`
 
 ## [Launch][Product][QA/Test][Docs/Drift] Finish Gmail inbox for hosted + OSS launch (size: 6)
