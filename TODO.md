@@ -61,6 +61,29 @@ Notes:
 - 2026-03-14: Slice 6 moved SSE encoding and the replay/live orchestration loop into `services/run_stream.py`, leaving `routers/stream.py` as thin request/response glue plus compatibility wrappers.
 - 2026-03-14: Final `make test` in the current dirty worktree is blocked by an unrelated runner failure: `tests_lite/test_runner_doctor.py::test_runner_doctor_reports_healthy_online_runner` expects `severity == "healthy"` but the active runner code in this tree returns `error`.
 
+## [Tech Debt] Make `/api/agents/*` machine-only (size: 4)
+
+Status (2026-03-16): In progress. This is phase 3 of the auth cleanup epic.
+
+**Goal:** Stop serving browser UI reads from the machine/device API surface. Browser pages should use a dedicated cookie-session archive API, while `/api/agents/*` becomes explicitly device-token auth only.
+
+**Done when:**
+- Browser session/timeline UI no longer calls `/api/agents/*`
+- A browser-owned archive API exists for timeline, detail, recall, briefing, filters, previews, and session actions
+- `/api/agents/*` read routes require machine auth instead of the mixed read helper
+- Core + live E2E reflect the split auth model cleanly
+- Full ship verification passes
+
+- [ ] Write and commit the concise phase 3 spec
+- [ ] Add a browser-owned archive/timeline API for the current session UI
+- [ ] Switch frontend and browser E2E off `/api/agents/*`
+- [ ] Tighten `/api/agents/*` read routes to machine auth only
+- [ ] Ship and verify the hosted runtime after the split
+
+Notes:
+- 2026-03-16: Keep this bounded to auth/API ownership. Do not fold in broader naming cleanup for `agents` vs `sessions` vs `timeline` yet.
+- 2026-03-16: Live QA should still keep direct device-token coverage for `/api/agents/*`; the browser should stop depending on that surface.
+
 ## [Tech Debt] Split auth by domain ownership (size: 4)
 
 Status (2026-03-14): Done. Phase 2 shipped with the tenant auth surface split into domain-owned modules, dependency ownership cleaned up, and the hosted runtime verified end to end.
