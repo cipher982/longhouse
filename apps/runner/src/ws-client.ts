@@ -334,4 +334,8 @@ export class RunnerWebSocketClient {
       console.log('[ws-client] Sent heartbeat');
     }, this.config.heartbeatIntervalMs);
   }
+
+  getRunningJobCount(): number {
+    return this.executor.getRunningJobCount();
+  }
 }

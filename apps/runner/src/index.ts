@@ -12,7 +12,14 @@ import { loadConfig, type RunnerConfig } from './config';
 import { loadEnvfile } from './envfile';
 import { runDoctorCommand } from './doctor';
 import { getRunnerMetadata } from './protocol';
-import { runUpdateCommand } from './update';
+import {
+  applyRunnerUpdate,
+  checkForRunnerUpdate,
+  resolveAutoUpdatePolicy,
+  resolveUpdateCheckIntervalSec,
+  resolveUpdateJitterSec,
+  runUpdateCommand,
+} from './update';
 import { RUNNER_VERSION } from './version';
 import { RunnerWebSocketClient } from './ws-client';
 const VERSION = RUNNER_VERSION;
@@ -30,7 +37,68 @@ Options:
   -h, --help                 Show this help`);
 }
 
-async function runDaemon(values: Record<string, any>, command: string) {
+function startAutoUpdateLoop(clients: RunnerWebSocketClient[]): () => void {
+  const policy = resolveAutoUpdatePolicy();
+  if (policy === 'off') {
+    return () => {};
+  }
+
+  const intervalMs = resolveUpdateCheckIntervalSec() * 1000;
+  const jitterMs = resolveUpdateJitterSec() * 1000;
+  let stopped = false;
+  let timer: Timer | null = null;
+
+  const scheduleNext = (delayMs: number) => {
+    if (stopped) {
+      return;
+    }
+
+    timer = setTimeout(async () => {
+      timer = null;
+
+      if (clients.some((client) => client.getRunningJobCount() > 0)) {
+        console.log('[update] Deferring auto-update check while runner jobs are active.');
+        scheduleNext(intervalMs);
+        return;
+      }
+
+      try {
+        const result = await checkForRunnerUpdate();
+        if (result.update_available && result.blocked_reason) {
+          console.log(`[update] Runner update is available but blocked: ${result.blocked_reason}`);
+        } else if (result.update_available) {
+          console.log(`[update] Runner update available: v${result.current_version} -> v${result.latest_version}`);
+          if (policy === 'apply') {
+            const applied = await applyRunnerUpdate();
+            console.log(`[update] Applied runner update to v${applied.to_version}; exiting so the service manager can relaunch the new binary.`);
+            clients.forEach((client) => client.stop());
+            process.exit(75);
+          }
+        }
+      } catch (error) {
+        console.error('[update] Auto-update check failed:', error);
+      } finally {
+        const nextDelay = intervalMs + Math.floor(Math.random() * Math.max(1, jitterMs));
+        scheduleNext(nextDelay);
+      }
+    }, delayMs);
+  };
+
+  console.log(
+    `[update] Auto-update policy ${policy}; checking every ${resolveUpdateCheckIntervalSec()}s with up to ${resolveUpdateJitterSec()}s jitter.`,
+  );
+  scheduleNext(Math.floor(Math.random() * Math.max(1, jitterMs)));
+
+  return () => {
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+}
+
+async function runDaemon(values: Record<string, any>) {
   if (values.envfile) {
     try {
       loadEnvfile(values.envfile, { allowInsecure: values['allow-insecure-envfile'] });
@@ -75,12 +143,15 @@ async function runDaemon(values: Record<string, any>, command: string) {
 
   const shutdown = () => {
     console.log('\n[main] Shutting down all connections...');
+    stopAutoUpdateLoop();
     clients.forEach((client) => client.stop());
     process.exit(0);
   };
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  const stopAutoUpdateLoop = startAutoUpdateLoop(clients);
 
   try {
     await Promise.all(clients.map((client) => client.start()));
@@ -135,7 +206,7 @@ async function main() {
     process.exit(1);
   }
 
-  await runDaemon(values, command);
+  await runDaemon(values);
 }
 
 main().catch((error) => {

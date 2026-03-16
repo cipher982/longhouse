@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 
 import { loadConfig, type RunnerConfig } from './config';
 import { findDefaultEnvfile, loadEnvfile } from './envfile';
+import { hasManagedInstallLayout, resolveAutoUpdatePolicy } from './update';
 
 export type DoctorSeverity = 'healthy' | 'warning' | 'error';
 export type DoctorCheckStatus = 'ok' | 'warn' | 'fail';
@@ -297,6 +298,29 @@ export async function collectDoctorReport(options: DoctorOptions = {}, deps: Doc
   } else {
     checks.push({ key: 'install_mode', label: 'Install Mode', status: 'ok', message: `Detected ${installMode} install mode.` });
   }
+
+  if (hasManagedInstallLayout(deps.env)) {
+    checks.push({
+      key: 'update_layout',
+      label: 'Update Layout',
+      status: 'ok',
+      message: 'Versioned install root is configured; signed updates can be applied on this machine.',
+    });
+  } else {
+    checks.push({
+      key: 'update_layout',
+      label: 'Update Layout',
+      status: 'warn',
+      message: 'This runner still uses the legacy install layout. Re-run the installer once before using update apply or background auto-updates.',
+    });
+  }
+
+  checks.push({
+    key: 'update_policy',
+    label: 'Auto-Update Policy',
+    status: 'ok',
+    message: `Configured auto-update policy is ${resolveAutoUpdatePolicy(deps.env)}.`,
+  });
 
   const servicePath = expectedServicePath(deps.platform, installMode, deps.homeDir);
   if (!servicePath) {

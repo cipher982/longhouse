@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { normalizeAutoUpdatePolicy } from './update';
+import { hasManagedInstallLayout, normalizeAutoUpdatePolicy } from './update';
 import { RUNNER_VERSION } from './version';
 
 // Runner -> Server messages
@@ -77,6 +77,7 @@ export interface RunnerMetadata {
   capabilities?: string[];
   install_mode?: string;
   auto_update_policy?: string;
+  install_layout_version?: number;
 }
 
 function detectDockerAvailable(): boolean {
@@ -115,5 +116,6 @@ export function getRunnerMetadata(): RunnerMetadata {
     docker_available: detectDockerAvailable(),
     install_mode: process.env.RUNNER_INSTALL_MODE || undefined,
     auto_update_policy: normalizeAutoUpdatePolicy(process.env.RUNNER_AUTO_UPDATE_POLICY),
+    install_layout_version: hasManagedInstallLayout(process.env) ? 1 : undefined,
   };
 }
