@@ -1,6 +1,6 @@
 # Browser Archive API Split
 
-Status: In progress
+Status: Done
 
 ## Scope
 
@@ -53,3 +53,4 @@ Browser routes to mirror:
 
 - 2026-03-16: Prefer thin browser routes that reuse existing session/archive logic rather than re-implementing it.
 - 2026-03-16: Keep live QA split-brained on purpose: browser pages validate cookie auth, direct API checks validate device-token auth.
+- 2026-03-16: Shipped on `main` after `make test`, `make test-e2e`, `make qa-live`, and the hosted `david010` reprovision/deploy cycle passed.
