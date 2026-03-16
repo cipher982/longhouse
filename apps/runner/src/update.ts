@@ -57,6 +57,7 @@ export interface RunnerUpdateCheckResult {
   latest_version: string;
   manifest_url: string;
   policy: RunnerAutoUpdatePolicy;
+  managed_install_ready: boolean;
   update_available: boolean;
   blocked_reason: string | null;
   manifest_expires_at: string;
@@ -172,6 +173,10 @@ export function resolveInstallLayout(
     launcherPath: resolveLauncherPath(env, homeDir),
     updateStatePath: join(installRoot, 'state', 'update-state.json'),
   };
+}
+
+export function hasManagedInstallLayout(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.RUNNER_INSTALL_ROOT && env.RUNNER_LAUNCHER_PATH);
 }
 
 export function launcherScriptFor(layout: RunnerInstallLayout): string {
@@ -344,7 +349,12 @@ async function fetchVerifiedManifest(
 function updateBlockedReason(
   currentVersion: string,
   manifest: RunnerUpdateManifest,
+  env: NodeJS.ProcessEnv,
 ): string | null {
+  if (!hasManagedInstallLayout(env)) {
+    return 'This runner still uses the legacy install layout. Re-run the installer once before applying updates.';
+  }
+
   if (compareSemver(currentVersion, manifest.runner_version) >= 0) {
     return null;
   }
@@ -354,6 +364,12 @@ function updateBlockedReason(
   }
 
   return null;
+}
+
+function ensureManagedInstallLayout(env: NodeJS.ProcessEnv): void {
+  if (!hasManagedInstallLayout(env)) {
+    throw new Error('This runner still uses the legacy install layout. Re-run the installer once before applying updates.');
+  }
 }
 
 async function readUpdateState(layout: RunnerInstallLayout): Promise<RunnerUpdateState> {
@@ -406,13 +422,14 @@ export async function checkForRunnerUpdate(runtime: RunnerUpdateRuntime = {}): P
   const manifest = await fetchVerifiedManifest(manifestUrl, runtime);
   const target = platformTargetFor(runtime.platform, runtime.arch);
   const asset = selectAsset(manifest, target);
-  const blockedReason = updateBlockedReason(currentVersion, manifest);
+  const blockedReason = updateBlockedReason(currentVersion, manifest, env);
   const result: RunnerUpdateCheckResult = {
     current_version: currentVersion,
     installed_version: detectInstalledVersion(layout),
     latest_version: manifest.runner_version,
     manifest_url: manifestUrl,
     policy: resolveAutoUpdatePolicy(env),
+    managed_install_ready: hasManagedInstallLayout(env),
     update_available: compareSemver(currentVersion, manifest.runner_version) < 0,
     blocked_reason: blockedReason,
     manifest_expires_at: manifest.expires_at,
@@ -438,6 +455,7 @@ export async function applyRunnerUpdate(
 ): Promise<RunnerUpdateApplyResult> {
   const env = runtime.env ?? process.env;
   const now = (runtime.now ?? (() => new Date()))();
+  ensureManagedInstallLayout(env);
   const layout = resolveInstallLayout(env, runtime.homeDir);
   const state = await readUpdateState(layout);
   const currentVersion = detectInstalledVersion(layout) || RUNNER_VERSION;
@@ -454,7 +472,7 @@ export async function applyRunnerUpdate(
     throw new Error(`Runner is already on v${currentVersion}; no newer update is available.`);
   }
 
-  const blockedReason = updateBlockedReason(currentVersion, manifest);
+  const blockedReason = updateBlockedReason(currentVersion, manifest, env);
   if (blockedReason) {
     throw new Error(blockedReason);
   }
@@ -513,6 +531,7 @@ export async function applyRunnerUpdate(
 export async function rollbackRunnerUpdate(runtime: RunnerUpdateRuntime = {}): Promise<RunnerUpdateRollbackResult> {
   const env = runtime.env ?? process.env;
   const now = (runtime.now ?? (() => new Date()))();
+  ensureManagedInstallLayout(env);
   const layout = resolveInstallLayout(env, runtime.homeDir);
   const state = await readUpdateState(layout);
   const currentVersion = detectInstalledVersion(layout);
@@ -555,6 +574,7 @@ function printCheckResult(result: RunnerUpdateCheckResult): void {
   console.log(`Latest version:  v${result.latest_version}`);
   console.log(`Policy:          ${result.policy}`);
   console.log(`Manifest URL:    ${result.manifest_url}`);
+  console.log(`Layout ready:    ${result.managed_install_ready ? 'yes' : 'no'}`);
   if (result.update_available) {
     console.log('');
     if (result.blocked_reason) {

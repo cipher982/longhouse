@@ -11,6 +11,8 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
       RUNNER_NAME: 'clifford',
       RUNNER_SECRET: 'secret',
       RUNNER_INSTALL_MODE: 'server',
+      RUNNER_INSTALL_ROOT: '/home/test/.local/share/longhouse-runner',
+      RUNNER_LAUNCHER_PATH: '/home/test/.local/bin/longhouse-runner',
     },
     homeDir: '/home/test',
     uid: 1000,
@@ -96,6 +98,18 @@ describe('collectDoctorReport', () => {
     expect(report.severity).toBe('error');
     expect(report.summary).toContain('warnings');
     expect(report.checks.some((check) => check.key === 'config' && check.status === 'fail')).toBe(true);
+  });
+
+  it('warns when the runner still uses the legacy install layout', async () => {
+    const report = await collectDoctorReport({}, deps({
+      env: {
+        LONGHOUSE_URL: 'https://david010.longhouse.ai',
+        RUNNER_NAME: 'clifford',
+        RUNNER_SECRET: 'secret',
+        RUNNER_INSTALL_MODE: 'server',
+      },
+    }));
+    expect(report.checks.some((check) => check.key === 'update_layout' && check.status === 'warn')).toBe(true);
   });
 
   it('flags invalid runner secrets from Longhouse preflight', async () => {

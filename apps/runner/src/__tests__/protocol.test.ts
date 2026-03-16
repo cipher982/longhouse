@@ -9,6 +9,8 @@ const originalDockerHost = process.env.DOCKER_HOST;
 
 const originalInstallMode = process.env.RUNNER_INSTALL_MODE;
 const originalAutoUpdatePolicy = process.env.RUNNER_AUTO_UPDATE_POLICY;
+const originalInstallRoot = process.env.RUNNER_INSTALL_ROOT;
+const originalLauncherPath = process.env.RUNNER_LAUNCHER_PATH;
 
 afterEach(() => {
   if (originalDockerHost === undefined) {
@@ -27,6 +29,18 @@ afterEach(() => {
     delete process.env.RUNNER_AUTO_UPDATE_POLICY;
   } else {
     process.env.RUNNER_AUTO_UPDATE_POLICY = originalAutoUpdatePolicy;
+  }
+
+  if (originalInstallRoot === undefined) {
+    delete process.env.RUNNER_INSTALL_ROOT;
+  } else {
+    process.env.RUNNER_INSTALL_ROOT = originalInstallRoot;
+  }
+
+  if (originalLauncherPath === undefined) {
+    delete process.env.RUNNER_LAUNCHER_PATH;
+  } else {
+    process.env.RUNNER_LAUNCHER_PATH = originalLauncherPath;
   }
 });
 
@@ -75,5 +89,13 @@ describe('getRunnerMetadata', () => {
 
     const metadata = getRunnerMetadata();
     expect(metadata.auto_update_policy).toBe('apply');
+  });
+
+  it('reports install layout v1 when updater paths are configured', () => {
+    process.env.RUNNER_INSTALL_ROOT = '/tmp/runner-root';
+    process.env.RUNNER_LAUNCHER_PATH = '/tmp/bin/longhouse-runner';
+
+    const metadata = getRunnerMetadata();
+    expect(metadata.install_layout_version).toBe(1);
   });
 });
