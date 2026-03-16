@@ -100,6 +100,7 @@ from zerg.routers.stream import router as stream_router
 from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
 from zerg.routers.threads import router as threads_router
+from zerg.routers.timeline import router as timeline_router
 from zerg.routers.traces import router as traces_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
@@ -1034,6 +1035,7 @@ api_app.include_router(traces_router)  # Trace Explorer (admin only)
 api_app.include_router(reliability_router)  # Reliability Dashboard (admin only)
 api_app.include_router(skills_router)  # Skills Platform for workspace-scoped tools
 api_app.include_router(session_chat_router)  # Timeline session drop-in chat
+api_app.include_router(timeline_router)  # Browser-owned timeline/session archive API
 api_app.include_router(agents_router)  # Agents schema for cross-provider session tracking
 api_app.include_router(heartbeat_router)  # Engine daemon heartbeat ingest
 api_app.include_router(presence_router)  # Claude Code hook presence signals
@@ -1097,9 +1099,9 @@ async def serve_config_js():
         f'window.WS_BASE_URL="{ws_host or ""}";\n'
         f'window.__APP_MODE__="{_settings.app_mode.value}";\n'
         f'window.__GOOGLE_CLIENT_ID__="{google_client_id}";\n'
-        f'window.__SINGLE_TENANT__={"true" if _settings.single_tenant else "false"};\n'
-        f'window.__LLM_AVAILABLE__={_llm_avail};\n'
-        f'window.__EMBEDDINGS_AVAILABLE__={_emb_avail};\n'
+        f"window.__SINGLE_TENANT__={'true' if _settings.single_tenant else 'false'};\n"
+        f"window.__LLM_AVAILABLE__={_llm_avail};\n"
+        f"window.__EMBEDDINGS_AVAILABLE__={_emb_avail};\n"
     )
     return Response(
         content=js,

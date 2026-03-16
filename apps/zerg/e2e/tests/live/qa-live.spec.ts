@@ -8,8 +8,8 @@
  * Or:      make qa-live
  */
 
-import { test, expect } from './fixtures';
-import type { APIRequestContext, Page } from '@playwright/test';
+import { test, expect } from "./fixtures";
+import type { APIRequestContext, Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
 // Shared error collectors
@@ -31,8 +31,8 @@ function attachErrorCollectors(page: Page): {
   const consoleErrors: string[] = [];
   const serverErrors: string[] = [];
 
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') {
+  page.on("console", (msg) => {
+    if (msg.type() === "error") {
       const text = msg.text();
       if (!BENIGN_CONSOLE_PATTERNS.some((p) => p.test(text))) {
         consoleErrors.push(text);
@@ -40,11 +40,14 @@ function attachErrorCollectors(page: Page): {
     }
   });
 
-  page.on('response', (response) => {
+  page.on("response", (response) => {
     const url = response.url();
     const status = response.status();
     // Catch 4xx (excluding 401 — handled separately) and all 5xx
-    if (url.includes('/api/') && (status >= 500 || (status >= 400 && status !== 401))) {
+    if (
+      url.includes("/api/") &&
+      (status >= 500 || (status >= 400 && status !== 401))
+    ) {
       serverErrors.push(`${status} ${url}`);
     }
   });
@@ -53,15 +56,24 @@ function attachErrorCollectors(page: Page): {
 }
 
 /** Save a failure screenshot and throw a descriptive error. */
-async function failWithScreenshot(page: Page, testName: string, message: string): Promise<never> {
-  const path = `/tmp/qa-live-fail-${testName.replace(/\s+/g, '-')}.png`;
+async function failWithScreenshot(
+  page: Page,
+  testName: string,
+  message: string,
+): Promise<never> {
+  const path = `/tmp/qa-live-fail-${testName.replace(/\s+/g, "-")}.png`;
   await page.screenshot({ path, fullPage: false }).catch(() => {});
   throw new Error(`${message}\nScreenshot saved: ${path}`);
 }
 
-async function findRecentSessionWithEvents(request: APIRequestContext): Promise<string | null> {
-  const sessionsRes = await request.get('/api/agents/sessions?limit=5');
-  expect(sessionsRes.ok(), `GET /api/agents/sessions failed: ${sessionsRes.status()}`).toBe(true);
+async function findRecentSessionWithEvents(
+  request: APIRequestContext,
+): Promise<string | null> {
+  const sessionsRes = await request.get("/api/agents/sessions?limit=5");
+  expect(
+    sessionsRes.ok(),
+    `GET /api/agents/sessions failed: ${sessionsRes.status()}`,
+  ).toBe(true);
 
   const sessionsData = await sessionsRes.json();
   const sessions = sessionsData?.sessions ?? sessionsData ?? [];
@@ -70,15 +82,17 @@ async function findRecentSessionWithEvents(request: APIRequestContext): Promise<
   }
 
   for (const session of sessions) {
-    const sessionId = typeof session?.id === 'string' ? session.id : null;
+    const sessionId = typeof session?.id === "string" ? session.id : null;
     if (!sessionId) continue;
 
-    const eventsRes = await request.get(`/api/agents/sessions/${sessionId}/events?limit=1&branch_mode=head`);
+    const eventsRes = await request.get(
+      `/api/agents/sessions/${sessionId}/events?limit=1&branch_mode=head`,
+    );
     if (!eventsRes.ok()) continue;
 
     const eventsData = await eventsRes.json();
     const total =
-      typeof eventsData?.total === 'number'
+      typeof eventsData?.total === "number"
         ? eventsData.total
         : Array.isArray(eventsData?.events)
           ? eventsData.events.length
@@ -89,27 +103,30 @@ async function findRecentSessionWithEvents(request: APIRequestContext): Promise<
   }
 
   const fallbackId = sessions[0]?.id;
-  return typeof fallbackId === 'string' ? fallbackId : null;
+  return typeof fallbackId === "string" ? fallbackId : null;
 }
 
 // ---------------------------------------------------------------------------
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
 
-test('auth + timeline loads with session rows', async ({ context }) => {
+test("auth + timeline loads with session rows", async ({ context }) => {
   test.setTimeout(20_000);
 
   const page = await context.newPage();
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
 
   let authFailed = false;
-  page.on('response', (response) => {
-    if (response.url().includes('/api/agents/sessions') && response.status() === 401) {
+  page.on("response", (response) => {
+    if (
+      response.url().includes("/api/timeline/sessions") &&
+      response.status() === 401
+    ) {
       authFailed = true;
     }
   });
 
-  await page.goto('/timeline', { waitUntil: 'domcontentloaded' });
+  await page.goto("/timeline", { waitUntil: "domcontentloaded" });
 
   // Wait for the list to appear — either the session cards or an empty-state
   await page
@@ -118,26 +135,43 @@ test('auth + timeline loads with session rows', async ({ context }) => {
     .waitFor({ timeout: 12_000 })
     .catch(async () => {
       // Maybe still loading — give the spinner a chance to go away
-      await page.waitForFunction(
-        () => !document.querySelector('[class*="spinner"], [class*="Spinner"], .loading'),
-        { timeout: 5_000 },
-      ).catch(() => {});
+      await page
+        .waitForFunction(
+          () =>
+            !document.querySelector(
+              '[class*="spinner"], [class*="Spinner"], .loading',
+            ),
+          { timeout: 5_000 },
+        )
+        .catch(() => {});
     });
 
   if (authFailed) {
-    await failWithScreenshot(page, 'timeline-auth', 'Auth failure: /api/agents/sessions returned 401. Check SMOKE_LOGIN_TOKEN.');
+    await failWithScreenshot(
+      page,
+      "timeline-auth",
+      "Auth failure: /api/timeline/sessions returned 401. Check SMOKE_LOGIN_TOKEN.",
+    );
   }
 
   if (serverErrors.length > 0) {
-    await failWithScreenshot(page, 'timeline-500', `Server errors on timeline: ${serverErrors.join(', ')}`);
+    await failWithScreenshot(
+      page,
+      "timeline-500",
+      `Server errors on timeline: ${serverErrors.join(", ")}`,
+    );
   }
 
   if (consoleErrors.length > 0) {
-    await failWithScreenshot(page, 'timeline-console', `JS errors on timeline: ${consoleErrors.join(' | ')}`);
+    await failWithScreenshot(
+      page,
+      "timeline-console",
+      `JS errors on timeline: ${consoleErrors.join(" | ")}`,
+    );
   }
 
   // At least one session card should be visible (this is the dev instance with real data)
-  const cardCount = await page.locator('.session-card').count();
+  const cardCount = await page.locator(".session-card").count();
   expect(
     cardCount,
     `Expected at least 1 session card on /timeline, found ${cardCount}. Page may be broken or empty.`,
@@ -150,7 +184,9 @@ test('auth + timeline loads with session rows', async ({ context }) => {
 // Test 2: Legacy forum route redirects to timeline
 // ---------------------------------------------------------------------------
 
-test('forum route redirects to timeline without auth errors', async ({ context }) => {
+test("forum route redirects to timeline without auth errors", async ({
+  context,
+}) => {
   // Budget includes auth checks + redirect + timeline render.
   test.setTimeout(45_000);
 
@@ -158,46 +194,52 @@ test('forum route redirects to timeline without auth errors', async ({ context }
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
 
   const authErrors: string[] = [];
-  page.on('response', (response) => {
-    if (response.url().includes('/api/') && response.status() === 401) {
+  page.on("response", (response) => {
+    if (response.url().includes("/api/") && response.status() === 401) {
       authErrors.push(response.url());
     }
   });
 
-  await page.goto('/forum', { waitUntil: 'domcontentloaded' });
-  await expect(page).toHaveURL(/\/timeline(\/.*)?(\?.*)?$/, { timeout: 10_000 });
+  await page.goto("/forum", { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(/\/timeline(\/.*)?(\?.*)?$/, {
+    timeout: 10_000,
+  });
 
   if (authErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'forum-redirect-auth',
-      `Auth failures while loading /forum redirect: ${authErrors.join(', ')}`,
+      "forum-redirect-auth",
+      `Auth failures while loading /forum redirect: ${authErrors.join(", ")}`,
     );
   }
 
   if (serverErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'forum-redirect-500',
-      `Server errors while loading /forum redirect: ${serverErrors.join(', ')}`,
+      "forum-redirect-500",
+      `Server errors while loading /forum redirect: ${serverErrors.join(", ")}`,
     );
   }
 
   if (consoleErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'forum-redirect-console',
-      `JS errors while loading /forum redirect: ${consoleErrors.join(' | ')}`,
+      "forum-redirect-console",
+      `JS errors while loading /forum redirect: ${consoleErrors.join(" | ")}`,
     );
   }
 
   // Ensure timeline shell mounted after redirect.
   await page
-    .locator('.sessions-page, .sessions-hero-empty, .session-card')
+    .locator(".sessions-page, .sessions-hero-empty, .session-card")
     .first()
     .waitFor({ timeout: 10_000 })
     .catch(async () => {
-      await failWithScreenshot(page, 'forum-redirect-empty', 'Redirect from /forum did not render timeline content.');
+      await failWithScreenshot(
+        page,
+        "forum-redirect-empty",
+        "Redirect from /forum did not render timeline content.",
+      );
     });
 
   await page.close();
@@ -207,7 +249,10 @@ test('forum route redirects to timeline without auth errors', async ({ context }
 // Test 3: Session detail loads events
 // ---------------------------------------------------------------------------
 
-test('session detail renders event timeline', async ({ agentsRequest, context }) => {
+test("session detail renders event timeline", async ({
+  agentsRequest,
+  context,
+}) => {
   test.setTimeout(20_000);
 
   // Keep discovery on the agents API fixture for now. The smoke still validates the
@@ -215,60 +260,71 @@ test('session detail renders event timeline', async ({ agentsRequest, context })
   const sessionId = await findRecentSessionWithEvents(agentsRequest);
   if (!sessionId) {
     // No sessions at all — skip (instance may be newly provisioned)
-    test.skip(true, 'No sessions available to test detail view');
+    test.skip(true, "No sessions available to test detail view");
     return;
   }
 
   const page = await context.newPage();
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
   const authErrors: string[] = [];
-  const detailPath = `/api/agents/sessions/${sessionId}`;
-  const timelineItems = page.locator('[data-testid="session-timeline-row"], button[id^="event-"], .timeline-row, .event-item');
+  const detailPath = `/api/timeline/sessions/${sessionId}`;
+  const timelineItems = page.locator(
+    '[data-testid="session-timeline-row"], button[id^="event-"], .timeline-row, .event-item',
+  );
 
-  page.on('response', (response) => {
+  page.on("response", (response) => {
     const url = response.url();
-    if (url.includes(detailPath) && (response.status() === 401 || response.status() === 403)) {
+    if (
+      url.includes(detailPath) &&
+      (response.status() === 401 || response.status() === 403)
+    ) {
       authErrors.push(`${response.status()} ${url}`);
     }
   });
 
-  await page.goto(`/timeline/${sessionId}`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
 
   if (authErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'session-detail-auth',
-      `Auth failures on session detail: ${authErrors.join(', ')}`,
+      "session-detail-auth",
+      `Auth failures on session detail: ${authErrors.join(", ")}`,
     );
   }
 
   // Support both the current workspace DOM and the older live session-detail shape.
-  await timelineItems.first().waitFor({ timeout: 12_000 }).catch(async () => {
-    await failWithScreenshot(
-      page,
-      'session-detail',
-      `No compatible timeline items found for session ${sessionId}. Expected [data-testid=\"session-timeline-row\"], button[id^=\"event-\"], .timeline-row, or .event-item.`,
-    );
-  });
+  await timelineItems
+    .first()
+    .waitFor({ timeout: 12_000 })
+    .catch(async () => {
+      await failWithScreenshot(
+        page,
+        "session-detail",
+        `No compatible timeline items found for session ${sessionId}. Expected [data-testid=\"session-timeline-row\"], button[id^=\"event-\"], .timeline-row, or .event-item.`,
+      );
+    });
 
   if (serverErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'session-detail-500',
-      `Server errors on session detail: ${serverErrors.join(', ')}`,
+      "session-detail-500",
+      `Server errors on session detail: ${serverErrors.join(", ")}`,
     );
   }
 
   if (consoleErrors.length > 0) {
     await failWithScreenshot(
       page,
-      'session-detail-console',
-      `JS errors on session detail: ${consoleErrors.join(' | ')}`,
+      "session-detail-console",
+      `JS errors on session detail: ${consoleErrors.join(" | ")}`,
     );
   }
 
   const eventCount = await timelineItems.count();
-  expect(eventCount, `Expected at least 1 compatible timeline item in session ${sessionId}`).toBeGreaterThan(0);
+  expect(
+    eventCount,
+    `Expected at least 1 compatible timeline item in session ${sessionId}`,
+  ).toBeGreaterThan(0);
 
   await page.close();
 });
@@ -277,10 +333,10 @@ test('session detail renders event timeline', async ({ agentsRequest, context })
 // Test 4: Health + API sanity
 // ---------------------------------------------------------------------------
 
-test('health endpoint returns healthy', async ({ agentsRequest }) => {
+test("health endpoint returns healthy", async ({ agentsRequest }) => {
   test.setTimeout(10_000);
 
-  const res = await agentsRequest.get('/api/health');
+  const res = await agentsRequest.get("/api/health");
   expect(res.ok(), `GET /api/health returned ${res.status()}`).toBe(true);
 
   const body = await res.json();
@@ -290,10 +346,10 @@ test('health endpoint returns healthy', async ({ agentsRequest }) => {
   ).toMatch(/^(healthy|ok)$/);
 });
 
-test('agents sessions API returns list', async ({ agentsRequest }) => {
+test("agents sessions API returns list", async ({ agentsRequest }) => {
   test.setTimeout(10_000);
 
-  const res = await agentsRequest.get('/api/agents/sessions?limit=5');
+  const res = await agentsRequest.get("/api/agents/sessions?limit=5");
   expect(
     res.ok(),
     `GET /api/agents/sessions returned ${res.status()} — auth may be broken`,
@@ -311,29 +367,29 @@ test('agents sessions API returns list', async ({ agentsRequest }) => {
 // Test 6: AI search toggle — off by default, toggles on
 // ---------------------------------------------------------------------------
 
-test('timeline has AI search toggle', async ({ context }) => {
+test("timeline has AI search toggle", async ({ context }) => {
   test.setTimeout(20_000);
 
   const page = await context.newPage();
-  await page.goto('/timeline', { waitUntil: 'domcontentloaded' });
+  await page.goto("/timeline", { waitUntil: "domcontentloaded" });
 
   // Wait for the search toolbar to render
-  await page.locator('.sessions-ai-toggle').waitFor({ timeout: 10_000 });
+  await page.locator(".sessions-ai-toggle").waitFor({ timeout: 10_000 });
 
-  const toggle = page.locator('.sessions-ai-toggle');
+  const toggle = page.locator(".sessions-ai-toggle");
 
   // AI off by default
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await expect(toggle).not.toHaveClass(/sessions-ai-toggle--active/);
 
   // Click to enable AI search
   await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(toggle).toHaveClass(/sessions-ai-toggle--active/);
 
   // Click again to disable
   await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
 
   await page.close();
 });
@@ -342,29 +398,29 @@ test('timeline has AI search toggle', async ({ context }) => {
 // Test 7: Recall panel opens and renders search input
 // ---------------------------------------------------------------------------
 
-test('recall panel opens and shows search input', async ({ context }) => {
+test("recall panel opens and shows search input", async ({ context }) => {
   test.setTimeout(20_000);
 
   const page = await context.newPage();
-  await page.goto('/timeline', { waitUntil: 'domcontentloaded' });
+  await page.goto("/timeline", { waitUntil: "domcontentloaded" });
 
   // Wait for toolbar
-  await page.locator('.sessions-toolbar').waitFor({ timeout: 10_000 });
+  await page.locator(".sessions-toolbar").waitFor({ timeout: 10_000 });
 
   // Recall toggle button must exist
-  const recallToggle = page.getByTestId('recall-toggle');
+  const recallToggle = page.getByTestId("recall-toggle");
   await expect(recallToggle).toBeVisible();
 
   // Open the recall panel
   await recallToggle.click();
 
   // Recall panel should appear with search input
-  const recallPanel = page.getByTestId('recall-panel');
+  const recallPanel = page.getByTestId("recall-panel");
   await recallPanel.waitFor({ timeout: 5_000 });
   await expect(recallPanel).toBeVisible();
 
   // Search input must be present and focusable
-  const input = page.getByTestId('recall-search-input');
+  const input = page.getByTestId("recall-search-input");
   await expect(input).toBeVisible();
   await expect(input).toBeEnabled();
 
@@ -375,21 +431,23 @@ test('recall panel opens and shows search input', async ({ context }) => {
 // Test 8: Briefings page loads with project selector
 // ---------------------------------------------------------------------------
 
-test('briefings page loads with project selector', async ({ context }) => {
+test("briefings page loads with project selector", async ({ context }) => {
   test.setTimeout(20_000);
 
   const page = await context.newPage();
-  await page.goto('/briefings', { waitUntil: 'domcontentloaded' });
+  await page.goto("/briefings", { waitUntil: "domcontentloaded" });
 
   // Should not 404 or throw
   const url = page.url();
-  expect(url, 'Should be on briefings page, not redirected').toContain('/briefings');
+  expect(url, "Should be on briefings page, not redirected").toContain(
+    "/briefings",
+  );
 
   // Controls area must render
-  await page.getByTestId('briefings-controls').waitFor({ timeout: 10_000 });
+  await page.getByTestId("briefings-controls").waitFor({ timeout: 10_000 });
 
   // Project selector must be present and empty by default
-  const select = page.getByTestId('briefings-project-select');
+  const select = page.getByTestId("briefings-project-select");
   await expect(select).toBeVisible();
 
   await page.close();

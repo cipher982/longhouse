@@ -1,11 +1,14 @@
 /**
- * Agents API service functions
+ * Browser timeline/session archive API service functions.
  *
- * Provides functions to fetch agent sessions and events from the shipper.
- * Used by the Sessions Timeline pages.
+ * These routes back the cookie-authenticated browser session archive UI.
+ * Device-token ingest and machine workflows stay on `/api/agents/*`.
  */
 
 import { request } from "./base";
+
+const TIMELINE_API_PREFIX = "/timeline";
+const TIMELINE_SESSIONS_PREFIX = `${TIMELINE_API_PREFIX}/sessions`;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,7 +90,12 @@ export interface AgentSessionPreview {
   total_messages: number;
 }
 
-export type AgentSessionStatus = "working" | "thinking" | "idle" | "completed" | "active";
+export type AgentSessionStatus =
+  | "working"
+  | "thinking"
+  | "idle"
+  | "completed"
+  | "active";
 export type AgentAttentionLevel = "hard" | "needs" | "soft" | "auto";
 
 export type PresenceState = "thinking" | "running" | "idle" | (string & {});
@@ -192,7 +200,7 @@ export interface AgentFiltersResponse {
  * List agent sessions with optional filters.
  */
 export async function fetchAgentSessions(
-  filters: AgentSessionFilters = {}
+  filters: AgentSessionFilters = {},
 ): Promise<AgentSessionsListResponse> {
   const params = new URLSearchParams();
 
@@ -204,12 +212,13 @@ export async function fetchAgentSessions(
   if (filters.query) params.set("query", filters.query);
   if (filters.limit) params.set("limit", String(filters.limit));
   if (filters.offset) params.set("offset", String(filters.offset));
-  if (filters.mode && filters.mode !== "lexical") params.set("mode", filters.mode);
+  if (filters.mode && filters.mode !== "lexical")
+    params.set("mode", filters.mode);
   if (filters.sort) params.set("sort", filters.sort);
   if (filters.hide_autonomous === false) params.set("hide_autonomous", "false");
 
   const queryString = params.toString();
-  const path = `/agents/sessions${queryString ? `?${queryString}` : ""}`;
+  const path = `${TIMELINE_SESSIONS_PREFIX}${queryString ? `?${queryString}` : ""}`;
 
   return request<AgentSessionsListResponse>(path, { method: "GET" });
 }
@@ -218,7 +227,7 @@ export async function fetchAgentSessions(
  * List agent session summaries for picker UI.
  */
 export async function fetchAgentSessionSummaries(
-  filters: AgentSessionSummaryFilters = {}
+  filters: AgentSessionSummaryFilters = {},
 ): Promise<AgentSessionSummaryListResponse> {
   const params = new URLSearchParams();
 
@@ -231,7 +240,7 @@ export async function fetchAgentSessionSummaries(
   if (filters.offset) params.set("offset", String(filters.offset));
 
   const queryString = params.toString();
-  const path = `/agents/sessions/summary${queryString ? `?${queryString}` : ""}`;
+  const path = `${TIMELINE_SESSIONS_PREFIX}/summary${queryString ? `?${queryString}` : ""}`;
 
   return request<AgentSessionSummaryListResponse>(path, { method: "GET" });
 }
@@ -241,9 +250,9 @@ export async function fetchAgentSessionSummaries(
  */
 export async function fetchAgentSessionPreview(
   sessionId: string,
-  lastN: number = 6
+  lastN: number = 6,
 ): Promise<AgentSessionPreview> {
-  const path = `/agents/sessions/${sessionId}/preview?last_n=${lastN}`;
+  const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/preview?last_n=${lastN}`;
   return request<AgentSessionPreview>(path, { method: "GET" });
 }
 
@@ -251,7 +260,7 @@ export async function fetchAgentSessionPreview(
  * List sessions for the live sessions view.
  */
 export async function fetchAgentActiveSessions(
-  filters: AgentActiveSessionFilters = {}
+  filters: AgentActiveSessionFilters = {},
 ): Promise<AgentActiveSessionsResponse> {
   const params = new URLSearchParams();
 
@@ -262,7 +271,7 @@ export async function fetchAgentActiveSessions(
   if (filters.days_back) params.set("days_back", String(filters.days_back));
 
   const queryString = params.toString();
-  const path = `/agents/sessions/active${queryString ? `?${queryString}` : ""}`;
+  const path = `${TIMELINE_SESSIONS_PREFIX}/active${queryString ? `?${queryString}` : ""}`;
 
   return request<AgentActiveSessionsResponse>(path, { method: "GET" });
 }
@@ -270,12 +279,21 @@ export async function fetchAgentActiveSessions(
 /**
  * Get a single session by ID.
  */
-export async function fetchAgentSession(sessionId: string): Promise<AgentSession> {
-  return request<AgentSession>(`/agents/sessions/${sessionId}`, { method: "GET" });
+export async function fetchAgentSession(
+  sessionId: string,
+): Promise<AgentSession> {
+  return request<AgentSession>(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}`, {
+    method: "GET",
+  });
 }
 
-export async function fetchAgentSessionThread(sessionId: string): Promise<AgentSessionThreadResponse> {
-  return request<AgentSessionThreadResponse>(`/agents/sessions/${sessionId}/thread`, { method: "GET" });
+export async function fetchAgentSessionThread(
+  sessionId: string,
+): Promise<AgentSessionThreadResponse> {
+  return request<AgentSessionThreadResponse>(
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/thread`,
+    { method: "GET" },
+  );
 }
 
 /**
@@ -283,7 +301,12 @@ export async function fetchAgentSessionThread(sessionId: string): Promise<AgentS
  */
 export async function fetchAgentSessionEvents(
   sessionId: string,
-  options: { roles?: string; limit?: number; offset?: number; branch_mode?: "head" | "all" } = {}
+  options: {
+    roles?: string;
+    limit?: number;
+    offset?: number;
+    branch_mode?: "head" | "all";
+  } = {},
 ): Promise<AgentEventsListResponse> {
   const params = new URLSearchParams();
 
@@ -293,7 +316,7 @@ export async function fetchAgentSessionEvents(
   if (options.branch_mode) params.set("branch_mode", options.branch_mode);
 
   const queryString = params.toString();
-  const path = `/agents/sessions/${sessionId}/events${queryString ? `?${queryString}` : ""}`;
+  const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/events${queryString ? `?${queryString}` : ""}`;
 
   return request<AgentEventsListResponse>(path, { method: "GET" });
 }
@@ -302,11 +325,14 @@ export async function fetchAgentSessionEvents(
  * Get distinct filter values for dropdowns.
  */
 export async function fetchAgentFilters(
-  daysBack: number = 90
+  daysBack: number = 90,
 ): Promise<AgentFiltersResponse> {
-  return request<AgentFiltersResponse>(`/agents/filters?days_back=${daysBack}`, {
-    method: "GET",
-  });
+  return request<AgentFiltersResponse>(
+    `${TIMELINE_API_PREFIX}/filters?days_back=${daysBack}`,
+    {
+      method: "GET",
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +394,7 @@ export interface RecallFilters {
  * Semantic search for sessions using embeddings.
  */
 export async function fetchSemanticSearch(
-  filters: SemanticSearchFilters
+  filters: SemanticSearchFilters,
 ): Promise<SemanticSearchResponse> {
   const params = new URLSearchParams();
   params.set("query", filters.query);
@@ -379,8 +405,8 @@ export async function fetchSemanticSearch(
   if (filters.limit) params.set("limit", String(filters.limit));
 
   return request<SemanticSearchResponse>(
-    `/agents/sessions/semantic?${params.toString()}`,
-    { method: "GET" }
+    `${TIMELINE_SESSIONS_PREFIX}/semantic?${params.toString()}`,
+    { method: "GET" },
   );
 }
 
@@ -388,18 +414,20 @@ export async function fetchSemanticSearch(
  * Recall: turn-level semantic search with context windows.
  */
 export async function fetchRecall(
-  filters: RecallFilters
+  filters: RecallFilters,
 ): Promise<RecallResponse> {
   const params = new URLSearchParams();
   params.set("query", filters.query);
   if (filters.project) params.set("project", filters.project);
   if (filters.since_days) params.set("since_days", String(filters.since_days));
-  if (filters.max_results) params.set("max_results", String(filters.max_results));
-  if (filters.context_turns) params.set("context_turns", String(filters.context_turns));
+  if (filters.max_results)
+    params.set("max_results", String(filters.max_results));
+  if (filters.context_turns)
+    params.set("context_turns", String(filters.context_turns));
 
   return request<RecallResponse>(
-    `/agents/recall?${params.toString()}`,
-    { method: "GET" }
+    `${TIMELINE_API_PREFIX}/recall?${params.toString()}`,
+    { method: "GET" },
   );
 }
 
@@ -413,11 +441,15 @@ export interface DemoSeedResponse {
 /**
  * Seed demo sessions for the timeline (idempotent).
  */
-export async function seedDemoSessions(options?: { replace?: boolean }): Promise<DemoSeedResponse> {
+export async function seedDemoSessions(options?: {
+  replace?: boolean;
+}): Promise<DemoSeedResponse> {
   const params = new URLSearchParams();
   if (options?.replace) params.set("replace", "true");
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
-  return request<DemoSeedResponse>(`/agents/demo${suffix}`, { method: "POST" });
+  return request<DemoSeedResponse>(`${TIMELINE_API_PREFIX}/demo${suffix}`, {
+    method: "POST",
+  });
 }
 
 /**
@@ -439,10 +471,10 @@ export interface BriefingResponse {
  */
 export async function fetchAgentBriefing(
   project: string,
-  limit: number = 5
+  limit: number = 5,
 ): Promise<BriefingResponse> {
   const params = new URLSearchParams({ project, limit: String(limit) });
-  return request<BriefingResponse>(`/agents/briefing?${params}`);
+  return request<BriefingResponse>(`${TIMELINE_API_PREFIX}/briefing?${params}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -451,9 +483,9 @@ export async function fetchAgentBriefing(
 
 export async function setSessionAction(
   sessionId: string,
-  action: UserStateAction
+  action: UserStateAction,
 ): Promise<{ session_id: string; user_state: string }> {
-  return request(`/agents/sessions/${sessionId}/action`, {
+  return request(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}/action`, {
     method: "POST",
     body: JSON.stringify({ action }),
   });
