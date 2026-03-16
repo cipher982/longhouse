@@ -49,7 +49,6 @@ from sqlalchemy.orm import sessionmaker as _sessionmaker
 from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_read_access
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
@@ -96,9 +95,7 @@ class SessionResponse(UTCBaseModel):
     match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role for matching event")
-    match_score: Optional[float] = Field(
-        None, description="Semantic similarity score (0–1) when result is from vector search"
-    )
+    match_score: Optional[float] = Field(None, description="Semantic similarity score (0–1) when result is from vector search")
     thread_root_session_id: str = Field(..., description="Logical thread root session UUID")
     thread_head_session_id: str = Field(..., description="Current writable head session UUID")
     thread_continuation_count: int = Field(..., description="Number of concrete continuations in this logical thread")
@@ -140,8 +137,7 @@ class SessionsListResponse(BaseModel):
     total: int
     has_real_sessions: bool = Field(
         True,
-        description="True if any non-demo sessions exist (device_id != 'demo-mac'). "
-        "False means only demo-seeded data is present.",
+        description="True if any non-demo sessions exist (device_id != 'demo-mac'). " "False means only demo-seeded data is present.",
     )
 
 
@@ -153,9 +149,7 @@ class SessionThreadResponse(BaseModel):
     sessions: List[SessionResponse]
 
 
-def _get_thread_meta(
-    store: AgentsStore, session: AgentSession, thread_cache: Dict[str, tuple[str, int]]
-) -> tuple[str, int]:
+def _get_thread_meta(store: AgentsStore, session: AgentSession, thread_cache: Dict[str, tuple[str, int]]) -> tuple[str, int]:
     root_id = str(session.thread_root_session_id or session.id)
     cached = thread_cache.get(root_id)
     if cached is not None:
@@ -206,9 +200,7 @@ def _build_session_response(
         thread_root_session_id=str(session.thread_root_session_id or session.id),
         thread_head_session_id=thread_head_session_id,
         thread_continuation_count=thread_continuation_count,
-        continued_from_session_id=(
-            str(session.continued_from_session_id) if session.continued_from_session_id else None
-        ),
+        continued_from_session_id=(str(session.continued_from_session_id) if session.continued_from_session_id else None),
         continuation_kind=session.continuation_kind,
         origin_label=session.origin_label,
         branched_from_event_id=session.branched_from_event_id,
@@ -551,10 +543,7 @@ async def _generate_summary_impl(session_id: str) -> None:
         cursor_id = session.last_summarized_event_id
         if cursor_id is not None:
             new_events = (
-                db.query(AgentEvent)
-                .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
-                .order_by(AgentEvent.id)
-                .all()
+                db.query(AgentEvent).filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id).order_by(AgentEvent.id).all()
             )
         else:
             old_count = session.summary_event_count or 0
@@ -568,9 +557,7 @@ async def _generate_summary_impl(session_id: str) -> None:
         # Throttle: skip if fewer than 2 new user/assistant messages.
         # Do NOT advance cursor — let events accumulate until threshold is met.
         new_event_dicts = _events_to_dicts(new_events)
-        meaningful_count = sum(
-            1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text")
-        )
+        meaningful_count = sum(1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text"))
         if meaningful_count < 2:
             logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
             # Set a structured title so the session doesn't show "Generating summary..." forever
@@ -633,9 +620,7 @@ async def _generate_summary_impl(session_id: str) -> None:
                 )
             else:
                 old_count = session.summary_event_count or 0
-                all_events = (
-                    db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
-                )
+                all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
                 new_events = all_events[old_count:]
             if not new_events:
                 return
@@ -847,7 +832,7 @@ async def get_briefing(
     project: str = Query(..., description="Project name to get briefing for"),
     limit: int = Query(5, ge=1, le=20, description="Max sessions to include"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> BriefingResponse:
     """Pre-computed session summaries formatted for AI context injection.
@@ -1012,7 +997,7 @@ async def backfill_summaries(
     project: Optional[str] = Query(None, description="Optional project filter"),
     force: bool = Query(False, description="Re-summarize sessions that already have summaries"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> BackfillSummariesResponse:
     """Start backfilling missing summaries as a background task.
@@ -1069,7 +1054,7 @@ async def backfill_summaries(
 
 @router.get("/backfill-summaries", response_model=BackfillProgressResponse)
 async def backfill_progress(
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> BackfillProgressResponse:
     """Check backfill progress."""
@@ -1122,12 +1107,7 @@ async def _run_backfill(
                             _backfill_state["skipped"] += 1
                             return
 
-                        events = (
-                            db.query(AgentEvent)
-                            .filter(AgentEvent.session_id == session_id)
-                            .order_by(AgentEvent.timestamp)
-                            .all()
-                        )
+                        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
                         if not events:
                             _backfill_state["skipped"] += 1
                             return
@@ -1210,7 +1190,7 @@ async def backfill_embeddings(
     batch_size: int = Query(50, ge=1, le=200, description="Sessions per batch"),
     max_batches: int = Query(10, ge=1, le=100, description="Max batches to process"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> BackfillEmbeddingsResponse:
     """Start backfilling embeddings for sessions that need them."""
@@ -1259,7 +1239,7 @@ async def backfill_embeddings(
 
 @router.get("/backfill-embeddings", response_model=BackfillEmbeddingsProgressResponse)
 async def backfill_embeddings_progress(
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> BackfillEmbeddingsProgressResponse:
     """Check embedding backfill progress."""
@@ -1309,17 +1289,10 @@ async def _run_embedding_backfill(
                                 _embedding_backfill_state["skipped"] += 1
                                 return
 
-                            events = (
-                                db.query(AgentEvent)
-                                .filter(AgentEvent.session_id == sid)
-                                .order_by(AgentEvent.timestamp)
-                                .all()
-                            )
+                            events = db.query(AgentEvent).filter(AgentEvent.session_id == sid).order_by(AgentEvent.timestamp).all()
                             if not events:
                                 # Mark as done even with no events
-                                db.execute(
-                                    sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"), {"sid": sid}
-                                )
+                                db.execute(sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"), {"sid": sid})
                                 db.commit()
                                 _embedding_backfill_state["skipped"] += 1
                                 return
@@ -1412,7 +1385,7 @@ async def semantic_search_sessions(
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SemanticSearchResponse:
     """Search sessions by semantic similarity using embeddings.
@@ -1501,9 +1474,7 @@ async def semantic_search_sessions(
                     .first()
                 )
             boundary = store.get_active_context_boundary(session.id)
-            if boundary is not None and (
-                matched_event is None or not store.is_event_in_active_context(matched_event, boundary)
-            ):
+            if boundary is not None and (matched_event is None or not store.is_event_in_active_context(matched_event, boundary)):
                 continue
 
             snippet_source = ""
@@ -1539,7 +1510,7 @@ async def recall_sessions(
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RecallResponse:
     """Recall specific knowledge from past sessions.
@@ -1583,11 +1554,7 @@ async def recall_sessions(
     matches = []
     for session_id, chunk_index, score, event_start, event_end in results:
         # Fetch context window
-        events_query = (
-            db.query(AgentEvent)
-            .filter(AgentEvent.session_id == session_id)
-            .order_by(AgentEvent.timestamp, AgentEvent.id)
-        )
+        events_query = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
         all_events = events_query.all()
         total_events = len(all_events)
         if total_events == 0:
@@ -1659,7 +1626,7 @@ class IngestHealthResponse(UTCBaseModel):
 @router.get("/ingest-health", response_model=IngestHealthResponse)
 async def get_ingest_health(
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> IngestHealthResponse:
     """Check ingest freshness — detects if sessions have stopped shipping."""
@@ -1686,7 +1653,7 @@ class UsageStatsResponse(BaseModel):
 async def get_usage_stats(
     days: int = Query(30, ge=1, le=365, description="Days to look back (max 365)"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> UsageStatsResponse:
     """Session activity statistics by provider, queried live from sessions table."""
@@ -1710,9 +1677,7 @@ async def get_usage_stats(
         {"since": since.isoformat()},
     ).fetchall()
 
-    by_provider = [
-        UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0) for r in rows
-    ]
+    by_provider = [UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0) for r in rows]
 
     return UsageStatsResponse(
         total_sessions=sum(r.sessions for r in by_provider),
@@ -1728,9 +1693,7 @@ async def list_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
-    hide_autonomous: bool = Query(
-        True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"
-    ),
+    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -1743,7 +1706,7 @@ async def list_sessions(
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
     """List sessions with optional filters.
@@ -2017,11 +1980,9 @@ async def list_session_summaries(
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    hide_autonomous: bool = Query(
-        True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"
-    ),
+    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionsSummaryResponse:
     """List session summaries for picker UI."""
@@ -2082,14 +2043,12 @@ async def list_session_summaries(
 @router.get("/sessions/active", response_model=ActiveSessionsResponse)
 async def list_active_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
-    status_filter: Optional[str] = Query(
-        None, alias="status", description="Filter by status (working, idle, completed)"
-    ),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, idle, completed)"),
     attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> ActiveSessionsResponse:
     """Return active/recent session summaries for the live sessions surface."""
@@ -2119,11 +2078,7 @@ async def list_active_sessions(
         # session_ids contains UUID objects; SessionPresence.session_id is String —
         # convert to str so the IN comparison matches across types.
         str_session_ids = [str(sid) for sid in session_ids]
-        presence_rows = (
-            (db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all())
-            if str_session_ids
-            else []
-        )
+        presence_rows = (db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()) if str_session_ids else []
         presence_map = {p.session_id: p for p in presence_rows}
         presence_stale_threshold = timedelta(minutes=10)
 
@@ -2152,9 +2107,7 @@ async def list_active_sessions(
             # response (Stop hook ships transcript), so a session with fresh presence is
             # actively in progress even though ended_at is non-null.
             if presence_fresh:
-                derived_status = (
-                    "working" if presence.state in ("thinking", "running", "needs_user", "blocked") else "idle"
-                )
+                derived_status = "working" if presence.state in ("thinking", "running", "needs_user", "blocked") else "idle"
             elif s.ended_at:
                 derived_status = "completed"
             else:
@@ -2168,11 +2121,7 @@ async def list_active_sessions(
             if attention and attention_level != attention:
                 continue
 
-            _started = (
-                s.started_at.replace(tzinfo=timezone.utc)
-                if s.started_at and s.started_at.tzinfo is None
-                else s.started_at
-            )
+            _started = s.started_at.replace(tzinfo=timezone.utc) if s.started_at and s.started_at.tzinfo is None else s.started_at
             _ended = s.ended_at.replace(tzinfo=timezone.utc) if s.ended_at and s.ended_at.tzinfo is None else s.ended_at
             end_time = _ended or now
             duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
@@ -2221,7 +2170,7 @@ async def preview_session(
     session_id: UUID,
     last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionPreviewResponse:
     """Get a preview of a session's recent messages."""
@@ -2255,7 +2204,7 @@ async def preview_session(
 async def get_filters(
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> FiltersResponse:
     """Get distinct filter values for UI dropdowns.
@@ -2283,7 +2232,7 @@ async def get_filters(
 async def seed_demo_sessions(
     replace: bool = Query(False, description="Delete existing demo sessions before seeding fresh demo data"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> DemoSeedResponse:
     """Seed missing demo sessions for the timeline (idempotent top-up)."""
@@ -2315,7 +2264,7 @@ async def seed_demo_sessions(
 @router.delete("/demo", response_model=DemoSeedResponse)
 async def reset_demo_sessions(
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> DemoSeedResponse:
     """Delete all demo-seeded sessions (provider_session_id LIKE 'demo-%').
@@ -2359,7 +2308,7 @@ async def set_session_action(
     session_id: UUID,
     body: SessionActionRequest,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionActionResponse:
     """Set user-driven bucket state for a session (park/snooze/archive/resume).
@@ -2392,7 +2341,7 @@ async def set_session_action(
 async def get_session(
     session_id: UUID,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionResponse:
     """Get a single session by ID."""
@@ -2419,7 +2368,7 @@ async def get_session(
 async def get_session_thread(
     session_id: UUID,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionThreadResponse:
     """Get all concrete continuations in a logical thread."""
@@ -2464,7 +2413,7 @@ async def get_session_events(
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> EventsListResponse:
     """Get events for a session."""
@@ -2552,7 +2501,7 @@ async def export_session(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume.
@@ -2699,7 +2648,7 @@ async def list_reflections(
     project: Optional[str] = Query(None, description="Filter by project"),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_read_access),
+    _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> ReflectionListResponse:
     """Query reflection run history."""

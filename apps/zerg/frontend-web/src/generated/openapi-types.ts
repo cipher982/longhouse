@@ -1458,14 +1458,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Dev Login
-         * @description Development-only login endpoint that bypasses Google OAuth.
-         *
-         *     Only works when AUTH_DISABLED=1 is set in environment.
-         *     Creates/returns a token for dev@local admin user.
-         *     Also sets longhouse_session cookie for browser auth.
-         */
+        /** Dev Login */
         post: operations["dev_login_auth_dev_login_post"];
         delete?: never;
         options?: never;
@@ -1482,13 +1475,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Google Sign In
-         * @description Exchange a Google ID token for a platform access token.
-         *
-         *     Expected JSON body: `{ "id_token": "<JWT from Google>" }`.
-         *     Also sets longhouse_session cookie for browser auth.
-         */
+        /** Google Sign In */
         post: operations["google_sign_in_auth_google_post"];
         delete?: never;
         options?: never;
@@ -1503,15 +1490,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Verify Session
-         * @description Fast auth check for nginx auth_request.
-         *
-         *     Validates the browser session cookie.
-         *     Returns 204 if valid, 401 if missing/invalid/expired/user-inactive.
-         *
-         *     In development mode (AUTH_DISABLED=1), always returns 204.
-         */
+        /** Verify Session */
         get: operations["verify_session_auth_verify_get"];
         put?: never;
         post?: never;
@@ -1528,10 +1507,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Auth Status
-         * @description Return auth status without throwing 401 (browser-friendly).
-         */
+        /** Auth Status */
         get: operations["auth_status_auth_status_get"];
         put?: never;
         post?: never;
@@ -1550,66 +1526,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Logout
-         * @description Clear the session cookie.
-         *
-         *     Returns 204 on success. Safe to call even if not logged in.
-         */
+        /** Logout */
         post: operations["logout_auth_logout_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/auth/accept-token": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Accept Token
-         * @description Accept a JWT token from cross-subdomain auth redirect.
-         *
-         *     This endpoint validates the token and sets a session cookie.
-         *     Used when OAuth happens on longhouse.ai and user is redirected
-         *     back to their subdomain (e.g., david010.longhouse.ai or {subdomain}.longhouse.ai) with a token.
-         *
-         *     Tokens may come from:
-         *     1. The instance itself (sub=numeric user_id, signed with JWT_SECRET)
-         *     2. The control plane (sub=numeric cp user_id + email claim, signed with CONTROL_PLANE_JWT_SECRET)
-         *
-         *     Expected JSON body: `{ "token": "<JWT>" }`.
-         */
-        post: operations["accept_token_auth_accept_token_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/auth/sso": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Sso Redirect
-         * @description Cross-subdomain SSO: accept token via URL param, set cookie, redirect.
-         *
-         *     Used by the control plane to sign users into their instance:
-         *     control.longhouse.ai → {subdomain}.longhouse.ai/auth/sso?token=xxx → /timeline
-         */
-        get: operations["sso_redirect_auth_sso_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1623,10 +1541,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get Auth Methods
-         * @description Return available auth methods for frontend.
-         */
+        /** Get Auth Methods */
         get: operations["get_auth_methods_auth_methods_get"];
         put?: never;
         post?: never;
@@ -1645,13 +1560,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Password Login
-         * @description Simple password auth for self-hosters.
-         *
-         *     Expected JSON body: `{ "password": "<configured password>" }`.
-         *     Returns a JWT token and sets session cookie on success.
-         */
+        /** Password Login */
         post: operations["password_login_auth_password_post"];
         delete?: never;
         options?: never;
@@ -1668,17 +1577,48 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Cli Login
-         * @description Password login for CLI tools. Returns a short-lived JWT for device token creation.
-         *
-         *     This endpoint is used by `longhouse connect` to auto-create a device token
-         *     without requiring the user to open a browser. The returned JWT is valid for
-         *     5 minutes -- just long enough to call POST /api/devices/tokens.
-         *
-         *     Expected JSON body: `{ "password": "<configured password>" }`.
-         */
+        /** Cli Login */
         post: operations["cli_login_auth_cli_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/accept-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Token
+         * @description Accept a JWT token from cross-subdomain auth redirect.
+         */
+        post: operations["accept_token_auth_accept_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/sso": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sso Redirect
+         * @description Cross-subdomain SSO: accept token via URL param, set cookie, redirect.
+         */
+        get: operations["sso_redirect_auth_sso_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1717,14 +1657,6 @@ export interface paths {
         /**
          * Connect Gmail
          * @description Connect Gmail via OAuth and create/update a Gmail connector.
-         *
-         *     Expected body: { "auth_code": "...", "callback_url": "https://.../api/email/webhook/google" }
-         *     where ``callback_url`` is optional and only used in tests/local legacy flows.
-         *
-         *     - Stores the encrypted refresh token in a Connector (type="email", provider="gmail").
-         *     - Registers a Gmail Pub/Sub watch when ``GMAIL_PUBSUB_TOPIC`` is configured.
-         *     - Uses direct HTTPS callbacks only in tests, never as the production path.
-         *     - Returns connector + watch bootstrap state so callers can surface partial failure.
          */
         post: operations["connect_gmail_auth_google_gmail_post"];
         delete?: never;
@@ -4092,6 +4024,244 @@ export interface paths {
          *     Use with caution - may cause issues if a chat is in progress.
          */
         delete: operations["force_release_lock_sessions__session_id__lock_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/briefing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Briefing */
+        get: operations["get_timeline_briefing_timeline_briefing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/semantic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Semantic Search Timeline Sessions */
+        get: operations["semantic_search_timeline_sessions_timeline_sessions_semantic_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/recall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recall Timeline Sessions */
+        get: operations["recall_timeline_sessions_timeline_recall_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Timeline Sessions */
+        get: operations["list_timeline_sessions_timeline_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Timeline Session Summaries */
+        get: operations["list_timeline_session_summaries_timeline_sessions_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Timeline Active Sessions */
+        get: operations["list_timeline_active_sessions_timeline_sessions_active_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview Timeline Session */
+        get: operations["preview_timeline_session_timeline_sessions__session_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/filters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Filters */
+        get: operations["get_timeline_filters_timeline_filters_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/demo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seed Timeline Demo Sessions */
+        post: operations["seed_timeline_demo_sessions_timeline_demo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/action": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Timeline Session Action */
+        post: operations["set_timeline_session_action_timeline_sessions__session_id__action_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session */
+        get: operations["get_timeline_session_timeline_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/thread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session Thread */
+        get: operations["get_timeline_session_thread_timeline_sessions__session_id__thread_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session Events */
+        get: operations["get_timeline_session_events_timeline_sessions__session_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Timeline Session */
+        get: operations["export_timeline_session_timeline_sessions__session_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -12842,75 +13012,6 @@ export interface operations {
             };
         };
     };
-    accept_token_auth_accept_token_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TokenOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sso_redirect_auth_sso_get: {
-        parameters: {
-            query: {
-                token: string;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_auth_methods_auth_methods_get: {
         parameters: {
             query?: never;
@@ -12990,6 +13091,75 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_token_auth_accept_token_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sso_redirect_auth_sso_get: {
+        parameters: {
+            query: {
+                token: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -17098,6 +17268,564 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_briefing_timeline_briefing_get: {
+        parameters: {
+            query: {
+                /** @description Project name to get briefing for */
+                project: string;
+                /** @description Max sessions to include */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BriefingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    semantic_search_timeline_sessions_timeline_sessions_semantic_get: {
+        parameters: {
+            query: {
+                /** @description Search query */
+                query: string;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
+                /** @description Filter by environment (production, development, test, e2e) */
+                environment?: string | null;
+                /** @description Days to look back */
+                days_back?: number;
+                /** @description Max results */
+                limit?: number;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SemanticSearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recall_timeline_sessions_timeline_recall_get: {
+        parameters: {
+            query: {
+                /** @description What to search for */
+                query: string;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Days to look back */
+                since_days?: number;
+                /** @description Max matches */
+                max_results?: number;
+                /** @description Context turns before/after match */
+                context_turns?: number;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_timeline_sessions_timeline_sessions_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
+                /** @description Filter by environment (production, development, test, e2e) */
+                environment?: string | null;
+                /** @description Include test/e2e sessions (default: False) */
+                include_test?: boolean;
+                /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
+                hide_autonomous?: boolean;
+                /** @description Filter by device ID */
+                device_id?: string | null;
+                /** @description Days to look back */
+                days_back?: number;
+                /** @description Search query for content */
+                query?: string | null;
+                /** @description Max results */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+                /** @description Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present. */
+                sort?: string | null;
+                /** @description Search mode: lexical|semantic|hybrid. Default: lexical. */
+                mode?: string | null;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_timeline_session_summaries_timeline_sessions_summary_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
+                /** @description Filter by environment (production, development, test, e2e) */
+                environment?: string | null;
+                /** @description Include test/e2e sessions (default: False) */
+                include_test?: boolean;
+                /** @description Filter by device ID */
+                device_id?: string | null;
+                /** @description Days to look back */
+                days_back?: number;
+                /** @description Search query for content */
+                query?: string | null;
+                /** @description Max results */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+                /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
+                hide_autonomous?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_timeline_active_sessions_timeline_sessions_active_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by status (working, idle, completed) */
+                status?: string | null;
+                /** @description Filter by attention (auto) */
+                attention?: string | null;
+                /** @description Max results */
+                limit?: number;
+                /** @description Days to look back */
+                days_back?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActiveSessionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_timeline_session_timeline_sessions__session_id__preview_get: {
+        parameters: {
+            query?: {
+                /** @description Number of messages to return */
+                last_n?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_filters_timeline_filters_get: {
+        parameters: {
+            query?: {
+                /** @description Days to look back for distinct values */
+                days_back?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FiltersResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_timeline_demo_sessions_timeline_demo_post: {
+        parameters: {
+            query?: {
+                /** @description Delete existing demo sessions before seeding fresh demo data */
+                replace?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoSeedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_timeline_session_action_timeline_sessions__session_id__action_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_session_timeline_sessions__session_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_session_thread_timeline_sessions__session_id__thread_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionThreadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_session_events_timeline_sessions__session_id__events_get: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated roles to filter */
+                roles?: string | null;
+                /** @description Exact tool name filter, e.g. Bash */
+                tool_name?: string | null;
+                /** @description Content search within session events */
+                query?: string | null;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
+                /** @description Max results */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_timeline_session_timeline_sessions__session_id__export_get: {
+        parameters: {
+            query?: {
+                /** @description Branch projection mode for export: head|all */
+                branch_mode?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
