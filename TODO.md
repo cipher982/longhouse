@@ -110,6 +110,29 @@ Notes:
 - 2026-03-14: Tenant auth now routes through `auth_browser.py`, `auth_sso.py`, and `auth_gmail.py`; shared browser cookies live in `auth/session_tokens.py`; Oikos/browser/device helpers now live under `zerg/dependencies/`.
 - 2026-03-14: Focused auth seam coverage landed in `tests_lite/test_auth_domain_split.py`, and the moved imports are covered across Gmail, SSO, Oikos, agents, heartbeat, and session-resume tests.
 - 2026-03-14: Final verification passed: `make test-lite`, `make test-e2e`, GHCR runtime build `23098760543`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, and `make qa-live` (8/8).
+
+## [Tech Debt] Delete legacy auth fallbacks (size: 4)
+
+Status (2026-03-16): In progress. This is phase 4 of the auth cleanup epic.
+
+**Goal:** Remove the remaining auth compatibility paths so machine auth is device-token only, hosted SSO keys come from the control plane path only, and password auth stops mutating legacy users on login.
+
+**Done when:**
+- `AGENTS_API_TOKEN` is no longer accepted or documented as a machine-auth path
+- `CONTROL_PLANE_JWT_SECRET` is no longer part of the tenant SSO key fallback chain
+- Password auth binds to the configured owner/local account without mutating the first non-service user on login
+- CLI/tests/docs follow the new strict contracts cleanly
+- Full ship verification passes
+
+- [ ] Write and commit the concise phase 4 spec
+- [ ] Remove `AGENTS_API_TOKEN` fallback support from backend auth and CLI entrypoints
+- [ ] Remove `CONTROL_PLANE_JWT_SECRET` fallback support from tenant SSO key resolution
+- [ ] Remove password-login legacy-user mutation fallback and tighten the tests
+- [ ] Ship and verify the hosted runtime after the cleanup
+
+Notes:
+- 2026-03-16: Keep this bounded to deleting compatibility paths. Do not fold in `AUTH_DISABLED` narrowing yet.
+- 2026-03-16: Hosted login-token -> `/api/auth/accept-token` remains the browser auth bridge; this phase only deletes the old fallback contracts behind it.
 - Spec: `docs/specs/auth-domain-split.md`
 
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
