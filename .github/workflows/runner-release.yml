@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -72,6 +74,11 @@ jobs:
           path: binaries
           merge-multiple: true
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: List binaries
         run: ls -la binaries/
 
@@ -89,6 +96,33 @@ jobs:
           VERSION="${TAG#runner-}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build update manifest + checksums
+        run: |
+          bun apps/runner/scripts/build-update-manifest.ts \
+            --binaries-dir binaries \
+            --output-dir release-metadata \
+            --tag "${{ steps.version.outputs.tag }}" \
+            --version "${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}"
+
+      - name: Sign update manifest
+        env:
+          RUNNER_RELEASE_SIGNING_KEY: ${{ secrets.RUNNER_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RUNNER_RELEASE_SIGNING_KEY" ]; then
+            echo "RUNNER_RELEASE_SIGNING_KEY is not configured" >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$RUNNER_RELEASE_SIGNING_KEY" > runner-release-signing-key.pem
+          openssl pkeyutl \
+            -sign \
+            -rawin \
+            -inkey runner-release-signing-key.pem \
+            -in release-metadata/longhouse-runner-manifest.json \
+            -out release-metadata/longhouse-runner-manifest.json.sig
+          rm -f runner-release-signing-key.pem
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -110,6 +144,11 @@ jobs:
             | Linux | x64 | `longhouse-runner-linux-x64` |
             | Linux | arm64 | `longhouse-runner-linux-arm64` |
 
+            Signed release metadata is published as:
+            - `longhouse-runner-manifest.json`
+            - `longhouse-runner-manifest.json.sig`
+            - `checksums.txt`
+
             ## Manual Installation
 
             1. Download the binary for your platform
@@ -122,3 +161,17 @@ jobs:
             binaries/longhouse-runner-darwin-arm64
             binaries/longhouse-runner-linux-x64
             binaries/longhouse-runner-linux-arm64
+            release-metadata/longhouse-runner-manifest.json
+            release-metadata/longhouse-runner-manifest.json.sig
+            release-metadata/checksums.txt
+
+      - name: Attest runner release artifacts
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            binaries/longhouse-runner-darwin-arm64
+            binaries/longhouse-runner-linux-x64
+            binaries/longhouse-runner-linux-arm64
+            release-metadata/longhouse-runner-manifest.json
+            release-metadata/longhouse-runner-manifest.json.sig
+            release-metadata/checksums.txt
