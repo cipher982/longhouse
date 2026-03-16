@@ -113,7 +113,7 @@ Notes:
 
 ## [Tech Debt] Delete legacy auth fallbacks (size: 4)
 
-Status (2026-03-16): In progress. This is phase 4 of the auth cleanup epic.
+Status (2026-03-16): Done. Phase 4 shipped with the legacy machine-auth and tenant-SSO fallbacks deleted, password auth tightened to fail closed on mismatched owner users, and the hosted runtime verified end to end.
 
 **Goal:** Remove the remaining auth compatibility paths so machine auth is device-token only, hosted SSO keys come from the control plane path only, and password auth stops mutating legacy users on login.
 
@@ -124,16 +124,17 @@ Status (2026-03-16): In progress. This is phase 4 of the auth cleanup epic.
 - CLI/tests/docs follow the new strict contracts cleanly
 - Full ship verification passes
 
-- [ ] Write and commit the concise phase 4 spec
-- [ ] Remove `AGENTS_API_TOKEN` fallback support from backend auth and CLI entrypoints
-- [ ] Remove `CONTROL_PLANE_JWT_SECRET` fallback support from tenant SSO key resolution
-- [ ] Remove password-login legacy-user mutation fallback and tighten the tests
-- [ ] Ship and verify the hosted runtime after the cleanup
+- [x] Write and commit the concise phase 4 spec
+- [x] Remove `AGENTS_API_TOKEN` fallback support from backend auth and CLI entrypoints
+- [x] Remove `CONTROL_PLANE_JWT_SECRET` fallback support from tenant SSO key resolution
+- [x] Remove password-login legacy-user mutation fallback and tighten the tests
+- [x] Ship and verify the hosted runtime after the cleanup
 
 Notes:
 - 2026-03-16: Keep this bounded to deleting compatibility paths. Do not fold in `AUTH_DISABLED` narrowing yet.
 - 2026-03-16: Hosted login-token -> `/api/auth/accept-token` remains the browser auth bridge; this phase only deletes the old fallback contracts behind it.
-- Spec: `docs/specs/auth-domain-split.md`
+- 2026-03-16: Final verification passed in a clean `origin/main` clone: `make test`, `make test-e2e`, and later live `make qa-live` after deploy/reprovision.
+- Spec: `docs/specs/auth-fallback-deletion.md`
 
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
