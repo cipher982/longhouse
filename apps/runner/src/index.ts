@@ -12,43 +12,25 @@ import { loadConfig, type RunnerConfig } from './config';
 import { loadEnvfile } from './envfile';
 import { runDoctorCommand } from './doctor';
 import { getRunnerMetadata } from './protocol';
+import { runUpdateCommand } from './update';
+import { RUNNER_VERSION } from './version';
 import { RunnerWebSocketClient } from './ws-client';
-
-const VERSION = '0.1.3';
-
-const { values, positionals } = parseArgs({
-  options: {
-    version: { type: 'boolean', short: 'v' },
-    envfile: { type: 'string' },
-    help: { type: 'boolean', short: 'h' },
-    'allow-insecure-envfile': { type: 'boolean' },
-    json: { type: 'boolean' },
-  },
-  allowPositionals: true,
-});
-
-const command = positionals[0] ?? 'run';
-
-if (values.help) {
+const VERSION = RUNNER_VERSION;
+function printHelp(): void {
   console.log(`Usage: longhouse-runner [command] [options]
 Commands:
   run                        Start the runner daemon (default)
   doctor                     Diagnose local runner install health
+  update                     Check, apply, or roll back runner updates
 Options:
   -v, --version              Print version and exit
   --envfile <path>           Load env vars from file
   --allow-insecure-envfile   Skip envfile permission check (not recommended)
   --json                     Print JSON for doctor output
   -h, --help                 Show this help`);
-  process.exit(0);
 }
 
-if (values.version) {
-  console.log(`longhouse-runner ${VERSION}`);
-  process.exit(0);
-}
-
-async function runDaemon() {
+async function runDaemon(values: Record<string, any>, command: string) {
   if (values.envfile) {
     try {
       loadEnvfile(values.envfile, { allowInsecure: values['allow-insecure-envfile'] });
@@ -109,6 +91,35 @@ async function runDaemon() {
 }
 
 async function main() {
+  const rawArgv = process.argv.slice(2);
+  if (rawArgv[0] === 'update') {
+    const exitCode = await runUpdateCommand(rawArgv.slice(1));
+    process.exit(exitCode);
+  }
+
+  const { values, positionals } = parseArgs({
+    options: {
+      version: { type: 'boolean', short: 'v' },
+      envfile: { type: 'string' },
+      help: { type: 'boolean', short: 'h' },
+      'allow-insecure-envfile': { type: 'boolean' },
+      json: { type: 'boolean' },
+    },
+    allowPositionals: true,
+  });
+
+  const command = positionals[0] ?? 'run';
+
+  if (values.help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  if (values.version) {
+    console.log(`longhouse-runner ${VERSION}`);
+    process.exit(0);
+  }
+
   if (command === 'doctor') {
     const exitCode = await runDoctorCommand({
       envfile: values.envfile,
@@ -124,7 +135,7 @@ async function main() {
     process.exit(1);
   }
 
-  await runDaemon();
+  await runDaemon(values, command);
 }
 
 main().catch((error) => {
