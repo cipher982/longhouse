@@ -53,7 +53,7 @@ EOF_SESSION
 # 4. Test ship command
 cd "$BACKEND_DIR"
 if [[ -n "$SHIPPER_TOKEN" ]]; then
-  SHIP_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
+  SHIP_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --token "$SHIPPER_TOKEN" --file "$SESSION_FILE" 2>&1 || true)
 else
   SHIP_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 fi
@@ -69,7 +69,7 @@ fi
 
 # 6. Test incremental ship (no new content)
 if [[ -n "$SHIPPER_TOKEN" ]]; then
-  SHIP2_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
+  SHIP2_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --token "$SHIPPER_TOKEN" --file "$SESSION_FILE" 2>&1 || true)
 else
   SHIP2_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 fi
@@ -78,7 +78,7 @@ echo "$SHIP2_OUTPUT"
 # 7. Add new content and ship again
 printf '{"type":"user","uuid":"%s","timestamp":"%s","cwd":"/tmp/smoke-test","message":{"content":"New message after first ship"}}\n' "$(uuidgen)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SESSION_FILE"
 if [[ -n "$SHIPPER_TOKEN" ]]; then
-  SHIP3_OUTPUT=$(AGENTS_API_TOKEN="$SHIPPER_TOKEN" uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
+  SHIP3_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --token "$SHIPPER_TOKEN" --file "$SESSION_FILE" 2>&1 || true)
 else
   SHIP3_OUTPUT=$(uv run longhouse ship --url "$BACKEND_URL" --file "$SESSION_FILE" 2>&1 || true)
 fi

@@ -5,8 +5,6 @@ aligning with database._is_sqlite_url() behavior.
 """
 
 
-
-
 class TestDbIsSqlite:
     """Test Settings.db_is_sqlite() properly detects SQLite URLs."""
 
@@ -62,9 +60,7 @@ class TestDbIsSqlite:
             oikos_workspace_path="/tmp",
             notification_webhook=None,
             control_plane_url=None,
-            control_plane_jwt_secret=None,
             smoke_test_secret=None,
-            agents_api_token=None,
             job_queue_enabled=False,
             jobs_git_repo_url=None,
             jobs_git_branch="main",

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 
 from fastapi import Depends
@@ -28,46 +26,29 @@ def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> Devi
 
     provided_token = request.headers.get("X-Agents-Token")
     if not provided_token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            provided_token = auth_header[7:]
-
-    if not provided_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication - provide X-Agents-Token header",
         )
 
-    if provided_token.startswith("zdt_"):
-        from zerg.routers.device_tokens import validate_device_token
-
-        device_token = validate_device_token(provided_token, db)
-        if device_token:
-            logger.debug("Device token validated for device %s", device_token.device_id)
-            request.state.agents_rate_key = f"device:{device_token.id}"
-            return device_token
-
+    if not provided_token.startswith("zdt_"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or revoked device token",
         )
 
-    expected_token = settings.agents_api_token
-    if not expected_token:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Agents API not configured - create a device token or set AGENTS_API_TOKEN env var",
-        )
+    from zerg.routers.device_tokens import validate_device_token
 
-    if not hmac.compare_digest(provided_token, expected_token):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid agents API token",
-        )
+    device_token = validate_device_token(provided_token, db)
+    if device_token:
+        logger.debug("Device token validated for device %s", device_token.device_id)
+        request.state.agents_rate_key = f"device:{device_token.id}"
+        return device_token
 
-    token_hash = hashlib.sha256(provided_token.encode()).hexdigest()
-    request.state.agents_rate_key = f"token:{token_hash}"
-    return None
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or revoked device token",
+    )
 
 
 def require_single_tenant(db: Session = Depends(get_db)) -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import os
 import secrets
 import time
 from collections import defaultdict
@@ -372,28 +371,26 @@ class PasswordLoginRequest(BaseModel):
 
 def _resolve_password_user(db: Session):
     settings = get_settings()
-    explicit_owner = os.environ.get("OWNER_EMAIL", "").strip()
 
-    if settings.single_tenant and not settings.testing and explicit_owner:
+    if settings.single_tenant and not settings.testing:
+        from fastapi import HTTPException
+        from fastapi import status
         from zerg.models import User
         from zerg.services.single_tenant import get_owner_email
 
         owner_email = get_owner_email().strip().lower()
-        if owner_email:
-            user = get_user_by_email(db, owner_email)
-            if user:
-                return user
+        user = get_user_by_email(db, owner_email)
+        if user:
+            return user
 
         existing = db.query(User).filter(User.provider != "service").order_by(User.id.asc()).first()
         if existing:
-            if owner_email and existing.email.lower() != owner_email:
-                existing.email = owner_email
-                db.commit()
-                db.refresh(existing)
-            return existing
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL.",
+            )
 
-        if owner_email:
-            return create_user(db, email=owner_email, provider="password", skip_notification=True)
+        return create_user(db, email=owner_email, provider="password", skip_notification=True)
 
     user = get_user_by_email(db, "local@longhouse")
     if not user:

@@ -64,8 +64,8 @@ def test_password_login_binds_owner_email(tmp_path):
         assert users[0].email == "alice@example.com"
 
 
-def test_password_login_migrates_legacy_user(tmp_path):
-    """Legacy local@longhouse user should be migrated to OWNER_EMAIL."""
+def test_password_login_rejects_legacy_user_mismatch(tmp_path):
+    """Hosted password login should fail closed when the stored user mismatches OWNER_EMAIL."""
     sf = _make_db(tmp_path)
 
     with sf() as db:
@@ -85,9 +85,12 @@ def test_password_login_migrates_legacy_user(tmp_path):
     ):
         for client in _get_client(sf):
             resp = client.post("/auth/password", json={"password": "secret"})
-            assert resp.status_code == 200
+            assert resp.status_code == 409
+            assert resp.json()["detail"] == (
+                "Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL."
+            )
 
     with sf() as db:
         users = db.query(User).all()
         assert len(users) == 1
-        assert users[0].email == "owner@example.com"
+        assert users[0].email == "local@longhouse"

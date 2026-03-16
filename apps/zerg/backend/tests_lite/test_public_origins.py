@@ -35,7 +35,6 @@ def _make_settings(**overrides):
         environment="test",
         allowed_cors_origins="",
         openai_api_key=None,
-
         app_public_url=None,
         public_site_url=None,
         public_api_url=None,
@@ -58,9 +57,7 @@ def _make_settings(**overrides):
         oikos_workspace_path="/tmp",
         notification_webhook=None,
         control_plane_url=None,
-        control_plane_jwt_secret=None,
         smoke_test_secret=None,
-        agents_api_token=None,
         job_queue_enabled=False,
         jobs_git_repo_url=None,
         jobs_git_branch="main",

@@ -25,8 +25,7 @@ def mcp_server(
         None,
         "--token",
         "-t",
-        envvar="AGENTS_API_TOKEN",
-        help="API token (uses stored device token if omitted)",
+        help="Device token (uses stored device token if omitted)",
     ),
     transport: str = typer.Option(
         "stdio",
