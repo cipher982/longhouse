@@ -5,6 +5,8 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { normalizeAutoUpdatePolicy } from './update';
+import { RUNNER_VERSION } from './version';
 
 // Runner -> Server messages
 
@@ -74,6 +76,7 @@ export interface RunnerMetadata {
   docker_available?: boolean;
   capabilities?: string[];
   install_mode?: string;
+  auto_update_policy?: string;
 }
 
 function detectDockerAvailable(): boolean {
@@ -108,8 +111,9 @@ export function getRunnerMetadata(): RunnerMetadata {
     hostname: process.env.HOSTNAME || 'unknown',
     platform: process.platform,
     arch: process.arch,
-    runner_version: '0.1.3',
+    runner_version: RUNNER_VERSION,
     docker_available: detectDockerAvailable(),
     install_mode: process.env.RUNNER_INSTALL_MODE || undefined,
+    auto_update_policy: normalizeAutoUpdatePolicy(process.env.RUNNER_AUTO_UPDATE_POLICY),
   };
 }

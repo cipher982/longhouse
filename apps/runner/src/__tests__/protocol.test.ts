@@ -8,6 +8,7 @@ import { getRunnerMetadata } from '../protocol';
 const originalDockerHost = process.env.DOCKER_HOST;
 
 const originalInstallMode = process.env.RUNNER_INSTALL_MODE;
+const originalAutoUpdatePolicy = process.env.RUNNER_AUTO_UPDATE_POLICY;
 
 afterEach(() => {
   if (originalDockerHost === undefined) {
@@ -20,6 +21,12 @@ afterEach(() => {
     delete process.env.RUNNER_INSTALL_MODE;
   } else {
     process.env.RUNNER_INSTALL_MODE = originalInstallMode;
+  }
+
+  if (originalAutoUpdatePolicy === undefined) {
+    delete process.env.RUNNER_AUTO_UPDATE_POLICY;
+  } else {
+    process.env.RUNNER_AUTO_UPDATE_POLICY = originalAutoUpdatePolicy;
   }
 });
 
@@ -61,5 +68,12 @@ describe('getRunnerMetadata', () => {
 
     const metadata = getRunnerMetadata();
     expect(metadata.install_mode).toBe('server');
+  });
+
+  it('includes the normalized auto-update policy', () => {
+    process.env.RUNNER_AUTO_UPDATE_POLICY = 'apply';
+
+    const metadata = getRunnerMetadata();
+    expect(metadata.auto_update_policy).toBe('apply');
   });
 });
