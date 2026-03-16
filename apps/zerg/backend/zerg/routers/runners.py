@@ -51,6 +51,7 @@ from zerg.services.runner_auth import authenticate_runner_identity
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_doctor import diagnose_runner
 from zerg.services.runner_health import build_runner_response
+from zerg.services.runner_health import normalize_runner_binary_tag
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.utils.time import utc_now_naive
 
@@ -279,12 +280,16 @@ def get_install_script(
             api_url = settings.app_public_url
 
     binary_url = f"https://github.com/cipher982/longhouse/releases/download/{settings.runner_binary_tag}"
+    update_manifest_url = "https://github.com/cipher982/longhouse/releases/latest/download/longhouse-runner-manifest.json"
+    runner_binary_version = normalize_runner_binary_tag(settings.runner_binary_tag) or settings.runner_binary_tag
 
     # Shell-escape all substituted values to prevent injection
     safe_enroll_token = shlex.quote(enroll_token)
     safe_runner_name_expr = shlex.quote(runner_name) if runner_name else "$(hostname)"
     safe_api_url = shlex.quote(api_url)
     safe_binary_url = shlex.quote(binary_url)
+    safe_update_manifest_url = shlex.quote(update_manifest_url)
+    safe_runner_binary_version = shlex.quote(runner_binary_version)
 
     safe_install_mode = mode or "desktop"
     safe_requested_capabilities = shlex.quote("exec.full")
@@ -303,6 +308,8 @@ def get_install_script(
         "__BINARY_URL__": safe_binary_url,
         "__INSTALL_MODE__": safe_install_mode,
         "__REQUESTED_CAPABILITIES__": safe_requested_capabilities,
+        "__RUNNER_BINARY_VERSION__": safe_runner_binary_version,
+        "__UPDATE_MANIFEST_URL__": safe_update_manifest_url,
     }
     _pattern = _re.compile("|".join(_re.escape(k) for k in _substitutions))
     script = _pattern.sub(lambda m: _substitutions[m.group()], script)

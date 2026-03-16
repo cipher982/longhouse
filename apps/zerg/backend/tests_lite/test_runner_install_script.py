@@ -47,15 +47,26 @@ def _fetch_install_script(**params):
     return _request("GET", "/api/runners/install.sh", params=params)
 
 
+def _fetch_uninstall_script():
+    return _request("GET", "/api/runners/uninstall.sh")
+
+
 def test_install_script_defaults_to_desktop_mode_and_is_valid_bash(tmp_path):
     response = _fetch_install_script(enroll_token="token_123")
 
     assert response.status_code == 200
     assert 'RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-desktop}"' in response.text
     assert 'RUNNER_REQUESTED_CAPABILITIES="${RUNNER_REQUESTED_CAPABILITIES:-exec.full}"' in response.text
+    assert 'RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-9.9.9}"' in response.text
+    assert 'RUNNER_UPDATE_MANIFEST_URL="${RUNNER_UPDATE_MANIFEST_URL:-https://github.com/cipher982/longhouse/releases/latest/download/longhouse-runner-manifest.json}"' in response.text
+    assert 'RUNNER_AUTO_UPDATE_POLICY="${RUNNER_AUTO_UPDATE_POLICY:-notify}"' in response.text
     assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
     assert 'RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE' in response.text
+    assert 'RUNNER_INSTALL_ROOT=$INSTALL_ROOT' in response.text
+    assert 'RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH' in response.text
     assert "systemctl --user enable longhouse-runner" in response.text
+    assert 'VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"' in response.text
+    assert 'BINARY_PATH="$VERSION_DIR/longhouse-runner"' in response.text
     assert "For always-on servers, use RUNNER_INSTALL_MODE=server instead." in response.text
 
     script_path = Path(tmp_path) / "install.sh"
@@ -69,11 +80,15 @@ def test_install_script_server_mode_exposes_system_service_contract(tmp_path):
     assert response.status_code == 200
     assert 'RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-server}"' in response.text
     assert 'RUNNER_REQUESTED_CAPABILITIES="${RUNNER_REQUESTED_CAPABILITIES:-exec.full}"' in response.text
+    assert 'RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-9.9.9}"' in response.text
     assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
     assert 'RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE' in response.text
+    assert 'RUNNER_INSTALL_ROOT=$INSTALL_ROOT' in response.text
+    assert 'RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH' in response.text
     assert "EnvironmentFile=/etc/longhouse/runner.env" in response.text
-    assert "ExecStart=/usr/local/bin/longhouse-runner" in response.text
+    assert 'ExecStart=$LAUNCHER_PATH' in response.text
     assert "WantedBy=multi-user.target" in response.text
+    assert ".local/share/longhouse-runner" in response.text
     assert "sudo systemctl status longhouse-runner" in response.text
 
     script_path = Path(tmp_path) / "install-server.sh"
@@ -86,6 +101,22 @@ def test_install_script_rejects_invalid_mode():
 
     assert response.status_code == 400
     assert response.text == "Error: Invalid mode (use desktop or server)"
+
+
+def test_uninstall_script_cleans_up_managed_layout_paths_and_server_contract(tmp_path):
+    response = _fetch_uninstall_script()
+
+    assert response.status_code == 200
+    assert 'RUNNER_INSTALL_ROOT:-$HOME/.local/share/longhouse-runner' in response.text
+    assert 'RUNNER_LAUNCHER_PATH:-$HOME/.local/bin/longhouse-runner' in response.text
+    assert "/etc/systemd/system/${SERVICE_NAME}.service" in response.text
+    assert "/etc/longhouse/runner.env" in response.text
+    assert 'Install root removed: $INSTALL_ROOT' in response.text
+    assert 'Launcher removed: $LAUNCHER_PATH' in response.text
+
+    script_path = Path(tmp_path) / "uninstall.sh"
+    script_path.write_text(response.text)
+    run(["bash", "-n", str(script_path)], check=True)
 
 
 def test_create_enroll_token_uses_request_base_url_when_public_url_missing(tmp_path):

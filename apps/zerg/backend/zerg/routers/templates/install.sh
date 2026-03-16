@@ -14,6 +14,11 @@ RUNNER_NAME="${RUNNER_NAME:-__RUNNER_NAME_EXPR__}"
 LONGHOUSE_URL="${LONGHOUSE_URL:-__API_URL__}"
 BINARY_URL="${BINARY_URL:-__BINARY_URL__}"
 RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-__INSTALL_MODE__}"
+RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-__RUNNER_BINARY_VERSION__}"
+RUNNER_UPDATE_MANIFEST_URL="${RUNNER_UPDATE_MANIFEST_URL:-__UPDATE_MANIFEST_URL__}"
+RUNNER_AUTO_UPDATE_POLICY="${RUNNER_AUTO_UPDATE_POLICY:-notify}"
+RUNNER_UPDATE_CHECK_INTERVAL_SEC="${RUNNER_UPDATE_CHECK_INTERVAL_SEC:-14400}"
+RUNNER_UPDATE_JITTER_SEC="${RUNNER_UPDATE_JITTER_SEC:-300}"
 
 # Validate required vars
 if [ -z "$ENROLL_TOKEN" ]; then
@@ -30,6 +35,14 @@ case "$RUNNER_INSTALL_MODE" in
   desktop|server) ;;
   *)
     echo "Error: RUNNER_INSTALL_MODE must be 'desktop' or 'server'" >&2
+    exit 1
+    ;;
+esac
+
+case "$RUNNER_AUTO_UPDATE_POLICY" in
+  off|notify|apply) ;;
+  *)
+    echo "Error: RUNNER_AUTO_UPDATE_POLICY must be off, notify, or apply" >&2
     exit 1
     ;;
 esac
@@ -78,6 +91,27 @@ parse_json() {
   else
     echo ""
   fi
+}
+
+write_launcher() {
+  local launcher_path="$1"
+  local current_link="$2"
+
+  cat > "$launcher_path" <<EOF
+#!/bin/sh
+set -eu
+
+CURRENT_LINK='$current_link'
+TARGET="\$CURRENT_LINK/longhouse-runner"
+
+if [ ! -x "\$TARGET" ]; then
+  echo "Longhouse runner is not installed under \$CURRENT_LINK" >&2
+  exit 1
+fi
+
+exec "\$TARGET" "\$@"
+EOF
+  chmod 755 "$launcher_path"
 }
 
 # Register runner with backend
@@ -145,10 +179,14 @@ case "$OS_TYPE" in
 
     BIN_DIR="$HOME/.local/bin"
     CONFIG_DIR="$HOME/.config/longhouse"
-    STATE_DIR="$HOME/.local/state/longhouse"
+    INSTALL_ROOT="$HOME/.local/share/longhouse-runner"
+    VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"
+    STATE_DIR="$INSTALL_ROOT/state"
+    DOWNLOADS_DIR="$INSTALL_ROOT/downloads"
+    CURRENT_LINK="$INSTALL_ROOT/current"
     LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
-    mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$STATE_DIR" "$LAUNCH_AGENTS_DIR"
+    mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$STATE_DIR" "$DOWNLOADS_DIR" "$VERSION_DIR" "$LAUNCH_AGENTS_DIR"
     if [ "$RUNNER_INSTALL_MODE" != "desktop" ]; then
       echo "Note: RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE currently only changes Linux installs; using launchd on macOS."
       echo ""
@@ -158,15 +196,20 @@ case "$OS_TYPE" in
     touch "$STATE_DIR/runner.log"
     chmod 600 "$STATE_DIR/runner.log"
 
-    BINARY_PATH="$BIN_DIR/longhouse-runner"
+    BINARY_PATH="$VERSION_DIR/longhouse-runner"
+    TMP_BINARY="$DOWNLOADS_DIR/longhouse-runner-${PLATFORM}.download"
+    LAUNCHER_PATH="$BIN_DIR/longhouse-runner"
     DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
 
     echo "Downloading runner binary ($PLATFORM)..."
-    if ! curl -fsSL "$DOWNLOAD_URL" -o "$BINARY_PATH"; then
+    if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BINARY"; then
       echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
       exit 1
     fi
-    chmod +x "$BINARY_PATH"
+    chmod +x "$TMP_BINARY"
+    mv "$TMP_BINARY" "$BINARY_PATH"
+    ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
+    write_launcher "$LAUNCHER_PATH" "$CURRENT_LINK"
 
     ENV_FILE="$CONFIG_DIR/runner.env"
     cat > "$ENV_FILE" <<EOF
@@ -175,6 +218,12 @@ RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
 RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES
 RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE
+RUNNER_INSTALL_ROOT=$INSTALL_ROOT
+RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH
+RUNNER_UPDATE_MANIFEST_URL=$RUNNER_UPDATE_MANIFEST_URL
+RUNNER_AUTO_UPDATE_POLICY=$RUNNER_AUTO_UPDATE_POLICY
+RUNNER_UPDATE_CHECK_INTERVAL_SEC=$RUNNER_UPDATE_CHECK_INTERVAL_SEC
+RUNNER_UPDATE_JITTER_SEC=$RUNNER_UPDATE_JITTER_SEC
 EOF
     chmod 600 "$ENV_FILE"
     echo "Credentials saved to $ENV_FILE"
@@ -189,7 +238,7 @@ EOF
     <string>com.longhouse.runner</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$BINARY_PATH</string>
+        <string>$LAUNCHER_PATH</string>
         <string>--envfile</string>
         <string>$ENV_FILE</string>
     </array>
@@ -254,19 +303,28 @@ EOF
       BIN_DIR="$HOME/.local/bin"
       CONFIG_DIR="$HOME/.config/longhouse"
       SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+      INSTALL_ROOT="$HOME/.local/share/longhouse-runner"
+      VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"
+      DOWNLOADS_DIR="$INSTALL_ROOT/downloads"
+      CURRENT_LINK="$INSTALL_ROOT/current"
+      LAUNCHER_PATH="$BIN_DIR/longhouse-runner"
 
-      mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$SYSTEMD_USER_DIR"
+      mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$SYSTEMD_USER_DIR" "$VERSION_DIR" "$DOWNLOADS_DIR" "$INSTALL_ROOT/state"
       chmod 700 "$CONFIG_DIR"
 
-      BINARY_PATH="$BIN_DIR/longhouse-runner"
+      BINARY_PATH="$VERSION_DIR/longhouse-runner"
+      TMP_BINARY="$DOWNLOADS_DIR/longhouse-runner-${PLATFORM}.download"
       DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
 
       echo "Downloading runner binary ($PLATFORM)..."
-      if ! curl -fsSL "$DOWNLOAD_URL" -o "$BINARY_PATH"; then
+      if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BINARY"; then
         echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
         exit 1
       fi
-      chmod +x "$BINARY_PATH"
+      chmod +x "$TMP_BINARY"
+      mv "$TMP_BINARY" "$BINARY_PATH"
+      ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
+      write_launcher "$LAUNCHER_PATH" "$CURRENT_LINK"
 
       ENV_FILE="$CONFIG_DIR/runner.env"
       cat > "$ENV_FILE" <<EOF
@@ -275,6 +333,12 @@ RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
 RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES
 RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE
+RUNNER_INSTALL_ROOT=$INSTALL_ROOT
+RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH
+RUNNER_UPDATE_MANIFEST_URL=$RUNNER_UPDATE_MANIFEST_URL
+RUNNER_AUTO_UPDATE_POLICY=$RUNNER_AUTO_UPDATE_POLICY
+RUNNER_UPDATE_CHECK_INTERVAL_SEC=$RUNNER_UPDATE_CHECK_INTERVAL_SEC
+RUNNER_UPDATE_JITTER_SEC=$RUNNER_UPDATE_JITTER_SEC
 EOF
       chmod 600 "$ENV_FILE"
       echo "Credentials saved to $ENV_FILE"
@@ -347,8 +411,13 @@ SERVICEEOF
       TMP_DIR="$(mktemp -d)"
       trap 'rm -rf "$TMP_DIR"' EXIT
       TMP_BINARY="$TMP_DIR/longhouse-runner"
+      TMP_LAUNCHER="$TMP_DIR/longhouse-runner-launcher"
       TMP_ENV="$TMP_DIR/runner.env"
       TMP_SERVICE="$TMP_DIR/longhouse-runner.service"
+      INSTALL_ROOT="$INSTALL_HOME/.local/share/longhouse-runner"
+      VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"
+      CURRENT_LINK="$INSTALL_ROOT/current"
+      LAUNCHER_PATH="$INSTALL_HOME/.local/bin/longhouse-runner"
       DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
 
       echo "Downloading runner binary ($PLATFORM)..."
@@ -357,6 +426,7 @@ SERVICEEOF
         exit 1
       fi
       chmod +x "$TMP_BINARY"
+      write_launcher "$TMP_LAUNCHER" "$CURRENT_LINK"
 
       cat > "$TMP_ENV" <<EOF
 LONGHOUSE_URL=$LONGHOUSE_URL
@@ -364,6 +434,12 @@ RUNNER_NAME=$RUNNER_NAME
 RUNNER_SECRET=$RUNNER_SECRET
 RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES
 RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE
+RUNNER_INSTALL_ROOT=$INSTALL_ROOT
+RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH
+RUNNER_UPDATE_MANIFEST_URL=$RUNNER_UPDATE_MANIFEST_URL
+RUNNER_AUTO_UPDATE_POLICY=$RUNNER_AUTO_UPDATE_POLICY
+RUNNER_UPDATE_CHECK_INTERVAL_SEC=$RUNNER_UPDATE_CHECK_INTERVAL_SEC
+RUNNER_UPDATE_JITTER_SEC=$RUNNER_UPDATE_JITTER_SEC
 EOF
       chmod 600 "$TMP_ENV"
 
@@ -380,7 +456,7 @@ Group=$INSTALL_GROUP
 WorkingDirectory=$INSTALL_HOME
 Environment=HOME=$INSTALL_HOME
 EnvironmentFile=/etc/longhouse/runner.env
-ExecStart=/usr/local/bin/longhouse-runner
+ExecStart=$LAUNCHER_PATH
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=60
@@ -391,8 +467,19 @@ WantedBy=multi-user.target
 EOF
 
       echo "Installing system service for user $INSTALL_USER..."
-      $SUDO install -d -m 755 /usr/local/bin /etc/longhouse /etc/systemd/system
-      $SUDO install -m 755 "$TMP_BINARY" /usr/local/bin/longhouse-runner
+      $SUDO install -d -m 755 /etc/longhouse /etc/systemd/system
+      $SUDO install -d -m 755 -o "$INSTALL_USER" -g "$INSTALL_GROUP" \
+        "$INSTALL_HOME/.local" \
+        "$INSTALL_HOME/.local/bin" \
+        "$INSTALL_HOME/.local/share" \
+        "$INSTALL_ROOT" \
+        "$INSTALL_ROOT/versions" \
+        "$VERSION_DIR" \
+        "$INSTALL_ROOT/state" \
+        "$INSTALL_ROOT/downloads"
+      $SUDO install -m 755 -o "$INSTALL_USER" -g "$INSTALL_GROUP" "$TMP_BINARY" "$VERSION_DIR/longhouse-runner"
+      $SUDO install -m 755 -o "$INSTALL_USER" -g "$INSTALL_GROUP" "$TMP_LAUNCHER" "$LAUNCHER_PATH"
+      $SUDO ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
       $SUDO install -m 600 "$TMP_ENV" /etc/longhouse/runner.env
       $SUDO install -m 644 "$TMP_SERVICE" /etc/systemd/system/longhouse-runner.service
 
