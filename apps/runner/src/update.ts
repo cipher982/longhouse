@@ -98,6 +98,14 @@ type FetchLike = typeof fetch;
 const DEFAULT_UPDATE_CHECK_INTERVAL_SEC = 4 * 60 * 60;
 const DEFAULT_UPDATE_JITTER_SEC = 5 * 60;
 
+function isPermissionDenied(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EACCES' || code === 'EPERM';
+}
+
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
   if (!raw) {
     return fallback;
@@ -189,15 +197,27 @@ export function loadUpdateCommandEnvfile(options: {
     return null;
   }
 
-  loadEnvfile(envfilePath, {
-    allowInsecure: options.allowInsecure,
-    env: options.env,
-  });
+  try {
+    loadEnvfile(envfilePath, {
+      allowInsecure: options.allowInsecure,
+      env: options.env,
+    });
+  } catch (error) {
+    if (!options.envfile && isPermissionDenied(error)) {
+      return null;
+    }
+    throw error;
+  }
   return envfilePath;
 }
 
-export function hasManagedInstallLayout(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.RUNNER_INSTALL_ROOT && env.RUNNER_LAUNCHER_PATH);
+export function hasManagedInstallLayout(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = homedir(),
+  exists: (path: string) => boolean = existsSync,
+): boolean {
+  const layout = resolveInstallLayout(env, homeDir);
+  return exists(layout.launcherPath) && exists(layout.currentLink);
 }
 
 export function launcherScriptFor(layout: RunnerInstallLayout): string {
@@ -371,8 +391,9 @@ function updateBlockedReason(
   currentVersion: string,
   manifest: RunnerUpdateManifest,
   env: NodeJS.ProcessEnv,
+  homeDir?: string,
 ): string | null {
-  if (!hasManagedInstallLayout(env)) {
+  if (!hasManagedInstallLayout(env, homeDir)) {
     return 'This runner still uses the legacy install layout. Re-run the installer once before applying updates.';
   }
 
@@ -387,8 +408,8 @@ function updateBlockedReason(
   return null;
 }
 
-function ensureManagedInstallLayout(env: NodeJS.ProcessEnv): void {
-  if (!hasManagedInstallLayout(env)) {
+function ensureManagedInstallLayout(env: NodeJS.ProcessEnv, homeDir?: string): void {
+  if (!hasManagedInstallLayout(env, homeDir)) {
     throw new Error('This runner still uses the legacy install layout. Re-run the installer once before applying updates.');
   }
 }
@@ -443,14 +464,14 @@ export async function checkForRunnerUpdate(runtime: RunnerUpdateRuntime = {}): P
   const manifest = await fetchVerifiedManifest(manifestUrl, runtime);
   const target = platformTargetFor(runtime.platform, runtime.arch);
   const asset = selectAsset(manifest, target);
-  const blockedReason = updateBlockedReason(currentVersion, manifest, env);
+  const blockedReason = updateBlockedReason(currentVersion, manifest, env, runtime.homeDir);
   const result: RunnerUpdateCheckResult = {
     current_version: currentVersion,
     installed_version: detectInstalledVersion(layout),
     latest_version: manifest.runner_version,
     manifest_url: manifestUrl,
     policy: resolveAutoUpdatePolicy(env),
-    managed_install_ready: hasManagedInstallLayout(env),
+    managed_install_ready: hasManagedInstallLayout(env, runtime.homeDir),
     update_available: compareSemver(currentVersion, manifest.runner_version) < 0,
     blocked_reason: blockedReason,
     manifest_expires_at: manifest.expires_at,
@@ -476,7 +497,7 @@ export async function applyRunnerUpdate(
 ): Promise<RunnerUpdateApplyResult> {
   const env = runtime.env ?? process.env;
   const now = (runtime.now ?? (() => new Date()))();
-  ensureManagedInstallLayout(env);
+  ensureManagedInstallLayout(env, runtime.homeDir);
   const layout = resolveInstallLayout(env, runtime.homeDir);
   const state = await readUpdateState(layout);
   const currentVersion = detectInstalledVersion(layout) || RUNNER_VERSION;
@@ -493,7 +514,7 @@ export async function applyRunnerUpdate(
     throw new Error(`Runner is already on v${currentVersion}; no newer update is available.`);
   }
 
-  const blockedReason = updateBlockedReason(currentVersion, manifest, env);
+  const blockedReason = updateBlockedReason(currentVersion, manifest, env, runtime.homeDir);
   if (blockedReason) {
     throw new Error(blockedReason);
   }
@@ -552,7 +573,7 @@ export async function applyRunnerUpdate(
 export async function rollbackRunnerUpdate(runtime: RunnerUpdateRuntime = {}): Promise<RunnerUpdateRollbackResult> {
   const env = runtime.env ?? process.env;
   const now = (runtime.now ?? (() => new Date()))();
-  ensureManagedInstallLayout(env);
+  ensureManagedInstallLayout(env, runtime.homeDir);
   const layout = resolveInstallLayout(env, runtime.homeDir);
   const state = await readUpdateState(layout);
   const currentVersion = detectInstalledVersion(layout);

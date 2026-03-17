@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -92,10 +92,23 @@ describe('getRunnerMetadata', () => {
   });
 
   it('reports install layout v1 when updater paths are configured', () => {
-    process.env.RUNNER_INSTALL_ROOT = '/tmp/runner-root';
-    process.env.RUNNER_LAUNCHER_PATH = '/tmp/bin/longhouse-runner';
+    withTempDir((dir) => {
+      const installRoot = join(dir, 'runner-root');
+      const versionsDir = join(installRoot, 'versions');
+      const versionDir = join(versionsDir, '0.1.6');
+      const launcherPath = join(dir, 'bin', 'longhouse-runner');
 
-    const metadata = getRunnerMetadata();
-    expect(metadata.install_layout_version).toBe(1);
+      mkdirSync(versionDir, { recursive: true });
+      mkdirSync(join(dir, 'bin'), { recursive: true });
+      writeFileSync(join(versionDir, 'longhouse-runner'), 'binary');
+      writeFileSync(launcherPath, '#!/bin/sh\n');
+      symlinkSync(versionDir, join(installRoot, 'current'));
+
+      process.env.RUNNER_INSTALL_ROOT = installRoot;
+      process.env.RUNNER_LAUNCHER_PATH = launcherPath;
+
+      const metadata = getRunnerMetadata();
+      expect(metadata.install_layout_version).toBe(1);
+    });
   });
 });

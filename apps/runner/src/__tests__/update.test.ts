@@ -8,6 +8,7 @@ import {
   applyRunnerUpdate,
   checkForRunnerUpdate,
   compareSemver,
+  hasManagedInstallLayout,
   launcherScriptFor,
   loadUpdateCommandEnvfile,
   parseAndValidateManifest,
@@ -120,8 +121,10 @@ describe('runner update flows', () => {
       const versionsDir = join(installRoot, 'versions');
       const currentVersionDir = join(versionsDir, '0.1.3');
       mkdirSync(currentVersionDir, { recursive: true });
+      mkdirSync(join(dir, 'bin'), { recursive: true });
       writeFileSync(join(currentVersionDir, 'longhouse-runner'), 'old-binary');
       symlinkSync(currentVersionDir, join(installRoot, 'current'));
+      writeFileSync(launcherPath, '#!/bin/sh\n');
 
       process.env.RUNNER_INSTALL_ROOT = installRoot;
       process.env.RUNNER_LAUNCHER_PATH = launcherPath;
@@ -218,6 +221,45 @@ describe('runner update flows', () => {
       expect(env.RUNNER_INSTALL_ROOT).toBe(join(dir, 'runner-root'));
       expect(env.RUNNER_LAUNCHER_PATH).toBe(join(dir, '.local', 'bin', 'longhouse-runner'));
       expect(env.RUNNER_UPDATE_MANIFEST_URL).toBe('https://updates.example.com/manifest.json');
+    });
+  });
+
+  it('detects managed layout from launcher and current symlink without env vars', async () => {
+    await withTempDir(async (dir) => {
+      const installRoot = join(dir, '.local', 'share', 'longhouse-runner');
+      const versionsDir = join(installRoot, 'versions');
+      const versionDir = join(versionsDir, '0.1.6');
+      const launcherPath = join(dir, '.local', 'bin', 'longhouse-runner');
+
+      mkdirSync(versionDir, { recursive: true });
+      mkdirSync(join(dir, '.local', 'bin'), { recursive: true });
+      writeFileSync(join(versionDir, 'longhouse-runner'), 'binary');
+      writeFileSync(launcherPath, '#!/bin/sh\n');
+      symlinkSync(versionDir, join(installRoot, 'current'));
+
+      expect(hasManagedInstallLayout({}, dir)).toBe(true);
+    });
+  });
+
+  it('ignores an unreadable auto-discovered envfile and falls back to filesystem detection', async () => {
+    await withTempDir(async (dir) => {
+      const env: NodeJS.ProcessEnv = {};
+      const configDir = join(dir, '.config', 'longhouse');
+      mkdirSync(configDir, { recursive: true });
+      const envfilePath = join(configDir, 'runner.env');
+      writeFileSync(envfilePath, 'RUNNER_INSTALL_ROOT=/tmp/runner-root\n');
+      chmodSync(envfilePath, 0o000);
+
+      const loadedPath = loadUpdateCommandEnvfile({
+        env,
+        homeDir: dir,
+        platform: process.platform,
+      });
+
+      expect(loadedPath).toBeNull();
+      expect(env.RUNNER_INSTALL_ROOT).toBeUndefined();
+
+      chmodSync(envfilePath, 0o600);
     });
   });
 });
