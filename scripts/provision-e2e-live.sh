@@ -155,16 +155,16 @@ else
   fail "GET /timeline -> ${timeline_resp} (expected 200)"
 fi
 
-# Test API sessions endpoint (should return JSON, may need auth)
-sessions_code=$(curl -s -o /dev/null -w "%{http_code}" \
+# Test machine sessions endpoint (should return JSON, usually auth-gated)
+machine_sessions_code=$(curl -s -o /dev/null -w "%{http_code}" \
   --connect-timeout 5 --max-time 15 \
   "${INSTANCE_URL}/api/agents/sessions" 2>/dev/null)
-if [[ "$sessions_code" == "200" ]]; then
-  ok "GET /api/agents/sessions -> 200 (auth disabled in instance)"
-elif [[ "$sessions_code" == "401" || "$sessions_code" == "403" ]]; then
-  ok "GET /api/agents/sessions -> ${sessions_code} (auth enabled, expected)"
+if [[ "$machine_sessions_code" == "200" ]]; then
+  ok "GET /api/agents/sessions -> 200 (machine auth disabled in instance)"
+elif [[ "$machine_sessions_code" == "401" || "$machine_sessions_code" == "403" ]]; then
+  ok "GET /api/agents/sessions -> ${machine_sessions_code} (machine auth enabled, expected)"
 else
-  fail "GET /api/agents/sessions -> ${sessions_code} (unexpected)"
+  fail "GET /api/agents/sessions -> ${machine_sessions_code} (unexpected)"
 fi
 
 # Test config.js serves expected config
