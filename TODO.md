@@ -15,6 +15,25 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][QA/Test][Tech Debt] Fix stale browser smoke checks after the auth split (size: 1)
+
+Status (2026-03-17): Done. The deploy smoke now follows the current auth contract: browser-cookie checks stay on `/api/timeline/*`, so hosted deploy verification no longer false-fails on the machine-only sessions API.
+
+**Goal:** Make the post-deploy smoke checks follow the current auth contract: browser-session flows hit `/api/timeline/*`, machine-token flows hit `/api/agents/*`.
+
+**Done when:**
+- `scripts/smoke-prod.sh` no longer uses a browser cookie against `/api/agents/sessions`
+- The authenticated smoke label reflects the browser-owned timeline contract explicitly
+- Focused live verification proves the smoke passes again against `david010`
+
+- [x] Update the stale browser-auth smoke check to use the timeline API
+- [x] Rerun the focused live smoke path after the script change
+
+Notes:
+- 2026-03-17: The local installer smoke had already been fixed to authenticate with a device token before calling `/api/agents/sessions`; the remaining false negative lived only in `scripts/smoke-prod.sh`.
+- 2026-03-17: `scripts/smoke-prod.sh --no-llm` passed 25/25 against `david010` once the authenticated browser check moved to `/api/timeline/sessions?limit=1`.
+- 2026-03-17: `make qa-live` still passed 8/8 after the smoke cleanup, so the hosted browser/session paths stayed healthy.
+
 ## [Launch][Infra][QA/Test] Unblock PyPI publish for the public CLI package (size: 2)
 
 Status (2026-03-17): Done. The dead `hatch-agent` Git dependency is gone from the backend wheel, `v0.1.5` is published on GitHub Releases and PyPI, the public installer smoke passes against that release, and the hosted runtime has been redeployed and live-QA'd.
