@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Infra][QA/Test] Unblock PyPI publish for the public CLI package (size: 2)
+
+Status (2026-03-17): In progress. The public installer now works from GitHub release wheels, but PyPI publishing still fails because the backend wheel declares an unused Git dependency that PyPI rejects.
+
+**Goal:** Restore a clean public Python package story so GitHub release wheels and PyPI uploads both work without carrying dead `hatch-agent` baggage in the core Longhouse package.
+
+**Done when:**
+- The backend wheel no longer declares the unused `hatch-agent` Git dependency
+- Dead compatibility code for that dependency is removed from the backend package
+- Focused packaging coverage prevents direct-URL dependency regressions
+- A fresh tagged release publishes successfully and the public installer still passes
+
+- [x] Remove the dead `hatch-agent` dependency from backend packaging
+- [x] Delete the unused backend compatibility shim that forced the dependency
+- [x] Add focused regression coverage for package metadata / direct dependencies
+- [ ] Cut and verify a fresh public release
+
 ## [Launch][Product][Tech Debt] Tighten insights to a thin continuity primitive (size: 3)
 
 Status (2026-03-16): Done. The useful insight store remains in place, machine-readable reads are restored, and unattended reflection/proposal generation is paused by default before launch.

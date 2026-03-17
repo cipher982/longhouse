@@ -45,7 +45,7 @@ jobs:
   sqlite-tests:
     runs-on: ubuntu-latest
     # No dependency on validate - can run immediately on GitHub-hosted runners
-    name: "🗃️ sqlite-lite--make-test--hatch-agent--install-runner--oss-path"
+    name: "🗃️ sqlite-lite--make-test--install-runner--oss-path"
 
     steps:
     - uses: actions/checkout@v4
