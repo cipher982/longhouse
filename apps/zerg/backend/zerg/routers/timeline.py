@@ -218,6 +218,21 @@ async def set_timeline_session_action(
     )
 
 
+@router.patch("/sessions/{session_id}/loop-mode", response_model=agents_router.SessionLoopModeResponse)
+async def set_timeline_session_loop_mode(
+    session_id: UUID,
+    body: agents_router.SessionLoopModeRequest,
+    db: Session = Depends(get_db),
+):
+    return await agents_router.set_session_loop_mode(
+        session_id=session_id,
+        body=body,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
+
+
 @router.get("/sessions/{session_id}", response_model=agents_router.SessionResponse)
 async def get_timeline_session(
     session_id: UUID,

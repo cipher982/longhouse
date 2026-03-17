@@ -44,6 +44,7 @@ export interface AgentSession {
   origin_label: string | null;
   branched_from_event_id: number | null;
   is_writable_head: boolean;
+  loop_mode: SessionLoopMode;
 }
 
 export interface AgentSessionsListResponse {
@@ -123,9 +124,11 @@ export interface AgentActiveSession {
   presence_updated_at: string | null;
   // User-driven bucket
   user_state: "active" | "parked" | "snoozed" | "archived";
+  loop_mode: SessionLoopMode;
 }
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
+export type SessionLoopMode = "manual" | "assist" | "autopilot";
 
 export interface AgentActiveSessionsResponse {
   sessions: AgentActiveSession[];
@@ -488,5 +491,15 @@ export async function setSessionAction(
   return request(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}/action`, {
     method: "POST",
     body: JSON.stringify({ action }),
+  });
+}
+
+export async function setSessionLoopMode(
+  sessionId: string,
+  loopMode: SessionLoopMode,
+): Promise<{ session_id: string; loop_mode: SessionLoopMode }> {
+  return request(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}/loop-mode`, {
+    method: "PATCH",
+    body: JSON.stringify({ loop_mode: loopMode }),
   });
 }
