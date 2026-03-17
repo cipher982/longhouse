@@ -4,6 +4,8 @@ Provides endpoints for:
 - POST /api/insights — create or deduplicate insight (same title+project within 7 days → update)
 - GET /api/insights — browser-authenticated insight query
 - GET /api/agents/insights — machine-authenticated insight query
+- POST /api/insights/{id}/archive — browser-authenticated archive
+- POST /api/insights/{id}/unarchive — browser-authenticated restore
 """
 
 import logging
@@ -29,6 +31,7 @@ from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
 from zerg.models.work import INSIGHT_ORIGIN_MANUAL
 from zerg.models.work import Insight
+from zerg.models.work import insight_visibility_clause
 from zerg.models.work import user_visible_insight_clause
 from zerg.utils.time import UTCBaseModel
 
@@ -70,6 +73,7 @@ class InsightResponse(UTCBaseModel):
     tags: Optional[List[str]] = None
     observations: Optional[List[str]] = None
     session_id: Optional[str] = None
+    archived_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -79,6 +83,13 @@ class InsightListResponse(BaseModel):
 
     insights: List[InsightResponse]
     total: int
+
+
+def _get_insight_or_404(db: Session, insight_id: str) -> Insight:
+    insight = db.query(Insight).filter(Insight.id == insight_id).first()
+    if insight is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insight not found")
+    return insight
 
 
 # ---------------------------------------------------------------------------
@@ -211,13 +222,19 @@ def _list_insights_response(
     since_hours: int = 168,
     limit: int = 20,
     include_system: bool = False,
+    include_archived: bool = False,
 ) -> InsightListResponse:
     """Query insights with shared filtering for browser and machine reads."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
 
     query = db.query(Insight).filter(Insight.created_at >= cutoff)
-    if not include_system:
-        query = query.filter(user_visible_insight_clause(Insight))
+    query = query.filter(
+        insight_visibility_clause(
+            Insight,
+            include_system=include_system,
+            include_archived=include_archived,
+        )
+    )
 
     if project is not None:
         query = query.filter(Insight.project == project)
@@ -240,6 +257,7 @@ async def list_insights(
     since_hours: int = Query(168, ge=1, le=8760, description="Hours to look back (default 168 = 7 days)"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     include_system: bool = Query(False, description="Include system-generated alert rows"),
+    include_archived: bool = Query(False, description="Include archived insights"),
     db: Session = Depends(get_db),
     _browser_user=Depends(get_current_browser_user),
     _single: None = Depends(require_single_tenant),
@@ -253,6 +271,7 @@ async def list_insights(
             since_hours=since_hours,
             limit=limit,
             include_system=include_system,
+            include_archived=include_archived,
         )
     except Exception:
         logger.exception("Failed to list insights")
@@ -269,6 +288,7 @@ async def list_machine_insights(
     since_hours: int = Query(168, ge=1, le=8760, description="Hours to look back (default 168 = 7 days)"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     include_system: bool = Query(False, description="Include system-generated alert rows"),
+    include_archived: bool = Query(False, description="Include archived insights"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -282,6 +302,7 @@ async def list_machine_insights(
             since_hours=since_hours,
             limit=limit,
             include_system=include_system,
+            include_archived=include_archived,
         )
     except Exception:
         logger.exception("Failed to list machine insights")
@@ -312,4 +333,57 @@ def _insight_to_response(insight: Insight) -> InsightResponse:
         session_id=str(insight.session_id) if insight.session_id else None,
         created_at=insight.created_at,
         updated_at=insight.updated_at,
+        archived_at=insight.archived_at,
     )
+
+
+@router.post("/{insight_id}/archive", response_model=InsightResponse)
+async def archive_insight(
+    insight_id: str,
+    db: Session = Depends(get_db),
+    _browser_user=Depends(get_current_browser_user),
+    _single: None = Depends(require_single_tenant),
+) -> InsightResponse:
+    """Archive an insight so it stops participating in default continuity reads."""
+    try:
+        insight = _get_insight_or_404(db, insight_id)
+        if insight.archived_at is None:
+            insight.archived_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(insight)
+        return _insight_to_response(insight)
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to archive insight %s", insight_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to archive insight",
+        )
+
+
+@router.post("/{insight_id}/unarchive", response_model=InsightResponse)
+async def unarchive_insight(
+    insight_id: str,
+    db: Session = Depends(get_db),
+    _browser_user=Depends(get_current_browser_user),
+    _single: None = Depends(require_single_tenant),
+) -> InsightResponse:
+    """Restore an archived insight to the default continuity corpus."""
+    try:
+        insight = _get_insight_or_404(db, insight_id)
+        if insight.archived_at is not None:
+            insight.archived_at = None
+            db.commit()
+            db.refresh(insight)
+        return _insight_to_response(insight)
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to unarchive insight %s", insight_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to unarchive insight",
+        )

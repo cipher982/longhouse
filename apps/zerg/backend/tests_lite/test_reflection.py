@@ -12,8 +12,8 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
-from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
 from zerg.models.work import Insight
 from zerg.models.work import ReflectionRun
@@ -21,7 +21,6 @@ from zerg.models.work import user_visible_insight_clause
 from zerg.services.reflection.collector import ProjectBatch
 from zerg.services.reflection.collector import SessionInfo
 from zerg.services.reflection.collector import collect_sessions
-
 
 # ---------------------------------------------------------------------------
 # DB setup
@@ -63,7 +62,14 @@ def _make_session(
     return session
 
 
-def _make_insight(db, title="Known gotcha", project="test-project", insight_type="learning", origin=None, confidence=0.8):
+def _make_insight(
+    db,
+    title="Known gotcha",
+    project="test-project",
+    insight_type="learning",
+    origin=None,
+    confidence=0.8,
+):
     insight = Insight(
         insight_type=insight_type,
         title=title,
@@ -580,7 +586,11 @@ class TestBriefingInsights:
 
         project_insights = (
             db.query(Insight)
-            .filter(user_visible_insight_clause(Insight), Insight.project == project, Insight.created_at >= insight_cutoff)
+            .filter(
+                user_visible_insight_clause(Insight),
+                Insight.project == project,
+                Insight.created_at >= insight_cutoff,
+            )
             .order_by(Insight.created_at.desc())
             .limit(5)
             .all()
@@ -715,3 +725,16 @@ class TestBriefingInsights:
             briefing = self._build_briefing(db, project="myapp")
             assert "Manual gotcha" in briefing
             assert "System alert" not in briefing
+
+    def test_briefing_excludes_archived_insights(self, tmp_path):
+        SessionLocal = _make_db(tmp_path)
+        with SessionLocal() as db:
+            _make_session(db, project="myapp", summary="Test session")
+            _make_insight(db, title="Active gotcha", project="myapp")
+            archived = _make_insight(db, title="Archived gotcha", project="myapp")
+            archived.archived_at = datetime.now(timezone.utc)
+            db.commit()
+
+            briefing = self._build_briefing(db, project="myapp")
+            assert "Active gotcha" in briefing
+            assert "Archived gotcha" not in briefing

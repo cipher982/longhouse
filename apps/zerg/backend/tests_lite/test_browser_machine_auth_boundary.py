@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timezone
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-import zerg.dependencies.auth as auth_deps
 import zerg.dependencies.agents_auth as agents_auth_deps
+import zerg.dependencies.auth as auth_deps
 from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.auth.session_tokens import _encode_jwt
@@ -21,8 +23,8 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentsBase
-from zerg.models.work import ActionProposal
 from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
+from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
 
 
@@ -271,6 +273,95 @@ def test_agents_insights_list_can_include_system_rows(tmp_path):
             "Manual insight": "manual",
             "System insight": "system",
         }
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_insights_list_hides_archived_rows_by_default(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        _seed_insight(db, title="Active insight")
+        archived = _seed_insight(db, title="Archived insight")
+        db.execute(
+            text("UPDATE insights SET archived_at = :ts WHERE id = :id"),
+            {"ts": datetime.now(timezone.utc).isoformat(), "id": str(archived.id)},
+        )
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get("/insights")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["insights"][0]["title"] == "Active insight"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_agents_insights_list_can_include_archived_rows(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        _seed_insight(db, title="Active insight")
+        archived = _seed_insight(db, title="Archived insight")
+        db.execute(
+            text("UPDATE insights SET archived_at = :ts WHERE id = :id"),
+            {"ts": datetime.now(timezone.utc).isoformat(), "id": str(archived.id)},
+        )
+        db.commit()
+
+    client = _make_client(session_local)
+    api_app.dependency_overrides[verify_agents_token] = lambda: None
+
+    try:
+        with _force_agents_token_mode():
+            response = client.get("/agents/insights", headers={"X-Agents-Token": "dev"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["insights"][0]["title"] == "Active insight"
+
+        with _force_agents_token_mode():
+            response = client.get("/agents/insights?include_archived=true", headers={"X-Agents-Token": "dev"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 2
+        archived_rows = {row["title"]: row["archived_at"] for row in payload["insights"]}
+        assert archived_rows["Active insight"] is None
+        assert archived_rows["Archived insight"] is not None
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_insights_archive_and_unarchive_require_browser_session(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        insight = _seed_insight(db, title="Archive me")
+        insight_id = str(insight.id)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            response = client.post(f"/insights/{insight_id}/archive", headers={"X-Agents-Token": "dev"})
+        assert response.status_code == 401
+
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.post(f"/insights/{insight_id}/archive")
+        assert response.status_code == 200
+        assert response.json()["archived_at"] is not None
+
+        with _force_browser_jwt_mode():
+            response = client.post(f"/insights/{insight_id}/unarchive")
+        assert response.status_code == 200
+        assert response.json()["archived_at"] is None
     finally:
         api_app.dependency_overrides.clear()
 

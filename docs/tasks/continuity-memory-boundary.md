@@ -31,12 +31,12 @@ Last updated: 2026-03-17
 
 ## Phase 3: Add minimal insight curation
 
-- [ ] Add `archived_at` or equivalent active-state field to `Insight`
-- [ ] Exclude archived insights from `query_insights` and briefing gotcha reads by default
-- [ ] Add archive/unarchive browser/API actions for insights
-- [ ] Add a minimal browser insight-management surface reachable from continuity-adjacent UI
-- [ ] Add/adjust focused tests for archive/unarchive behavior
-- [ ] Commit Phase 3
+- [x] Add `archived_at` or equivalent active-state field to `Insight`
+- [x] Exclude archived insights from `query_insights` and briefing gotcha reads by default
+- [x] Add archive/unarchive browser/API actions for insights
+- [x] Add a minimal browser insight-management surface reachable from continuity-adjacent UI
+- [x] Add/adjust focused tests for archive/unarchive behavior
+- [x] Commit Phase 3
 
 ## Phase 4: Docs, reflection posture, and verification
 
@@ -63,3 +63,4 @@ Notes:
 - 2026-03-17: Verification for this slice: `uv run --with ruff ruff check ...` passed and `make test-lite` passed (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`).
 - 2026-03-17: Phase 2 trims briefings back to session summaries plus curated gotchas, redirects `/proposals` to `/briefings`, and keeps the remaining proposals copy explicitly internal/manual-reflection-only.
 - 2026-03-17: Verification for Phase 2: backend `ruff check` passed, `make test-lite` passed again (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` passed (`31 passed, 1 skipped`).
+- 2026-03-17: Phase 3 adds `Insight.archived_at`, hides archived rows from default browser/machine reads and briefing gotchas, exposes browser archive/unarchive actions plus a minimal `/insights` curation page reached from Briefings, and verified with backend `ruff check`, `make test-lite` (`878 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` (`31 passed, 1 skipped`).

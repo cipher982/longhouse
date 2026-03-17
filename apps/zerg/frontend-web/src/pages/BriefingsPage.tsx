@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import "../styles/briefings.css";
 import { useBriefing } from "../hooks/useAgentSessions";
 import { useAgentFilters } from "../hooks/useAgentSessions";
@@ -19,13 +20,17 @@ import {
 } from "../components/ui";
 
 export function BriefingsPage() {
+  const navigate = useNavigate();
   const [project, setProject] = useState("");
   const [sessionLimit, setSessionLimit] = useState(5);
 
   const { data: filtersData } = useAgentFilters(90);
   const projectOptions = filtersData?.projects ?? [];
 
-  const { data, isLoading, error, refetch, isFetching } = useBriefing(project, sessionLimit);
+  const { data, isLoading, error, refetch, isFetching } = useBriefing(
+    project,
+    sessionLimit,
+  );
 
   const handleCopy = useCallback(() => {
     if (data?.briefing) {
@@ -45,6 +50,18 @@ export function BriefingsPage() {
                 Copy
               </Button>
             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const suffix = project
+                  ? `?project=${encodeURIComponent(project)}`
+                  : "";
+                navigate(`/insights${suffix}`);
+              }}
+            >
+              Manage Insights
+            </Button>
             <Button
               variant="ghost"
               size="sm"

@@ -521,7 +521,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if columns:
                 if "origin" not in columns:
                     conn.execute(text("ALTER TABLE insights ADD COLUMN origin VARCHAR(20)"))
+                if "archived_at" not in columns:
+                    conn.execute(text("ALTER TABLE insights ADD COLUMN archived_at DATETIME"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_origin ON insights(origin)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_archived_at ON insights(archived_at)"))
                 if "title" in columns:
                     conn.execute(
                         text(
