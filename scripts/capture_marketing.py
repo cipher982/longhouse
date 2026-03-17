@@ -23,11 +23,30 @@ import yaml
 MANIFEST_PATH = Path(__file__).parent / "screenshots.yaml"
 FRONTEND_DIR = Path(__file__).parent.parent / "apps" / "zerg" / "frontend-web"
 READY_TIMEOUT = 15000  # 15 seconds
+TIMELINE_SESSIONS_PATH = "/api/timeline/sessions"
 
 
 def load_manifest():
     with open(MANIFEST_PATH) as f:
         return yaml.safe_load(f)
+
+
+def load_timeline_sessions(api_url: str, limit: int) -> list[dict]:
+    """Fetch browser-owned timeline sessions for placeholder resolution."""
+    resp = urllib.request.urlopen(f"{api_url}{TIMELINE_SESSIONS_PATH}?days_back=30&limit={limit}")
+    payload = json.loads(resp.read())
+
+    if isinstance(payload, dict):
+        sessions = payload.get("sessions", [])
+    elif isinstance(payload, list):
+        sessions = payload
+    else:
+        raise ValueError("unexpected sessions payload")
+
+    if not isinstance(sessions, list):
+        raise ValueError("sessions payload missing 'sessions' list")
+
+    return sessions
 
 
 def resolve_url_templates(url: str, base_url: str) -> str:
@@ -40,8 +59,7 @@ def resolve_url_templates(url: str, base_url: str) -> str:
 
     if "{featured_session_id}" in url:
         try:
-            resp = urllib.request.urlopen(f"{api_url}/api/agents/sessions?days_back=30&limit=50")
-            sessions = json.loads(resp.read()).get("sessions", [])
+            sessions = load_timeline_sessions(api_url, limit=50)
             best = max(
                 (s for s in sessions if s.get("ended_at")),
                 key=lambda s: s.get("tool_calls", 0),
@@ -56,9 +74,8 @@ def resolve_url_templates(url: str, base_url: str) -> str:
     if "{first_session_id}" not in url:
         return url
     try:
-        resp = urllib.request.urlopen(f"{api_url}/api/agents/sessions?days_back=30&limit=1")
-        data = json.loads(resp.read())
-        session_id = data["sessions"][0]["id"]
+        sessions = load_timeline_sessions(api_url, limit=1)
+        session_id = sessions[0]["id"]
         return url.replace("{first_session_id}", session_id)
     except Exception as e:
         print(f"  Warning: Could not resolve session ID: {e}")
