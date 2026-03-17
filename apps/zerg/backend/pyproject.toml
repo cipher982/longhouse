@@ -1,6 +1,6 @@
 [project]
 name = "longhouse"
-version = "0.1.4"
+version = "0.1.5"
 description = "Never lose an AI coding conversation. Search and browse every AI coding session."
 authors = [
     {name = "David Rose", email = "david.github@drose.io"}
