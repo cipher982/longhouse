@@ -6,6 +6,7 @@ Verifies the full pipeline:
 Strategy
 --------
 - Spin up a real uvicorn server against a temp SQLite DB (AUTH_DISABLED=1).
+- Mint a real device token from the dev browser surface before shipping.
 - Run ``longhouse-engine ship --file <fixture>`` using the REPO-LOCAL binary
   (not the one on PATH) so the tests always use the binary built from the
   current source tree.  This prevents stale-binary false confidence.
@@ -98,14 +99,40 @@ def _wait_ready(url: str, proc: subprocess.Popen[str], timeout: float = 20.0) ->
     raise TimeoutError(f"Server at {url} did not become ready within {timeout}s.{detail}")
 
 
-def _ship(fixture: str, url: str, provider: str, engine_db: Path) -> None:
+def _server_url(server: str | dict[str, str]) -> str:
+    return server["url"] if isinstance(server, dict) else server
+
+
+def _server_token(server: str | dict[str, str]) -> str:
+    if isinstance(server, dict):
+        return server["token"]
+    raise RuntimeError("Device token missing for machine-auth integration test")
+
+
+def _mint_device_token(url: str) -> str:
+    response = requests.post(
+        f"{url}/api/devices/tokens",
+        json={"device_id": "shipper-e2e"},
+        timeout=5,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    token = payload.get("token")
+    assert isinstance(token, str) and token.startswith("zdt_"), payload
+    return token
+
+
+def _ship(fixture: str, server: str | dict[str, str], provider: str, engine_db: Path) -> None:
     """Run ``longhouse-engine ship --file`` using the repo-local binary."""
+    url = _server_url(server)
+    token = _server_token(server)
     result = subprocess.run(
         [
             str(ENGINE_BIN),
             "ship",
             "--file", str(FIXTURES_DIR / fixture),
             "--url", url,
+            "--token", token,
             "--provider", provider,
             "--db", str(engine_db),
             "--json",
@@ -121,16 +148,24 @@ def _ship(fixture: str, url: str, provider: str, engine_db: Path) -> None:
     )
 
 
-def _get_session(url: str, session_id: str) -> dict | None:
-    r = requests.get(f"{url}/api/agents/sessions/{session_id}")
+def _get_session(server: str | dict[str, str], session_id: str) -> dict | None:
+    r = requests.get(
+        f"{_server_url(server)}/api/agents/sessions/{session_id}",
+        headers={"X-Agents-Token": _server_token(server)},
+        timeout=5,
+    )
     if r.status_code == 404:
         return None
     r.raise_for_status()
     return r.json()
 
 
-def _get_events(url: str, session_id: str) -> list[dict]:
-    r = requests.get(f"{url}/api/agents/sessions/{session_id}/events")
+def _get_events(server: str | dict[str, str], session_id: str) -> list[dict]:
+    r = requests.get(
+        f"{_server_url(server)}/api/agents/sessions/{session_id}/events",
+        headers={"X-Agents-Token": _server_token(server)},
+        timeout=5,
+    )
     r.raise_for_status()
     data = r.json()
     return data.get("events", data) if isinstance(data, dict) else data
@@ -184,7 +219,7 @@ def server(tmp_path_factory):
 
     try:
         _wait_ready(base_url, proc)
-        yield base_url
+        yield {"url": base_url, "token": _mint_device_token(base_url)}
     finally:
         proc.terminate()
         try:

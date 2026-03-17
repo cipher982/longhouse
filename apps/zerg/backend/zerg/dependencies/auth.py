@@ -155,19 +155,14 @@ def require_internal_call(request: Request):
 
     Internal endpoints should only be called from within the backend process,
     not exposed to external clients. This uses a shared secret token approach:
-    1. In production, requires X-Internal-Token header matching INTERNAL_API_SECRET
-    2. In dev mode (auth disabled), allows all calls (trusted environment)
+    1. Requires X-Internal-Token header matching INTERNAL_API_SECRET
+    2. Fails closed when the shared secret is missing or invalid
 
     This is a security measure for endpoints like /internal/runs/{run_id}/continue
     that are called by background tasks.
     """
     settings = get_settings()
 
-    # In dev mode with auth disabled, allow all internal calls (trusted environment)
-    if settings.auth_disabled:
-        return True
-
-    # In production, require shared secret token
     internal_token = request.headers.get("X-Internal-Token")
     expected_token = settings.internal_api_secret
 

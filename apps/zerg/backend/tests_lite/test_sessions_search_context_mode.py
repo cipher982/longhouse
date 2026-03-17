@@ -1,5 +1,6 @@
 from datetime import datetime
 from datetime import timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -7,6 +8,7 @@ from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -33,7 +35,11 @@ def _get_client(session_factory):
         finally:
             db.close()
 
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="context-mode", id="token-1", owner_id=1)
+
     api_app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     client = TestClient(api_app)
     yield client
     api_app.dependency_overrides.clear()

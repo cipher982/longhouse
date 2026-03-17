@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
@@ -39,7 +40,7 @@ def _make_db(tmp_path):
 
 
 def _make_client(SessionLocal):
-    """Create TestClient with get_db override + auth bypass."""
+    """Create TestClient with get_db override + explicit machine auth."""
     from zerg.dependencies.agents_auth import verify_agents_token
     from zerg.main import api_app
     from zerg.main import app
@@ -49,8 +50,7 @@ def _make_client(SessionLocal):
             yield db
 
     def override_verify_agents_token():
-        # Return None so code falls back to IP-based device_id
-        return None
+        return SimpleNamespace(device_id="testclient", id="token-1")
 
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token

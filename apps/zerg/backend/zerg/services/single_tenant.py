@@ -61,23 +61,17 @@ def get_owner_email() -> str:
 
     Priority:
     1. OWNER_EMAIL env var (set by control plane for hosted instances)
-    2. ADMIN_EMAILS first entry (legacy/migration support)
-    3. OSS_DEFAULT_EMAIL ('local@zerg') for OSS instances
+    2. OSS_DEFAULT_EMAIL ('local@zerg') for OSS/dev instances
     """
-    # Check explicit OWNER_EMAIL first (control plane sets this)
     owner_email = os.getenv("OWNER_EMAIL", "").strip()
     if owner_email:
         return owner_email
 
-    # Fall back to ADMIN_EMAILS first entry (legacy support)
     settings = get_settings()
-    if settings.admin_emails:
-        first_admin = settings.admin_emails.split(",")[0].strip()
-        if first_admin:
-            return first_admin
+    if settings.auth_disabled or settings.testing:
+        return OSS_DEFAULT_EMAIL
 
-    # Default for OSS instances
-    return OSS_DEFAULT_EMAIL
+    raise RuntimeError("OWNER_EMAIL is required when auth is enabled for single-tenant instances.")
 
 
 def bootstrap_owner_user(db: Session) -> None:
@@ -132,7 +126,7 @@ def is_owner_email(email: str) -> bool:
     """Check if the given email matches the instance owner.
 
     Used by OAuth to reject signups from non-owners.
-    Always returns True for OSS mode (AUTH_DISABLED or no OWNER_EMAIL set).
+    Always returns True for OSS/dev mode.
     """
     settings = get_settings()
 
@@ -140,15 +134,8 @@ def is_owner_email(email: str) -> bool:
     if settings.auth_disabled or settings.testing:
         return True
 
-    # Check if OWNER_EMAIL is configured
-    owner_email = os.getenv("OWNER_EMAIL", "").strip()
-    if not owner_email:
-        # No owner email configured - accept any email
-        # This supports legacy deployments without explicit owner binding
-        return True
-
     # Compare case-insensitively
-    return email.strip().lower() == owner_email.lower()
+    return email.strip().lower() == get_owner_email().lower()
 
 
 def can_create_user_locked(db: Session) -> bool:
@@ -222,15 +209,13 @@ def validate_single_tenant_config() -> str | None:
     if not settings.single_tenant:
         return None  # Multi-tenant mode, no validation needed
 
-    # If auth is enabled, we need either OWNER_EMAIL or ADMIN_EMAILS
-    # to know who should own this instance
+    # If auth is enabled, OWNER_EMAIL must be explicit so hosted instances
+    # fail closed instead of inheriting unrelated admin config.
     if not settings.auth_disabled:
         owner_email = os.getenv("OWNER_EMAIL", "").strip()
-        admin_emails = settings.admin_emails.strip() if settings.admin_emails else ""
-
-        if not owner_email and not admin_emails:
+        if not owner_email:
             return (
-                "Single-tenant mode with auth enabled requires OWNER_EMAIL or ADMIN_EMAILS. "
+                "Single-tenant mode with auth enabled requires OWNER_EMAIL. "
                 "Set OWNER_EMAIL to the email of the instance owner, or use AUTH_DISABLED=1 for OSS mode."
             )
 

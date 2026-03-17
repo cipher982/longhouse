@@ -9,6 +9,7 @@ Covers:
 
 import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +18,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.database import make_engine, make_sessionmaker
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent, AgentSession, AgentsBase
 
 
@@ -176,7 +178,11 @@ def test_sessions_list_includes_first_user_message(tmp_path):
         finally:
             d.close()
 
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="structured-title", id="token-1", owner_id=1)
+
     api_app.dependency_overrides[get_db] = override
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     try:
         client = TestClient(api_app)
         resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})

@@ -85,7 +85,11 @@ def client(tmp_path):
         finally:
             db.close()
 
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="presence-fixture", id="token-1", owner_id=1)
+
     api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     with TestClient(api_app) as c:
         yield c
     api_app.dependency_overrides.clear()
@@ -574,10 +578,14 @@ def test_needs_user_does_not_wake_operator_when_disabled(monkeypatch, tmp_path):
         calls.append((owner_id, message, message_id, kwargs))
         return 123
 
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="presence-fixture", id="token-1", owner_id=1)
+
     monkeypatch.delenv("OIKOS_OPERATOR_MODE_ENABLED", raising=False)
     monkeypatch.setattr("zerg.routers.presence.invoke_oikos", fake_invoke_oikos)
 
     api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     with TestClient(api_app) as c:
         sid = str(uuid4())
         response = c.post(

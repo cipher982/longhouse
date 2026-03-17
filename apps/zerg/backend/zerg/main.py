@@ -328,6 +328,38 @@ FRONTEND_DIST_DIR, FRONTEND_SOURCE = _get_frontend_dist_path()
 logger = logging.getLogger(__name__)
 
 
+def _enforce_single_tenant_startup(app: FastAPI) -> None:
+    """Validate and bootstrap the single-tenant owner or fail fast."""
+    if not _settings.single_tenant or _settings.testing:
+        return
+
+    from zerg.database import db_session
+    from zerg.services.single_tenant import SingleTenantViolation
+    from zerg.services.single_tenant import bootstrap_owner_user
+    from zerg.services.single_tenant import validate_single_tenant
+    from zerg.services.single_tenant import validate_single_tenant_config
+
+    config_error = validate_single_tenant_config()
+    if config_error:
+        app.state.single_tenant_violation = config_error
+        logger.error("Single-tenant config error: %s", config_error)
+        raise RuntimeError(config_error)
+
+    try:
+        with db_session() as db:
+            validate_single_tenant(db)
+            bootstrap_owner_user(db)
+    except SingleTenantViolation as exc:
+        app.state.single_tenant_violation = str(exc)
+        logger.error(str(exc))
+        raise
+    except Exception as exc:
+        message = f"Bootstrap failed: {exc}"
+        app.state.single_tenant_violation = message
+        logger.error("Single-tenant bootstrap failed: %s", exc)
+        raise RuntimeError(message) from exc
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown lifecycle."""
@@ -370,31 +402,7 @@ async def lifespan(app: FastAPI):
 
         # Single-tenant enforcement and owner bootstrap
         # Must run after DB init but before other services
-        if _settings.single_tenant and not _settings.testing:
-            from zerg.database import db_session
-            from zerg.services.single_tenant import SingleTenantViolation
-            from zerg.services.single_tenant import bootstrap_owner_user
-            from zerg.services.single_tenant import validate_single_tenant
-            from zerg.services.single_tenant import validate_single_tenant_config
-
-            # First, validate configuration (fail fast on misconfig)
-            config_error = validate_single_tenant_config()
-            if config_error:
-                logger.error(f"Single-tenant config error: {config_error}")
-                app.state.single_tenant_violation = config_error
-
-            # Then validate and bootstrap in DB
-            with db_session() as db:
-                try:
-                    validate_single_tenant(db)
-                    bootstrap_owner_user(db)
-                except SingleTenantViolation as e:
-                    logger.error(str(e))
-                    # Store violation for /api/health endpoint to report
-                    app.state.single_tenant_violation = str(e)
-                except Exception as e:
-                    logger.error(f"Single-tenant bootstrap failed: {e}")
-                    app.state.single_tenant_violation = f"Bootstrap failed: {e}"
+        _enforce_single_tenant_startup(app)
 
         # Prefetch SSO signing keys from control plane (non-fatal)
         if not _settings.testing:

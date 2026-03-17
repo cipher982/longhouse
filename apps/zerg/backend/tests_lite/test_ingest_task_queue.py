@@ -17,6 +17,7 @@ from datetime import timezone
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 from uuid import uuid4
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,6 +28,7 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
@@ -485,7 +487,11 @@ def test_ingest_endpoint_enqueues_tasks(tmp_path):
         finally:
             d.close()
 
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="ingest-task-queue", id="token-1", owner_id=1)
+
     api_app.dependency_overrides[get_db] = override
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     try:
         client = TestClient(api_app)
         payload = {

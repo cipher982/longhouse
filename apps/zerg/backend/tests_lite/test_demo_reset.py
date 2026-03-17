@@ -10,6 +10,7 @@ Covers:
 import os
 from datetime import datetime
 from datetime import timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -52,6 +53,7 @@ def _seed(factory, *, device_id, provider_session_id=None):
 
 
 def _client(factory):
+    from zerg.dependencies.agents_auth import verify_agents_token
     from zerg.main import api_app
 
     def override():
@@ -61,7 +63,11 @@ def _client(factory):
         finally:
             d.close()
 
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="demo-device", id="token-1", owner_id=1)
+
     api_app.dependency_overrides[get_db] = override
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     return TestClient(api_app)
 
 
