@@ -39,6 +39,8 @@ Notes:
 - 2026-03-16: The useful portion is mostly manual/system-written operational learnings. The low-signal portion strongly clusters around the scheduled reflection cadence.
 - 2026-03-16: Machine reads now live on `/api/agents/insights`, browser reads stay on `/api/insights`, `query_insights` points at the machine route again, and `make test-lite` is green on this slice.
 - 2026-03-16: `session-reflection` is now opt-in via `REFLECTION_JOB_ENABLED=1`, proposal/briefing copy no longer implies a default 6-hour automation loop, and `AGENTS.md` reflects the current product surface.
+- 2026-03-17: Shipped on `main` via `d694bfd1`; `runtime-image.yml` run `23176581718` succeeded, Coolify deploys for `longhouse-demo` and `longhouse-control-plane` completed, `david010` was reprovisioned, `/api/health` returned `healthy`, and `make qa-live` passed 8/8.
+- 2026-03-17: Hosted cleanup backed up the affected rows to `/var/app-data/longhouse/david010/insights-cleanup-backup-20260317-031820.db`, removed 157 reflection-generated insights plus all 133 proposals, and left `david010` with 128 insights and 0 proposals.
 - Spec: `docs/specs/insights-tightening.md`
 
 ## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)
