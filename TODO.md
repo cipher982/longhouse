@@ -15,6 +15,24 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Infra][QA/Test] Make control-plane health status explicit in Coolify (size: 1)
+
+Status (2026-03-17): In progress. The control plane is serving traffic and admin APIs correctly, but Coolify reports `running:unknown` because the Docker image has no container healthcheck.
+
+**Goal:** Make the hosted control plane surface an explicit healthy/unhealthy state instead of `unknown`, so ops status matches the real product state.
+
+**Done when:**
+- The control-plane Docker image defines a working container `HEALTHCHECK` against `/health`
+- The change is deployed to the hosted control-plane app
+- Coolify reports `running:healthy` for `longhouse-control-plane`
+
+- [ ] Add a Docker healthcheck to the control-plane image
+- [ ] Verify the image/config locally with focused checks
+- [ ] Redeploy and confirm Coolify reports `running:healthy`
+
+Notes:
+- 2026-03-17: Live verification showed `https://control.longhouse.ai/` serving correctly, the admin reprovision API working, and the container state as running, but `docker inspect` reported `Config.Healthcheck = null`, which explains Coolify’s `running:unknown`.
+
 ## [Launch][Product][QA/Test] Let non-repo synced sessions cloud-continue without a local path (size: 1)
 
 Status (2026-03-17): Done. Session continuation now falls back to a stable Longhouse-managed scratch workspace when the original laptop cwd is unavailable and there is no git repo to clone.

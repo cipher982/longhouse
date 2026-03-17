@@ -58,6 +58,10 @@ Required env contract:
 - `CONTROL_PLANE_INSTANCE_DATA_ROOT=/var/app-data/longhouse`
 - Preview env rows for those keys must either be absent or match the prod values
 
+Required container health contract:
+- The image defines a Docker `HEALTHCHECK` against `http://127.0.0.1:8085/health`
+- Healthy hosted deploys should show `running:healthy` in Coolify rather than `running:unknown`
+
 Validate or repair the deployed app with:
 
 ```bash

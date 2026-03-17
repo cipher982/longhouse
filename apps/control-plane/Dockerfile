@@ -17,4 +17,7 @@ ENV PATH="/app/.venv/bin:${PATH}"
 
 EXPOSE 8085
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python -c "import json, sys, urllib.request; data = json.load(urllib.request.urlopen('http://127.0.0.1:8085/health', timeout=5)); sys.exit(0 if data.get('status') == 'ok' else 1)" || exit 1
+
 CMD ["uvicorn", "control_plane.main:app", "--host", "0.0.0.0", "--port", "8085"]
