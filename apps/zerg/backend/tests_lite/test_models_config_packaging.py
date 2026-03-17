@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 
 import zerg.models_config as models_config
@@ -31,3 +32,12 @@ def test_get_config_path_falls_back_to_repo_layout(tmp_path, monkeypatch):
     monkeypatch.setattr(models_config, "__file__", str(fake_module))
 
     assert models_config._get_config_path() == repo_config
+
+
+def test_backend_package_dependencies_do_not_use_git_urls():
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    dependencies = pyproject["project"]["dependencies"]
+
+    assert all("@ git+" not in dependency for dependency in dependencies)
