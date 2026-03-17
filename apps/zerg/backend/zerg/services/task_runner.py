@@ -107,8 +107,8 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
         update_fiche(db, fiche.id, status="running")
         db.commit()
         await event_bus.publish(
-            EventType.FICHE_UPDATED,
-            {"event_type": "fiche_updated", "id": fiche.id, "status": "running"},
+            EventType.AUTOMATION_UPDATED,
+            {"event_type": "automation_updated", "id": fiche.id, "status": "running"},
         )
 
         # ------------------------------------------------------------------
@@ -210,9 +210,9 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
                 db.commit()
 
                 await event_bus.publish(
-                    EventType.FICHE_UPDATED,
+                    EventType.AUTOMATION_UPDATED,
                     {
-                        "event_type": "fiche_updated",
+                        "event_type": "automation_updated",
                         "id": fiche.id,
                         "status": "error",
                         "last_error": str(exc),
@@ -275,9 +275,9 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
             db.commit()
 
             await event_bus.publish(
-                EventType.FICHE_UPDATED,
+                EventType.AUTOMATION_UPDATED,
                 {
-                    "event_type": "fiche_updated",
+                    "event_type": "automation_updated",
                     "id": fiche.id,
                     "status": new_status,
                     "last_run_at": end_ts.isoformat(),

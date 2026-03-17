@@ -264,7 +264,7 @@ def read_dashboard_snapshot(
 
 @router.post("/", response_model=Fiche, status_code=status.HTTP_201_CREATED)
 @router.post("", response_model=Fiche, status_code=status.HTTP_201_CREATED)
-@publish_event(EventType.FICHE_CREATED)
+@publish_event(EventType.AUTOMATION_CREATED)
 async def create_fiche(
     fiche: FicheCreate = Body(...),
     db: Session = Depends(get_db),
@@ -322,7 +322,7 @@ def read_fiche(fiche_id: int, db: Session = Depends(get_db), current_user=Depend
 
 
 @router.put("/{fiche_id}", response_model=Fiche)
-@publish_event(EventType.FICHE_UPDATED)
+@publish_event(EventType.AUTOMATION_UPDATED)
 async def update_fiche(
     fiche_id: int,
     fiche: FicheUpdate,
@@ -415,7 +415,8 @@ async def delete_fiche(fiche_id: int, db: Session = Depends(get_db), current_use
 
     payload = {c.name: getattr(row, c.name) for c in row.__table__.columns}
     payload.pop("_sa_instance_state", None)
-    await event_bus.publish(EventType.FICHE_DELETED, payload)
+    payload["event_type"] = EventType.AUTOMATION_DELETED
+    await event_bus.publish(EventType.AUTOMATION_DELETED, payload)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

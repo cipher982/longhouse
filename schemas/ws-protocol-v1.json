@@ -4,7 +4,7 @@
   "info": {
     "title": "Zerg WebSocket Protocol",
     "version": "1.0.0",
-    "description": "Comprehensive WebSocket protocol for the Zerg Fiche Platform.\nConsolidates message types, payload schemas, and routing patterns into\na single source of truth for contract-first development.\n\nFeatures:\n- Topic-based routing with parameterized channels\n- Strongly-typed message payloads\n- Bidirectional operations (send/receive)\n- Alias support for message evolution\n- Handler method mapping for code generation\n"
+    "description": "Comprehensive WebSocket protocol for Longhouse realtime topics.\nConsolidates message types, payload schemas, and routing patterns into\na single source of truth for contract-first development.\n\nFeatures:\n- Topic-based routing with parameterized channels\n- Strongly-typed message payloads\n- Bidirectional operations (send/receive)\n- Alias support for message evolution\n- Handler method mapping for code generation\n"
   },
   "channels": {
     "SystemChannel": {
@@ -44,11 +44,11 @@
       ]
     },
     "FicheChannel": {
-      "address": "fiche:{fiche_id}",
-      "description": "Fiche lifecycle events and run updates",
+      "address": "automation:{automation_id}",
+      "description": "Automation lifecycle events and run updates",
       "parameters": {
-        "fiche_id": {
-          "description": "Numeric identifier of the fiche",
+        "automation_id": {
+          "description": "Numeric identifier of the automation",
           "examples": [
             "17",
             "42"
@@ -204,13 +204,17 @@
       "handler_method": "handle_assistant_id",
       "aliases": []
     },
-    "fiche_event": {
-      "summary": "Fiche lifecycle or status event",
+    "automation_event": {
+      "summary": "Automation lifecycle or status event",
       "payload_schema": {
         "$ref": "#/components/schemas/FicheEventData"
       },
       "handler_method": "handle_fiche_event",
       "aliases": [
+        "automation_created",
+        "automation_updated",
+        "automation_deleted",
+        "automation_state",
         "fiche_created",
         "fiche_updated",
         "fiche_deleted",
@@ -218,7 +222,7 @@
       ]
     },
     "run_update": {
-      "summary": "Fiche run status update",
+      "summary": "Automation run status update",
       "payload_schema": {
         "$ref": "#/components/schemas/RunUpdateData"
       },

@@ -92,11 +92,11 @@ class SchedulerService:
     async def _subscribe_to_events(self):
         """Subscribe to fiche-related events for dynamic scheduling updates."""
         # Subscribe to fiche created events
-        event_bus.subscribe(EventType.FICHE_CREATED, self._handle_fiche_created)
+        event_bus.subscribe(EventType.AUTOMATION_CREATED, self._handle_fiche_created)
         # Subscribe to fiche updated events
-        event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_fiche_updated)
+        event_bus.subscribe(EventType.AUTOMATION_UPDATED, self._handle_fiche_updated)
         # Subscribe to fiche deleted events
-        event_bus.subscribe(EventType.FICHE_DELETED, self._handle_fiche_deleted)
+        event_bus.subscribe(EventType.AUTOMATION_DELETED, self._handle_fiche_deleted)
 
         # External triggers
         event_bus.subscribe(EventType.TRIGGER_FIRED, self._handle_trigger_fired)
@@ -281,8 +281,9 @@ class SchedulerService:
                     update_fiche(db, fiche_id, next_run_at=next_run_time)
 
                     await event_bus.publish(
-                        EventType.FICHE_UPDATED,
+                        EventType.AUTOMATION_UPDATED,
                         {
+                            "event_type": "automation_updated",
                             "id": fiche_id,
                             "next_run_at": next_run_time.isoformat(),
                             "thread_id": thread.id,

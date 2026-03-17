@@ -2148,7 +2148,7 @@ Notes:
 
 ## [Refactor][Product] Rename Nested Automation Routes + Event Surface
 
-**Status (2026-03-17):** In progress.
+**Status (2026-03-17):** Done. Browser-facing automation routes, websocket topics, and live event names are now automation-first, with bounded fiche compatibility retained only in the transport layer and Oikos SSE listeners.
 
 **Goal:** Finish the public automation rename where users and browser clients still see `fiches`: nested REST paths, websocket topics, and event names.
 
@@ -2160,12 +2160,14 @@ Notes:
 
 - [x] Add nested `/api/automations/{id}/runs`, `/connectors`, and `/mcp-servers` aliases
 - [x] Repoint canonical frontend automation/connectors helpers to the nested automation paths
-- [ ] Rename the live automation websocket/event contract off `fiche:*` / `fiche_updated` / `fiche_state`
-- [ ] Verify with SDK generation, frontend units, and `make test`
+- [x] Rename the live automation websocket/event contract off `fiche:*` / `fiche_updated` / `fiche_state`
+- [x] Verify with SDK generation, frontend units, and `make test`
 
 Notes:
 - 2026-03-17: Inventory confirmed the remaining hot spots are `routers/runs.py`, `routers/fiche_connectors.py`, `routers/mcp_servers.py`, `services/api/connectors.ts`, `services/api/automations.ts`, `hooks/useFicheConfig.ts`, `hooks/useFicheConnectors.ts`, `pages/DashboardPage.tsx`, `websocket/manager.py`, `websocket/handlers.py`, `events/event_bus.py`, and the generated WS/OpenAPI contracts.
 - 2026-03-17: Landed the nested REST alias tranche. Canonical browser helpers now hit `/api/automations/{id}/runs`, `/connectors`, and `/mcp-servers`, while the old fiche helpers stay as compatibility aliases. Added focused frontend API-path tests plus backend HTTP coverage for the new nested aliases. Verification is green via `make generate-sdk`, `make test-frontend-unit`, and `make test`; only the websocket/event rename remains in this task.
+- 2026-03-17: Finished the live transport rename. Dashboard subscriptions now use `automation:{id}` topics and `automation_updated` / `automation_state` as the canonical live event names, while the WebSocket manager still dual-fans out to legacy `fiche:{id}` subscribers for bounded compatibility. Oikos SSE now listens for both `automation_updated` and `fiche_updated`, and the Oikos client exposes `onAutomationUpdated` while still invoking `onFicheUpdated` for older consumers.
+- 2026-03-17: Added focused regression coverage for the transport rename in `tests_lite/test_automation_websocket_transport.py`, `src/pages/__tests__/DashboardPage.test.tsx`, and `src/oikos/core/__tests__/oikos-api-client.test.ts`. Verification passed via `make regen-ws`, `make test-frontend-unit`, and `make test`.
 
 ---
 

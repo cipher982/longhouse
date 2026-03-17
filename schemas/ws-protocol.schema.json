@@ -27,7 +27,7 @@
         },
         "topic": {
           "type": "string",
-          "description": "Topic routing string (e.g., 'fiche:123', 'thread:456')"
+          "description": "Topic routing string (e.g., 'automation:123', 'thread:456')"
         },
         "req_id": {
           "type": "string",
@@ -515,6 +515,8 @@
             "run_started",
             "run_success",
             "run_failed",
+            "automation_created",
+            "automation_updated",
             "fiche_created",
             "fiche_updated",
             "thread_message_created",

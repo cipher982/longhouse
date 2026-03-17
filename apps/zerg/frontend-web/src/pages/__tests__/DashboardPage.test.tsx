@@ -359,8 +359,8 @@ describe("DashboardPage", () => {
     expect(statusCell.textContent).toContain("Idle");
 
     const payload = {
-      type: "fiche_updated",
-      topic: "fiche:42",
+      type: "automation_updated",
+      topic: "automation:42",
       data: {
         id: 42,
         status: "running",

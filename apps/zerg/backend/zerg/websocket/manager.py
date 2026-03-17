@@ -40,6 +40,24 @@ def _parse_iso8601(value: str) -> datetime | None:
         return None
 
 
+def _to_automation_event_type(event_type: Any) -> str:
+    raw = str(event_type)
+    return {
+        "fiche_created": "automation_created",
+        "fiche_updated": "automation_updated",
+        "fiche_deleted": "automation_deleted",
+    }.get(raw, raw)
+
+
+def _to_legacy_fiche_event_type(event_type: Any) -> str:
+    raw = str(event_type)
+    return {
+        "automation_created": "fiche_created",
+        "automation_updated": "fiche_updated",
+        "automation_deleted": "fiche_deleted",
+    }.get(raw, raw)
+
+
 class TopicConnectionManager:
     """Manages WebSocket connections with topic-based subscriptions."""
 
@@ -103,10 +121,13 @@ class TopicConnectionManager:
     def _setup_event_handlers(self) -> None:
         """Set up handlers for events we want to broadcast."""
         logger.info("Setting up WebSocket event handlers")
-        # Fiche events
-        event_bus.subscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
-        event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
-        event_bus.subscribe(EventType.FICHE_DELETED, self._handle_fiche_event)
+        # Automation events (plus legacy fiche aliases during migration)
+        event_bus.subscribe(EventType.AUTOMATION_CREATED, self._handle_automation_event)
+        event_bus.subscribe(EventType.AUTOMATION_UPDATED, self._handle_automation_event)
+        event_bus.subscribe(EventType.AUTOMATION_DELETED, self._handle_automation_event)
+        event_bus.subscribe(EventType.FICHE_CREATED, self._handle_automation_event)
+        event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_automation_event)
+        event_bus.subscribe(EventType.FICHE_DELETED, self._handle_automation_event)
         # Thread events
         event_bus.subscribe(EventType.THREAD_CREATED, self._handle_thread_event)
         event_bus.subscribe(EventType.THREAD_UPDATED, self._handle_thread_event)
@@ -266,7 +287,7 @@ class TopicConnectionManager:
 
         Args:
             client_id: The client ID to subscribe
-            topic: The topic to subscribe to (e.g., "fiche:123", "thread:45")
+            topic: The topic to subscribe to (e.g., "automation:123", "thread:45")
         """
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
@@ -428,7 +449,7 @@ class TopicConnectionManager:
         """
         logger.debug(f"broadcast_to_topic called for topic: {topic}")
         # If there are no active subscribers we silently skip to avoid log
-        # spam – this situation is perfectly normal when scheduled fiches or
+        # spam – this situation is perfectly normal when scheduled automations or
         # background jobs emit updates while no browser is connected.
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
@@ -498,24 +519,28 @@ class TopicConnectionManager:
                 return_exceptions=True,
             )
 
-    async def _handle_fiche_event(self, data: Dict[str, Any]) -> None:
-        """Handle fiche-related events from the event bus."""
+    async def _handle_automation_event(self, data: Dict[str, Any]) -> None:
+        """Handle automation lifecycle events and fan them out to both topic aliases."""
         if "id" not in data:
             return
 
-        fiche_id = data["id"]
-        topic = f"fiche:{fiche_id}"
+        automation_id = data["id"]
+        automation_topic = f"automation:{automation_id}"
+        legacy_topic = f"fiche:{automation_id}"
 
         # Extract event_type before serialization to avoid duplication in envelope
-        event_type = data["event_type"]
+        raw_event_type = data["event_type"]
+        automation_event_type = _to_automation_event_type(raw_event_type)
+        legacy_event_type = _to_legacy_fiche_event_type(raw_event_type)
 
         # Create clean data payload without event_type (since it's in message type)
         clean_data = {k: v for k, v in data.items() if k != "event_type"}
         serialized_data = jsonable_encoder(clean_data)
 
-        # Use envelope format
-        envelope = Envelope.create(message_type=event_type, topic=topic, data=serialized_data)
-        await self.broadcast_to_topic(topic, envelope.model_dump())
+        automation_envelope = Envelope.create(message_type=automation_event_type, topic=automation_topic, data=serialized_data)
+        legacy_envelope = Envelope.create(message_type=legacy_event_type, topic=legacy_topic, data=serialized_data)
+        await self.broadcast_to_topic(automation_topic, automation_envelope.model_dump())
+        await self.broadcast_to_topic(legacy_topic, legacy_envelope.model_dump())
 
     async def _handle_thread_event(self, data: Dict[str, Any]) -> None:
         """Handle thread-related events from the event bus."""
@@ -537,12 +562,13 @@ class TopicConnectionManager:
         await self.broadcast_to_topic(topic, envelope.model_dump())
 
     async def _handle_run_event(self, data: Dict[str, Any]) -> None:
-        """Forward run events to the *fiche:* topic so dashboards update."""
+        """Forward run events to automation topics plus the legacy fiche alias."""
         if "fiche_id" not in data:
             return
 
-        fiche_id = data["fiche_id"]
-        topic = f"fiche:{fiche_id}"
+        automation_id = data["fiche_id"]
+        automation_topic = f"automation:{automation_id}"
+        legacy_topic = f"fiche:{automation_id}"
 
         # Map run_id to id to match schema expectations
         clean_data = {k: v for k, v in data.items() if k != "event_type"}
@@ -570,15 +596,15 @@ class TopicConnectionManager:
         thread_id = clean_data.get("thread_id")
         if thread_id is None:
             logger.warning(
-                "run_update payload missing thread_id (fiche=%s run=%s source=%s)",
-                fiche_id,
+                "run_update payload missing thread_id (automation=%s run=%s source=%s)",
+                automation_id,
                 run_id,
                 source_event,
             )
 
         logger.info(
-            "Broadcasting run_update (fiche=%s run=%s status=%s thread=%s elapsed=%s)",
-            fiche_id,
+            "Broadcasting run_update (automation=%s run=%s status=%s thread=%s elapsed=%s)",
+            automation_id,
             run_id,
             status_value,
             thread_id if thread_id is not None else "unknown",
@@ -588,8 +614,10 @@ class TopicConnectionManager:
         serialized_data = jsonable_encoder(clean_data)
 
         # Use envelope format
-        envelope = Envelope.create(message_type="run_update", topic=topic, data=serialized_data)
-        await self.broadcast_to_topic(topic, envelope.model_dump())
+        automation_envelope = Envelope.create(message_type="run_update", topic=automation_topic, data=serialized_data)
+        legacy_envelope = Envelope.create(message_type="run_update", topic=legacy_topic, data=serialized_data)
+        await self.broadcast_to_topic(automation_topic, automation_envelope.model_dump())
+        await self.broadcast_to_topic(legacy_topic, legacy_envelope.model_dump())
 
     async def _handle_user_event(self, data: Dict[str, Any]) -> None:
         """Forward user events to `user:{id}` topic so other tabs update."""

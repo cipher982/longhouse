@@ -48,7 +48,7 @@ router.include_router(oikos_voice.router, tags=["oikos-voice"])
 
 
 # ---------------------------------------------------------------------------
-# General SSE events stream (fiche/run updates for Task Inbox UI)
+# General SSE events stream (automation/run updates for Task Inbox UI)
 # ---------------------------------------------------------------------------
 
 
@@ -58,6 +58,7 @@ async def _event_generator(_current_user):
     async def _handler(event):
         await queue.put(event)
 
+    event_bus.subscribe(EventType.AUTOMATION_UPDATED, _handler)
     event_bus.subscribe(EventType.FICHE_UPDATED, _handler)
     event_bus.subscribe(EventType.RUN_CREATED, _handler)
     event_bus.subscribe(EventType.RUN_UPDATED, _handler)
@@ -87,6 +88,7 @@ async def _event_generator(_current_user):
     except asyncio.CancelledError:
         logger.info("Oikos SSE stream disconnected")
     finally:
+        event_bus.unsubscribe(EventType.AUTOMATION_UPDATED, _handler)
         event_bus.unsubscribe(EventType.FICHE_UPDATED, _handler)
         event_bus.unsubscribe(EventType.RUN_CREATED, _handler)
         event_bus.unsubscribe(EventType.RUN_UPDATED, _handler)
@@ -96,5 +98,5 @@ async def _event_generator(_current_user):
 async def oikos_events(
     current_user=Depends(get_current_oikos_user),
 ) -> EventSourceResponse:
-    """SSE stream for real-time fiche/run updates (Task Inbox UI)."""
+    """SSE stream for real-time automation/run updates (Task Inbox UI)."""
     return EventSourceResponse(_event_generator(current_user))

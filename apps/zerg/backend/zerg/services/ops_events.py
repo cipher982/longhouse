@@ -63,10 +63,10 @@ class OpsEventsBridge:
         fiche_id = data.get("id")
         if not fiche_id:
             return
-        event_type = "fiche_updated"
+        event_type = "automation_updated"
         # Try to infer created
-        if data.get("event_type") == "fiche_created":
-            event_type = "fiche_created"
+        if data.get("event_type") in {"automation_created", "fiche_created"}:
+            event_type = "automation_created"
         payload = OpsEventData(
             type=event_type,
             fiche_id=fiche_id,
@@ -102,6 +102,8 @@ class OpsEventsBridge:
             return
         event_bus.subscribe(EventType.RUN_CREATED, self._handle_run_event)
         event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
+        event_bus.subscribe(EventType.AUTOMATION_CREATED, self._handle_fiche_event)
+        event_bus.subscribe(EventType.AUTOMATION_UPDATED, self._handle_fiche_event)
         event_bus.subscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
         event_bus.subscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
         event_bus.subscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)
@@ -115,6 +117,8 @@ class OpsEventsBridge:
         try:
             event_bus.unsubscribe(EventType.RUN_CREATED, self._handle_run_event)
             event_bus.unsubscribe(EventType.RUN_UPDATED, self._handle_run_event)
+            event_bus.unsubscribe(EventType.AUTOMATION_CREATED, self._handle_fiche_event)
+            event_bus.unsubscribe(EventType.AUTOMATION_UPDATED, self._handle_fiche_event)
             event_bus.unsubscribe(EventType.FICHE_CREATED, self._handle_fiche_event)
             event_bus.unsubscribe(EventType.FICHE_UPDATED, self._handle_fiche_event)
             event_bus.unsubscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)

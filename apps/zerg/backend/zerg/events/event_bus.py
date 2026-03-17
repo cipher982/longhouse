@@ -18,6 +18,9 @@ class EventType(str, Enum):
     FICHE_CREATED = "fiche_created"
     FICHE_UPDATED = "fiche_updated"
     FICHE_DELETED = "fiche_deleted"
+    AUTOMATION_CREATED = "automation_created"
+    AUTOMATION_UPDATED = "automation_updated"
+    AUTOMATION_DELETED = "automation_deleted"
 
     # Thread events
     THREAD_CREATED = "thread_created"

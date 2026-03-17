@@ -153,7 +153,7 @@ export interface UserUpdateData {
 }
 
 export interface OpsEventData {
-  type: "run_started" | "run_success" | "run_failed" | "fiche_created" | "fiche_updated" | "thread_message_created" | "budget_denied";
+  type: "run_started" | "run_success" | "run_failed" | "automation_created" | "automation_updated" | "fiche_created" | "fiche_updated" | "thread_message_created" | "budget_denied";
   fiche_id?: number;
   run_id?: number;
   thread_id?: number;
@@ -240,12 +240,12 @@ export interface AssistantId extends Envelope<AssistantIdData> {
   type: 'assistant_id';
 }
 
-/** Fiche lifecycle or status event */
+/** Automation lifecycle or status event */
 export interface FicheEvent extends Envelope<FicheEventData> {
-  type: 'fiche_event';
+  type: 'automation_event';
 }
 
-/** Fiche run status update */
+/** Automation run status update */
 export interface RunUpdate extends Envelope<RunUpdateData> {
   type: 'run_update';
 }
