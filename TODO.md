@@ -138,7 +138,7 @@ Notes:
 
 ## [Tech Debt] Narrow `AUTH_DISABLED` and harden auth startup (size: 4)
 
-Status (2026-03-16): In progress. This is phase 5 of the auth cleanup epic.
+Status (2026-03-16): Done. Phase 5 shipped with `AUTH_DISABLED` reduced to browser/dev ergonomics, machine/internal auth kept strict, single-tenant startup failing closed on missing owner config, and the hosted runtime verified end to end.
 
 **Goal:** Keep `AUTH_DISABLED` as a dev browser convenience only, stop letting it implicitly open machine/internal auth surfaces, and fail startup when single-tenant auth config is missing the canonical owner binding.
 
@@ -150,16 +150,17 @@ Status (2026-03-16): In progress. This is phase 5 of the auth cleanup epic.
 - Startup fails fast on single-tenant auth misconfig instead of only reporting it in `/api/health`
 - Full ship verification passes
 
-- [ ] Write and commit the concise phase 5 spec
-- [ ] Tighten machine/internal auth so `AUTH_DISABLED` no longer bypasses those surfaces
-- [ ] Require explicit `OWNER_EMAIL` for auth-enabled single-tenant startup
-- [ ] Fail startup on single-tenant auth misconfig / invariant violation
-- [ ] Update dev/test coverage for the stricter contracts
-- [ ] Ship and verify the hosted runtime after the cleanup
+- [x] Write and commit the concise phase 5 spec
+- [x] Tighten machine/internal auth so `AUTH_DISABLED` no longer bypasses those surfaces
+- [x] Require explicit `OWNER_EMAIL` for auth-enabled single-tenant startup
+- [x] Fail startup on single-tenant auth misconfig / invariant violation
+- [x] Update dev/test coverage for the stricter contracts
+- [x] Ship and verify the hosted runtime after the cleanup
 
 Notes:
 - 2026-03-16: Keep this bounded to auth boundaries and startup hardening. Do not fold in hosted SSO bridge simplification yet.
 - 2026-03-16: The intended dev path is browser dev user -> create device token -> machine routes, not blanket-open `/api/agents/*`.
+- 2026-03-16: Verification passed in a clean `origin/main` clone: `make test`, `make test-e2e`, `make test-shipper-e2e`, GHCR runtime build `23173937151`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, and live `make qa-live` (8/8).
 - Spec: `docs/specs/auth-disabled-startup-hardening.md`
 
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
