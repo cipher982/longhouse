@@ -136,6 +136,32 @@ Notes:
 - 2026-03-16: Final verification passed in a clean `origin/main` clone: `make test`, `make test-e2e`, and later live `make qa-live` after deploy/reprovision.
 - Spec: `docs/specs/auth-fallback-deletion.md`
 
+## [Tech Debt] Narrow `AUTH_DISABLED` and harden auth startup (size: 4)
+
+Status (2026-03-16): In progress. This is phase 5 of the auth cleanup epic.
+
+**Goal:** Keep `AUTH_DISABLED` as a dev browser convenience only, stop letting it implicitly open machine/internal auth surfaces, and fail startup when single-tenant auth config is missing the canonical owner binding.
+
+**Done when:**
+- `/api/agents/*` machine auth still requires a real device token even when `AUTH_DISABLED=1`
+- Internal endpoints still require `X-Internal-Token` even when `AUTH_DISABLED=1`
+- Browser/dev flows can still mint device tokens locally without manual login ceremony
+- Single-tenant auth-enabled startup requires a valid `OWNER_EMAIL` instead of silently falling back to `ADMIN_EMAILS`
+- Startup fails fast on single-tenant auth misconfig instead of only reporting it in `/api/health`
+- Full ship verification passes
+
+- [ ] Write and commit the concise phase 5 spec
+- [ ] Tighten machine/internal auth so `AUTH_DISABLED` no longer bypasses those surfaces
+- [ ] Require explicit `OWNER_EMAIL` for auth-enabled single-tenant startup
+- [ ] Fail startup on single-tenant auth misconfig / invariant violation
+- [ ] Update dev/test coverage for the stricter contracts
+- [ ] Ship and verify the hosted runtime after the cleanup
+
+Notes:
+- 2026-03-16: Keep this bounded to auth boundaries and startup hardening. Do not fold in hosted SSO bridge simplification yet.
+- 2026-03-16: The intended dev path is browser dev user -> create device token -> machine routes, not blanket-open `/api/agents/*`.
+- Spec: `docs/specs/auth-disabled-startup-hardening.md`
+
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
 Status (2026-03-14): Done. Kept to the bounded browser-vs-machine cleanup pass; not expanded into a full auth rewrite.
