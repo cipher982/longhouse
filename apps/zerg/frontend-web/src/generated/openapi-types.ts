@@ -8625,6 +8625,22 @@ export interface components {
             } | null;
             /** Install Mode */
             install_mode?: string | null;
+            /**
+             * Auto Update Policy
+             * @description off|notify|apply
+             */
+            auto_update_policy?: string | null;
+            /**
+             * Install Layout Version
+             * @description Versioned install layout revision reported by the runner
+             */
+            install_layout_version?: number | null;
+            /**
+             * Managed Install Ready
+             * @description True when the runner reports a managed versioned install layout
+             * @default false
+             */
+            managed_install_ready: boolean;
             /** Runner Version */
             runner_version?: string | null;
             /** Latest Runner Version */

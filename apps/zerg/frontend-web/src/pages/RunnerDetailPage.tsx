@@ -176,6 +176,46 @@ function formatVersionHint(runner: Runner): string | null {
   }
 }
 
+function updatePolicyLabel(policy: string | null | undefined): string {
+  switch (policy) {
+    case "apply":
+      return "Auto-apply";
+    case "off":
+      return "Updates off";
+    case "notify":
+      return "Notify only";
+    default:
+      return "Policy unknown";
+  }
+}
+
+function updatePolicyHint(policy: string | null | undefined): string {
+  switch (policy) {
+    case "apply":
+      return "Signed updates will apply automatically when the runner is idle.";
+    case "off":
+      return "Background update checks are disabled on this machine.";
+    case "notify":
+      return "Runner reports update availability and waits for a manual apply.";
+    default:
+      return "Runner has not reported its auto-update policy yet.";
+  }
+}
+
+function installLayoutLabel(runner: Runner): string {
+  if (runner.managed_install_ready) {
+    return runner.install_layout_version ? `Managed layout v${runner.install_layout_version}` : "Managed layout";
+  }
+  return "Legacy layout";
+}
+
+function installLayoutHint(runner: Runner): string {
+  if (runner.managed_install_ready) {
+    return "This machine can use signed update apply and background auto-update.";
+  }
+  return "Re-run the installer once to migrate this machine onto the managed versioned layout.";
+}
+
 function capabilitySyncLabel(runner: Runner): string {
   if (runner.capabilities_match === true) {
     return "Aligned";
@@ -513,6 +553,9 @@ export default function RunnerDetailPage() {
                 {runner.capabilities_match === false && (
                   <Badge variant="warning">capability mismatch</Badge>
                 )}
+                {!runner.managed_install_ready && (
+                  <Badge variant="warning">legacy layout</Badge>
+                )}
               </div>
               <strong>{runner.status_summary ?? "No health summary reported."}</strong>
               <span className="runner-health-summary-note">
@@ -548,6 +591,20 @@ export default function RunnerDetailPage() {
               <div className="detail-item">
                 <span className="detail-label">Install Mode</span>
                 <span className="detail-value">{runner.install_mode ?? "Unknown"}</span>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Update Policy</span>
+                <div className="detail-value-stack">
+                  <span className="detail-value">{updatePolicyLabel(runner.auto_update_policy)}</span>
+                  <span className="detail-subvalue">{updatePolicyHint(runner.auto_update_policy)}</span>
+                </div>
+              </div>
+              <div className="detail-item">
+                <span className="detail-label">Update Layout</span>
+                <div className="detail-value-stack">
+                  <span className="detail-value">{installLayoutLabel(runner)}</span>
+                  <span className="detail-subvalue">{installLayoutHint(runner)}</span>
+                </div>
               </div>
               <div className="detail-item">
                 <span className="detail-label">Version</span>

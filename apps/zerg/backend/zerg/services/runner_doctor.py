@@ -13,6 +13,7 @@ from zerg.services.runner_health import assess_runner_health
 from zerg.utils.time import utc_now_naive
 
 KNOWN_INSTALL_MODES = {"desktop", "server"}
+KNOWN_AUTO_UPDATE_POLICIES = {"off", "notify", "apply"}
 RECENT_OFFLINE_WINDOW = timedelta(minutes=10)
 
 
@@ -24,6 +25,11 @@ def _metadata_map(runner: Runner) -> dict[str, Any]:
 def _normalized_install_mode(metadata: dict[str, Any]) -> str | None:
     value = metadata.get("install_mode")
     return value if value in KNOWN_INSTALL_MODES else None
+
+
+def _normalized_auto_update_policy(metadata: dict[str, Any]) -> str | None:
+    value = metadata.get("auto_update_policy")
+    return value if value in KNOWN_AUTO_UPDATE_POLICIES else None
 
 
 def _format_last_seen(last_seen_at: datetime | None) -> str:
@@ -54,6 +60,7 @@ def diagnose_runner(
     metadata = _metadata_map(runner)
     health = assess_runner_health(runner, is_connected=is_connected)
     install_mode = _normalized_install_mode(metadata)
+    auto_update_policy = _normalized_auto_update_policy(metadata)
     platform = metadata.get("platform") if isinstance(metadata.get("platform"), str) else None
     hostname = metadata.get("hostname") if isinstance(metadata.get("hostname"), str) else None
     reported_capabilities = health.reported_capabilities
@@ -103,6 +110,62 @@ def diagnose_runner(
         checks.append(_check("install_mode", "Install Mode", "warn", mode_message))
         if platform == "darwin":
             repair_install_mode = "desktop"
+
+    if health.managed_install_ready:
+        checks.append(
+            _check(
+                "update_layout",
+                "Update Layout",
+                "ok",
+                f"Runner reports managed install layout v{health.install_layout_version}.",
+            )
+        )
+    elif metadata:
+        checks.append(
+            _check(
+                "update_layout",
+                "Update Layout",
+                "warn",
+                "Runner is still on the legacy install layout. Re-run the installer once before using update apply or background auto-updates.",
+            )
+        )
+    else:
+        checks.append(
+            _check(
+                "update_layout",
+                "Update Layout",
+                "warn",
+                "Runner has not reported install layout metadata yet.",
+            )
+        )
+
+    if auto_update_policy:
+        policy_message = (
+            "Signed updates will auto-apply once the runner is idle."
+            if auto_update_policy == "apply"
+            else (
+                "Runner will report update availability but waits for a manual `longhouse-runner update apply`."
+                if auto_update_policy == "notify"
+                else "Auto-update is disabled on this runner."
+            )
+        )
+        checks.append(
+            _check(
+                "update_policy",
+                "Auto-Update Policy",
+                "ok",
+                f"Policy is `{auto_update_policy}`. {policy_message}",
+            )
+        )
+    else:
+        checks.append(
+            _check(
+                "update_policy",
+                "Auto-Update Policy",
+                "warn",
+                "Runner has not reported an auto-update policy yet.",
+            )
+        )
 
     if not configured_capabilities:
         checks.append(_check("capabilities", "Capabilities", "warn", "Runner has no configured capabilities in Longhouse."))
@@ -186,13 +249,41 @@ def diagnose_runner(
             checks=checks,
         )
 
+    if health.effective_status == "online" and not health.managed_install_ready:
+        repair_supported = True
+        reason_code = "runner_version_outdated_legacy_layout" if health.version_status == "outdated" else "runner_update_layout_legacy"
+        summary = (
+            f"Runner is online but still on v{health.runner_version}; latest is v{health.latest_runner_version}, and this machine still uses the legacy install layout."
+            if health.version_status == "outdated" and health.runner_version and health.latest_runner_version
+            else "Runner is online, but this machine still uses the legacy install layout."
+        )
+        recommended_action = (
+            "Generate a repair command and re-run the installer once to migrate this machine onto the managed versioned layout."
+        )
+        return RunnerDoctorResponse(
+            severity="warning",
+            reason_code=reason_code,
+            summary=summary,
+            recommended_action=recommended_action,
+            install_mode=install_mode,
+            repair_install_mode=repair_install_mode,
+            repair_supported=repair_supported,
+            checks=checks,
+        )
+
     if health.effective_status == "online" and health.version_status == "outdated":
         repair_supported = True
+        if auto_update_policy == "apply":
+            recommended_action = (
+                "Let the runner go idle so background auto-update can apply, or run `longhouse-runner update apply` on the machine now."
+            )
+        else:
+            recommended_action = "Run `longhouse-runner update apply` on the machine to stage the latest signed runner release."
         return RunnerDoctorResponse(
             severity="warning",
             reason_code="runner_version_outdated",
             summary=f"Runner is online but still on v{health.runner_version}; latest is v{health.latest_runner_version}.",
-            recommended_action="Generate a repair command and re-run the installer once when convenient to update the binary.",
+            recommended_action=recommended_action,
             install_mode=install_mode,
             repair_install_mode=repair_install_mode,
             repair_supported=repair_supported,

@@ -66,6 +66,8 @@ def test_runner_doctor_reports_healthy_online_runner(tmp_path: Path):
                 "platform": "linux",
                 "runner_version": "0.1.3",
                 "install_mode": "server",
+                "auto_update_policy": "notify",
+                "install_layout_version": 1,
                 "capabilities": ["exec.full"],
             },
         )
@@ -102,6 +104,8 @@ def test_runner_doctor_flags_capability_mismatch(tmp_path: Path):
                 "hostname": "cube",
                 "platform": "linux",
                 "install_mode": "server",
+                "auto_update_policy": "notify",
+                "install_layout_version": 1,
                 "capabilities": ["exec.readonly"],
             },
         )
@@ -164,6 +168,8 @@ def test_runner_doctor_warns_for_outdated_version(tmp_path: Path):
                 "platform": "linux",
                 "runner_version": "0.1.0",
                 "install_mode": "server",
+                "auto_update_policy": "notify",
+                "install_layout_version": 1,
                 "capabilities": ["exec.full"],
             },
         )
@@ -180,6 +186,81 @@ def test_runner_doctor_warns_for_outdated_version(tmp_path: Path):
         payload = response.json()
         assert payload["severity"] == "warning"
         assert payload["reason_code"] == "runner_version_outdated"
+        assert payload["repair_supported"] is True
+        assert "update apply" in payload["recommended_action"]
+    finally:
+        api_app.dependency_overrides.clear()
+        db.close()
+
+
+def test_runner_doctor_warns_for_legacy_layout_even_when_online(tmp_path: Path):
+    client, api_app, db, user = _make_client(tmp_path)
+    try:
+        runner = Runner(
+            owner_id=user.id,
+            name="cube",
+            auth_secret_hash="hash",
+            capabilities=["exec.full"],
+            status="online",
+            runner_metadata={
+                "hostname": "cube",
+                "platform": "linux",
+                "runner_version": "0.1.3",
+                "install_mode": "server",
+                "auto_update_policy": "notify",
+                "capabilities": ["exec.full"],
+            },
+        )
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+
+        with patch(
+            "zerg.routers.runners.get_runner_connection_manager",
+            return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        ):
+            response = client.get(f"/runners/{runner.id}/doctor")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["severity"] == "warning"
+        assert payload["reason_code"] == "runner_update_layout_legacy"
+        assert payload["repair_supported"] is True
+    finally:
+        api_app.dependency_overrides.clear()
+        db.close()
+
+
+def test_runner_doctor_distinguishes_outdated_runner_on_legacy_layout(tmp_path: Path):
+    client, api_app, db, user = _make_client(tmp_path)
+    try:
+        runner = Runner(
+            owner_id=user.id,
+            name="zerg",
+            auth_secret_hash="hash",
+            capabilities=["exec.full"],
+            status="online",
+            runner_metadata={
+                "hostname": "zerg",
+                "platform": "linux",
+                "runner_version": "0.1.0",
+                "install_mode": "server",
+                "auto_update_policy": "notify",
+                "capabilities": ["exec.full"],
+            },
+        )
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+
+        with patch(
+            "zerg.routers.runners.get_runner_connection_manager",
+            return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        ):
+            response = client.get(f"/runners/{runner.id}/doctor")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["severity"] == "warning"
+        assert payload["reason_code"] == "runner_version_outdated_legacy_layout"
         assert payload["repair_supported"] is True
     finally:
         api_app.dependency_overrides.clear()
@@ -216,6 +297,8 @@ def test_runner_preflight_reports_authenticated_server_view(tmp_path: Path):
                 "platform": "linux",
                 "runner_version": "0.1.3",
                 "install_mode": "server",
+                "auto_update_policy": "notify",
+                "install_layout_version": 1,
                 "capabilities": ["exec.full"],
             },
         )

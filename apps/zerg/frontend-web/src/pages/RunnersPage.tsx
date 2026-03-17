@@ -175,6 +175,46 @@ function formatVersionHint(runner: Runner): string | null {
   }
 }
 
+function updatePolicyLabel(policy: string | null | undefined): string {
+  switch (policy) {
+    case "apply":
+      return "Auto-apply";
+    case "off":
+      return "Updates off";
+    case "notify":
+      return "Notify only";
+    default:
+      return "Policy unknown";
+  }
+}
+
+function updatePolicyHint(policy: string | null | undefined): string {
+  switch (policy) {
+    case "apply":
+      return "Signed updates apply automatically when the runner is idle.";
+    case "off":
+      return "Runner will not check or apply background updates.";
+    case "notify":
+      return "Runner reports update availability and waits for a manual apply.";
+    default:
+      return "Runner has not reported its auto-update policy yet.";
+  }
+}
+
+function installLayoutLabel(runner: Runner): string {
+  if (runner.managed_install_ready) {
+    return runner.install_layout_version ? `Managed v${runner.install_layout_version}` : "Managed";
+  }
+  return "Legacy layout";
+}
+
+function installLayoutHint(runner: Runner): string {
+  if (runner.managed_install_ready) {
+    return "Ready for signed update apply and background auto-update.";
+  }
+  return "Re-run the installer once to migrate onto the versioned layout.";
+}
+
 export default function RunnersPage() {
   const navigate = useNavigate();
   const { data: runners, isLoading, error } = useRunners({ refetchInterval: 10_000 });
@@ -282,6 +322,11 @@ export default function RunnersPage() {
                           capability mismatch
                         </span>
                       )}
+                      {!runner.managed_install_ready && (
+                        <span className="runner-inline-pill runner-inline-pill--warning">
+                          legacy layout
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -323,6 +368,16 @@ export default function RunnersPage() {
                         <span className="runner-detail-value">{runner.install_mode}</span>
                       </div>
                     )}
+
+                    <div className="runner-detail-row">
+                      <span className="runner-detail-label">Updates</span>
+                      <div className="runner-detail-stack">
+                        <span className="runner-detail-value">{updatePolicyLabel(runner.auto_update_policy)}</span>
+                        <span className="runner-detail-subvalue">
+                          {installLayoutLabel(runner)}. {runner.managed_install_ready ? updatePolicyHint(runner.auto_update_policy) : installLayoutHint(runner)}
+                        </span>
+                      </div>
+                    </div>
 
                     {runner.reported_capabilities && runner.capabilities_match === false && (
                       <div className="runner-detail-row">
