@@ -15,8 +15,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from zerg.models.agents import AgentSession
 from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
+from zerg.models.work import INSIGHT_ORIGIN_REFLECTION
 from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
+from zerg.models.work import user_visible_insight_clause
 from zerg.services.reflection.collector import ProjectBatch
 
 logger = logging.getLogger(__name__)
@@ -97,6 +99,7 @@ def _create_insight(db: Session, action: dict) -> tuple[str | None, bool]:
     # Dedup: check same title + project within 7 days
     cutoff = datetime.now(UTC) - timedelta(days=INSIGHT_DEDUP_WINDOW_DAYS)
     query = db.query(Insight).filter(
+        user_visible_insight_clause(Insight),
         Insight.title == title,
         Insight.created_at >= cutoff,
     )
@@ -119,6 +122,7 @@ def _create_insight(db: Session, action: dict) -> tuple[str | None, bool]:
     cross_match = (
         db.query(Insight)
         .filter(
+            user_visible_insight_clause(Insight),
             Insight.title == title,
             Insight.created_at >= cutoff,
         )
@@ -143,6 +147,7 @@ def _create_insight(db: Session, action: dict) -> tuple[str | None, bool]:
         title=title,
         description=description,
         project=project,
+        origin=INSIGHT_ORIGIN_REFLECTION,
         severity=severity,
         confidence=confidence,
         tags=tags if tags else None,

@@ -514,6 +514,40 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
+    # insights table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(insights)"))}
+            if columns:
+                if "origin" not in columns:
+                    conn.execute(text("ALTER TABLE insights ADD COLUMN origin VARCHAR(20)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_origin ON insights(origin)"))
+                if "title" in columns:
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE insights
+                            SET origin = 'system'
+                            WHERE origin IS NULL
+                              AND title IN ('Stale ingest detected', 'Ingest recovered')
+                            """
+                        )
+                    )
+                if "tags" in columns:
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE insights
+                            SET origin = 'system'
+                            WHERE origin IS NULL
+                              AND COALESCE(tags, '') LIKE '%stale-agent%'
+                            """
+                        )
+                    )
+                conn.commit()
+    except Exception:
+        logger.debug("insights table migration skipped (table may not exist yet)", exc_info=True)
+
     # session_branches table migrations
     try:
         with engine.connect() as conn:

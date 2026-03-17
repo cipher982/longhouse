@@ -40,6 +40,7 @@ def test_create_insight(tmp_path):
         assert result is not None
         assert result.title == "SQLite WAL mode is important"
         assert result.insight_type == "learning"
+        assert result.origin == "manual"
         assert result.confidence == 0.9
         assert result.tags == ["sqlite", "performance"]
 

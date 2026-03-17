@@ -102,6 +102,7 @@ async def run() -> dict[str, Any]:
 
         if status == "stale":
             # Check dedup: don't create insight if one exists within _DEDUP_HOURS
+            from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
             from zerg.models.work import Insight
 
             recent_cutoff = datetime.now(timezone.utc).timestamp() - (_DEDUP_HOURS * 3600)
@@ -125,6 +126,7 @@ async def run() -> dict[str, Any]:
                         f"(threshold: {health['threshold_hours']}h). "
                         "Check that the Rust engine (longhouse-engine) is running."
                     ),
+                    origin=INSIGHT_ORIGIN_SYSTEM,
                     severity="warning",
                 )
             )
@@ -132,6 +134,7 @@ async def run() -> dict[str, Any]:
             return {"status": "stale", "action": "insight_created"}
 
         # status == "ok": check if we were recently stale (recovery)
+        from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
         from zerg.models.work import Insight
 
         recent_stale = db.query(Insight).filter(Insight.title == "Stale ingest detected").order_by(Insight.created_at.desc()).first()
@@ -143,6 +146,7 @@ async def run() -> dict[str, Any]:
                     insight_type="learning",
                     title="Ingest recovered",
                     description=f"Session ingest resumed. Last session: {health.get('last_session_at')}",
+                    origin=INSIGHT_ORIGIN_SYSTEM,
                     severity="info",
                 )
             )
