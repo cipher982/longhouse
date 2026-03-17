@@ -673,9 +673,11 @@ verify-prod: ## Full prod validation: API + browser tests (~80s, requires hosted
 	@echo "✅ Production verified"
 
 qa-live: ## Run live QA against hosted instance (~60s, default subdomain david010)
+	@$(MAKE) ensure-js-deps
 	@./scripts/qa-live.sh
 
 qa-live-conversations: ## Run hosted conversations smoke against default instance
+	@$(MAKE) ensure-js-deps
 	@./scripts/run-prod-e2e.sh tests/live/conversations-live.spec.ts --timeout=60000 --reporter=line
 
 test-ci: ## @internal CI-ready tests (unit + build + contracts)
