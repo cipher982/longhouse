@@ -31,6 +31,7 @@ from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.oikos_operator_policy import operator_master_switch_enabled
+from zerg.services.oikos_shadow_review import build_session_shadow_review
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
@@ -305,7 +306,7 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
         cwd = session.cwd
         summary_title = session.summary_title
         summary = session.summary
-        wakeup_payload = {
+        surface_payload = {
             "trigger_type": trigger_type,
             "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
             "session_id": session_id,
@@ -329,7 +330,7 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
                 session_id=session_id,
                 conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
                 wakeup_key=wakeup_key,
-                payload=wakeup_payload,
+                payload=surface_payload,
             )
             db.commit()
             return
@@ -346,12 +347,13 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
                 session_id=session_id,
                 conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
                 wakeup_key=wakeup_key,
-                payload=wakeup_payload,
+                payload=surface_payload,
             )
             db.commit()
             return
         owner_id = int(owner[0])
-        if not get_operator_policy(db, owner_id).enabled:
+        policy = get_operator_policy(db, owner_id)
+        if not policy.enabled:
             append_wakeup(
                 db,
                 owner_id=owner_id,
@@ -362,10 +364,26 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
                 session_id=session_id,
                 conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
                 wakeup_key=wakeup_key,
-                payload=wakeup_payload,
+                payload=surface_payload,
             )
             db.commit()
             return
+
+        ledger_payload = dict(surface_payload)
+        if policy.shadow_mode:
+            try:
+                shadow_review = await build_session_shadow_review(
+                    db,
+                    trigger_type=trigger_type,
+                    session_id=session_id,
+                    trigger_summary=summary_title or summary or "Operator wakeup from session completion.",
+                    trigger_payload=surface_payload,
+                    policy=policy,
+                )
+                if shadow_review is not None:
+                    ledger_payload["shadow_review"] = shadow_review
+            except Exception:
+                logger.exception("Failed to build shadow review for completion wakeup on session %s", session_id)
     finally:
         db.close()
 
@@ -391,7 +409,7 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
             message_id,
             source="operator",
             surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
-            surface_payload=wakeup_payload,
+            surface_payload=surface_payload,
         )
         log_db = factory()
         try:
@@ -405,7 +423,7 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
                 conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
                 wakeup_key=wakeup_key,
                 run_id=run_id,
-                payload=wakeup_payload,
+                payload=ledger_payload,
             )
             log_db.commit()
         finally:
@@ -423,7 +441,7 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
                 session_id=session_id,
                 conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
                 wakeup_key=wakeup_key,
-                payload=wakeup_payload,
+                payload=ledger_payload,
             )
             log_db.commit()
         finally:

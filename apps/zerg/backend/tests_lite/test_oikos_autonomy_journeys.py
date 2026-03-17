@@ -24,7 +24,7 @@ def _load_cases():
 def test_load_autonomy_journey_cases_reads_expected_fixture():
     cases = _load_cases()
 
-    assert len(cases) == 11
+    assert len(cases) == 15
     assert [case.id for case in cases] == [
         "completed_nothing_left",
         "completed_obvious_follow_up",
@@ -37,6 +37,10 @@ def test_load_autonomy_journey_cases_reads_expected_fixture():
         "assist_bounded_follow_up_suggest",
         "manual_bounded_follow_up_ignore",
         "manual_human_fork_ignore",
+        "risky_follow_up_requires_escalation",
+        "autopilot_continue_cap_requires_handoff",
+        "sleeping_on_demand_runner_blocks_follow_up",
+        "explicit_refusal_requires_escalation",
     ]
     assert cases[1].artifacts[0].path == "/tmp/failing-tests.log"
     assert cases[1].primary_session.loop_mode == SessionLoopMode.AUTOPILOT
@@ -125,6 +129,10 @@ async def test_run_autonomy_journeys_executes_fixture_file_into_stable_root(tmp_
         "assist_bounded_follow_up_suggest",
         "manual_bounded_follow_up_ignore",
         "manual_human_fork_ignore",
+        "risky_follow_up_requires_escalation",
+        "autopilot_continue_cap_requires_handoff",
+        "sleeping_on_demand_runner_blocks_follow_up",
+        "explicit_refusal_requires_escalation",
     ]
     assert all(result.run_dir.parent == tmp_path for result in results)
     assert all(result.context_path.exists() for result in results)

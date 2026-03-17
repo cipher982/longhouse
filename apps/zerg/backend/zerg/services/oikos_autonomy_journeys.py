@@ -272,12 +272,51 @@ def load_autonomy_journey_cases(path: Path) -> list[AutonomyJourneyCase]:
 async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDecision:
     """Cheap deterministic baseline used for harness validation and local dogfooding."""
     trigger_summary = (packet.trigger.summary or "").lower()
+    trigger_payload = packet.trigger.payload or {}
+    autonomy_continue_streak = int(trigger_payload.get("auto_continue_streak") or 0)
+    required_runner_status = str(trigger_payload.get("required_runner_status") or "").strip().lower()
+    required_runner_policy = str(trigger_payload.get("required_runner_availability_policy") or "").strip().lower()
+    risk_level = str(trigger_payload.get("risk_level") or "").strip().lower()
+    explicit_refusal = bool(trigger_payload.get("explicit_refusal", False))
 
     def _supports_operator_prompt(session: AutonomySessionSnapshot) -> bool:
         return packet.policy.allow_notify and session.loop_mode != SessionLoopMode.MANUAL
 
     def _supports_autonomous_continue(session: AutonomySessionSnapshot) -> bool:
         return session.loop_mode == SessionLoopMode.AUTOPILOT and packet.policy.allow_continue and session.resumable
+
+    def _needs_risk_escalation() -> bool:
+        if explicit_refusal or risk_level in {"high", "destructive", "dangerous"}:
+            return True
+        combined = " ".join(
+            part.lower()
+            for part in (
+                packet.trigger.summary,
+                packet.primary_session.last_ai_message,
+                packet.primary_session.summary,
+                packet.primary_session.blocked_reason,
+            )
+            if part
+        )
+        return any(
+            phrase in combined
+            for phrase in (
+                "rm -rf",
+                "drop the database",
+                "production migration",
+                "delete prod data",
+                "explicit refusal",
+                "destructive",
+            )
+        )
+
+    def _auto_continue_cap_hit() -> bool:
+        return autonomy_continue_streak >= 3
+
+    def _needs_on_demand_runner() -> bool:
+        if required_runner_policy != "on_demand":
+            return False
+        return required_runner_status in {"offline", "away", "sleeping", "asleep", "unavailable"}
 
     def _find_human_fork_session() -> AutonomySessionSnapshot | None:
         sessions = [packet.primary_session, *packet.active_sessions]
@@ -345,6 +384,102 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
             needs_human=False,
         )
 
+    if _needs_risk_escalation():
+        if not _supports_operator_prompt(packet.primary_session):
+            return AutonomyDecision(
+                decision="ignore",
+                rationale=" ".join(
+                    [
+                        "The session is in a hands-off mode,",
+                        "so Oikos should not proactively intervene on a risky branch.",
+                    ]
+                ),
+                summary="Leave the risky branch untouched until the user returns.",
+                proposed_actions=[],
+                needs_human=False,
+            )
+        return AutonomyDecision(
+            decision="escalate",
+            rationale=" ".join(
+                [
+                    "The next step looks risky or explicitly declined,",
+                    "so Oikos should refuse autonomous continuation.",
+                ]
+            ),
+            summary="Escalate the risky follow-up instead of continuing it automatically.",
+            proposed_actions=[
+                AutonomyProposedAction(
+                    kind="notify_user",
+                    target_session_id=packet.primary_session.session_id,
+                    summary="Tell the user the next step looks risky and needs direct approval.",
+                    payload={"recommended_action": "review_risky_step"},
+                )
+            ],
+            needs_human=True,
+        )
+
+    if _auto_continue_cap_hit():
+        if not _supports_operator_prompt(packet.primary_session):
+            return AutonomyDecision(
+                decision="ignore",
+                rationale="Manual mode disables another proactive nudge even after multiple autonomous loops.",
+                summary="Stop here and wait for the user.",
+                proposed_actions=[],
+                needs_human=False,
+            )
+        return AutonomyDecision(
+            decision="escalate",
+            rationale=" ".join(
+                [
+                    "The same session has already been auto-continued several times",
+                    "and now needs a deliberate user check-in.",
+                ]
+            ),
+            summary="Escalate after repeated autonomous continuations instead of looping indefinitely.",
+            proposed_actions=[
+                AutonomyProposedAction(
+                    kind="notify_user",
+                    target_session_id=packet.primary_session.session_id,
+                    summary="Tell the user the session hit the autonomous continue cap.",
+                    payload={"recommended_action": "review_session_progress"},
+                )
+            ],
+            needs_human=True,
+        )
+
+    if _needs_on_demand_runner():
+        if not _supports_operator_prompt(packet.primary_session):
+            return AutonomyDecision(
+                decision="ignore",
+                rationale=" ".join(
+                    [
+                        "Manual mode keeps the sleeping on-demand runner as a passive blocker",
+                        "instead of generating a new prompt.",
+                    ]
+                ),
+                summary="Wait for the user to wake the required runner.",
+                proposed_actions=[],
+                needs_human=False,
+            )
+        return AutonomyDecision(
+            decision="escalate",
+            rationale=(
+                "The next step depends on an on-demand runner that appears "
+                "asleep, so Oikos should not treat it as an outage or continue "
+                "blindly."
+            ),
+            summary="Ask the user to wake the required on-demand runner before continuing.",
+            proposed_actions=[
+                AutonomyProposedAction(
+                    kind="notify_user",
+                    target_session_id=packet.primary_session.session_id,
+                    summary="Tell the user the required on-demand runner appears asleep.",
+                    payload={"recommended_action": "wake_runner"},
+                )
+            ],
+            needs_human=True,
+        )
+
     human_fork_session = _find_human_fork_session()
     if human_fork_session is not None:
         return AutonomyDecision(
@@ -379,7 +514,12 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
     if _has_bounded_follow_up() and _supports_operator_prompt(packet.primary_session):
         return AutonomyDecision(
             decision="suggest_continue",
-            rationale=("The session has a bounded next step, but this mode still requires " "user approval before resuming it."),
+            rationale=" ".join(
+                [
+                    "The session has a bounded next step,",
+                    "but this mode still requires user approval before resuming it.",
+                ]
+            ),
             summary="Ask the user whether Oikos should continue the bounded follow-up.",
             proposed_actions=[
                 AutonomyProposedAction(
