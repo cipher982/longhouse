@@ -121,7 +121,7 @@ Notes:
 
 ## [Launch][Product][Tech Debt] Add insight provenance and hide system alert noise by default (size: 2)
 
-Status (2026-03-17): In progress. The next slice should make the remaining insight store more trustworthy without adding a new subsystem: tag origins, keep system alerts out of default reads, and preserve manual/reflection learnings.
+Status (2026-03-17): Done. Insights now carry explicit origin on new writes, obvious system rows are backfilled on startup, and normal reads/briefings stop surfacing operational alerts unless a caller opts in.
 
 **Goal:** Distinguish manual, reflection, and system-generated insight rows so default reads and AI briefings stop treating operational alerts as first-class learnings.
 
@@ -132,15 +132,17 @@ Status (2026-03-17): In progress. The next slice should make the remaining insig
 - Session briefings and reflection dedup context stop pulling `system` rows by default
 - Focused backend tests cover migration, default filtering, and writer tagging
 
-- [ ] Write and commit the bounded spec + TODO entry
-- [ ] Add `Insight.origin` plus startup-safe SQLite migration/backfill
-- [ ] Tag manual, reflection, and system insight writers explicitly
-- [ ] Exclude `system` rows from default insight/briefing reads and keep an opt-in path
-- [ ] Run focused verification, commit, deploy, and verify live behavior
+- [x] Write and commit the bounded spec + TODO entry
+- [x] Add `Insight.origin` plus startup-safe SQLite migration/backfill
+- [x] Tag manual, reflection, and system insight writers explicitly
+- [x] Exclude `system` rows from default insight/briefing reads and keep an opt-in path
+- [x] Run focused verification, commit, deploy, and verify live behavior
 
 Notes:
 - 2026-03-17: Keep this bounded. Do not move alerts into a new table yet, and do not try to perfectly classify historic reflection rows.
 - 2026-03-17: Legacy `origin IS NULL` rows should stay visible; only explicit `system` rows should disappear from normal reads.
+- 2026-03-17: Shipped on `main` via `4771eebe` after test-fix helper commit `d8c5c0ac`; `runtime-image.yml` run `23201029986` succeeded, Coolify deploys for `longhouse-demo` and `longhouse-control-plane` completed, `david010` was reprovisioned, `/api/health` returned `healthy`, and `make qa-live` passed 8/8.
+- 2026-03-17: Hosted `/api/agents/insights` now returns `124` rows by default vs `128` with `include_system=true`, confirming that 4 backfilled `system` rows are hidden from normal reads on `david010`.
 - Spec: `docs/specs/insight-origin-filtering.md`
 
 ## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)
