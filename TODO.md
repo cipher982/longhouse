@@ -163,6 +163,30 @@ Notes:
 - 2026-03-16: Verification passed in a clean `origin/main` clone: `make test`, `make test-e2e`, `make test-shipper-e2e`, GHCR runtime build `23173937151`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, and live `make qa-live` (8/8).
 - Spec: `docs/specs/auth-disabled-startup-hardening.md`
 
+## [Tech Debt] Simplify hosted auth handoff (size: 4)
+
+Status (2026-03-16): Active.
+
+**Goal:** Make hosted browser sign-in read like one coherent flow: the tenant sends users to one control-plane login URL, the control plane preserves that intent through login/OAuth, and the tenant accepts the resulting login token through one canonical browser handoff route.
+
+**Done when:**
+- Hosted `/api/auth/methods` exposes an explicit control-plane login URL instead of making the frontend guess
+- Control-plane login and Google OAuth preserve a safe `return_to` intent for hosted instance login
+- Tenant browser login-token acceptance is canonicalized on `/api/auth/accept-token`
+- `/api/auth/sso` and the landing-page `auth_token` JS handoff are removed
+- Focused auth regression coverage plus full ship verification pass
+
+- [ ] Write and commit the concise phase 6 spec
+- [ ] Add a canonical hosted control-plane login URL to tenant auth methods
+- [ ] Preserve hosted return intent through control-plane password and Google login
+- [ ] Collapse tenant browser token acceptance onto `/api/auth/accept-token` and remove `/api/auth/sso`
+- [ ] Remove the frontend landing `auth_token` bridge and update the hosted login UI to use the canonical URL
+- [ ] Ship and verify the hosted runtime after the cleanup
+
+Notes:
+- 2026-03-16: Keep this bounded to browser handoff cleanup. Do not fold in Gmail connector OAuth, device auth, or runner auth changes.
+- 2026-03-16: The target shape is one hosted browser login bridge, not multiple overlapping entry points that happen to work.
+
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
 Status (2026-03-14): Done. Kept to the bounded browser-vs-machine cleanup pass; not expanded into a full auth rewrite.
