@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch][QA/Test][Tech Debt] Refresh GitHub Actions for the Node 24 transition (size: 2)
 
-Status (2026-03-17): In progress. Core workflows still pin older major versions of the stock GitHub actions, and live CI is emitting Node 20 deprecation warnings on both hosted and self-hosted runners.
+Status (2026-03-17): Done. Core workflows now use current Node 24-ready stock GitHub action majors, and both GitHub-hosted and self-hosted validation runs succeeded after the upgrade.
 
 **Goal:** Remove the noisy GitHub Actions deprecation surface before it becomes a real breakage, without regressing the repo's mixed hosted/self-hosted workflow fleet.
 
@@ -26,9 +26,14 @@ Status (2026-03-17): In progress. Core workflows still pin older major versions 
 - A GitHub-hosted workflow still runs successfully after the upgrade
 - A self-hosted workflow still runs successfully after the upgrade
 
-- [ ] Upgrade stock GitHub actions across workflow files
-- [ ] Re-run one GitHub-hosted workflow on the new action majors
-- [ ] Re-run one self-hosted workflow on the new action majors
+- [x] Upgrade stock GitHub actions across workflow files
+- [x] Re-run one GitHub-hosted workflow on the new action majors
+- [x] Re-run one self-hosted workflow on the new action majors
+
+Notes:
+- 2026-03-17: Upgraded `actions/checkout` to v6, `actions/setup-node` to v6, `actions/setup-python` to v6, `actions/upload-artifact` to v7, and `actions/download-artifact` to v8 across the workflow set.
+- 2026-03-17: GitHub-hosted validation passed via `Hosted Live QA` run `23202134083`.
+- 2026-03-17: Self-hosted validation passed via `CI Test Runner` run `23202134165` (`suite=validate`).
 
 ## [Launch][QA/Test][Tech Debt] Sweep remaining hosted auth-boundary script drift (size: 1)
 
