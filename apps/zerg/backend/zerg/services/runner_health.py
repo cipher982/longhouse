@@ -18,6 +18,8 @@ STALE_HEARTBEAT_MULTIPLIER = 3
 MIN_STALE_AFTER_SECONDS = 90
 KNOWN_INSTALL_MODES = {"desktop", "server"}
 KNOWN_AUTO_UPDATE_POLICIES = {"off", "notify", "apply"}
+KNOWN_AVAILABILITY_POLICIES = {"always_on", "on_demand", "ephemeral"}
+DEFAULT_AVAILABILITY_POLICY = "always_on"
 _SEMVER_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 
@@ -33,6 +35,7 @@ class RunnerHealthAssessment:
     last_seen_age_seconds: int | None
     is_stale: bool
     is_connected: bool | None
+    availability_policy: str
     install_mode: str | None
     auto_update_policy: str | None
     install_layout_version: int | None
@@ -96,6 +99,41 @@ def _auto_update_policy(metadata: dict[str, Any]) -> str | None:
     return value if value in KNOWN_AUTO_UPDATE_POLICIES else None
 
 
+def normalize_runner_availability_policy(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized if normalized in KNOWN_AVAILABILITY_POLICIES else None
+
+
+def infer_runner_availability_policy(
+    *,
+    policy: Any = None,
+    metadata: dict[str, Any] | None = None,
+    fallback: str = DEFAULT_AVAILABILITY_POLICY,
+) -> str:
+    normalized = normalize_runner_availability_policy(policy)
+    if normalized is not None:
+        return normalized
+
+    metadata = metadata or {}
+    metadata_policy = normalize_runner_availability_policy(metadata.get("availability_policy"))
+    if metadata_policy is not None:
+        return metadata_policy
+
+    install_mode = _install_mode(metadata)
+    if install_mode == "desktop":
+        return "on_demand"
+    if install_mode == "server":
+        return "always_on"
+
+    return normalize_runner_availability_policy(fallback) or DEFAULT_AVAILABILITY_POLICY
+
+
+def runner_requires_proactive_attention(policy: str | None) -> bool:
+    return infer_runner_availability_policy(policy=policy) == "always_on"
+
+
 def _install_layout_version(metadata: dict[str, Any]) -> int | None:
     raw = metadata.get("install_layout_version")
     if isinstance(raw, int) and raw > 0:
@@ -149,6 +187,10 @@ def assess_runner_health(
     if configured_capabilities and reported_capabilities:
         capabilities_match = configured_capabilities == reported_capabilities
     auto_update_policy = _auto_update_policy(metadata)
+    availability_policy = infer_runner_availability_policy(
+        policy=getattr(runner, "availability_policy", None),
+        metadata=metadata,
+    )
     install_layout_version = _install_layout_version(metadata)
     managed_install_ready = install_layout_version is not None and install_layout_version >= 1
 
@@ -200,6 +242,21 @@ def assess_runner_health(
         else:
             status_summary = f"Online. Last heartbeat {last_seen_age_seconds}s ago."
 
+    if effective_status == "offline" and availability_policy == "on_demand" and status_reason != "never_connected":
+        status_summary = (
+            f"Unavailable right now. Last heartbeat {last_seen_age_seconds}s ago. "
+            "This runner is configured as on-demand, so it may simply be asleep."
+            if last_seen_age_seconds is not None
+            else "Unavailable right now. This runner is configured as on-demand, so it may simply be asleep."
+        )
+    elif effective_status == "offline" and availability_policy == "ephemeral" and status_reason != "never_connected":
+        status_summary = (
+            f"Unavailable right now. Last heartbeat {last_seen_age_seconds}s ago. "
+            "This runner is ephemeral and is not expected to stay online."
+            if last_seen_age_seconds is not None
+            else "Unavailable right now. This runner is ephemeral and is not expected to stay online."
+        )
+
     if effective_status == "online" and version_status == "outdated" and runner_version and latest_runner_version:
         status_summary = f"{status_summary[:-1]} but runner v{runner_version} is behind latest v{latest_runner_version}."
     elif effective_status == "online" and capabilities_match is False:
@@ -214,6 +271,7 @@ def assess_runner_health(
         last_seen_age_seconds=last_seen_age_seconds,
         is_stale=is_stale,
         is_connected=is_connected,
+        availability_policy=availability_policy,
         install_mode=_install_mode(metadata),
         auto_update_policy=auto_update_policy,
         install_layout_version=install_layout_version,
@@ -247,6 +305,7 @@ def build_runner_response(
         id=runner.id,
         owner_id=runner.owner_id,
         name=runner.name,
+        availability_policy=assessment.availability_policy,
         labels=labels,
         capabilities=assessment.configured_capabilities or ["exec.readonly"],
         status=assessment.effective_status,

@@ -179,6 +179,50 @@ def test_startup_migration_adds_insight_origin_and_backfills_system_rows(tmp_pat
     ]
 
 
+def test_startup_migration_adds_runner_availability_policy_and_backfills_defaults(tmp_path):
+    db_path = tmp_path / "legacy_runners.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE runners (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                name VARCHAR NOT NULL,
+                labels JSON,
+                capabilities JSON NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'offline',
+                last_seen_at DATETIME,
+                auth_secret_hash VARCHAR NOT NULL,
+                runner_metadata JSON,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            INSERT INTO runners (owner_id, name, capabilities, status, auth_secret_hash, runner_metadata)
+            VALUES
+              (1, 'cinder', '["exec.full"]', 'offline', 'hash1', '{"install_mode":"desktop"}'),
+              (1, 'clifford', '["exec.full"]', 'offline', 'hash2', '{"install_mode":"server"}')
+            """
+        )
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(runners)"))}
+        rows = conn.execute(text("SELECT name, availability_policy FROM runners ORDER BY id")).fetchall()
+
+    assert "availability_policy" in columns
+    assert rows == [
+        ("cinder", "on_demand"),
+        ("clifford", "always_on"),
+    ]
+
+
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):
     db_path = tmp_path / "legacy_pending.db"
     engine = make_engine(f"sqlite:///{db_path}")

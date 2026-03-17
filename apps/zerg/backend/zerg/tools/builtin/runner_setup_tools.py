@@ -67,11 +67,16 @@ def runner_list() -> Dict[str, Any]:
         ]
         online = sum(1 for runner in data if runner["status"] == "online")
         total = len(data)
+        actionable_offline = [
+            runner for runner in data if runner["status"] != "online" and runner.get("availability_policy") == "always_on"
+        ]
         suggested_next_step = None
-        if total > 0 and online == 0:
+        if total > 0 and online == 0 and actionable_offline:
             suggested_next_step = (
                 "No runners are online. Use runner_doctor(target=...) on an offline runner or create a fresh enroll token."
             )
+        elif total > 0 and online == 0:
+            suggested_next_step = "No runners are online right now. That may be fine if these runners are on-demand."
         return {
             "ok": True,
             "data": {

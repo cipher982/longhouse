@@ -56,12 +56,14 @@ def test_install_script_defaults_to_desktop_mode_and_is_valid_bash(tmp_path):
 
     assert response.status_code == 200
     assert 'RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-desktop}"' in response.text
+    assert 'RUNNER_AVAILABILITY_POLICY="on_demand"' in response.text
     assert 'RUNNER_REQUESTED_CAPABILITIES="${RUNNER_REQUESTED_CAPABILITIES:-exec.full}"' in response.text
     assert 'RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-9.9.9}"' in response.text
     assert 'RUNNER_UPDATE_MANIFEST_URL="${RUNNER_UPDATE_MANIFEST_URL:-https://github.com/cipher982/longhouse/releases/latest/download/longhouse-runner-manifest.json}"' in response.text
     assert 'RUNNER_AUTO_UPDATE_POLICY="${RUNNER_AUTO_UPDATE_POLICY:-notify}"' in response.text
     assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
     assert 'RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE' in response.text
+    assert 'RUNNER_AVAILABILITY_POLICY=$RUNNER_AVAILABILITY_POLICY' in response.text
     assert 'RUNNER_INSTALL_ROOT=$INSTALL_ROOT' in response.text
     assert 'RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH' in response.text
     assert "systemctl --user enable longhouse-runner" in response.text
@@ -85,10 +87,12 @@ def test_install_script_server_mode_exposes_system_service_contract(tmp_path):
 
     assert response.status_code == 200
     assert 'RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-server}"' in response.text
+    assert 'RUNNER_AVAILABILITY_POLICY="always_on"' in response.text
     assert 'RUNNER_REQUESTED_CAPABILITIES="${RUNNER_REQUESTED_CAPABILITIES:-exec.full}"' in response.text
     assert 'RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-9.9.9}"' in response.text
     assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
     assert 'RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE' in response.text
+    assert 'RUNNER_AVAILABILITY_POLICY=$RUNNER_AVAILABILITY_POLICY' in response.text
     assert 'RUNNER_INSTALL_ROOT=$INSTALL_ROOT' in response.text
     assert 'RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH' in response.text
     assert "EnvironmentFile=/etc/longhouse/runner.env" in response.text
@@ -290,3 +294,52 @@ def test_register_runner_respects_requested_capabilities(tmp_path):
     assert payload["runner_capabilities_csv"] == "exec.full,docker"
     assert runner is not None
     assert runner.capabilities == ["exec.full", "docker"]
+
+
+def test_register_runner_persists_requested_availability_policy(tmp_path):
+    db_path = tmp_path / "runner-register-availability.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = make_sessionmaker(engine)
+
+    env = {
+        "DATABASE_URL": f"sqlite:///{db_path}",
+        "FERNET_SECRET": "test-fernet-secret",
+        "AUTH_DISABLED": "1",
+        "JWT_SECRET": "test-jwt-secret-1234",
+        "INTERNAL_API_SECRET": "test-internal-secret-1234",
+    }
+
+    with patch.dict(os.environ, env, clear=False):
+        from zerg.main import api_app, app
+
+        with SessionLocal() as db:
+            user = User(email="dev@local", role="ADMIN")
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+            _, enroll_token = runner_crud.create_enroll_token(db=db, owner_id=user.id, ttl_minutes=10)
+
+            def override_get_db():
+                try:
+                    yield db
+                finally:
+                    pass
+
+            api_app.dependency_overrides[get_db] = override_get_db
+            try:
+                with patch("zerg.config.get_settings", return_value=_settings()):
+                    client = TestClient(app, backend="asyncio")
+                    response = client.post(
+                        "/api/runners/register",
+                        json={"enroll_token": enroll_token, "name": "cinder", "availability_policy": "on_demand"},
+                    )
+            finally:
+                api_app.dependency_overrides.clear()
+
+            runner = runner_crud.get_runner_by_name(db, owner_id=user.id, name="cinder")
+
+    assert response.status_code == 200
+    assert runner is not None
+    assert runner.availability_policy == "on_demand"
