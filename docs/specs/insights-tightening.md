@@ -1,12 +1,14 @@
 # Insights Tightening
 
-Status: In progress
+Status: Shipped, later partially superseded by `docs/specs/continuity-memory-boundary.md`
 
 ## Executive Summary
 
 Insights still have real value as a continuity primitive, but the current feature shape is too loose. The useful part is the stored insight corpus plus machine/browser read paths. The unhealthy part is unattended reflection writing generic rows and proposals that nobody reviews.
 
 This pass keeps the thin insight primitive and restores machine-readable access without undoing the browser/machine auth split. It also pauses automatic reflection by default so we stop generating more low-signal rows before launch.
+
+Historical note: this doc covers the earlier auth + auto-reflection tightening pass only. A later continuity-boundary cleanup added the minimal browser `/insights` curation page and moved ops alerts into `OperationalIncident`; use `docs/specs/continuity-memory-boundary.md` for the current product shape.
 
 ## Decisions
 

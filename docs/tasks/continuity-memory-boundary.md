@@ -40,11 +40,11 @@ Last updated: 2026-03-17
 
 ## Phase 4: Docs, reflection posture, and verification
 
-- [ ] Update `AGENTS.md` product-surface copy for the final boundary
-- [ ] Update `VISION.md` or other user-facing docs if needed
-- [ ] Ensure reflection/proposal docs describe them as optional admin tooling, not core product
-- [ ] Run local verification for touched backend/frontend paths
-- [ ] Commit Phase 4
+- [x] Update `AGENTS.md` product-surface copy for the final boundary
+- [x] Update `VISION.md` or other user-facing docs if needed
+- [x] Ensure reflection/proposal docs describe them as optional admin tooling, not core product
+- [x] Run local verification for touched backend/frontend paths
+- [x] Commit Phase 4
 
 ## Phase 5: Ship and verify
 
@@ -64,3 +64,4 @@ Notes:
 - 2026-03-17: Phase 2 trims briefings back to session summaries plus curated gotchas, redirects `/proposals` to `/briefings`, and keeps the remaining proposals copy explicitly internal/manual-reflection-only.
 - 2026-03-17: Verification for Phase 2: backend `ruff check` passed, `make test-lite` passed again (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` passed (`31 passed, 1 skipped`).
 - 2026-03-17: Phase 3 adds `Insight.archived_at`, hides archived rows from default browser/machine reads and briefing gotchas, exposes browser archive/unarchive actions plus a minimal `/insights` curation page reached from Briefings, and verified with backend `ruff check`, `make test-lite` (`878 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` (`31 passed, 1 skipped`).
+- 2026-03-17: Phase 4 is docs-only. `AGENTS.md` now treats insights as curated continuity memory with a small browser curation page, proposals as internal/manual tooling only, and the continuity specs are updated so they no longer describe the pre-cleanup product shape. No VISION change was needed for this pass.

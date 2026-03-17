@@ -229,6 +229,7 @@ Notes:
 - 2026-03-17: Phase 1 landed in the clean clone: `OperationalIncident` now holds stale-agent and ingest-health alerts, `/api/reliability/incidents` lists them for admins, and `make test-lite` passed on the final state.
 - 2026-03-17: Phase 2 landed in the clean clone: briefings no longer include approved proposals, `/proposals` now redirects to `/briefings`, proposal copy is explicitly internal/manual, `make test-lite` passed again, and `make test-frontend-unit` passed after installing the workspace dependencies in the temp clone.
 - 2026-03-17: Phase 3 landed in the clean clone: `Insight.archived_at` now hides archived rows from default machine/browser reads and briefing gotchas, browser users can archive or restore insights via `/insights`, and verification passed with backend `ruff check`, `make test-lite` (`878 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` (`31 passed, 1 skipped`).
+- 2026-03-17: Phase 4 updated the agent-facing/product-boundary docs only: `AGENTS.md` now describes insights as curated continuity memory with browser archive/unarchive, proposals as internal/manual tooling only, and the active continuity specs no longer describe the pre-cleanup product shape.
 - Spec: `docs/specs/continuity-memory-boundary.md`
 - Tasks: `docs/tasks/continuity-memory-boundary.md`
 
