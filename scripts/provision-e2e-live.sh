@@ -195,15 +195,15 @@ else
   if lh_hosted_accept_login_token "$sso_token" "$COOKIE_JAR" "$INSTANCE_URL" >/dev/null 2>&1; then
     ok "SSO token accepted"
 
-    # Verify authenticated access using the session cookie
+    # Verify authenticated browser access using the browser-owned timeline API.
     auth_code=$(curl -s -o /dev/null -w "%{http_code}" \
       -b "$COOKIE_JAR" \
       --connect-timeout 5 --max-time 15 \
-      "${INSTANCE_URL}/api/agents/sessions" 2>/dev/null)
+      "${INSTANCE_URL}/api/timeline/sessions" 2>/dev/null)
     if [[ "$auth_code" == "200" ]]; then
-      ok "Authenticated access via SSO cookie -> 200"
+      ok "Authenticated browser access via SSO cookie -> 200"
     else
-      echo "  Warning: Authenticated /api/agents/sessions -> ${auth_code} (cookie may not work). Non-fatal."
+      echo "  Warning: Authenticated /api/timeline/sessions -> ${auth_code} (unexpected browser auth result). Non-fatal."
     fi
   else
     echo "  Warning: SSO accept-token failed (may need config). Non-fatal."
