@@ -805,7 +805,7 @@ function AdminPage() {
     mutationFn: impersonateUser,
     onSuccess: () => {
       toast.success("Switched to demo account");
-      window.location.assign("/dashboard");
+      window.location.assign("/timeline");
     },
     onError: (error: Error) => {
       toast.error(error.message || "Failed to switch accounts");
@@ -905,7 +905,7 @@ function AdminPage() {
       // Then impersonate
       await impersonateUser({ user_id: userId });
       toast.success("Demo ready!");
-      window.location.assign("/dashboard");
+      window.location.assign("/timeline");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to start demo");
     }
@@ -1242,7 +1242,7 @@ function AdminPage() {
                       <span className="admin-devtool-title">Trace Explorer</span>
                     </div>
                     <p className="admin-devtool-desc">
-                      Debug oikos runs, commiss, and LLM calls with unified trace timelines.
+                      Debug Oikos runs, cloud sessions, and LLM calls with unified trace timelines.
                     </p>
                   </div>
                 </Link>

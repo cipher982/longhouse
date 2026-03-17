@@ -55,6 +55,7 @@ function renderChatPage(initialEntry = "/fiche/1/thread/42") {
           <TestRouter initialEntries={[initialEntry]}>
             <Routes>
               <Route path="/fiche/:ficheId/thread/:threadId?" element={<ChatPage />} />
+              <Route path="/timeline" element={<div>Timeline Home</div>} />
             </Routes>
           </TestRouter>
         </ShelfProvider>
@@ -161,6 +162,14 @@ describe("ChatPage", () => {
       expect(mockPostThreadMessage).toHaveBeenCalledWith(42, "New human message");
       expect(mockStartThreadRun).toHaveBeenCalledWith(42);
     });
+  });
+
+  it("shows timeline-focused recovery copy when fiche context is missing", async () => {
+    renderChatPage("/fiche/not-a-number/thread/42");
+
+    expect(await screen.findByText("Missing fiche context")).toBeInTheDocument();
+    expect(screen.getByText("Open the timeline to pick a session or return to the main app.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Go to Timeline" })).toBeInTheDocument();
   });
 
   it("renames a thread and persists via API", async () => {

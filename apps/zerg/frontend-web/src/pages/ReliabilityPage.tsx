@@ -269,7 +269,7 @@ export default function ReliabilityPage() {
             color={health && health.recent_run_errors > 5 ? metricColors.error : metricColors.success}
           />
           <MetricCard
-            title="Commis Errors (1h)"
+            title="Cloud Session Errors (1h)"
             value={health?.recent_commis_errors ?? 0}
             color={health && health.recent_commis_errors > 5 ? metricColors.error : metricColors.success}
           />
@@ -291,7 +291,7 @@ export default function ReliabilityPage() {
             color={metricColors.success}
           />
           <MetricCard
-            title="Stuck Commis"
+            title="Stuck Cloud Sessions"
             value={stuckCommis?.stuck_count ?? 0}
             subtitle={`>${stuckCommis?.threshold_mins ?? 10}min threshold`}
             color={stuckCommis && stuckCommis.stuck_count > 0 ? metricColors.warning : metricColors.success}
@@ -345,7 +345,7 @@ export default function ReliabilityPage() {
                 {errors.commis_errors.length > 0 && (
                   <div>
                     <h4 className="reliability-subsection-title reliability-subsection-title--spaced ui-subsection-title">
-                      Commis Errors ({errors.total_commis_errors})
+                      Cloud Session Errors ({errors.total_commis_errors})
                     </h4>
                     <Table>
                       <Table.Header>
@@ -380,11 +380,11 @@ export default function ReliabilityPage() {
           </Card.Body>
         </Card>
 
-        {/* Stuck Commis */}
+        {/* Stuck cloud sessions */}
         {stuckCommis && stuckCommis.stuck_count > 0 && (
           <Card>
             <Card.Header>
-              <h3 className="reliability-warning-title">Stuck Commis ({stuckCommis.stuck_count})</h3>
+              <h3 className="reliability-warning-title">Stuck Cloud Sessions ({stuckCommis.stuck_count})</h3>
             </Card.Header>
             <Card.Body>
               <Table>
@@ -392,7 +392,7 @@ export default function ReliabilityPage() {
                   <Table.Cell isHeader>ID</Table.Cell>
                   <Table.Cell isHeader>Task</Table.Cell>
                   <Table.Cell isHeader>Started</Table.Cell>
-                  <Table.Cell isHeader>Commis ID</Table.Cell>
+                  <Table.Cell isHeader>Cloud Session ID</Table.Cell>
                 </Table.Header>
                 <Table.Body>
                   {stuckCommis.commis.map((commis) => (

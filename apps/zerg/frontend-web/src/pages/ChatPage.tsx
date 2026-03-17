@@ -64,7 +64,7 @@ export default function ChatPage() {
 
     const legacyNav = (performance as Performance & { navigation?: PerformanceNavigation }).navigation;
     if (legacyNav && legacyNav.type === legacyNav.TYPE_RELOAD) {
-      navigate("/dashboard", { replace: true });
+      navigate("/timeline", { replace: true });
       return;
     }
 
@@ -72,7 +72,7 @@ export default function ChatPage() {
       const entries = performance.getEntriesByType("navigation");
       const latest = entries[entries.length - 1] as PerformanceNavigationTiming | undefined;
       if (latest?.type === "reload") {
-        navigate("/dashboard", { replace: true });
+        navigate("/timeline", { replace: true });
       }
     }
   }, [navigate]);
@@ -251,7 +251,7 @@ export default function ChatPage() {
       document.title = `${fiche.name} - Longhouse`;
     }
     return () => {
-      document.title = "Longhouse AI Fiche Platform";
+      document.title = "Longhouse";
     };
   }, [fiche]);
 
@@ -261,8 +261,8 @@ export default function ChatPage() {
         <EmptyState
           variant="error"
           title="Missing fiche context"
-          description="Navigate to a fiche from the dashboard to start chatting."
-          action={<Button variant="primary" onClick={() => navigate("/dashboard")}>Go to Dashboard</Button>}
+          description="Open the timeline to pick a session or return to the main app."
+          action={<Button variant="primary" onClick={() => navigate("/timeline")}>Go to Timeline</Button>}
         />
       </div>
     );
@@ -302,7 +302,7 @@ export default function ChatPage() {
           variant="error"
           title="Unable to load chat"
           description="Something went wrong loading the conversation."
-          action={<Button variant="primary" onClick={() => navigate("/dashboard")}>Back to Dashboard</Button>}
+          action={<Button variant="primary" onClick={() => navigate("/timeline")}>Back to Timeline</Button>}
         />
       </div>
     );
@@ -315,8 +315,8 @@ export default function ChatPage() {
           <button
             type="button"
             className="back-button"
-            onClick={() => navigate("/dashboard")}
-            aria-label="Back to dashboard"
+            onClick={() => navigate("/timeline")}
+            aria-label="Back to timeline"
           >
             ←
           </button>

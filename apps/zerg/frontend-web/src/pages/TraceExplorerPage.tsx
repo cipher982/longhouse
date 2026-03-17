@@ -108,7 +108,7 @@ const sourceStyles: Record<string, { color: string; bg: string; label: string }>
   commis: {
     color: "var(--color-intent-success)",
     bg: "var(--color-intent-success-muted)",
-    label: "COMMIS",
+    label: "CLOUD",
   },
   llm: {
     color: "var(--color-neon-secondary)",
@@ -285,7 +285,7 @@ function TraceDetailView({
         <div className="trace-detail-stats">
           {[
             { label: "Runs", value: detail.counts.runs, color: sourceStyles.run.color },
-            { label: "Commis", value: detail.counts.commis, color: sourceStyles.commis.color },
+            { label: "Cloud Sessions", value: detail.counts.commis, color: sourceStyles.commis.color },
             { label: "LLM Calls", value: detail.counts.llm_calls, color: sourceStyles.llm.color },
           ].map((stat) => (
             <div
@@ -402,7 +402,7 @@ export default function TraceExplorerPage() {
     <PageShell size="wide" className="trace-explorer-container">
       <SectionHeader
         title="Trace Explorer"
-        description="Debug oikos runs, commis jobs, and LLM calls with unified trace timelines."
+        description="Debug Oikos runs, cloud sessions, and LLM calls with unified trace timelines."
       />
 
       {selectedTraceId ? (
@@ -418,7 +418,7 @@ export default function TraceExplorerPage() {
             ) : error ? (
               <EmptyState variant="error" title="Error" description={String(error)} />
             ) : !data || data.traces.length === 0 ? (
-              <EmptyState title="No traces found" description="Traces will appear here once fiches start running." />
+              <EmptyState title="No traces found" description="Traces will appear here once Oikos runs or cloud sessions start running." />
             ) : (
               <>
                 <Table>

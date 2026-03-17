@@ -294,7 +294,7 @@ export function CommisToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
 
   const taskDisplay = useMemo(() => {
     // Extract task from args
-    const task = (tool.args as any)?.task || 'Commis task';
+    const task = (tool.args as any)?.task || 'Cloud session task';
     return task.length > 60 ? task.slice(0, 57) + '...' : task;
   }, [tool.args]);
 
@@ -324,7 +324,7 @@ export function CommisToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
           <span className="commis-tool-card__icon">
             <CommisStatusIcon status={commisState.status} />
           </span>
-          <span className="commis-tool-card__name">Commis</span>
+          <span className="commis-tool-card__name">Cloud session</span>
         </div>
         <span className="commis-tool-card__task">{taskDisplay}</span>
         <span className="commis-tool-card__spacer" />

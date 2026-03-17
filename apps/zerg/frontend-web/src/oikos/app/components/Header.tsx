@@ -10,8 +10,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Timeline', href: '/timeline' },
-  { label: 'Chat', href: '/chat' },
-  { label: 'Dashboard', href: '/dashboard' },
+  { label: 'Oikos', href: '/chat' },
   { label: 'Integrations', href: '/settings/integrations' },
   { label: 'Runners', href: '/runners' },
 ]
