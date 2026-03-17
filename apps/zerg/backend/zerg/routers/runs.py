@@ -27,6 +27,11 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+automation_router = APIRouter(
+    tags=["runs"],
+    dependencies=[Depends(get_current_user)],
+)
+
 
 @router.get("/fiches/{fiche_id}/runs", response_model=List[RunOut])
 def list_runs(
@@ -47,6 +52,16 @@ def list_runs(
         raise HTTPException(status_code=403, detail="Forbidden: not fiche owner")
 
     return list_fiche_runs(db, fiche_id, limit=limit)
+
+
+@automation_router.get("/automations/{automation_id}/runs", response_model=List[RunOut])
+def list_automation_runs(
+    automation_id: int,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return list_runs(automation_id, limit=limit, db=db, current_user=current_user)
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)

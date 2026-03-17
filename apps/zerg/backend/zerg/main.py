@@ -74,6 +74,7 @@ from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.email_config import router as email_config_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.fiche_config import router as fiche_config_router
+from zerg.routers.fiche_connectors import automation_router as automation_connectors_router
 from zerg.routers.fiche_connectors import router as fiche_connectors_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
@@ -83,6 +84,7 @@ from zerg.routers.insights import router as insights_router
 from zerg.routers.job_settings import router as job_settings_router
 from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
+from zerg.routers.mcp_servers import automation_router as automation_mcp_servers_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
@@ -94,6 +96,7 @@ from zerg.routers.ops import router as ops_router
 from zerg.routers.presence import router as presence_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
+from zerg.routers.runs import automation_router as automation_runs_router
 from zerg.routers.runs import router as runs_router
 from zerg.routers.session_chat import router as session_chat_router
 from zerg.routers.skills import router as skills_router
@@ -1021,6 +1024,7 @@ app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 api_app.include_router(fiches_router, prefix=AUTOMATIONS_PREFIX)
 api_app.include_router(fiches_router, prefix=FICHES_PREFIX)
 api_app.include_router(mcp_servers_router)  # MCP servers nested under fiches
+api_app.include_router(automation_mcp_servers_router)  # Canonical MCP servers nested under automations
 api_app.include_router(threads_router, prefix=THREADS_PREFIX)
 api_app.include_router(models_router, prefix=MODELS_PREFIX)
 api_app.include_router(websocket_router)
@@ -1033,6 +1037,7 @@ api_app.include_router(conversations_router)
 api_app.include_router(triggers_router)
 api_app.include_router(knowledge_router)
 api_app.include_router(runs_router)
+api_app.include_router(automation_runs_router)
 api_app.include_router(runners_router)  # Runners execution infrastructure
 api_app.include_router(auth_router)
 api_app.include_router(auth_internal_router)  # Internal auth handoff endpoints
@@ -1051,6 +1056,7 @@ api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)  # Public beacon (no auth)
 api_app.include_router(fiche_config_router)
 api_app.include_router(fiche_connectors_router)  # Fiche connector credentials
+api_app.include_router(automation_connectors_router)  # Canonical automation connector credentials
 api_app.include_router(account_connectors_router)  # Account-level connector credentials
 api_app.include_router(funnel_router)  # Funnel tracking
 api_app.include_router(waitlist_router)  # Public waitlist signup
