@@ -349,8 +349,19 @@ if ! wait_for_health "http://127.0.0.1:${DEMO_PORT}/api/health" "Demo server"; t
   fail "Demo server did not become healthy"
 fi
 
+log "🔐 Creating local device token for demo server..."
+longhouse auth --url "http://127.0.0.1:${DEMO_PORT}" --device installer-smoke --force >/dev/null
+
+TOKEN_PATH="$HOME/.claude/longhouse-device-token"
+if [[ ! -s "$TOKEN_PATH" ]]; then
+  fail "Device token file missing after local auth: $TOKEN_PATH"
+fi
+DEMO_DEVICE_TOKEN="$(tr -d '\n' < "$TOKEN_PATH")"
+
 SESSIONS_JSON="$(mktemp -t longhouse-sessions.XXXXXX.json)"
-curl -fsS "http://127.0.0.1:${DEMO_PORT}/api/agents/sessions" > "$SESSIONS_JSON"
+curl -fsS \
+  -H "X-Agents-Token: $DEMO_DEVICE_TOKEN" \
+  "http://127.0.0.1:${DEMO_PORT}/api/agents/sessions" > "$SESSIONS_JSON"
 python3 - "$SESSIONS_JSON" <<'PY'
 import json
 import sys
