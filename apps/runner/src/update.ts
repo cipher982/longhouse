@@ -5,7 +5,7 @@ import { copyFile, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
-import { loadEnvfile } from './envfile';
+import { findDefaultEnvfile, loadEnvfile } from './envfile';
 import { DEFAULT_UPDATE_MANIFEST_URL, RUNNER_RELEASE_PUBLIC_KEY_PEM, RUNNER_VERSION } from './version';
 
 export type RunnerAutoUpdatePolicy = 'off' | 'notify' | 'apply';
@@ -173,6 +173,27 @@ export function resolveInstallLayout(
     launcherPath: resolveLauncherPath(env, homeDir),
     updateStatePath: join(installRoot, 'state', 'update-state.json'),
   };
+}
+
+export function loadUpdateCommandEnvfile(options: {
+  envfile?: string;
+  allowInsecure?: boolean;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+  exists?: (path: string) => boolean;
+} = {}): string | null {
+  const envfilePath = options.envfile
+    ?? findDefaultEnvfile(options.platform, options.exists, options.homeDir);
+  if (!envfilePath) {
+    return null;
+  }
+
+  loadEnvfile(envfilePath, {
+    allowInsecure: options.allowInsecure,
+    env: options.env,
+  });
+  return envfilePath;
 }
 
 export function hasManagedInstallLayout(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -644,13 +665,19 @@ export async function runUpdateCommand(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (values.envfile) {
-    try {
-      loadEnvfile(values.envfile, { allowInsecure: values['allow-insecure-envfile'] });
-    } catch (error) {
-      console.error(`Error loading envfile ${values.envfile}:`, error);
+  try {
+    loadUpdateCommandEnvfile({
+      envfile: values.envfile,
+      allowInsecure: values['allow-insecure-envfile'],
+    });
+  } catch (error) {
+    const envfilePath = values.envfile ?? findDefaultEnvfile();
+    if (!envfilePath) {
+      console.error('Error loading envfile:', error);
       return 1;
     }
+    console.error(`Error loading envfile ${envfilePath}:`, error);
+    return 1;
   }
 
   const command = positionals[0] ?? 'check';

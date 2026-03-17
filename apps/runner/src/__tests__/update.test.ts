@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,12 +9,15 @@ import {
   checkForRunnerUpdate,
   compareSemver,
   launcherScriptFor,
+  loadUpdateCommandEnvfile,
   parseAndValidateManifest,
   platformTargetFor,
   resolveInstallLayout,
   rollbackRunnerUpdate,
   type RunnerUpdateManifest,
 } from '../update';
+
+const originalHome = process.env.HOME;
 
 function withTempDir(fn: (dir: string) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), 'runner-update-'));
@@ -107,6 +110,7 @@ describe('runner update flows', () => {
     delete process.env.RUNNER_INSTALL_ROOT;
     delete process.env.RUNNER_LAUNCHER_PATH;
     delete process.env.RUNNER_UPDATE_MANIFEST_URL;
+    process.env.HOME = originalHome;
   });
 
   it('checks, applies, and rolls back a signed update', async () => {
@@ -182,6 +186,38 @@ describe('runner update flows', () => {
       });
       expect(rollback.from_version).toBe('0.1.5');
       expect(rollback.to_version).toBe('0.1.3');
+    });
+  });
+
+  it('auto-loads the default envfile for update commands', async () => {
+    await withTempDir(async (dir) => {
+      const env: NodeJS.ProcessEnv = {};
+      const configDir = join(dir, '.config', 'longhouse');
+      mkdirSync(configDir, { recursive: true });
+      const envfilePath = join(configDir, 'runner.env');
+      writeFileSync(
+        envfilePath,
+        [
+          'LONGHOUSE_URL=https://longhouse.example.com',
+          'RUNNER_NAME=test-runner',
+          'RUNNER_SECRET=test-secret',
+          `RUNNER_INSTALL_ROOT=${join(dir, 'runner-root')}`,
+          `RUNNER_LAUNCHER_PATH=${join(dir, '.local', 'bin', 'longhouse-runner')}`,
+          'RUNNER_UPDATE_MANIFEST_URL=https://updates.example.com/manifest.json',
+        ].join('\n'),
+      );
+      chmodSync(envfilePath, 0o600);
+
+      const loadedPath = loadUpdateCommandEnvfile({
+        env,
+        homeDir: dir,
+        platform: process.platform,
+      });
+
+      expect(loadedPath).toBe(envfilePath);
+      expect(env.RUNNER_INSTALL_ROOT).toBe(join(dir, 'runner-root'));
+      expect(env.RUNNER_LAUNCHER_PATH).toBe(join(dir, '.local', 'bin', 'longhouse-runner'));
+      expect(env.RUNNER_UPDATE_MANIFEST_URL).toBe('https://updates.example.com/manifest.json');
     });
   });
 });
