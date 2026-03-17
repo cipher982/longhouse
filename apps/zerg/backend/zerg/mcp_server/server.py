@@ -362,7 +362,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             params["insight_type"] = insight_type
 
         try:
-            resp = await client.get("/api/insights", params=params)
+            resp = await client.get("/api/agents/insights", params=params)
             if resp.status_code != 200:
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import zerg.dependencies.auth as auth_deps
+import zerg.dependencies.agents_auth as agents_auth_deps
 from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.auth.session_tokens import _encode_jwt
@@ -15,6 +16,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentsBase
@@ -98,6 +100,16 @@ def _force_browser_jwt_mode():
     auth_deps._strategy_cache.clear()
 
 
+@contextmanager
+def _force_agents_token_mode():
+    with patch.object(
+        agents_auth_deps,
+        "get_settings",
+        return_value=type("S", (), {"auth_disabled": False, "agents_api_token": None})(),
+    ):
+        yield
+
+
 def test_auth_status_ignores_bearer_token_without_session_cookie(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:
@@ -159,6 +171,44 @@ def test_insights_list_accepts_browser_session_cookie(tmp_path):
         with _force_browser_jwt_mode():
             client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
             response = client.get("/insights")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["insights"][0]["title"] == "Insight title"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_agents_insights_list_requires_agents_token_not_browser_session(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        _seed_insight(db)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_agents_token_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get("/agents/insights")
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Missing authentication - provide X-Agents-Token header"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_agents_insights_list_accepts_agents_token(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        _seed_insight(db)
+
+    client = _make_client(session_local)
+    api_app.dependency_overrides[verify_agents_token] = lambda: None
+
+    try:
+        with _force_agents_token_mode():
+            response = client.get("/agents/insights", headers={"X-Agents-Token": "dev"})
         assert response.status_code == 200
         payload = response.json()
         assert payload["total"] == 1
