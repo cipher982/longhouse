@@ -1,8 +1,8 @@
-"""Work tracking models — insights, proposals, and wakeups.
+"""Work tracking models — insights, incidents, proposals, and wakeups.
 
-These models support agent infrastructure: tracking learnings across sessions,
-surfacing actionable proposals for human review, and recording proactive Oikos
-wakeups.
+These models support agent infrastructure: tracking reusable learnings across
+sessions, storing tenant-local operational incidents, surfacing actionable
+proposals for human review, and recording proactive Oikos wakeups.
 """
 
 from uuid import uuid4
@@ -13,9 +13,9 @@ from sqlalchemy import DateTime
 from sqlalchemy import Float
 from sqlalchemy import Index
 from sqlalchemy import Integer
-from sqlalchemy import or_
 from sqlalchemy import String
 from sqlalchemy import Text
+from sqlalchemy import or_
 from sqlalchemy.sql import func
 
 from zerg.models.agents import AgentsBase
@@ -26,6 +26,8 @@ INSIGHT_DEDUP_WINDOW_DAYS = 7
 INSIGHT_ORIGIN_MANUAL = "manual"
 INSIGHT_ORIGIN_REFLECTION = "reflection"
 INSIGHT_ORIGIN_SYSTEM = "system"
+OPERATIONAL_INCIDENT_STATUS_OPEN = "open"
+OPERATIONAL_INCIDENT_STATUS_RESOLVED = "resolved"
 
 
 class Insight(AgentsBase):
@@ -46,6 +48,28 @@ class Insight(AgentsBase):
     session_id = Column(GUID(), nullable=True)  # Source session (optional)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class OperationalIncident(AgentsBase):
+    """Durable tenant-local ops incident, separate from curated memory."""
+
+    __tablename__ = "operational_incidents"
+    __table_args__ = (
+        Index("ix_operational_incidents_dedupe_status", "dedupe_key", "status"),
+        Index("ix_operational_incidents_source_status", "source", "status"),
+        Index("ix_operational_incidents_last_observed", "last_observed_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    incident_type = Column(String(64), nullable=False, index=True)
+    source = Column(String(64), nullable=False, index=True)
+    dedupe_key = Column(String(255), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default=OPERATIONAL_INCIDENT_STATUS_OPEN)
+    summary = Column(Text, nullable=False)
+    context = Column(JSON, nullable=True)
+    opened_at = Column(DateTime, server_default=func.now(), nullable=False)
+    last_observed_at = Column(DateTime, server_default=func.now(), nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
 
 
 class ActionProposal(AgentsBase):

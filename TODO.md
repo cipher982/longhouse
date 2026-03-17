@@ -215,8 +215,8 @@ Status (2026-03-17): In progress. The product boundary is clearer now, but it is
 - browser users can inspect and archive/unarchive insights without touching SQLite directly
 - docs and product copy describe insights as continuity memory, not a separate product
 
-- [ ] Write and commit the boundary spec + task checklist
-- [ ] Add a tenant-local incident path and repoint ops alert writers away from `Insight`
+- [x] Write and commit the boundary spec + task checklist
+- [x] Add a tenant-local incident path and repoint ops alert writers away from `Insight`
 - [ ] Remove proposal data from briefing assembly and hide/remove the proposals surface
 - [ ] Add minimal browser insight curation with archive/unarchive
 - [ ] Verify locally, ship, and re-run hosted QA
@@ -225,6 +225,8 @@ Notes:
 - 2026-03-17: This is a product-boundary cleanup, not a push to make reflection/proposals bigger.
 - 2026-03-17: The thin Longhouse-native core is sessions/search/recall, briefings, and curated insights. Ops monitoring and planning artifacts should sit adjacent to that core, not inside it.
 - 2026-03-17: Keep reflection manual/admin-only while this lands; do not revive unattended reflection before the boundary is clean.
+- 2026-03-17: Phase 1 is the bounded incident split only: add a tenant-local operational incident path, repoint stale-agent and ingest-health, and leave proposals/briefings for the next slice.
+- 2026-03-17: Phase 1 landed in the clean clone: `OperationalIncident` now holds stale-agent and ingest-health alerts, `/api/reliability/incidents` lists them for admins, and `make test-lite` passed on the final state.
 - Spec: `docs/specs/continuity-memory-boundary.md`
 - Tasks: `docs/tasks/continuity-memory-boundary.md`
 

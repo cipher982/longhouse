@@ -1,7 +1,7 @@
 """Stale agent detection job.
 
 Runs hourly. Queries agent_heartbeats for devices that haven't checked in
-within the last 30 minutes and emits a Longhouse insight per stale device.
+within the last 30 minutes and opens or resolves operational incidents.
 """
 
 from __future__ import annotations
@@ -16,19 +16,40 @@ from typing import Any
 from zerg.database import db_session
 from zerg.jobs.registry import JobConfig
 from zerg.jobs.registry import job_registry
-from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
-from zerg.models.work import Insight
+from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_OPEN
+from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_RESOLVED
+from zerg.models.work import OperationalIncident
 
 logger = logging.getLogger(__name__)
 
 STALE_THRESHOLD_MINUTES = 30
+INCIDENT_SOURCE = "check_stale_agents"
+INCIDENT_TYPE = "stale_agent"
+
+
+def _incident_summary(*, device_id: str, elapsed_minutes: int) -> str:
+    return (
+        f"Agent {device_id} has not checked in for {elapsed_minutes} minutes "
+        f"(threshold: {STALE_THRESHOLD_MINUTES} minutes)."
+    )
+
+
+def _incident_context(*, device_id: str, elapsed_minutes: int, last_seen: datetime, now: datetime) -> dict[str, Any]:
+    return {
+        "device_id": device_id,
+        "elapsed_minutes": elapsed_minutes,
+        "threshold_minutes": STALE_THRESHOLD_MINUTES,
+        "last_seen_at": last_seen.isoformat(),
+        "observed_at": now.isoformat(),
+    }
 
 
 async def run() -> dict[str, Any]:
     """Check for agents that have missed heartbeats."""
     import sqlalchemy
 
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_THRESHOLD_MINUTES)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=STALE_THRESHOLD_MINUTES)
 
     stale_devices: list[dict[str, Any]] = []
 
@@ -62,51 +83,96 @@ async def run() -> dict[str, Any]:
                     continue
                 if last_seen.tzinfo is None:
                     last_seen = last_seen.replace(tzinfo=timezone.utc)
-                elapsed = datetime.now(timezone.utc) - last_seen
+                elapsed = now - last_seen
                 elapsed_minutes = int(elapsed.total_seconds() / 60)
             except Exception:
-                elapsed_minutes = -1
+                continue
 
-            stale_devices.append({"device_id": device_id, "elapsed_minutes": elapsed_minutes})
-
-        # Emit one insight per stale device (deduped by title in 7-day window)
-        for device in stale_devices:
-            title = f"Agent {device['device_id']} has not checked in"
-            description = (
-                f"Engine daemon on device '{device['device_id']}' has not sent a heartbeat "
-                f"for {device['elapsed_minutes']} minutes "
-                f"(threshold: {STALE_THRESHOLD_MINUTES} minutes)."
+            stale_devices.append(
+                {
+                    "device_id": device_id,
+                    "elapsed_minutes": elapsed_minutes,
+                    "last_seen": last_seen,
+                }
             )
-            try:
-                # Check for recent duplicate
-                from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
 
-                dedup_cutoff = datetime.now(timezone.utc) - timedelta(days=INSIGHT_DEDUP_WINDOW_DAYS)
-                existing = db.query(Insight).filter(Insight.title == title, Insight.created_at >= dedup_cutoff).first()
-                if existing:
-                    obs = existing.observations or []
-                    obs.append(f"{datetime.now(timezone.utc).isoformat()}: {description}")
-                    existing.observations = obs
-                    from sqlalchemy.orm.attributes import flag_modified
+        incidents_opened = 0
+        incidents_updated = 0
+        incidents_resolved = 0
+        stale_dedupe_keys = {f"stale-agent:{device['device_id']}" for device in stale_devices}
 
-                    flag_modified(existing, "observations")
-                else:
-                    insight = Insight(
-                        insight_type="failure",
-                        title=title,
-                        description=description,
-                        origin=INSIGHT_ORIGIN_SYSTEM,
-                        severity="warning",
-                        tags=["engine", "heartbeat", "stale-agent"],
+        for device in stale_devices:
+            dedupe_key = f"stale-agent:{device['device_id']}"
+            existing = (
+                db.query(OperationalIncident)
+                .filter(
+                    OperationalIncident.dedupe_key == dedupe_key,
+                    OperationalIncident.status == OPERATIONAL_INCIDENT_STATUS_OPEN,
+                )
+                .order_by(OperationalIncident.opened_at.desc())
+                .first()
+            )
+            summary = _incident_summary(device_id=device["device_id"], elapsed_minutes=device["elapsed_minutes"])
+            context = _incident_context(
+                device_id=device["device_id"],
+                elapsed_minutes=device["elapsed_minutes"],
+                last_seen=device["last_seen"],
+                now=now,
+            )
+            if existing is None:
+                db.add(
+                    OperationalIncident(
+                        incident_type=INCIDENT_TYPE,
+                        source=INCIDENT_SOURCE,
+                        dedupe_key=dedupe_key,
+                        status=OPERATIONAL_INCIDENT_STATUS_OPEN,
+                        summary=summary,
+                        context=context,
+                        opened_at=now,
+                        last_observed_at=now,
                     )
-                    db.add(insight)
-                db.commit()
-            except Exception as e:
-                logger.warning(f"Failed to log stale agent insight: {e}")
-                db.rollback()
+                )
+                incidents_opened += 1
+                continue
+
+            existing.summary = summary
+            existing.context = context
+            existing.last_observed_at = now
+            incidents_updated += 1
+
+        open_incidents = (
+            db.query(OperationalIncident)
+            .filter(
+                OperationalIncident.source == INCIDENT_SOURCE,
+                OperationalIncident.status == OPERATIONAL_INCIDENT_STATUS_OPEN,
+            )
+            .all()
+        )
+        for incident in open_incidents:
+            if incident.dedupe_key in stale_dedupe_keys:
+                continue
+            context = dict(incident.context or {})
+            incident.status = OPERATIONAL_INCIDENT_STATUS_RESOLVED
+            incident.summary = f"Agent {context.get('device_id', 'unknown')} heartbeat recovered"
+            incident.last_observed_at = now
+            incident.resolved_at = now
+            incident.context = {
+                **context,
+                "resolved_at": now.isoformat(),
+                "resolved": True,
+            }
+            incidents_resolved += 1
+
+        db.commit()
 
     logger.info(f"check_stale_agents: {len(stale_devices)} stale device(s)")
-    return {"success": True, "stale_devices": len(stale_devices)}
+    return {
+        "success": True,
+        "stale_devices": len(stale_devices),
+        "incidents_opened": incidents_opened,
+        "incidents_updated": incidents_updated,
+        "incidents_resolved": incidents_resolved,
+    }
 
 
 # Register the job

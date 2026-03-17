@@ -1,9 +1,10 @@
 """Tests for the check_stale_agents builtin job.
 
 Covers:
-- Stale device (no heartbeat >30min) emits an Insight
+- Stale device (no heartbeat >30min) opens an incident
 - Fresh device (heartbeat <30min) does not emit
-- Second run with same device deduplicates (appends to observations)
+- Second run with same device deduplicates against the same open incident
+- Recovered device resolves the open incident
 
 Uses in-memory SQLite, ORM-only (no HTTP). No shared conftest.
 """
@@ -14,15 +15,15 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
-import pytest
-from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentsBase
+from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_OPEN
+from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_RESOLVED
 from zerg.models.work import Insight
-
+from zerg.models.work import OperationalIncident
 
 # ---------------------------------------------------------------------------
 # DB helper
@@ -43,8 +44,8 @@ def _make_db(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_stale_agent_job_emits_insight(tmp_path):
-    """A device with no heartbeat in >30min triggers an insight."""
+def test_stale_agent_job_opens_incident(tmp_path):
+    """A device with no heartbeat in >30min opens an incident."""
     SessionLocal, engine = _make_db(tmp_path)
 
     # Insert a stale heartbeat (40 minutes ago)
@@ -63,8 +64,8 @@ def test_stale_agent_job_emits_insight(tmp_path):
         db.commit()
 
     # Patch db_session to use our test engine
-    from unittest.mock import patch
     from contextlib import contextmanager
+    from unittest.mock import patch
 
     @contextmanager
     def fake_db_session():
@@ -81,14 +82,15 @@ def test_stale_agent_job_emits_insight(tmp_path):
     assert result["stale_devices"] == 1
 
     with SessionLocal() as db:
-        insights = db.query(Insight).filter(
-            Insight.title.contains("stale-device-001")
+        incidents = db.query(OperationalIncident).filter(
+            OperationalIncident.dedupe_key == "stale-agent:stale-device-001"
         ).all()
-        assert len(insights) == 1, f"Expected 1 insight, got {len(insights)}"
-        assert insights[0].insight_type == "failure"
-        assert insights[0].origin == "system"
-        assert insights[0].severity == "warning"
-        assert "stale-agent" in (insights[0].tags or [])
+        assert len(incidents) == 1, f"Expected 1 incident, got {len(incidents)}"
+        assert incidents[0].incident_type == "stale_agent"
+        assert incidents[0].source == "check_stale_agents"
+        assert incidents[0].status == OPERATIONAL_INCIDENT_STATUS_OPEN
+        assert incidents[0].context["device_id"] == "stale-device-001"
+        assert db.query(Insight).count() == 0
 
 
 def test_fresh_agent_no_insight(tmp_path):
@@ -109,8 +111,8 @@ def test_fresh_agent_no_insight(tmp_path):
         ))
         db.commit()
 
-    from unittest.mock import patch
     from contextlib import contextmanager
+    from unittest.mock import patch
 
     @contextmanager
     def fake_db_session():
@@ -127,12 +129,12 @@ def test_fresh_agent_no_insight(tmp_path):
     assert result["stale_devices"] == 0
 
     with SessionLocal() as db:
-        count = db.query(Insight).count()
-        assert count == 0, "No insights should be emitted for a fresh device"
+        assert db.query(OperationalIncident).count() == 0
+        assert db.query(Insight).count() == 0
 
 
 def test_stale_agent_deduplicates_on_second_run(tmp_path):
-    """Second run for same stale device appends to observations, not creates a new insight."""
+    """Second run for same stale device updates the same open incident."""
     SessionLocal, engine = _make_db(tmp_path)
 
     stale_ts = datetime.now(timezone.utc) - timedelta(minutes=40)
@@ -149,24 +151,88 @@ def test_stale_agent_deduplicates_on_second_run(tmp_path):
         ))
         db.commit()
 
-    from unittest.mock import patch
     from contextlib import contextmanager
+    from unittest.mock import patch
 
     @contextmanager
     def fake_db_session():
         with SessionLocal() as db:
             yield db
 
-    import zerg.jobs.check_stale_agents as job_module
     import asyncio
+
+    import zerg.jobs.check_stale_agents as job_module
+
+    with patch.object(job_module, "db_session", fake_db_session):
+        first = asyncio.run(job_module.run())
+        second = asyncio.run(job_module.run())
+
+    with SessionLocal() as db:
+        incidents = db.query(OperationalIncident).filter(
+            OperationalIncident.dedupe_key == "stale-agent:dedup-device-001"
+        ).all()
+        assert len(incidents) == 1, "Should have exactly 1 incident (deduped)"
+        assert incidents[0].status == OPERATIONAL_INCIDENT_STATUS_OPEN
+        assert first["incidents_opened"] == 1
+        assert second["incidents_updated"] == 1
+        assert db.query(Insight).count() == 0
+
+
+def test_stale_agent_incident_resolves_when_heartbeat_recovers(tmp_path):
+    """A previously stale device resolves its incident after a fresh heartbeat."""
+    SessionLocal, engine = _make_db(tmp_path)
+
+    stale_ts = datetime.now(timezone.utc) - timedelta(minutes=40)
+    fresh_ts = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        db.add(AgentHeartbeat(
+            device_id="recovered-device-001",
+            received_at=stale_ts,
+            version="0.5.0",
+            spool_pending=0,
+            parse_errors_1h=0,
+            consecutive_failures=0,
+            disk_free_bytes=0,
+            is_offline=0,
+        ))
+        db.commit()
+
+    from contextlib import contextmanager
+    from unittest.mock import patch
+
+    @contextmanager
+    def fake_db_session():
+        with SessionLocal() as db:
+            yield db
+
+    import asyncio
+
+    import zerg.jobs.check_stale_agents as job_module
 
     with patch.object(job_module, "db_session", fake_db_session):
         asyncio.run(job_module.run())
-        asyncio.run(job_module.run())
 
     with SessionLocal() as db:
-        insights = db.query(Insight).filter(
-            Insight.title.contains("dedup-device-001")
-        ).all()
-        assert len(insights) == 1, "Should have exactly 1 insight (deduped)"
-        assert len(insights[0].observations or []) >= 1, "Second run should append to observations"
+        db.add(AgentHeartbeat(
+            device_id="recovered-device-001",
+            received_at=fresh_ts,
+            version="0.5.0",
+            spool_pending=0,
+            parse_errors_1h=0,
+            consecutive_failures=0,
+            disk_free_bytes=0,
+            is_offline=0,
+        ))
+        db.commit()
+
+    with patch.object(job_module, "db_session", fake_db_session):
+        result = asyncio.run(job_module.run())
+
+    assert result["incidents_resolved"] == 1
+    with SessionLocal() as db:
+        incident = db.query(OperationalIncident).filter(
+            OperationalIncident.dedupe_key == "stale-agent:recovered-device-001"
+        ).one()
+        assert incident.status == OPERATIONAL_INCIDENT_STATUS_RESOLVED
+        assert incident.resolved_at is not None
+        assert db.query(Insight).count() == 0

@@ -1,15 +1,20 @@
 """Unit tests for ingest health checking."""
 import asyncio
 from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from unittest.mock import patch
 
 from sqlalchemy.orm import sessionmaker
 
 from zerg.jobs.ingest_health import compute_ingest_health
-from zerg.models.agents import AgentsBase, AgentSession
-from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
+from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
+from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_OPEN
+from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_RESOLVED
 from zerg.models.work import Insight
+from zerg.models.work import OperationalIncident
 
 
 def _make_session_local(tmp_path):
@@ -83,7 +88,7 @@ def test_threshold_zero_always_ok(tmp_path, monkeypatch):
     assert result["status"] == "ok"
 
 
-def test_run_stale_creates_system_insight(tmp_path, monkeypatch):
+def test_run_stale_opens_incident(tmp_path, monkeypatch):
     import zerg.jobs.ingest_health as ih
 
     SessionLocal = _make_session_local(tmp_path)
@@ -99,23 +104,27 @@ def test_run_stale_creates_system_insight(tmp_path, monkeypatch):
     with patch.object(ih, "db_session", fake_db_session):
         result = asyncio.run(ih.run())
 
-    assert result["action"] == "insight_created"
+    assert result["action"] == "incident_opened"
     with SessionLocal() as db:
-        insight = db.query(Insight).filter(Insight.title == "Stale ingest detected").one()
-        assert insight.origin == INSIGHT_ORIGIN_SYSTEM
+        incident = db.query(OperationalIncident).filter(OperationalIncident.dedupe_key == "ingest-health:stale").one()
+        assert incident.status == OPERATIONAL_INCIDENT_STATUS_OPEN
+        assert incident.source == "ingest_health"
+        assert incident.incident_type == "stale_ingest"
+        assert db.query(Insight).count() == 0
 
 
-def test_run_recovery_creates_system_insight(tmp_path, monkeypatch):
+def test_run_recovery_resolves_open_incident(tmp_path, monkeypatch):
     import zerg.jobs.ingest_health as ih
 
     SessionLocal = _make_session_local(tmp_path)
     with SessionLocal() as db:
         _add_session(db, started_days_ago=0.1, ended_days_ago=0.05)
-        db.add(Insight(
-            insight_type="failure",
-            title="Stale ingest detected",
-            origin=INSIGHT_ORIGIN_SYSTEM,
-            severity="warning",
+        db.add(OperationalIncident(
+            incident_type="stale_ingest",
+            source="ingest_health",
+            dedupe_key="ingest-health:stale",
+            status=OPERATIONAL_INCIDENT_STATUS_OPEN,
+            summary="No sessions ingested for 6.0 hours",
         ))
         db.commit()
 
@@ -128,7 +137,42 @@ def test_run_recovery_creates_system_insight(tmp_path, monkeypatch):
     with patch.object(ih, "db_session", fake_db_session):
         result = asyncio.run(ih.run())
 
-    assert result["action"] == "recovery_insight_created"
+    assert result["action"] == "incident_resolved"
     with SessionLocal() as db:
-        insight = db.query(Insight).filter(Insight.title == "Ingest recovered").one()
-        assert insight.origin == INSIGHT_ORIGIN_SYSTEM
+        incident = db.query(OperationalIncident).filter(OperationalIncident.dedupe_key == "ingest-health:stale").one()
+        assert incident.status == OPERATIONAL_INCIDENT_STATUS_RESOLVED
+        assert incident.resolved_at is not None
+        assert db.query(Insight).count() == 0
+
+
+def test_run_stale_updates_existing_open_incident(tmp_path, monkeypatch):
+    import zerg.jobs.ingest_health as ih
+
+    SessionLocal = _make_session_local(tmp_path)
+    with SessionLocal() as db:
+        _add_session(db, started_days_ago=2, ended_days_ago=2)
+        db.add(OperationalIncident(
+            incident_type="stale_ingest",
+            source="ingest_health",
+            dedupe_key="ingest-health:stale",
+            status=OPERATIONAL_INCIDENT_STATUS_OPEN,
+            summary="Old summary",
+        ))
+        db.commit()
+
+    @contextmanager
+    def fake_db_session():
+        with SessionLocal() as db:
+            yield db
+
+    monkeypatch.setattr(ih, "_THRESHOLD_HOURS", 4.0)
+    with patch.object(ih, "db_session", fake_db_session):
+        result = asyncio.run(ih.run())
+
+    assert result["action"] == "incident_updated"
+    with SessionLocal() as db:
+        incidents = db.query(OperationalIncident).filter(OperationalIncident.dedupe_key == "ingest-health:stale").all()
+        assert len(incidents) == 1
+        assert incidents[0].status == OPERATIONAL_INCIDENT_STATUS_OPEN
+        assert "threshold: 4.0h" in incidents[0].summary
+        assert db.query(Insight).count() == 0
