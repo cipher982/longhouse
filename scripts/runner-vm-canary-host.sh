@@ -186,7 +186,7 @@ if ! command -v curl >/dev/null 2>&1; then
   sudo apt-get update
   sudo apt-get install -y curl ca-certificates
 fi
-curl -fsSL '$install_url' | sudo bash
+curl -fsSL '$install_url' | sudo env RUNNER_AVAILABILITY_POLICY='${RUNNER_AVAILABILITY_POLICY}' bash
 sudo systemctl is-active --quiet longhouse-runner
 "
 }
@@ -229,6 +229,7 @@ VM_CPU="${VM_CPU:-2}"
 VM_DISK_GB="${VM_DISK_GB:-10}"
 VM_WAIT_TIMEOUT="${VM_WAIT_TIMEOUT:-300}"
 RUNNER_INSTALL_MODE="${RUNNER_INSTALL_MODE:-server}"
+RUNNER_AVAILABILITY_POLICY="${RUNNER_AVAILABILITY_POLICY:-ephemeral}"
 KEEP_VM="${KEEP_VM:-0}"
 INSTALL_USER="$(current_user)"
 INSTALL_HOME="$(home_dir_for_user "$INSTALL_USER")"
