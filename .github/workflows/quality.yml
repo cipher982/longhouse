@@ -16,10 +16,10 @@ jobs:
     name: "🔦 Lighthouse CI"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -46,10 +46,10 @@ jobs:
     name: "📦 Bundle Size"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -72,7 +72,7 @@ jobs:
     name: "🖼️ Image Size Check"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check for oversized images (>2MB)
         run: |

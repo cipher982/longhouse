@@ -15,6 +15,21 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][QA/Test][Tech Debt] Refresh GitHub Actions for the Node 24 transition (size: 2)
+
+Status (2026-03-17): In progress. Core workflows still pin older major versions of the stock GitHub actions, and live CI is emitting Node 20 deprecation warnings on both hosted and self-hosted runners.
+
+**Goal:** Remove the noisy GitHub Actions deprecation surface before it becomes a real breakage, without regressing the repo's mixed hosted/self-hosted workflow fleet.
+
+**Done when:**
+- Core stock actions are moved to current Node 24-ready major versions
+- A GitHub-hosted workflow still runs successfully after the upgrade
+- A self-hosted workflow still runs successfully after the upgrade
+
+- [ ] Upgrade stock GitHub actions across workflow files
+- [ ] Re-run one GitHub-hosted workflow on the new action majors
+- [ ] Re-run one self-hosted workflow on the new action majors
+
 ## [Launch][QA/Test][Tech Debt] Sweep remaining hosted auth-boundary script drift (size: 1)
 
 Status (2026-03-17): Done. The hosted provisioning smoke now verifies browser-cookie access against the browser-owned timeline route and no longer implies that browser cookies might work on the machine-only sessions API.
