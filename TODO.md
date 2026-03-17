@@ -572,6 +572,8 @@ Notes:
 - 2026-03-17: Current slice: finish the remaining launch-path drift without touching the active automation rename work. Scope is Oikos prompt/tool wording (`managed cloud sessions`, not `autonomous agents on servers`), visible `commis` labels on Oikos/admin/operator pages, and legacy chat recovery paths that still bounce users back to `/dashboard` instead of `/timeline`.
 - 2026-03-17: Shipped the second launch-copy pass across prompt/tool guidance, Oikos/admin/operator labels, and legacy recovery paths. Visible `Commis` labels now render as `cloud session`, the Oikos header/nav no longer advertises `Dashboard`, and demo impersonation plus legacy chat recovery now land on `/timeline`.
 - 2026-03-17: Verification passed via `make test`, `make test-frontend-unit`, and `make test-e2e`.
+- 2026-03-17: Shipped the Oikos run-surface compatibility slice. `/api/oikos/runs` now returns both `task_*` and `fiche_*`, accepts `task_id` as the preferred filter alias, `SwarmOpsPage` prefers task aliases while keeping the current `/fiche/:id/thread/:thread_id` route shape, and focused regressions now live in `test_oikos_runs_router.py` and `SwarmOpsPage.test.tsx`.
+- 2026-03-17: Verification for the Oikos run-surface slice passed via `make generate-sdk`, `make test-frontend-unit`, and `make test`.
 - 2026-03-16: Restored the missing spec at `docs/specs/launch-runtime-simplification.md` so the bounded launch cleanup has an explicit vocabulary contract, provider matrix, and acceptance criteria again.
 - 2026-03-16: Current implementation scope for this pass is:
   1. restore the missing spec and lock the bounded cleanup plan,

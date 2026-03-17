@@ -20,8 +20,10 @@ export interface OikosFicheSummary {
 
 export interface OikosRunSummary {
   id: number;
+  task_id: number;
   fiche_id: number;
   thread_id?: number;
+  task_name: string;
   fiche_name: string;
   status: string;
   summary?: string;
@@ -127,12 +129,16 @@ export class OikosAPIClient {
   }
 
   /**
-   * Get recent fiche runs
+   * Get recent task runs
    */
-  async listRuns(options?: { limit?: number; fiche_id?: number }): Promise<OikosRunSummary[]> {
+  async listRuns(options?: { limit?: number; task_id?: number; fiche_id?: number }): Promise<OikosRunSummary[]> {
     const params = new URLSearchParams();
-    if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.fiche_id) params.append('fiche_id', options.fiche_id.toString());
+    if (options?.limit != null) params.append('limit', options.limit.toString());
+    if (options?.task_id != null) {
+      params.append('task_id', options.task_id.toString());
+    } else if (options?.fiche_id != null) {
+      params.append('fiche_id', options.fiche_id.toString());
+    }
 
     const url = `${this._baseURL}/api/oikos/runs${params.toString() ? '?' + params.toString() : ''}`;
 

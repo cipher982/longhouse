@@ -12,9 +12,11 @@ type RunFilter = "all" | "attention" | "active" | "done";
 
 type RunSummary = {
   id: number;
-  fiche_id: number;
+  task_id?: number;
+  fiche_id?: number;
   thread_id?: number;
-  fiche_name: string;
+  task_name?: string;
+  fiche_name?: string;
   status: string;
   summary?: string | null;
   signal?: string | null;
@@ -144,6 +146,14 @@ function getEventSummary(event: RunEvent): string {
   return "";
 }
 
+function getRunTaskId(run: Pick<RunSummary, "task_id" | "fiche_id">): number | null {
+  return run.task_id ?? run.fiche_id ?? null;
+}
+
+function getRunTaskName(run: Pick<RunSummary, "task_name" | "fiche_name">): string {
+  return run.task_name ?? run.fiche_name ?? "Untitled task";
+}
+
 export default function SwarmOpsPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -238,6 +248,8 @@ export default function SwarmOpsPage() {
   }, [sortedRuns, selectedRunId]);
 
   const selectedRun = sortedRuns.find((run) => run.id === selectedRunId) ?? null;
+  const selectedTaskId = selectedRun ? getRunTaskId(selectedRun) : null;
+  const selectedTaskName = selectedRun ? getRunTaskName(selectedRun) : "Untitled task";
   const shouldPollEvents = selectedRun ? ACTIVE_STATUSES.has(selectedRun.status) : false;
 
   const runEventsQuery = useQuery({
@@ -293,7 +305,7 @@ export default function SwarmOpsPage() {
       <div className="swarm-ops-page">
         <SectionHeader
           title="Runs"
-          description="Triage active runs and jump to context."
+          description="Triage active cloud runs and jump to context."
           actions={
             <div className="swarm-ops-actions">
               <Button
@@ -350,7 +362,7 @@ export default function SwarmOpsPage() {
         {runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
-            description="Kick off a task with the Oikos and it will show up here for triage."
+            description="Kick off a cloud run with Oikos and it will show up here for triage."
           />
         ) : (
           <div className="swarm-ops-layout">
@@ -385,7 +397,7 @@ export default function SwarmOpsPage() {
                     >
                       <div className="swarm-ops-item-main">
                         <div className="swarm-ops-item-title-row">
-                          <span className="swarm-ops-item-title">{run.fiche_name}</span>
+                          <span className="swarm-ops-item-title">{getRunTaskName(run)}</span>
                           <Badge variant={statusVariant}>{run.status}</Badge>
                         </div>
                         <div className="swarm-ops-item-summary">
@@ -415,7 +427,7 @@ export default function SwarmOpsPage() {
                 <Card className="swarm-ops-detail-card">
                   <Card.Header className="swarm-ops-detail-header">
                     <div>
-                      <div className="swarm-ops-detail-title">{selectedRun.fiche_name}</div>
+                      <div className="swarm-ops-detail-title">{selectedTaskName}</div>
                       <div className="swarm-ops-detail-subtitle">
                         Run #{selectedRun.id} · {selectedRun.status} · {formatRelativeTime(selectedRun.created_at)}
                       </div>
@@ -462,10 +474,10 @@ export default function SwarmOpsPage() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        disabled={!selectedRun.thread_id}
+                        disabled={!selectedRun.thread_id || selectedTaskId == null}
                         onClick={() => {
-                          if (selectedRun.thread_id) {
-                            navigate(`/fiche/${selectedRun.fiche_id}/thread/${selectedRun.thread_id}`);
+                          if (selectedRun.thread_id && selectedTaskId != null) {
+                            navigate(`/fiche/${selectedTaskId}/thread/${selectedRun.thread_id}`);
                           }
                         }}
                       >
