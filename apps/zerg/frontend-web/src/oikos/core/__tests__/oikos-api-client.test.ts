@@ -46,9 +46,8 @@ describe("OikosAPIClient event stream", () => {
   it("routes automation and legacy update events through the automation-first handler surface", () => {
     const client = new OikosAPIClient("/base");
     const onAutomationUpdated = vi.fn<(event: OikosEventData) => void>();
-    const onFicheUpdated = vi.fn<(event: OikosEventData) => void>();
 
-    client.connectEventStream({ onAutomationUpdated, onFicheUpdated });
+    client.connectEventStream({ onAutomationUpdated });
 
     expect(MockEventSource.instances).toHaveLength(1);
     expect(MockEventSource.instances[0].url).toBe("/base/api/oikos/events");
@@ -63,8 +62,6 @@ describe("OikosAPIClient event stream", () => {
 
     expect(onAutomationUpdated).toHaveBeenCalledTimes(1);
     expect(onAutomationUpdated).toHaveBeenLastCalledWith(automationEvent);
-    expect(onFicheUpdated).toHaveBeenCalledTimes(1);
-    expect(onFicheUpdated).toHaveBeenLastCalledWith(automationEvent);
 
     const legacyEvent: OikosEventData = {
       type: "fiche_updated",
@@ -75,7 +72,5 @@ describe("OikosAPIClient event stream", () => {
 
     expect(onAutomationUpdated).toHaveBeenCalledTimes(2);
     expect(onAutomationUpdated).toHaveBeenLastCalledWith(legacyEvent);
-    expect(onFicheUpdated).toHaveBeenCalledTimes(2);
-    expect(onFicheUpdated).toHaveBeenLastCalledWith(legacyEvent);
   });
 });
