@@ -30,7 +30,7 @@ jobs:
       INSTANCE_SUBDOMAIN: david010
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Resolve hosted instance
         env:
