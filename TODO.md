@@ -15,6 +15,24 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Docs/Drift][QA/Test][Tech Debt] Align marketing screenshot capture with browser auth ownership (size: 1)
+
+Status (2026-03-17): Done. The screenshot helper now resolves marketing session IDs through the browser-owned timeline API, and the duplicate session-fetch logic is collapsed into one helper.
+
+**Goal:** Keep the marketing capture helper on the same browser-owned session surface as the pages it screenshots, while simplifying the duplicated session-fetch logic.
+
+**Done when:**
+- `scripts/capture_marketing.py` resolves session placeholders from `/api/timeline/sessions`
+- The duplicate session-fetch code is collapsed into one small helper
+- Focused verification proves placeholder resolution still works with the new API path
+
+- [x] Switch placeholder resolution to the browser-owned timeline API
+- [x] Simplify the duplicate session fetch path into one helper
+- [x] Run focused verification for the placeholder resolver
+
+Notes:
+- 2026-03-17: Focused verification via `uv run --with pyyaml python` plus mocked `urllib.request.urlopen` showed `{featured_session_id}` resolving to the highest-tool-call completed session and `{first_session_id}` resolving to the first timeline session while hitting `/api/timeline/sessions` for both lookups.
+
 ## [Launch][QA/Test][Tech Debt] Refresh GitHub Actions for the Node 24 transition (size: 2)
 
 Status (2026-03-17): Done. Core workflows now use current Node 24-ready stock GitHub action majors, and both GitHub-hosted and self-hosted validation runs succeeded after the upgrade.
