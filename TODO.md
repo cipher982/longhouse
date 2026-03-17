@@ -578,6 +578,8 @@ Notes:
 - 2026-03-17: Verification for the browser-side Oikos transport cleanup passed via `make test-frontend-unit`.
 - 2026-03-17: Shipped the frontend-only automation settings rename. The drawer/hooks now live under `automation-settings` / `useAutomation*` names, and the remaining backend/API/cache contract stays unchanged for now.
 - 2026-03-17: Verification for the frontend-only automation settings rename passed via `make test-frontend-unit`.
+- 2026-03-17: Shipped the dashboard/browser automation rename. `DashboardPage` now renders automation-first copy and selectors, the row/sort/websocket modules are renamed to `Automation*`, and the frontend regression coverage moved to the new `data-automation-id` / `create-automation-btn` contract.
+- 2026-03-17: Current slice: migrate the remaining Playwright helpers/specs off `create-fiche-btn`, `data-fiche-id`, and `*-fiche-*` selectors while keeping backend routes and API payloads stable.
 - 2026-03-16: Restored the missing spec at `docs/specs/launch-runtime-simplification.md` so the bounded launch cleanup has an explicit vocabulary contract, provider matrix, and acceptance criteria again.
 - 2026-03-16: Current implementation scope for this pass is:
   1. restore the missing spec and lock the bounded cleanup plan,
