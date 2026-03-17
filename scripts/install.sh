@@ -109,9 +109,20 @@ install_longhouse() {
 
     # Package source - defaults to PyPI, can be overridden for dev installs
     local pkg_source="${LONGHOUSE_PKG_SOURCE:-longhouse}"
+    local source_install=0
+
+    if [[ "$pkg_source" != "longhouse" ]]; then
+        source_install=1
+    fi
 
     # Install the longhouse package as a tool
-    if uv tool list 2>/dev/null | grep -q "^longhouse"; then
+    if [[ "$source_install" -eq 1 ]]; then
+        info "Installing longhouse from source..."
+        # Local-path source installs can otherwise reuse a stale cached wheel and miss
+        # recent code changes during disposable installer validation.
+        uv tool uninstall longhouse 2>/dev/null || true
+        uv tool install --force --no-cache "$pkg_source"
+    elif uv tool list 2>/dev/null | grep -q "^longhouse"; then
         info "Upgrading existing longhouse installation..."
         uv tool upgrade longhouse || {
             # If upgrade fails (e.g., installed from different source), reinstall
