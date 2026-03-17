@@ -67,6 +67,7 @@ def test_install_script_defaults_to_desktop_mode_and_is_valid_bash(tmp_path):
     assert "systemctl --user enable longhouse-runner" in response.text
     assert 'VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"' in response.text
     assert 'BINARY_PATH="$VERSION_DIR/longhouse-runner"' in response.text
+    assert 'mv -f "$temp_launcher_path" "$launcher_path"' in response.text
     assert "For always-on servers, use RUNNER_INSTALL_MODE=server instead." in response.text
     linux_desktop_start = response.text.index('if [ "$RUNNER_INSTALL_MODE" = "desktop" ]')
     assert response.text.index('if systemctl --user is-active --quiet longhouse-runner', linux_desktop_start) < response.text.index(

@@ -96,8 +96,9 @@ parse_json() {
 write_launcher() {
   local launcher_path="$1"
   local current_link="$2"
+  local temp_launcher_path="${launcher_path}.tmp.$$"
 
-  cat > "$launcher_path" <<EOF
+  cat > "$temp_launcher_path" <<EOF
 #!/bin/sh
 set -eu
 
@@ -111,7 +112,8 @@ fi
 
 exec "\$TARGET" "\$@"
 EOF
-  chmod 755 "$launcher_path"
+  chmod 755 "$temp_launcher_path"
+  mv -f "$temp_launcher_path" "$launcher_path"
 }
 
 # Register runner with backend
