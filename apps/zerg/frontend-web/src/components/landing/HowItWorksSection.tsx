@@ -26,7 +26,7 @@ const steps: Step[] = [
     icon: <SmartphoneIcon width={32} height={32} />,
     number: "2",
     title: "Resume Anywhere",
-    description: "Close your laptop. Open any device. Click a session and pick up where you left off — full context, live interaction."
+    description: "Close your laptop. Open any device. Continue Claude directly in the browser, or start a cloud session from the same timeline."
   },
   {
     icon: <SearchIcon width={32} height={32} />,

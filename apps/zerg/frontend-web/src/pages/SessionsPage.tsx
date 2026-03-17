@@ -34,6 +34,7 @@ import {
 import { PresenceBadge } from "../components/PresenceBadge";
 import { parseUTC } from "../lib/dateUtils";
 import { reportApiError, clearApiError } from "../lib/apiHealth";
+import { getProviderColor, supportsCloudContinuation } from "../lib/providers";
 import { RecallPanel } from "../components/RecallPanel";
 import "../styles/sessions.css";
 
@@ -154,25 +155,6 @@ function groupThreadCardsByDay(cards: SessionThreadCard[]): Map<string, SessionT
   }
 
   return groups;
-}
-
-function getProviderColor(provider: string): string {
-  switch (provider) {
-    case "claude":
-      return "var(--color-provider-claude)";
-    case "codex":
-      return "var(--color-provider-codex)";
-    case "gemini":
-      return "var(--color-provider-gemini)";
-    case "zai":
-      return "var(--color-provider-zai)";
-    default:
-      return "var(--color-provider-default)";
-  }
-}
-
-function supportsCloudContinuation(provider: string): boolean {
-  return provider === "claude";
 }
 
 function buildSessionDetailPath(

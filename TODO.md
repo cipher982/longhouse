@@ -508,7 +508,7 @@ Status (2026-03-16): In progress. This phase is now narrowed to contract truth, 
 - Regression tests cover the prompt/tool contract, provider capability contract, and key renamed UI surfaces
 
 - [ ] Remove user-facing `commis` / `autonomous agents` / server-first wording from prompts, product copy, and operator pages
-- [ ] Publish one honest provider capability story for archive, cloud session start, continuation, hooks, and telemetry
+- [x] Publish one honest provider capability story for archive, cloud session start, continuation, hooks, and telemetry
 - [ ] Rename launch-facing cloud work labels from `commis` to `cloud session` or equivalent while keeping internal symbol churn minimal
 - [ ] Remove fiche/dashboard-era surfaces from default onboarding and primary navigation unless they are directly required
 - [ ] Define and begin the deletion path for the current Oikos harness (`OikosService` / `Runner` / `oikos_react_engine`) instead of treating it as a permanent subsystem
@@ -517,6 +517,8 @@ Notes:
 - 2026-03-13: The session archive, lineage model, and session workspace already form the clearest product center. The main confusion comes from older Oikos/ops-era `commis` and `fiche` language still leaking into prompts, UI, and docs.
 - 2026-03-13: The spawn path is multi-backend only at the dispatch layer; continuity, ingest, hooks, and presence are still mostly Claude-first. The launch story should reflect that explicitly instead of implying parity.
 - 2026-03-13: Do the naming/capability truth pass first. Avoid a large internal rename or harness rewrite before launch.
+- 2026-03-17: Final landing-copy follow-up is still needed. The landing FAQ/cards currently imply provider parity more strongly than the actual continuation/hooks/telemetry contract, so this slice should centralize the frontend capability story before touching broader route cleanup.
+- 2026-03-17: Added a shared frontend provider capability contract in `src/lib/providers.ts` and rewired the landing hero/demo/how-it-works/provider cards/FAQ to use the Claude-first continuation truth instead of parity copy. Added fast regression coverage (`providers.test.ts`, `ProviderClaims.test.tsx`) plus the landing Playwright spec, and re-ran `bun run validate:types`, `make test-frontend-unit`, `make test`, `make test-e2e`, and `make test-e2e-single TEST=tests/landing-integrations.spec.ts`.
 - 2026-03-13: Phase 1 truth pass landed across Oikos prompt/tool copy, shared provider capability helpers, and the most visible launch/admin `commis` labels. `make test-frontend-unit` and `make test` are green. `make test-e2e-core` still has three unrelated chat/thread failures (`useAuth` / missing `create-fiche-btn`) that should be addressed during launch-surface cleanup.
 - 2026-03-16: Restored the missing spec at `docs/specs/launch-runtime-simplification.md` so the bounded launch cleanup has an explicit vocabulary contract, provider matrix, and acceptance criteria again.
 - 2026-03-16: Current implementation scope for this pass is:

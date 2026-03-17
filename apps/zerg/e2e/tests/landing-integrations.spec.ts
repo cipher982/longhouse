@@ -3,24 +3,24 @@ import { test, expect } from '@playwright/test';
 type ProviderExpectation = {
   name: string;
   description: string;
-  status: 'Syncing now' | 'Coming soon';
+  status: 'Live now' | 'Coming soon';
 };
 
 const EXPECTED_PROVIDERS: ProviderExpectation[] = [
   {
     name: 'Claude Code',
-    description: 'Full session sync with tool calls',
-    status: 'Syncing now',
+    description: 'Archive sync, cloud sessions, direct web continuation',
+    status: 'Live now',
   },
   {
     name: 'Codex CLI',
-    description: 'Full session sync with tool calls',
-    status: 'Syncing now',
+    description: 'Archive sync and cloud sessions; web continuation later',
+    status: 'Live now',
   },
   {
     name: 'Gemini CLI',
-    description: 'Full session sync with tool calls',
-    status: 'Syncing now',
+    description: 'Archive sync and cloud sessions; web continuation later',
+    status: 'Live now',
   },
   {
     name: 'OpenCode',

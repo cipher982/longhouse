@@ -687,7 +687,7 @@
     letter-spacing: 0.5px;
   }
 
-  .landing-provider-status.syncing {
+  .landing-provider-status.live {
     background: rgba(93, 155, 74, 0.15);
     color: var(--color-intent-success);
   }
@@ -705,6 +705,14 @@
     text-align: center;
     margin: var(--space-8) auto var(--space-12);
     max-width: 500px;
+  }
+
+  .landing-providers-tagline--subtle {
+    font-size: var(--font-size-sm);
+    font-style: normal;
+    line-height: 1.6;
+    margin-top: calc(var(--space-8) * -1);
+    max-width: 720px;
   }
 
   @media (width <= 600px) {
