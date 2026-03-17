@@ -42,7 +42,7 @@ PY
 lh_hosted_require_env() {
   local name=""
   for name in "$@"; do
-    if [[ -z "${!name:-}" ]]; then
+    if [[ -z "$(printenv "$name")" ]]; then
       echo "Missing required environment variable: ${name}" >&2
       return 1
     fi
