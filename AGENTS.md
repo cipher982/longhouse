@@ -79,10 +79,10 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 | **Recall** | `GET /api/agents/recall?query=` | SessionsPage (Recall panel) | `recall` | Turn-level knowledge retrieval with context windows |
 | Embeddings | `POST /api/agents/backfill-embeddings` | — | — | Auto-generated on ingest; backfill for existing sessions |
 | Oikos (chat) | WebSocket `/ws/oikos` | OikosPage | — | Voice/text AI assistant with tool use |
-| Insights | `GET /api/insights` (browser), `GET /api/agents/insights` + `POST /api/insights` (machine) | — | `log_insight`, `query_insights` | Manual/system learnings; no dedicated Insights page |
-| Reflection / briefings | `POST /api/agents/reflect`, `GET /api/agents/reflections`, `GET /api/timeline/briefing` | BriefingsPage | — | Manual reflection exists; the cron job is paused by default |
+| Insights | `GET /api/insights`, `POST /api/insights/:id/archive`, `POST /api/insights/:id/unarchive` (browser); `GET /api/agents/insights` + `POST /api/insights` (machine) | InsightsPage | `log_insight`, `query_insights` | Curated continuity memory; browser users can archive/restore rows and machine reads stay separate |
+| Reflection / briefings | `POST /api/agents/reflect`, `GET /api/agents/reflections`, `GET /api/timeline/briefing` | BriefingsPage | — | Briefings are the user-facing continuity surface; reflection remains optional admin tooling and the cron job is paused by default |
 | Jobs/Scheduler | `GET /api/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
-| Action proposals | `GET/POST /api/proposals` | ProposalsPage | — | Follow-ups created by explicit reflection runs; approved proposals show in briefings |
+| Action proposals | `GET/POST /api/proposals` | — | — | Internal manual-review queue for explicit reflection runs; `/proposals` redirects away and proposals no longer feed briefings |
 | Runner daemon | WebSocket from runner binary | — | — | Remote command execution on user infra |
 | **Session presence** | `POST /api/agents/presence` + `GET /api/agents/sessions/active` | ForumPage | — | Real-time state (thinking/running/idle) via Claude Code hooks; `session_presence` table, stale after 10min |
 | **Forum / live view** | `GET /api/agents/sessions/active` | ForumPage | — | Active session map; active rows glow green, canvas entities pulse; polls at 2s |

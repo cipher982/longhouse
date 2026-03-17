@@ -57,12 +57,12 @@ That would be a different wedge than Longhouse’s core product.
 
 ## Current State
 
-- `Insight` is now cleaner than before: new writes carry `origin`, and explicit `system` rows are hidden from normal reads.
-- Operational alerts are still **stored in `insights`**, just filtered out of default reads.
-- Briefings still include approved action proposals.
+- `Insight` now carries `origin`, can be archived via `archived_at`, and default browser/machine reads hide both explicit `system` rows and archived rows.
+- Operational alerts now live in `OperationalIncident` and are exposed through the reliability path instead of insight queries.
+- Briefings now contain recent session summaries plus curated gotchas only.
 - Reflection is paused by default, but the code path still creates canonical insights and proposals when manually triggered.
-- There is still no small browser curation surface for the insight corpus.
-- `ProposalsPage` still exists as a route even though it is not part of the primary navigation.
+- Browser users now have a small `/insights` curation surface for archive/unarchive.
+- `/proposals` no longer exposes a primary product page; it redirects to `/briefings`, while the backend proposal queue remains internal/manual tooling.
 
 ## Target State
 
