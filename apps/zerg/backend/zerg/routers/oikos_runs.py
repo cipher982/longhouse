@@ -35,11 +35,13 @@ router = APIRouter(prefix="", tags=["oikos"])
 
 
 class OikosRunSummary(UTCBaseModel):
-    """Minimal run summary for Oikos Task Inbox."""
+    """Minimal run summary for Oikos run triage."""
 
     id: int
+    task_id: int
     fiche_id: int
     thread_id: Optional[int] = None
+    task_name: str
     fiche_name: str
     status: str
     summary: Optional[str] = None
@@ -81,18 +83,20 @@ def _get_owned_run(db: Session, *, run_id: int, owner_id: int) -> Run | None:
 @router.get("/runs", response_model=List[OikosRunSummary])
 def list_oikos_runs(
     limit: int = 50,
+    task_id: Optional[int] = None,
     fiche_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> List[OikosRunSummary]:
-    """List recent fiche runs for Oikos Task Inbox."""
+    """List recent Oikos runs for the authenticated user."""
     # Get recent runs scoped to the authenticated user.
     query = db.query(Run).options(selectinload(Run.fiche))
     query = query.join(Fiche, Fiche.id == Run.fiche_id)
     query = query.filter(Fiche.owner_id == current_user.id)
 
-    if fiche_id:
-        query = query.filter(Run.fiche_id == fiche_id)
+    selected_task_id = task_id if task_id is not None else fiche_id
+    if selected_task_id is not None:
+        query = query.filter(Run.fiche_id == selected_task_id)
 
     runs = query.order_by(Run.created_at.desc()).limit(limit).all()
 
@@ -104,7 +108,7 @@ def list_oikos_runs(
 
     summaries = []
     for run in runs:
-        fiche_name = run.fiche.name if run.fiche else f"Fiche {run.fiche_id}"
+        task_name = run.fiche.name if run.fiche else f"Task {run.fiche_id}"
 
         summary = getattr(run, "summary", None)
 
@@ -137,9 +141,11 @@ def list_oikos_runs(
         summaries.append(
             OikosRunSummary(
                 id=run.id,
+                task_id=run.fiche_id,
                 fiche_id=run.fiche_id,
                 thread_id=run.thread_id,
-                fiche_name=fiche_name,
+                task_name=task_name,
+                fiche_name=task_name,
                 status=run.status.value if hasattr(run.status, "value") else str(run.status),
                 summary=summary,
                 signal=signal,

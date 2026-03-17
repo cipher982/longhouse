@@ -2406,7 +2406,7 @@ export interface paths {
         };
         /**
          * List Oikos Runs
-         * @description List recent fiche runs for Oikos Task Inbox.
+         * @description List recent Oikos runs for the authenticated user.
          */
         get: operations["list_oikos_runs_oikos_runs_get"];
         put?: never;
@@ -2631,7 +2631,7 @@ export interface paths {
         };
         /**
          * Oikos Events
-         * @description SSE stream for real-time fiche/run updates (Task Inbox UI).
+         * @description SSE stream for real-time automation/run updates (Task Inbox UI).
          */
         get: operations["oikos_events_oikos_events_get"];
         put?: never;
@@ -8006,15 +8006,19 @@ export interface components {
         };
         /**
          * OikosRunSummary
-         * @description Minimal run summary for Oikos Task Inbox.
+         * @description Minimal run summary for Oikos run triage.
          */
         OikosRunSummary: {
             /** Id */
             id: number;
+            /** Task Id */
+            task_id: number;
             /** Fiche Id */
             fiche_id: number;
             /** Thread Id */
             thread_id?: number | null;
+            /** Task Name */
+            task_name: string;
             /** Fiche Name */
             fiche_name: string;
             /** Status */
@@ -15230,6 +15234,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                task_id?: number | null;
                 fiche_id?: number | null;
                 session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
