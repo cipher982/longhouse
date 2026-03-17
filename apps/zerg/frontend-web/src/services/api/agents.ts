@@ -466,7 +466,7 @@ export interface BriefingResponse {
 }
 
 /**
- * Fetch a project briefing — recent session summaries + insights + proposals.
+ * Fetch a project briefing — recent session summaries + curated insights.
  * Requires embeddings to be configured; returns null briefing if unavailable.
  */
 export async function fetchAgentBriefing(

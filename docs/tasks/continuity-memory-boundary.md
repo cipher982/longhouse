@@ -23,11 +23,11 @@ Last updated: 2026-03-17
 
 ## Phase 2: Remove planning artifacts from continuity context
 
-- [ ] Stop including approved proposals in briefing assembly
-- [ ] Remove or hide the `/proposals` route from the primary browser product surface
-- [ ] Tighten any remaining proposal copy so it reads as admin/internal tooling only
-- [ ] Add/adjust focused tests for the trimmed briefing composition
-- [ ] Commit Phase 2
+- [x] Stop including approved proposals in briefing assembly
+- [x] Remove or hide the `/proposals` route from the primary browser product surface
+- [x] Tighten any remaining proposal copy so it reads as admin/internal tooling only
+- [x] Add/adjust focused tests for the trimmed briefing composition
+- [x] Commit Phase 2
 
 ## Phase 3: Add minimal insight curation
 
@@ -61,3 +61,5 @@ Notes:
 - The goal is a cleaner product boundary, not a richer feature set.
 - 2026-03-17: Phase 1 now uses `OperationalIncident` plus `GET /api/reliability/incidents`; stale-agent and ingest-health open/update/resolve incidents instead of writing new `system` insights. The new table comes in through `AgentsBase.metadata.create_all()`, so no extra SQLite ALTER path was needed.
 - 2026-03-17: Verification for this slice: `uv run --with ruff ruff check ...` passed and `make test-lite` passed (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`).
+- 2026-03-17: Phase 2 trims briefings back to session summaries plus curated gotchas, redirects `/proposals` to `/briefings`, and keeps the remaining proposals copy explicitly internal/manual-reflection-only.
+- 2026-03-17: Verification for Phase 2: backend `ruff check` passed, `make test-lite` passed again (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` passed (`31 passed, 1 skipped`).

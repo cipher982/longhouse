@@ -23,7 +23,6 @@ import TraceExplorerPage from "../pages/TraceExplorerPage";
 import ReliabilityPage from "../pages/ReliabilityPage";
 import SessionsPage from "../pages/SessionsPage";
 import SessionDetailPage from "../pages/SessionDetailPage";
-import ProposalsPage from "../pages/ProposalsPage";
 import { BriefingsPage } from "../pages/BriefingsPage";
 import DemoBanner from "../components/DemoBanner";
 import { Spinner } from "../components/ui";
@@ -456,11 +455,7 @@ export default function App() {
         },
         {
           path: "/proposals",
-          element: (
-            <ErrorBoundary>
-              <ProposalsPage />
-            </ErrorBoundary>
-          )
+          element: <Navigate to="/briefings" replace />
         },
         {
           path: "/briefings",
