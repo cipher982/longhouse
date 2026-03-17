@@ -34,7 +34,7 @@ Notes:
 
 ## [Launch][QA/Test][Docs/Drift] Harden the solo QA loop for hosted runtime changes (size: 2)
 
-Status (2026-03-17): In progress. Installer and curl smoke are already automated, but the higher-signal hosted browser smoke still depends on a local device-token file and is not scheduled as part of the normal release loop.
+Status (2026-03-17): Done. Hosted live QA now self-mints ephemeral device auth, runs on a scheduled/manual GitHub workflow, and ships with a minimal PR review checklist.
 
 **Goal:** Make hosted live QA self-sufficient in CI and add one lightweight review checklist so risky changes always carry explicit test and rollback notes.
 
@@ -45,7 +45,7 @@ Status (2026-03-17): In progress. Installer and curl smoke are already automated
 
 - [x] Make hosted live QA self-provision an ephemeral device token
 - [x] Add a hosted live QA GitHub workflow
-- [ ] Add a minimal PR review template
+- [x] Add a minimal PR review template
 
 ## [Launch][QA/Test][Tech Debt] Fix stale browser smoke checks after the auth split (size: 1)
 

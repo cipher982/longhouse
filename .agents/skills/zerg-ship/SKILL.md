@@ -27,8 +27,8 @@ QA_INSTANCE_URL=https://other.longhouse.ai make qa-live  # other instance
 Tests: auth + timeline, forum redirect, session detail, health, agents API, AI search toggle, recall panel, and briefings page.
 Exit 0 = pass. Fail screenshots → `/tmp/qa-live-fail-{test}.png`.
 
-Auth: `qa-live.sh` now delegates to `run-prod-e2e.sh`, resolves the hosted instance by subdomain, and mints a fresh hosted login token through the control plane.
-API calls still use `~/.claude/longhouse-device-token` (`X-Agents-Token` header) for `/api/agents/*`; browser pages use the hosted session cookie exchanged from `SMOKE_LOGIN_TOKEN`.
+Auth: `qa-live.sh` delegates to `run-prod-e2e.sh`, resolves the hosted instance by subdomain, and mints a fresh hosted login token through the control plane.
+If `CONTROL_PLANE_ADMIN_TOKEN` is available, the harness also mints and revokes a short-lived device token automatically for `/api/agents/*`; otherwise it falls back to `LONGHOUSE_DEVICE_TOKEN` / `~/.claude/longhouse-device-token`. Browser pages use the hosted session cookie exchanged from `SMOKE_LOGIN_TOKEN`.
 
 **Two auth systems — don't mix them:**
 - Browser pages: hosted login-token → `longhouse_session` cookie
