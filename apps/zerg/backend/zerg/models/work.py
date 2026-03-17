@@ -15,7 +15,9 @@ from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
+from sqlalchemy import and_
 from sqlalchemy import or_
+from sqlalchemy import true
 from sqlalchemy.sql import func
 
 from zerg.models.agents import AgentsBase
@@ -46,6 +48,7 @@ class Insight(AgentsBase):
     tags = Column(JSON, nullable=True)
     observations = Column(JSON, nullable=True)  # Append-only list of sightings
     session_id = Column(GUID(), nullable=True)  # Source session (optional)
+    archived_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -147,6 +150,18 @@ class OikosWakeup(AgentsBase):
     )
 
 
+def insight_visibility_clause(model=Insight, *, include_system: bool = False, include_archived: bool = False):
+    """Shared visibility filter for continuity-facing insight reads."""
+    clauses = []
+    if not include_system:
+        clauses.append(or_(model.origin.is_(None), model.origin != INSIGHT_ORIGIN_SYSTEM))
+    if not include_archived:
+        clauses.append(model.archived_at.is_(None))
+    if not clauses:
+        return true()
+    return and_(*clauses)
+
+
 def user_visible_insight_clause(model=Insight):
-    """Hide explicitly system-generated alerts from normal reads."""
-    return or_(model.origin.is_(None), model.origin != INSIGHT_ORIGIN_SYSTEM)
+    """Default continuity view: hide system and archived insights."""
+    return insight_visibility_clause(model)

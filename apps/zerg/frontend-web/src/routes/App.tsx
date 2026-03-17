@@ -24,6 +24,7 @@ import ReliabilityPage from "../pages/ReliabilityPage";
 import SessionsPage from "../pages/SessionsPage";
 import SessionDetailPage from "../pages/SessionDetailPage";
 import { BriefingsPage } from "../pages/BriefingsPage";
+import { InsightsPage } from "../pages/InsightsPage";
 import DemoBanner from "../components/DemoBanner";
 import { Spinner } from "../components/ui";
 import { AuthGuard } from "../lib/auth";
@@ -35,7 +36,10 @@ const OikosChatPage = lazy(() => import("../pages/OikosChatPage"));
 const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
 import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
-import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
+import {
+  usePerformanceMonitoring,
+  useBundleSizeWarning,
+} from "../lib/usePerformance";
 import config from "../lib/config";
 
 // Loading fallback for lazy-loaded pages
@@ -78,7 +82,10 @@ function LandingAliasRedirect() {
   return <Navigate to={{ pathname: "/", search: location.search }} replace />;
 }
 
-export function resolveLegacyForumRedirect(search: string): { pathname: string; search?: string } {
+export function resolveLegacyForumRedirect(search: string): {
+  pathname: string;
+  search?: string;
+} {
   const params = new URLSearchParams(search);
   const sessionId = params.get("session");
   const shouldResume = params.get("chat") === "true";
@@ -100,7 +107,7 @@ function LegacyForumRedirect() {
 
 export default function App() {
   // Performance monitoring
-  usePerformanceMonitoring('App');
+  usePerformanceMonitoring("App");
   useBundleSizeWarning();
 
   const demoRoutes = [
@@ -111,7 +118,7 @@ export default function App() {
         <ErrorBoundary>
           <LandingPage />
         </ErrorBoundary>
-      )
+      ),
     },
     {
       path: "/pricing",
@@ -119,7 +126,7 @@ export default function App() {
         <ErrorBoundary>
           <PricingPage />
         </ErrorBoundary>
-      )
+      ),
     },
     {
       path: "/docs",
@@ -127,7 +134,7 @@ export default function App() {
         <ErrorBoundary>
           <DocsPage />
         </ErrorBoundary>
-      )
+      ),
     },
     {
       path: "/changelog",
@@ -135,7 +142,7 @@ export default function App() {
         <ErrorBoundary>
           <ChangelogPage />
         </ErrorBoundary>
-      )
+      ),
     },
     {
       path: "/privacy",
@@ -143,7 +150,7 @@ export default function App() {
         <ErrorBoundary>
           <PrivacyPage />
         </ErrorBoundary>
-      )
+      ),
     },
     {
       path: "/security",
@@ -151,7 +158,7 @@ export default function App() {
         <ErrorBoundary>
           <SecurityPage />
         </ErrorBoundary>
-      )
+      ),
     },
     // Demo timeline — wrapped in Layout with DemoBanner, no AuthGuard
     {
@@ -163,7 +170,7 @@ export default function App() {
             <ErrorBoundary>
               <SessionsPage />
             </ErrorBoundary>
-          )
+          ),
         },
         {
           path: "/timeline/:sessionId",
@@ -171,309 +178,327 @@ export default function App() {
             <ErrorBoundary>
               <SessionDetailPage />
             </ErrorBoundary>
-          )
+          ),
         },
         {
           path: "/demo",
-          element: <Navigate to="/timeline" replace />
+          element: <Navigate to="/timeline" replace />,
         },
-      ]
+      ],
     },
     // Fallback: anything else -> landing
     {
       path: "*",
-      element: <Navigate to="/" replace />
+      element: <Navigate to="/" replace />,
     },
   ];
 
   // Single-tenant instances (provisioned by control plane) skip marketing pages entirely.
   // Root "/" goes straight to the authenticated app — timeline is the home page.
-  const marketingRoutes = config.singleTenant ? [] : [
-    // Root: landing page for visitors, auto-redirects authenticated users to /timeline
-    {
-      path: "/",
-      element: (
-        <ErrorBoundary>
-          <LandingPage />
-        </ErrorBoundary>
-      )
-    },
-    // Keep /landing as an alias (bookmarks, old links)
-    {
-      path: "/landing",
-      element: <LandingAliasRedirect />
-    },
-    // Public info pages - NO AuthGuard
-    {
-      path: "/pricing",
-      element: (
-        <ErrorBoundary>
-          <PricingPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/docs",
-      element: (
-        <ErrorBoundary>
-          <DocsPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/changelog",
-      element: (
-        <ErrorBoundary>
-          <ChangelogPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/privacy",
-      element: (
-        <ErrorBoundary>
-          <PrivacyPage />
-        </ErrorBoundary>
-      )
-    },
-    {
-      path: "/security",
-      element: (
-        <ErrorBoundary>
-          <SecurityPage />
-        </ErrorBoundary>
-      )
-    },
-  ];
-
-  const routes = useRoutes(config.demoMode ? demoRoutes : [
-    ...marketingRoutes,
-    // Authenticated routes - nested under a single AuthenticatedApp wrapper
-    {
-      element: <AuthenticatedApp />,
-      children: [
-        // Single-tenant: "/" goes straight to timeline (no landing page)
-        ...(config.singleTenant ? [{
+  const marketingRoutes = config.singleTenant
+    ? []
+    : [
+        // Root: landing page for visitors, auto-redirects authenticated users to /timeline
+        {
           path: "/",
-          element: <Navigate to="/timeline" replace />
-        }] : []),
-        {
-          path: "/conversations",
           element: (
             <ErrorBoundary>
-              <Suspense fallback={<PageLoader />}>
-                <ConversationsPage />
-              </Suspense>
+              <LandingPage />
             </ErrorBoundary>
-          )
+          ),
         },
+        // Keep /landing as an alias (bookmarks, old links)
         {
-          path: "/chat",
+          path: "/landing",
+          element: <LandingAliasRedirect />,
+        },
+        // Public info pages - NO AuthGuard
+        {
+          path: "/pricing",
           element: (
             <ErrorBoundary>
-              <Suspense fallback={<PageLoader />}>
-                <OikosChatPage />
-              </Suspense>
+              <PricingPage />
             </ErrorBoundary>
-          )
+          ),
         },
         {
-          path: "/dashboard",
+          path: "/docs",
           element: (
             <ErrorBoundary>
-              <DashboardPage />
+              <DocsPage />
             </ErrorBoundary>
-          )
+          ),
         },
         {
-          path: "/jobs",
+          path: "/changelog",
           element: (
             <ErrorBoundary>
-              <JobsPage />
+              <ChangelogPage />
             </ErrorBoundary>
-          )
+          ),
         },
         {
-          path: "/forum",
+          path: "/privacy",
           element: (
             <ErrorBoundary>
-              <LegacyForumRedirect />
+              <PrivacyPage />
             </ErrorBoundary>
-          )
+          ),
         },
         {
-          path: "/runs",
+          path: "/security",
           element: (
             <ErrorBoundary>
-              <Suspense fallback={<PageLoader />}>
-                <SwarmOpsPage />
-              </Suspense>
+              <SecurityPage />
             </ErrorBoundary>
-          )
+          ),
         },
-        {
-          path: "/fiche/:ficheId/thread/:threadId?",
-          element: (
-            <ErrorBoundary>
-              <Suspense fallback={<PageLoader />}>
-                <ChatPage />
-              </Suspense>
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/profile",
-          element: (
-            <ErrorBoundary>
-              <ProfilePage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/settings",
-          element: (
-            <ErrorBoundary>
-              <SettingsPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/settings/integrations",
-          element: (
-            <ErrorBoundary>
-              <IntegrationsPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/settings/knowledge",
-          element: (
-            <ErrorBoundary>
-              <KnowledgeSourcesPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/settings/contacts",
-          element: (
-            <ErrorBoundary>
-              <ContactsPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/settings/devices",
-          element: (
-            <ErrorBoundary>
-              <DevicesPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/settings/secrets",
-          element: (
-            <ErrorBoundary>
-              <JobSecretsPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/admin",
-          element: (
-            <ErrorBoundary>
-              <AdminPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/runners",
-          element: (
-            <ErrorBoundary>
-              <RunnersPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/runners/:id",
-          element: (
-            <ErrorBoundary>
-              <RunnerDetailPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/traces",
-          element: (
-            <ErrorBoundary>
-              <TraceExplorerPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/traces/:traceId",
-          element: (
-            <ErrorBoundary>
-              <TraceExplorerPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/reliability",
-          element: (
-            <ErrorBoundary>
-              <ReliabilityPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/timeline",
-          element: (
-            <ErrorBoundary>
-              <SessionsPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/timeline/:sessionId",
-          element: (
-            <ErrorBoundary>
-              <SessionDetailPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/sessions",
-          element: <Navigate to="/timeline" replace />
-        },
-        {
-          path: "/sessions/:sessionId",
-          element: (
-            <ErrorBoundary>
-              <SessionDetailPage />
-            </ErrorBoundary>
-          )
-        },
-        {
-          path: "/proposals",
-          element: <Navigate to="/briefings" replace />
-        },
-        {
-          path: "/briefings",
-          element: (
-            <ErrorBoundary>
-              <BriefingsPage />
-            </ErrorBoundary>
-          )
-        },
-      ]
-    },
-    // Fallback for unknown SPA routes - send to landing page
-    // NOTE: Static files (.html, .js, etc.) are served by Vite before reaching React Router
-    {
-      path: "*",
-      element: <Navigate to="/" replace />
-    },
-  ]);
+      ];
+
+  const routes = useRoutes(
+    config.demoMode
+      ? demoRoutes
+      : [
+          ...marketingRoutes,
+          // Authenticated routes - nested under a single AuthenticatedApp wrapper
+          {
+            element: <AuthenticatedApp />,
+            children: [
+              // Single-tenant: "/" goes straight to timeline (no landing page)
+              ...(config.singleTenant
+                ? [
+                    {
+                      path: "/",
+                      element: <Navigate to="/timeline" replace />,
+                    },
+                  ]
+                : []),
+              {
+                path: "/conversations",
+                element: (
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageLoader />}>
+                      <ConversationsPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/chat",
+                element: (
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageLoader />}>
+                      <OikosChatPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/dashboard",
+                element: (
+                  <ErrorBoundary>
+                    <DashboardPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/jobs",
+                element: (
+                  <ErrorBoundary>
+                    <JobsPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/forum",
+                element: (
+                  <ErrorBoundary>
+                    <LegacyForumRedirect />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/runs",
+                element: (
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageLoader />}>
+                      <SwarmOpsPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/fiche/:ficheId/thread/:threadId?",
+                element: (
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageLoader />}>
+                      <ChatPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/profile",
+                element: (
+                  <ErrorBoundary>
+                    <ProfilePage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/settings",
+                element: (
+                  <ErrorBoundary>
+                    <SettingsPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/settings/integrations",
+                element: (
+                  <ErrorBoundary>
+                    <IntegrationsPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/settings/knowledge",
+                element: (
+                  <ErrorBoundary>
+                    <KnowledgeSourcesPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/settings/contacts",
+                element: (
+                  <ErrorBoundary>
+                    <ContactsPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/settings/devices",
+                element: (
+                  <ErrorBoundary>
+                    <DevicesPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/settings/secrets",
+                element: (
+                  <ErrorBoundary>
+                    <JobSecretsPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/admin",
+                element: (
+                  <ErrorBoundary>
+                    <AdminPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/runners",
+                element: (
+                  <ErrorBoundary>
+                    <RunnersPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/runners/:id",
+                element: (
+                  <ErrorBoundary>
+                    <RunnerDetailPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/traces",
+                element: (
+                  <ErrorBoundary>
+                    <TraceExplorerPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/traces/:traceId",
+                element: (
+                  <ErrorBoundary>
+                    <TraceExplorerPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/reliability",
+                element: (
+                  <ErrorBoundary>
+                    <ReliabilityPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/timeline",
+                element: (
+                  <ErrorBoundary>
+                    <SessionsPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/timeline/:sessionId",
+                element: (
+                  <ErrorBoundary>
+                    <SessionDetailPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/sessions",
+                element: <Navigate to="/timeline" replace />,
+              },
+              {
+                path: "/sessions/:sessionId",
+                element: (
+                  <ErrorBoundary>
+                    <SessionDetailPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/proposals",
+                element: <Navigate to="/briefings" replace />,
+              },
+              {
+                path: "/briefings",
+                element: (
+                  <ErrorBoundary>
+                    <BriefingsPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/insights",
+                element: (
+                  <ErrorBoundary>
+                    <InsightsPage />
+                  </ErrorBoundary>
+                ),
+              },
+            ],
+          },
+          // Fallback for unknown SPA routes - send to landing page
+          // NOTE: Static files (.html, .js, etc.) are served by Vite before reaching React Router
+          {
+            path: "*",
+            element: <Navigate to="/" replace />,
+          },
+        ],
+  );
 
   return routes;
 }
