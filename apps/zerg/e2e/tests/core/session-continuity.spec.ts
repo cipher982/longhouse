@@ -14,8 +14,19 @@ import { test, expect } from '../fixtures';
 import { postSseAndCollect } from '../helpers/sse';
 import { resetDatabase } from '../test-utils';
 
+async function mintDeviceToken(request: APIRequestContext): Promise<string> {
+  const response = await request.post('/api/devices/tokens', {
+    data: { device_id: 'e2e-device' },
+  });
+  expect(response.ok()).toBeTruthy();
+  const payload = await response.json();
+  expect(typeof payload.token).toBe('string');
+  return payload.token as string;
+}
+
 async function createTestSession(request: APIRequestContext) {
   const now = new Date().toISOString();
+  const deviceToken = await mintDeviceToken(request);
   const payload = {
     provider: 'claude',
     environment: 'development',
@@ -33,7 +44,12 @@ async function createTestSession(request: APIRequestContext) {
     ],
   };
 
-  const ingestRes = await request.post('/api/agents/ingest', { data: payload });
+  const ingestRes = await request.post('/api/agents/ingest', {
+    data: payload,
+    headers: {
+      'X-Agents-Token': deviceToken,
+    },
+  });
   expect(ingestRes.ok()).toBeTruthy();
   const data = await ingestRes.json();
   return data.session_id as string;

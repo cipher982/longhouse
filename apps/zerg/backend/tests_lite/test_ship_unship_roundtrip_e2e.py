@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +15,7 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentsBase
 
@@ -120,7 +122,11 @@ def _make_client(tmp_path):
         finally:
             d.close()
 
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="ship-unship", id="token-1", owner_id=1)
+
     api_app.dependency_overrides[get_db] = override
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     return TestClient(api_app)
 
 

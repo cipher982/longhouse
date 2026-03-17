@@ -6,11 +6,13 @@ so that JavaScript clients parse them correctly as UTC.
 
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentsBase
 from zerg.models.models import User
 from zerg.models.agents import AgentSession, AgentEvent
@@ -91,8 +93,12 @@ def _make_client(db_session):
     def override_require_admin():
         return User(id=1, email="test@local", role="ADMIN")
 
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="datetime-e2e", id="token-1", owner_id=1)
+
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[require_admin] = override_require_admin
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
 
     client = TestClient(app, backend="asyncio")
     return client, api_app

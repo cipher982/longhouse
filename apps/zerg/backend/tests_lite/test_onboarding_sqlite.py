@@ -73,15 +73,24 @@ print(f"  Health status: {status}")
 if status not in ("healthy", "ok"):  # /api/health uses "ok"
     raise AssertionError(f"Unexpected health status: {status}")
 
-# Test 3: Sessions endpoint works
-print("Test 3: Sessions endpoint...")
-response2 = client.get("/api/agents/sessions")
+# Test 3: Mint a real device token for machine routes
+print("Test 3: Device token bootstrap...")
+token_response = client.post("/api/devices/tokens", json={"device_id": "onboarding-smoke"})
+print(f"  Status: {token_response.status_code}")
+if token_response.status_code != 201:
+    raise AssertionError(f"Device token creation failed: {token_response.status_code} {token_response.text}")
+
+device_token = token_response.json()["token"]
+
+# Test 4: Sessions endpoint works with device token
+print("Test 4: Sessions endpoint...")
+response2 = client.get("/api/agents/sessions", headers={"X-Agents-Token": device_token})
 print(f"  Status: {response2.status_code}")
 if response2.status_code != 200:
     raise AssertionError(f"Sessions endpoint failed: {response2.status_code}")
 
-# Test 4: Database file created (use env var, not hardcoded path)
-print("Test 4: Database file...")
+# Test 5: Database file created (use env var, not hardcoded path)
+print("Test 5: Database file...")
 db_url = os.environ.get("DATABASE_URL", "")
 if db_url.startswith("sqlite:///"):
     db_file = db_url.replace("sqlite:///", "")

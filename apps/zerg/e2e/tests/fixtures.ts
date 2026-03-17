@@ -29,6 +29,27 @@ type TestFixtures = {
   commisId: string;
 };
 
+async function mintDeviceToken(
+  request: import('@playwright/test').APIRequestContext,
+  deviceId: string,
+): Promise<string> {
+  const response = await request.post('/api/devices/tokens', {
+    data: { device_id: deviceId },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `Failed to mint device token for E2E context: ${response.status()} ${await response.text()}`,
+    );
+  }
+
+  const payload = await response.json();
+  const token = payload?.token;
+  if (typeof token !== 'string' || !token.startsWith('zdt_')) {
+    throw new Error(`Invalid device token bootstrap payload: ${JSON.stringify(payload)}`);
+  }
+  return token;
+}
+
 export const test = base.extend<TestFixtures>({
   backendUrl: async ({}, use) => {
     const basePort = getBackendPort();
@@ -44,7 +65,7 @@ export const test = base.extend<TestFixtures>({
     // commisIndex can exceed the configured commis count when Playwright
     // restarts commis after test failures/timeouts.
     const commisId = String(testInfo.parallelIndex);
-    const request = await playwright.request.newContext({
+    const bootstrap = await playwright.request.newContext({
       baseURL: backendUrl, // Use dynamic backend URL
       extraHTTPHeaders: {
         'X-Test-Commis': commisId,
@@ -52,8 +73,20 @@ export const test = base.extend<TestFixtures>({
       // Increase timeout for API requests - reset-database can be slow under parallel load
       timeout: 30_000,
     });
+    const deviceToken = await mintDeviceToken(bootstrap, `playwright-${commisId}`);
+
+    const request = await playwright.request.newContext({
+      baseURL: backendUrl,
+      extraHTTPHeaders: {
+        'X-Test-Commis': commisId,
+        'X-Agents-Token': deviceToken,
+      },
+      timeout: 30_000,
+    });
+
     await use(request);
     await request.dispose();
+    await bootstrap.dispose();
   },
 
   context: async ({ browser }, use, testInfo) => {
