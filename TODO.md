@@ -44,7 +44,7 @@ Status (2026-03-17): In progress. Installer and curl smoke are already automated
 - PRs have a minimal template for summary, risk, tests, and rollback
 
 - [x] Make hosted live QA self-provision an ephemeral device token
-- [ ] Add a hosted live QA GitHub workflow
+- [x] Add a hosted live QA GitHub workflow
 - [ ] Add a minimal PR review template
 
 ## [Launch][QA/Test][Tech Debt] Fix stale browser smoke checks after the auth split (size: 1)

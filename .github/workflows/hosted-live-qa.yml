@@ -1,0 +1,92 @@
+name: Hosted Live QA
+
+on:
+  workflow_run:
+    workflows: ["Deploy and Verify"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: '41 10 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: hosted-live-qa
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-live-qa:
+    name: "hosted-live-qa"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    env:
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+      QA_INSTANCE_SUBDOMAIN: david010
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install JS deps
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers + deps
+        run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
+
+      - name: Prepare isolated QA home
+        run: mkdir -p "$RUNNER_TEMP/qa-home"
+
+      - name: Run hosted live QA
+        id: qa_live
+        env:
+          HOME: ${{ runner.temp }}/qa-home
+        run: make qa-live
+
+      - name: Run hosted conversations QA
+        id: qa_live_conversations
+        env:
+          HOME: ${{ runner.temp }}/qa-home
+        run: make qa-live-conversations
+
+      - name: Write summary
+        if: always()
+        run: |
+          echo "## Hosted Live QA" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Instance: \`$QA_INSTANCE_SUBDOMAIN\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Trigger: \`${{ github.event_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- qa-live-conversations: \`${{ steps.qa_live_conversations.outcome || 'skipped' }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload live QA artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-live-qa-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/qa-live-fail-*.png
+            apps/zerg/e2e/test-results
+            apps/zerg/e2e/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
