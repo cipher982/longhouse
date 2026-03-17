@@ -44,6 +44,7 @@ fi
 INSTANCE_SUBDOMAIN="${INSTANCE_SUBDOMAIN:-}"
 FRONTEND_URL="${FRONTEND_URL:-}"
 API_URL="${API_URL:-$FRONTEND_URL}"
+BROWSER_TIMELINE_SESSIONS_PATH="/api/timeline/sessions?limit=1"
 
 lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" "$FRONTEND_URL" "$API_URL" "david010"
 FRONTEND_URL="$LH_TARGET_FRONTEND_URL"
@@ -726,7 +727,8 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
             run_test test_http_auth "Oikos history (authed)" "$API_URL/api/oikos/history" "200" "$COOKIE_JAR"
             run_test test_http_auth "Oikos runs (authed)" "$API_URL/api/oikos/runs?limit=1" "200" "$COOKIE_JAR"
             run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
-            run_test test_http_auth "Sessions API (authed)" "$API_URL/api/agents/sessions?limit=1" "200" "$COOKIE_JAR"
+            # Browser-auth smoke must stay on the browser-owned timeline API.
+            run_test test_http_auth "Timeline sessions (authed)" "$API_URL$BROWSER_TIMELINE_SESSIONS_PATH" "200" "$COOKIE_JAR"
 
             if [[ $RUN_LLM -eq 1 ]]; then
                 llm_available=$(curl -s "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
