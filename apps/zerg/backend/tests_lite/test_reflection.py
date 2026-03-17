@@ -14,8 +14,10 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
+from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
 from zerg.models.work import Insight
 from zerg.models.work import ReflectionRun
+from zerg.models.work import user_visible_insight_clause
 from zerg.services.reflection.collector import ProjectBatch
 from zerg.services.reflection.collector import SessionInfo
 from zerg.services.reflection.collector import collect_sessions
@@ -61,13 +63,14 @@ def _make_session(
     return session
 
 
-def _make_insight(db, title="Known gotcha", project="test-project", insight_type="learning"):
+def _make_insight(db, title="Known gotcha", project="test-project", insight_type="learning", origin=None, confidence=0.8):
     insight = Insight(
         insight_type=insight_type,
         title=title,
         project=project,
         description="Some description",
-        confidence=0.8,
+        origin=origin,
+        confidence=confidence,
         observations=[],
     )
     db.add(insight)
@@ -127,6 +130,18 @@ class TestCollector:
             assert len(batches) == 1
             assert len(batches[0].existing_insights) == 1
             assert batches[0].existing_insights[0]["title"] == "Known gotcha"
+
+    def test_excludes_system_insights_from_dedup_context(self, tmp_path):
+        SessionLocal = _make_db(tmp_path)
+        with SessionLocal() as db:
+            _make_session(db, project="test-project", summary="Test session")
+            _make_insight(db, title="Manual note", project="test-project")
+            _make_insight(db, title="System note", project="test-project", origin=INSIGHT_ORIGIN_SYSTEM)
+
+            batches = collect_sessions(db, project="test-project", window_hours=24)
+            assert len(batches) == 1
+            titles = [item["title"] for item in batches[0].existing_insights]
+            assert titles == ["Manual note"]
 
     def test_empty_when_no_sessions(self, tmp_path):
         SessionLocal = _make_db(tmp_path)
@@ -300,6 +315,7 @@ class TestWriter:
             insight = db.query(Insight).filter(Insight.title == "New insight from reflection").first()
             assert insight is not None
             assert insight.confidence == 0.9
+            assert insight.origin == "reflection"
 
     def test_merges_into_existing(self, tmp_path):
         from zerg.services.reflection.writer import execute_actions
@@ -564,14 +580,19 @@ class TestBriefingInsights:
 
         project_insights = (
             db.query(Insight)
-            .filter(Insight.project == project, Insight.created_at >= insight_cutoff)
+            .filter(user_visible_insight_clause(Insight), Insight.project == project, Insight.created_at >= insight_cutoff)
             .order_by(Insight.created_at.desc())
             .limit(5)
             .all()
         )
         cross_insights = (
             db.query(Insight)
-            .filter(Insight.project != project, Insight.confidence >= 0.9, Insight.created_at >= insight_cutoff)
+            .filter(
+                user_visible_insight_clause(Insight),
+                Insight.project != project,
+                Insight.confidence >= 0.9,
+                Insight.created_at >= insight_cutoff,
+            )
             .order_by(Insight.created_at.desc())
             .limit(3)
             .all()
@@ -683,3 +704,14 @@ class TestBriefingInsights:
             briefing = self._build_briefing(db, project="myapp")
             # Should appear only once
             assert briefing.count("Shared issue") == 1
+
+    def test_briefing_excludes_system_insights(self, tmp_path):
+        SessionLocal = _make_db(tmp_path)
+        with SessionLocal() as db:
+            _make_session(db, project="myapp", summary="Test session")
+            _make_insight(db, title="Manual gotcha", project="myapp")
+            _make_insight(db, title="System alert", project="myapp", origin=INSIGHT_ORIGIN_SYSTEM)
+
+            briefing = self._build_briefing(db, project="myapp")
+            assert "Manual gotcha" in briefing
+            assert "System alert" not in briefing

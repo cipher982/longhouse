@@ -13,6 +13,7 @@ from sqlalchemy import DateTime
 from sqlalchemy import Float
 from sqlalchemy import Index
 from sqlalchemy import Integer
+from sqlalchemy import or_
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy.sql import func
@@ -22,6 +23,9 @@ from zerg.models.types import GUID
 
 # Shared constant: dedup window for insights (used by router, reflection service)
 INSIGHT_DEDUP_WINDOW_DAYS = 7
+INSIGHT_ORIGIN_MANUAL = "manual"
+INSIGHT_ORIGIN_REFLECTION = "reflection"
+INSIGHT_ORIGIN_SYSTEM = "system"
 
 
 class Insight(AgentsBase):
@@ -34,6 +38,7 @@ class Insight(AgentsBase):
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     project = Column(String(255), nullable=True, index=True)
+    origin = Column(String(20), nullable=True, default=INSIGHT_ORIGIN_MANUAL, index=True)
     severity = Column(String(20), default="info")  # info, warning, critical
     confidence = Column(Float, nullable=True)  # 0.0-1.0
     tags = Column(JSON, nullable=True)
@@ -116,3 +121,8 @@ class OikosWakeup(AgentsBase):
         Index("ix_oikos_wakeups_owner_created", "owner_id", "created_at"),
         Index("ix_oikos_wakeups_trigger_status", "trigger_type", "status"),
     )
+
+
+def user_visible_insight_clause(model=Insight):
+    """Hide explicitly system-generated alerts from normal reads."""
+    return or_(model.origin.is_(None), model.origin != INSIGHT_ORIGIN_SYSTEM)

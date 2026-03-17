@@ -27,7 +27,9 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
+from zerg.models.work import INSIGHT_ORIGIN_MANUAL
 from zerg.models.work import Insight
+from zerg.models.work import user_visible_insight_clause
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,7 @@ class InsightResponse(UTCBaseModel):
     title: str
     description: Optional[str] = None
     project: Optional[str] = None
+    origin: Optional[str] = None
     severity: str = "info"
     confidence: Optional[float] = None
     tags: Optional[List[str]] = None
@@ -100,6 +103,7 @@ async def create_insight(
 
         # Dedup: look for existing insight with same title + project
         query = db.query(Insight).filter(
+            user_visible_insight_clause(Insight),
             Insight.title == body.title,
             Insight.created_at >= cutoff,
         )
@@ -135,6 +139,7 @@ async def create_insight(
         cross_match = (
             db.query(Insight)
             .filter(
+                user_visible_insight_clause(Insight),
                 Insight.title == body.title,
                 Insight.created_at >= cutoff,
             )
@@ -175,6 +180,7 @@ async def create_insight(
             title=body.title,
             description=body.description,
             project=body.project,
+            origin=INSIGHT_ORIGIN_MANUAL,
             severity=body.severity,
             confidence=body.confidence,
             tags=body.tags,
@@ -204,11 +210,14 @@ def _list_insights_response(
     insight_type: Optional[str] = None,
     since_hours: int = 168,
     limit: int = 20,
+    include_system: bool = False,
 ) -> InsightListResponse:
     """Query insights with shared filtering for browser and machine reads."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
 
     query = db.query(Insight).filter(Insight.created_at >= cutoff)
+    if not include_system:
+        query = query.filter(user_visible_insight_clause(Insight))
 
     if project is not None:
         query = query.filter(Insight.project == project)
@@ -230,6 +239,7 @@ async def list_insights(
     insight_type: Optional[str] = Query(None, description="Filter by type"),
     since_hours: int = Query(168, ge=1, le=8760, description="Hours to look back (default 168 = 7 days)"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
+    include_system: bool = Query(False, description="Include system-generated alert rows"),
     db: Session = Depends(get_db),
     _browser_user=Depends(get_current_browser_user),
     _single: None = Depends(require_single_tenant),
@@ -242,6 +252,7 @@ async def list_insights(
             insight_type=insight_type,
             since_hours=since_hours,
             limit=limit,
+            include_system=include_system,
         )
     except Exception:
         logger.exception("Failed to list insights")
@@ -257,6 +268,7 @@ async def list_machine_insights(
     insight_type: Optional[str] = Query(None, description="Filter by type"),
     since_hours: int = Query(168, ge=1, le=8760, description="Hours to look back (default 168 = 7 days)"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
+    include_system: bool = Query(False, description="Include system-generated alert rows"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -269,6 +281,7 @@ async def list_machine_insights(
             insight_type=insight_type,
             since_hours=since_hours,
             limit=limit,
+            include_system=include_system,
         )
     except Exception:
         logger.exception("Failed to list machine insights")
@@ -291,6 +304,7 @@ def _insight_to_response(insight: Insight) -> InsightResponse:
         title=insight.title,
         description=insight.description,
         project=insight.project,
+        origin=insight.origin,
         severity=insight.severity,
         confidence=insight.confidence,
         tags=insight.tags,

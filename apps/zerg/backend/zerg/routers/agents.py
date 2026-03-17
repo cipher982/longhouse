@@ -882,6 +882,7 @@ async def get_briefing(
         insight_lines: list[str] = []
         try:
             from zerg.models.work import Insight
+            from zerg.models.work import user_visible_insight_clause
 
             insight_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
 
@@ -889,6 +890,7 @@ async def get_briefing(
             project_insights = (
                 db.query(Insight)
                 .filter(
+                    user_visible_insight_clause(Insight),
                     Insight.project == project,
                     Insight.created_at >= insight_cutoff,
                 )
@@ -901,6 +903,7 @@ async def get_briefing(
             cross_insights = (
                 db.query(Insight)
                 .filter(
+                    user_visible_insight_clause(Insight),
                     Insight.project != project,
                     Insight.confidence >= 0.9,
                     Insight.created_at >= insight_cutoff,

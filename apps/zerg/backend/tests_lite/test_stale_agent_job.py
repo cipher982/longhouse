@@ -86,6 +86,7 @@ def test_stale_agent_job_emits_insight(tmp_path):
         ).all()
         assert len(insights) == 1, f"Expected 1 insight, got {len(insights)}"
         assert insights[0].insight_type == "failure"
+        assert insights[0].origin == "system"
         assert insights[0].severity == "warning"
         assert "stale-agent" in (insights[0].tags or [])
 

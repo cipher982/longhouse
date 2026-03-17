@@ -1,19 +1,27 @@
 """Unit tests for ingest health checking."""
+import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
+from unittest.mock import patch
 
 from sqlalchemy.orm import sessionmaker
 
-from zerg.models.agents import AgentsBase, AgentSession
 from zerg.jobs.ingest_health import compute_ingest_health
+from zerg.models.agents import AgentsBase, AgentSession
+from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
+from zerg.models.work import Insight
 
 
-def _make_db(tmp_path):
+def _make_session_local(tmp_path):
     from zerg.database import make_engine
     engine = make_engine(f"sqlite:///{tmp_path}/test.db")
     engine = engine.execution_options(schema_translate_map={"agents": None})
     AgentsBase.metadata.create_all(bind=engine)
-    Session = sessionmaker(bind=engine)
-    return Session()
+    return sessionmaker(bind=engine)
+
+
+def _make_db(tmp_path):
+    return _make_session_local(tmp_path)()
 
 
 def _add_session(db, started_days_ago, ended_days_ago=None):
@@ -73,3 +81,54 @@ def test_threshold_zero_always_ok(tmp_path, monkeypatch):
     _add_session(db, started_days_ago=10, ended_days_ago=10)
     result = compute_ingest_health(db)
     assert result["status"] == "ok"
+
+
+def test_run_stale_creates_system_insight(tmp_path, monkeypatch):
+    import zerg.jobs.ingest_health as ih
+
+    SessionLocal = _make_session_local(tmp_path)
+    with SessionLocal() as db:
+        _add_session(db, started_days_ago=2, ended_days_ago=2)
+
+    @contextmanager
+    def fake_db_session():
+        with SessionLocal() as db:
+            yield db
+
+    monkeypatch.setattr(ih, "_THRESHOLD_HOURS", 4.0)
+    with patch.object(ih, "db_session", fake_db_session):
+        result = asyncio.run(ih.run())
+
+    assert result["action"] == "insight_created"
+    with SessionLocal() as db:
+        insight = db.query(Insight).filter(Insight.title == "Stale ingest detected").one()
+        assert insight.origin == INSIGHT_ORIGIN_SYSTEM
+
+
+def test_run_recovery_creates_system_insight(tmp_path, monkeypatch):
+    import zerg.jobs.ingest_health as ih
+
+    SessionLocal = _make_session_local(tmp_path)
+    with SessionLocal() as db:
+        _add_session(db, started_days_ago=0.1, ended_days_ago=0.05)
+        db.add(Insight(
+            insight_type="failure",
+            title="Stale ingest detected",
+            origin=INSIGHT_ORIGIN_SYSTEM,
+            severity="warning",
+        ))
+        db.commit()
+
+    @contextmanager
+    def fake_db_session():
+        with SessionLocal() as db:
+            yield db
+
+    monkeypatch.setattr(ih, "_THRESHOLD_HOURS", 4.0)
+    with patch.object(ih, "db_session", fake_db_session):
+        result = asyncio.run(ih.run())
+
+    assert result["action"] == "recovery_insight_created"
+    with SessionLocal() as db:
+        insight = db.query(Insight).filter(Insight.title == "Ingest recovered").one()
+        assert insight.origin == INSIGHT_ORIGIN_SYSTEM

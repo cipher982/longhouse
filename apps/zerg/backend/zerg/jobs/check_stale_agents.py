@@ -16,6 +16,7 @@ from typing import Any
 from zerg.database import db_session
 from zerg.jobs.registry import JobConfig
 from zerg.jobs.registry import job_registry
+from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
 from zerg.models.work import Insight
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,7 @@ async def run() -> dict[str, Any]:
                         insight_type="failure",
                         title=title,
                         description=description,
+                        origin=INSIGHT_ORIGIN_SYSTEM,
                         severity="warning",
                         tags=["engine", "heartbeat", "stale-agent"],
                     )

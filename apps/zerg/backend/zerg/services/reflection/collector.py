@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
 from zerg.models.work import Insight
+from zerg.models.work import user_visible_insight_clause
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ def _fetch_existing_insights(db: Session, project: str | None) -> list[dict]:
     """Fetch recent insights for a project (for dedup context in LLM prompt)."""
     cutoff = datetime.now(UTC) - timedelta(days=INSIGHT_DEDUP_WINDOW_DAYS)
 
-    query = db.query(Insight).filter(Insight.created_at >= cutoff)
+    query = db.query(Insight).filter(Insight.created_at >= cutoff, user_visible_insight_clause(Insight))
     if project is not None:
         query = query.filter(Insight.project == project)
     else:

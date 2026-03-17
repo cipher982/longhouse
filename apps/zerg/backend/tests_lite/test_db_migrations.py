@@ -128,6 +128,57 @@ def _make_legacy_schema(engine) -> None:
         )
 
 
+def test_startup_migration_adds_insight_origin_and_backfills_system_rows(tmp_path):
+    db_path = tmp_path / "legacy_insights.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE insights (
+                id VARCHAR(36) PRIMARY KEY,
+                insight_type VARCHAR(20) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                project VARCHAR(255),
+                severity VARCHAR(20),
+                confidence FLOAT,
+                tags TEXT,
+                observations TEXT,
+                session_id VARCHAR(36),
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO insights (id, insight_type, title, description, tags, created_at, updated_at)
+                VALUES
+                    ('1', 'learning', 'Manual note', 'keep visible', '["docs"]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                    ('2', 'failure', 'Agent stale', 'system row by tag', '["engine","stale-agent"]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                    ('3', 'failure', 'Stale ingest detected', 'system row by title', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                    ('4', 'learning', 'Ingest recovered', 'system row by title', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+            )
+        )
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(insights)"))}
+        rows = conn.execute(text("SELECT title, origin FROM insights ORDER BY id")).fetchall()
+
+    assert "origin" in columns
+    assert rows == [
+        ("Manual note", None),
+        ("Agent stale", "system"),
+        ("Stale ingest detected", "system"),
+        ("Ingest recovered", "system"),
+    ]
+
+
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):
     db_path = tmp_path / "legacy_pending.db"
     engine = make_engine(f"sqlite:///{db_path}")
