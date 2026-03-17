@@ -15,6 +15,28 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Tech Debt] Delete the dormant proposals workflow (size: 2)
+
+Status (2026-03-17): Done. The dormant proposals workflow is deleted from the runtime/backend/frontend surface, the reflection prompt no longer emits proposal-shaped fields, and AGENTS now documents the control-plane admin-call user-agent gotcha.
+
+**Goal:** Remove the unused proposals workflow entirely while keeping continuity memory focused on sessions, briefings, insights, and incidents.
+
+**Done when:**
+- reflection no longer writes `ActionProposal` rows
+- the proposals router and dead frontend proposal files are removed
+- proposal model/tests/guid-repair references are deleted
+- docs stop presenting proposals as a current product feature
+
+- [x] Remove proposal creation from reflection and delete the backend/router model surface
+- [x] Delete the dead frontend proposal hooks/API/page files
+- [x] Update docs/AGENTS copy and run focused verification
+
+Notes:
+- 2026-03-17: Synced the shared checkout back to `origin/main` first, preserving the old local state under `backup/shared-main-pre-sync-20260317-144631` plus `/tmp/zerg-shared-pre-sync-working-20260317-144632.patch`.
+- 2026-03-17: Removed `ActionProposal`, the proposals router/tests, the dead frontend proposals page/hooks/API, the `/proposals` route alias, and regenerated frontend OpenAPI types so `/api/proposals` disappeared from the generated contract.
+- 2026-03-17: Reflection no longer asks the LLM for proposal-style `action_blurb` fields, and `AGENTS.md` now points operators to `curl` / `scripts/lib/hosted-instance.sh` for control-plane admin calls because default Python `urllib` user-agents can trigger Cloudflare `1010`.
+- 2026-03-17: Verification passed with `make generate-sdk`, `make test-frontend-unit`, `make test`, `make test-e2e`, and `pre-commit run --files ...`.
+
 ## [Launch][Infra][QA/Test] Make control-plane health status explicit in Coolify (size: 1)
 
 Status (2026-03-17): Done. The control-plane image now defines a Docker healthcheck, the hosted app is redeployed, and Coolify reports `running:healthy`.
@@ -2105,7 +2127,7 @@ Make `model` an explicit override only, not a forced default. New execution logi
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.
 
-- [x] Briefings page (`/briefings`) — project selector, session summaries + insights + proposals
+- [x] Briefings page (`/briefings`) — project selector, session summaries + curated insights
 - [x] Reflection briefing endpoint — `GET /api/agents/briefing`
 - [x] Summarization coverage gap — fixed: `enqueue_ingest_tasks` now called inside `AgentsStore.ingest_session()` so all paths (demo seeds, commis_job_processor, CLI, router) enqueue summary + embedding tasks.
 

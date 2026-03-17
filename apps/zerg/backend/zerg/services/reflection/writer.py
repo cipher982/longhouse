@@ -16,7 +16,6 @@ from sqlalchemy.orm.attributes import flag_modified
 from zerg.models.agents import AgentSession
 from zerg.models.work import INSIGHT_DEDUP_WINDOW_DAYS
 from zerg.models.work import INSIGHT_ORIGIN_REFLECTION
-from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
 from zerg.models.work import user_visible_insight_clause
 from zerg.services.reflection.collector import ProjectBatch
@@ -28,7 +27,6 @@ def execute_actions(
     db: Session,
     actions: list[dict],
     batches: list[ProjectBatch],
-    run_id: str | None = None,
 ) -> tuple[int, int, int]:
     """Execute reflection actions and stamp processed sessions.
 
@@ -36,7 +34,6 @@ def execute_actions(
         db: SQLAlchemy session.
         actions: List of action dicts from the judge.
         batches: The original project batches (for session ID access).
-        run_id: UUID of the ReflectionRun (for linking proposals).
 
     Returns:
         Tuple of (created, merged, skipped) counts.
@@ -55,7 +52,6 @@ def execute_actions(
                         created += 1
                     else:
                         merged += 1  # dedup matched — counts as merge
-                    _maybe_create_proposal(db, action, insight_id, run_id)
                 else:
                     skipped += 1  # empty title
             elif action_type == "merge":
@@ -111,7 +107,7 @@ def _create_insight(db: Session, action: dict) -> tuple[str | None, bool]:
     existing = query.first()
 
     if existing:
-        # Merge into existing — return its ID so proposals can still be created
+        # Merge into existing insight rather than creating a duplicate row.
         _append_observation(existing, description or title)
         if confidence is not None:
             existing.confidence = confidence
@@ -130,7 +126,7 @@ def _create_insight(db: Session, action: dict) -> tuple[str | None, bool]:
     )
 
     if cross_match:
-        # Merge into the cross-project match, add project tag — return its ID for proposals
+        # Merge into the cross-project match and add the project tag.
         _append_observation(cross_match, f"[{project}] {description or title}")
         existing_tags = cross_match.tags or []
         if project and project not in existing_tags:
@@ -156,22 +152,6 @@ def _create_insight(db: Session, action: dict) -> tuple[str | None, bool]:
     db.add(insight)
     db.flush()
     return str(insight.id), True
-
-
-def _maybe_create_proposal(db: Session, action: dict, insight_id: str, run_id: str | None) -> None:
-    """Create an ActionProposal if the action has an action_blurb."""
-    blurb = action.get("action_blurb", "").strip() if isinstance(action.get("action_blurb"), str) else ""
-    if not blurb:
-        return
-    proposal = ActionProposal(
-        insight_id=insight_id,
-        reflection_run_id=run_id,
-        project=action.get("project"),
-        title=action.get("title", ""),
-        action_blurb=blurb,
-    )
-    db.add(proposal)
-    db.flush()
 
 
 def _merge_insight(db: Session, action: dict) -> bool:

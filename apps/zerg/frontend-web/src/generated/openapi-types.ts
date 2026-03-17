@@ -3793,6 +3793,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/reliability/incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recent Incidents
+         * @description Recent tenant-local operational incidents (admin only).
+         */
+        get: operations["recent_incidents_reliability_incidents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reliability/commis/stuck": {
         parameters: {
             query?: never;
@@ -4858,7 +4878,7 @@ export interface paths {
         };
         /**
          * List Insights
-         * @description Query insights with filters.
+         * @description Query insights for browser-owned UI reads.
          */
         get: operations["list_insights_insights_get"];
         put?: never;
@@ -4876,7 +4896,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/proposals": {
+    "/api/insights/{insight_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Insight
+         * @description Archive an insight so it stops participating in default continuity reads.
+         */
+        post: operations["archive_insight_insights__insight_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/insights/{insight_id}/unarchive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unarchive Insight
+         * @description Restore an archived insight to the default continuity corpus.
+         */
+        post: operations["unarchive_insight_insights__insight_id__unarchive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/insights": {
         parameters: {
             query?: never;
             header?: never;
@@ -4884,52 +4944,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Proposals
-         * @description List action proposals with filters.
+         * List Machine Insights
+         * @description Query insights for machine-owned continuity reads.
          */
-        get: operations["list_proposals_proposals_get"];
+        get: operations["list_machine_insights_agents_insights_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Approve Proposal
-         * @description Approve a proposal — sets status to approved and generates a task description.
-         */
-        post: operations["approve_proposal_proposals__proposal_id__approve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/proposals/{proposal_id}/decline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Decline Proposal
-         * @description Decline a proposal — sets status to declined.
-         */
-        post: operations["decline_proposal_proposals__proposal_id__decline_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6931,6 +6951,8 @@ export interface components {
             description?: string | null;
             /** Project */
             project?: string | null;
+            /** Origin */
+            origin?: string | null;
             /**
              * Severity
              * @default info
@@ -6944,6 +6966,8 @@ export interface components {
             observations?: string[] | null;
             /** Session Id */
             session_id?: string | null;
+            /** Archived At */
+            archived_at?: string | null;
             /** Created At */
             created_at?: string | null;
             /** Updated At */
@@ -7973,61 +7997,6 @@ export interface components {
              * @default claude
              */
             provider: string | null;
-        };
-        /**
-         * ProposalActionResponse
-         * @description Response after approving or declining a proposal.
-         */
-        ProposalActionResponse: {
-            proposal: components["schemas"]["ProposalResponse"];
-            /**
-             * Task Created
-             * @default false
-             */
-            task_created: boolean;
-        };
-        /**
-         * ProposalListResponse
-         * @description Response for proposal list.
-         */
-        ProposalListResponse: {
-            /** Proposals */
-            proposals: components["schemas"]["ProposalResponse"][];
-            /** Total */
-            total: number;
-        };
-        /**
-         * ProposalResponse
-         * @description Response for a single action proposal.
-         */
-        ProposalResponse: {
-            /** Id */
-            id: string;
-            /** Insight Id */
-            insight_id: string;
-            /** Reflection Run Id */
-            reflection_run_id?: string | null;
-            /** Project */
-            project?: string | null;
-            /** Title */
-            title: string;
-            /** Action Blurb */
-            action_blurb: string;
-            /**
-             * Status
-             * @default pending
-             */
-            status: string;
-            /** Decided At */
-            decided_at?: string | null;
-            /** Task Description */
-            task_description?: string | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Insight Type */
-            insight_type?: string | null;
-            /** Severity */
-            severity?: string | null;
         };
         /**
          * PullResponse
@@ -12447,8 +12416,8 @@ export interface operations {
     };
     get_install_script_runners_install_sh_get: {
         parameters: {
-            query: {
-                enroll_token: string;
+            query?: {
+                enroll_token?: string | null;
                 runner_name?: string | null;
                 longhouse_url?: string | null;
                 mode?: string | null;
@@ -16828,6 +16797,43 @@ export interface operations {
             };
         };
     };
+    recent_incidents_reliability_incidents_get: {
+        parameters: {
+            query?: {
+                /** @description Incident status filter */
+                status?: string;
+                /** @description Optional incident source filter */
+                source?: string | null;
+                /** @description Maximum incidents to return */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     stuck_commis_reliability_commis_stuck_get: {
         parameters: {
             query?: {
@@ -18972,6 +18978,10 @@ export interface operations {
                 since_hours?: number;
                 /** @description Max results */
                 limit?: number;
+                /** @description Include system-generated alert rows */
+                include_system?: boolean;
+                /** @description Include archived insights */
+                include_archived?: boolean;
                 session_factory?: unknown;
             };
             header?: never;
@@ -19035,15 +19045,87 @@ export interface operations {
             };
         };
     };
-    list_proposals_proposals_get: {
+    archive_insight_insights__insight_id__archive_post: {
         parameters: {
             query?: {
-                /** @description Filter by status: pending, approved, declined */
-                status?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                insight_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unarchive_insight_insights__insight_id__unarchive_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                insight_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_machine_insights_agents_insights_get: {
+        parameters: {
+            query?: {
                 /** @description Filter by project */
                 project?: string | null;
+                /** @description Filter by type */
+                insight_type?: string | null;
+                /** @description Hours to look back (default 168 = 7 days) */
+                since_hours?: number;
                 /** @description Max results */
                 limit?: number;
+                /** @description Include system-generated alert rows */
+                include_system?: boolean;
+                /** @description Include archived insights */
+                include_archived?: boolean;
                 session_factory?: unknown;
             };
             header?: never;
@@ -19058,73 +19140,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProposalListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    approve_proposal_proposals__proposal_id__approve_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProposalActionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    decline_proposal_proposals__proposal_id__decline_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProposalActionResponse"];
+                    "application/json": components["schemas"]["InsightListResponse"];
                 };
             };
             /** @description Validation Error */

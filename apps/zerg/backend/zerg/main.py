@@ -91,7 +91,6 @@ from zerg.routers.oikos_internal import router as oikos_internal_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.presence import router as presence_router
-from zerg.routers.proposals import router as proposals_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
@@ -391,7 +390,9 @@ async def lifespan(app: FastAPI):
 
             if default_engine is not None and default_engine.dialect.name == "sqlite":
                 with default_engine.connect() as conn:
-                    fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+                    fts_row = conn.execute(
+                        text("SELECT 1 FROM sqlite_master " "WHERE type='table' AND name='events_fts' LIMIT 1")
+                    ).fetchone()
                     if not fts_row:
                         raise RuntimeError("events_fts table is missing (FTS5 required).")
                     # Validate FTS module by executing a no-op MATCH query.
@@ -441,7 +442,10 @@ async def lifespan(app: FastAPI):
                     if seeded_count > 0:
                         logger.info("Demo mode: seeded %d demo sessions", seeded_count)
                     elif failed_count > 0:
-                        logger.warning("Demo mode: demo seed had %d failures (see per-session errors above)", failed_count)
+                        logger.warning(
+                            "Demo mode: demo seed had %d failures " "(see per-session errors above)",
+                            failed_count,
+                        )
                     else:
                         logger.info("Demo mode: demo sessions already present, skipping seed")
             except Exception as e:
@@ -603,8 +607,6 @@ async def lifespan(app: FastAPI):
             # Job queue commis (durable job execution)
             if not _settings.testing:
                 try:
-                    from pathlib import Path
-
                     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
                     from zerg.jobs.commis import enqueue_missed_runs
@@ -669,7 +671,12 @@ async def lifespan(app: FastAPI):
 
                         # Start background sync loop
                         if _settings.jobs_refresh_interval_seconds > 0:
-                            sync_task = asyncio.create_task(run_git_sync_loop(git_service, _settings.jobs_refresh_interval_seconds))
+                            sync_task = asyncio.create_task(
+                                run_git_sync_loop(
+                                    git_service,
+                                    _settings.jobs_refresh_interval_seconds,
+                                )
+                            )
                             set_git_sync_task(sync_task)
 
                         started.append("git_sync")
@@ -748,7 +755,14 @@ async def lifespan(app: FastAPI):
                 from zerg.shared.email import resolve_email_config
 
                 email_cfg = resolve_email_config()
-                if email_cfg.get("AWS_SES_ACCESS_KEY_ID") and email_cfg.get("AWS_SES_SECRET_ACCESS_KEY") and email_cfg.get("FROM_EMAIL"):
+                email_configured = all(
+                    (
+                        email_cfg.get("AWS_SES_ACCESS_KEY_ID"),
+                        email_cfg.get("AWS_SES_SECRET_ACCESS_KEY"),
+                        email_cfg.get("FROM_EMAIL"),
+                    )
+                )
+                if email_configured:
                     logger.info("Email configured (from=%s)", email_cfg.get("FROM_EMAIL"))
                 else:
                     logger.warning("Email not configured — job notifications disabled")
@@ -1051,7 +1065,6 @@ api_app.include_router(presence_router)  # Claude Code hook presence signals
 api_app.include_router(device_tokens_router)  # Per-device authentication tokens
 api_app.include_router(insights_router)  # Insights tracking for agent infrastructure
 api_app.include_router(machine_insights_router)  # Machine-auth insight reads for continuity tools
-api_app.include_router(proposals_router)  # Action proposals review queue
 
 # metrics_router stays on parent app — Prometheus expects /metrics at root
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
@@ -1260,7 +1273,7 @@ async def health_check():
 
         if default_engine is not None and default_engine.dialect.name == "sqlite":
             with default_engine.connect() as conn:
-                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master " "WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
                 if not fts_row:
                     raise RuntimeError("events_fts table is missing (FTS5 required).")
                 conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
@@ -1289,7 +1302,13 @@ async def health_check():
 
         email_cfg = resolve_email_config()
         email_configured = bool(
-            email_cfg.get("AWS_SES_ACCESS_KEY_ID") and email_cfg.get("AWS_SES_SECRET_ACCESS_KEY") and email_cfg.get("FROM_EMAIL")
+            all(
+                (
+                    email_cfg.get("AWS_SES_ACCESS_KEY_ID"),
+                    email_cfg.get("AWS_SES_SECRET_ACCESS_KEY"),
+                    email_cfg.get("FROM_EMAIL"),
+                )
+            )
         )
         checks["email"] = {
             "status": "pass" if email_configured else "warn",

@@ -52,17 +52,16 @@ That would be a different wedge than Longhouse’s core product.
 ### Internal Admin Tooling
 
 - manual reflection runs
-- reflection output review
-- proposal / draft queue, if retained
+- reflection result inspection
 
 ## Current State
 
 - `Insight` now carries `origin`, can be archived via `archived_at`, and default browser/machine reads hide both explicit `system` rows and archived rows.
 - Operational alerts now live in `OperationalIncident` and are exposed through the reliability path instead of insight queries.
 - Briefings now contain recent session summaries plus curated gotchas only.
-- Reflection is paused by default, but the code path still creates canonical insights and proposals when manually triggered.
+- Reflection is paused by default, and manual runs only create canonical insights plus run metadata.
 - Browser users now have a small `/insights` curation surface for archive/unarchive.
-- `/proposals` no longer exposes a primary product page; it redirects to `/briefings`, while the backend proposal queue remains internal/manual tooling.
+- The dormant proposals router, model, tests, and frontend page are removed.
 
 ## Target State
 
@@ -130,8 +129,8 @@ Near-term launch posture:
 
 If kept long-term:
 
-- reflection output should become a draft/review queue
-- reflection should not directly write canonical `Insight` rows without approval
+- reflection should stay a bounded admin analysis tool
+- if draft review ever returns, it should be introduced as a separate, explicitly justified feature
 
 ### 6. Insight curation gets a tiny browser surface
 
@@ -188,7 +187,7 @@ In scope:
 - define the target domain split: archive vs insights vs incidents vs reflection drafts
 - add a tenant-local incident model/API for ops alerts
 - remove proposal data from briefing composition
-- hide/remove proposals from the primary browser product surface
+- remove dormant proposals code from the primary browser and backend surfaces
 - add minimal insight archive/unarchive curation
 - align docs and product copy with the trimmed continuity story
 
@@ -206,14 +205,14 @@ Out of scope:
 2. Tenant ops alerts are visible through a reliability/admin incident surface instead of insight queries.
 3. `query_insights` and briefing “Known gotchas” return curated continuity memory only.
 4. Briefings no longer include approved proposals or other planning artifacts.
-5. `ProposalsPage` is no longer part of the normal product surface, and docs stop presenting proposals as a meaningful user-facing feature.
+5. Proposal-specific backend/frontend/runtime code is removed, and docs stop presenting proposals as a meaningful user-facing feature.
 6. Browser users have a minimal way to inspect and archive/unarchive insights without DB access.
 7. Reflection remains paused by default and is documented as optional admin tooling, not a core product feature.
 
 ## Implementation Order
 
 1. Move ops alerts into incidents.
-2. Remove proposals from briefing assembly and primary UI surface.
+2. Remove proposals from briefing assembly and delete the dormant proposal surface.
 3. Add minimal insight archive/unarchive curation.
 4. Tighten docs and product descriptions around the final boundary.
-5. Re-evaluate whether any reflection/proposal code should survive launch after that split lands.
+5. Re-evaluate whether reflection itself should survive launch after that split lands.

@@ -1,8 +1,8 @@
-"""Work tracking models — insights, incidents, proposals, and wakeups.
+"""Work tracking models — insights, incidents, and wakeups.
 
 These models support agent infrastructure: tracking reusable learnings across
-sessions, storing tenant-local operational incidents, surfacing actionable
-proposals for human review, and recording proactive Oikos wakeups.
+sessions, storing tenant-local operational incidents, and recording proactive
+Oikos wakeups.
 """
 
 from uuid import uuid4
@@ -73,28 +73,6 @@ class OperationalIncident(AgentsBase):
     opened_at = Column(DateTime, server_default=func.now(), nullable=False)
     last_observed_at = Column(DateTime, server_default=func.now(), nullable=False)
     resolved_at = Column(DateTime, nullable=True)
-
-
-class ActionProposal(AgentsBase):
-    """A proposed action derived from a high-confidence insight.
-
-    Created during reflection when the judge attaches an action_blurb to an
-    insight.  Users review proposals in the Longhouse UI and approve or decline
-    them.  Approved proposals become tasks visible in agent briefings.
-    """
-
-    __tablename__ = "action_proposals"
-
-    id = Column(GUID(), primary_key=True, default=uuid4)
-    insight_id = Column(GUID(), nullable=False, index=True)  # FK to insights.id (loose)
-    reflection_run_id = Column(GUID(), nullable=True)  # FK to reflection_runs.id (loose)
-    project = Column(String(255), nullable=True, index=True)
-    title = Column(String(255), nullable=False)  # Short action title
-    action_blurb = Column(Text, nullable=False)  # What should be done
-    status = Column(String(20), default="pending", index=True)  # pending, approved, declined
-    decided_at = Column(DateTime, nullable=True)  # When user approved/declined
-    task_description = Column(Text, nullable=True)  # Generated on approve (task body)
-    created_at = Column(DateTime, server_default=func.now())
 
 
 class ReflectionRun(AgentsBase):
