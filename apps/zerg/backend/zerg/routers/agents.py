@@ -53,11 +53,11 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.device_token import DeviceToken
-from zerg.models.enums import SessionLoopMode
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.demo_seed import delete_demo_sessions
 from zerg.services.demo_seed import seed_missing_demo_sessions
+from zerg.session_loop_mode import SessionLoopMode
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)

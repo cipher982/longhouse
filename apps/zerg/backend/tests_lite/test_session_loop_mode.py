@@ -1,7 +1,8 @@
 """Tests for the structured per-session loop mode endpoint."""
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -9,9 +10,13 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
+from zerg.database import Base
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentSession, AgentsBase
+from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 
 
 def _make_db(tmp_path, name="loop_mode.db"):

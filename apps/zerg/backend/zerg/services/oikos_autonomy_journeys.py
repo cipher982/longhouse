@@ -28,6 +28,8 @@ from typing import Callable
 
 import yaml
 
+from zerg.session_loop_mode import SessionLoopMode
+
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 DecisionCallable = Callable[["AutonomyContextPacket"], "AutonomyDecision | Awaitable[AutonomyDecision]"]
@@ -50,6 +52,13 @@ def _optional_clean_str(data: dict[str, Any], key: str) -> str | None:
     if value is None:
         return None
     return str(value).strip()
+
+
+def _coerce_loop_mode(value: Any) -> SessionLoopMode:
+    try:
+        return SessionLoopMode(str(value or SessionLoopMode.MANUAL.value).strip())
+    except ValueError:
+        return SessionLoopMode.MANUAL
 
 
 @dataclass(frozen=True)
@@ -85,6 +94,7 @@ class AutonomySessionSnapshot:
     summary: str | None = None
     presence_state: str | None = None
     blocked_reason: str | None = None
+    loop_mode: SessionLoopMode = SessionLoopMode.MANUAL
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AutonomySessionSnapshot":
@@ -99,6 +109,7 @@ class AutonomySessionSnapshot:
             summary=_optional_clean_str(data, "summary"),
             presence_state=_optional_clean_str(data, "presence_state"),
             blocked_reason=_optional_clean_str(data, "blocked_reason"),
+            loop_mode=_coerce_loop_mode(data.get("loop_mode")),
         )
 
 
@@ -183,6 +194,7 @@ class ExpectedJourneyOutcome:
     decision: str
     action_count: int = 0
     needs_human: bool | None = None
+    required_actions: list[str] = field(default_factory=list)
     forbidden_actions: list[str] = field(default_factory=list)
 
     @classmethod
@@ -192,6 +204,7 @@ class ExpectedJourneyOutcome:
             decision=str(payload.get("decision", "")).strip(),
             action_count=int(payload.get("action_count", 0)),
             needs_human=bool(payload["needs_human"]) if "needs_human" in payload else None,
+            required_actions=[str(item).strip() for item in payload.get("required_actions", [])],
             forbidden_actions=[str(item).strip() for item in payload.get("forbidden_actions", [])],
         )
 
@@ -260,6 +273,12 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
     """Cheap deterministic baseline used for harness validation and local dogfooding."""
     trigger_summary = (packet.trigger.summary or "").lower()
 
+    def _supports_operator_prompt(session: AutonomySessionSnapshot) -> bool:
+        return packet.policy.allow_notify and session.loop_mode != SessionLoopMode.MANUAL
+
+    def _supports_autonomous_continue(session: AutonomySessionSnapshot) -> bool:
+        return session.loop_mode == SessionLoopMode.AUTOPILOT and packet.policy.allow_continue and session.resumable
+
     def _find_human_fork_session() -> AutonomySessionSnapshot | None:
         sessions = [packet.primary_session, *packet.active_sessions]
         for session in sessions:
@@ -281,7 +300,8 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                     "direction choice",
                 )
             ):
-                return session
+                if _supports_operator_prompt(session):
+                    return session
         return None
 
     def _has_bounded_follow_up() -> bool:
@@ -341,7 +361,7 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
             needs_human=True,
         )
 
-    if packet.policy.allow_continue and packet.primary_session.resumable and _has_bounded_follow_up():
+    if _has_bounded_follow_up() and _supports_autonomous_continue(packet.primary_session):
         return AutonomyDecision(
             decision="continue_session",
             rationale="The session explicitly left one bounded follow-up step undone.",
@@ -354,6 +374,22 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                 )
             ],
             needs_human=False,
+        )
+
+    if _has_bounded_follow_up() and _supports_operator_prompt(packet.primary_session):
+        return AutonomyDecision(
+            decision="suggest_continue",
+            rationale=("The session has a bounded next step, but this mode still requires " "user approval before resuming it."),
+            summary="Ask the user whether Oikos should continue the bounded follow-up.",
+            proposed_actions=[
+                AutonomyProposedAction(
+                    kind="notify_user",
+                    target_session_id=packet.primary_session.session_id,
+                    summary="Tell the user there is one bounded next step ready for approval.",
+                    payload={"recommended_action": "continue_session"},
+                )
+            ],
+            needs_human=True,
         )
 
     return AutonomyDecision(
@@ -415,6 +451,16 @@ def evaluate_journey_assertions(
         )
 
     proposed_action_kinds = {action.kind for action in decision.proposed_actions}
+    for required_action in case.expected.required_actions:
+        assertions.append(
+            AutonomyAssertionResult(
+                name=f"required_action:{required_action}",
+                passed=required_action in proposed_action_kinds,
+                message=f"required_action={required_action} present={required_action in proposed_action_kinds}",
+                expected=True,
+                actual=required_action in proposed_action_kinds,
+            )
+        )
     for forbidden_action in case.expected.forbidden_actions:
         assertions.append(
             AutonomyAssertionResult(

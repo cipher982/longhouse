@@ -13,6 +13,7 @@ cases:
       provider: claude
       status: completed
       resumable: true
+      loop_mode: manual
       project: zerg
       last_user_message: Please add the telemetry hook and report back.
       last_ai_message: Done. I added the hook, ran the targeted tests, and there is nothing else pending.
@@ -42,6 +43,7 @@ cases:
       provider: claude
       status: completed
       resumable: true
+      loop_mode: autopilot
       project: zerg
       last_user_message: Fix the flaky hook and verify it.
       last_ai_message: I fixed the hook, but the targeted tests were not run yet. Next step is to run the session-detail tests.
@@ -52,6 +54,7 @@ cases:
         provider: claude
         status: working
         resumable: true
+        loop_mode: manual
         project: zerg
         summary: Separate refactor still in progress.
         presence_state: thinking
@@ -67,6 +70,8 @@ cases:
       decision: continue_session
       action_count: 1
       needs_human: false
+      required_actions:
+        - continue_session
       forbidden_actions:
         - notify_user
 
@@ -83,6 +88,7 @@ cases:
       provider: claude
       status: blocked
       resumable: true
+      loop_mode: assist
       project: zerg
       last_user_message: Keep going on the autonomy work.
       last_ai_message: I can continue, but I need to know whether to optimize for a nonstop loop or event-driven wakeups first.
@@ -99,6 +105,8 @@ cases:
       decision: escalate
       action_count: 1
       needs_human: true
+      required_actions:
+        - notify_user
       forbidden_actions:
         - continue_session
 
@@ -115,6 +123,7 @@ cases:
       provider: claude
       status: idle
       resumable: true
+      loop_mode: manual
       project: zerg
       last_user_message: Please continue later if something obvious remains.
       last_ai_message: Waiting for the next meaningful task.
@@ -125,6 +134,7 @@ cases:
         provider: codex
         status: idle
         resumable: false
+        loop_mode: manual
         project: zerg
         summary: Historical session, no current work.
         presence_state: idle
@@ -154,6 +164,7 @@ cases:
       provider: claude
       status: paused
       resumable: true
+      loop_mode: assist
       project: zerg
       last_user_message: Circle back later if there is still something obvious to do.
       last_ai_message: I am waiting for the user to answer a non-urgent follow-up before continuing.
@@ -187,6 +198,7 @@ cases:
       provider: claude
       status: blocked
       resumable: true
+      loop_mode: autopilot
       project: zerg
       last_user_message: Keep going if this turns into something real.
       last_ai_message: Still waiting on permission to run the same Bash command as before.
@@ -219,6 +231,7 @@ cases:
       provider: claude
       status: blocked
       resumable: true
+      loop_mode: autopilot
       project: zerg
       last_user_message: Keep going if the next step is straightforward.
       last_ai_message: I already fixed the issue. Next step is only to rerun the targeted session-detail tests after permission is granted.
@@ -234,6 +247,8 @@ cases:
       decision: continue_session
       action_count: 1
       needs_human: false
+      required_actions:
+        - continue_session
       forbidden_actions:
         - notify_user
 
@@ -250,6 +265,7 @@ cases:
       provider: claude
       status: completed
       resumable: true
+      loop_mode: autopilot
       project: zerg
       last_user_message: Keep going if something obvious remains.
       last_ai_message: I fixed the hook, but the targeted tests were not run yet. Next step is to run the session-detail tests.
@@ -260,6 +276,7 @@ cases:
         provider: claude
         status: blocked
         resumable: true
+        loop_mode: assist
         project: zerg
         last_ai_message: I need to know whether to optimize for nonstop loops or event-driven wakeups first.
         summary: Real product fork about autonomy direction.
@@ -273,5 +290,101 @@ cases:
       decision: escalate
       action_count: 1
       needs_human: true
+      required_actions:
+        - notify_user
       forbidden_actions:
         - continue_session
+
+  - id: assist_bounded_follow_up_suggest
+    description: Assist mode can tee up a bounded next step, but it must ask the user instead of resuming autonomously.
+    trigger:
+      type: session_completed
+      source_session_id: sess-assist-1
+      summary: Claude finished the code change but left one bounded verification step undone.
+    primary_session:
+      session_id: sess-assist-1
+      provider: claude
+      status: completed
+      resumable: true
+      loop_mode: assist
+      project: zerg
+      last_user_message: Keep going when the next step is obvious.
+      last_ai_message: The fix is in. The only remaining step is to run the targeted session-detail tests.
+      summary: Code change landed; only targeted verification remains.
+      presence_state: idle
+    active_sessions: []
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    expected:
+      decision: suggest_continue
+      action_count: 1
+      needs_human: true
+      required_actions:
+        - notify_user
+      forbidden_actions:
+        - continue_session
+
+  - id: manual_bounded_follow_up_ignore
+    description: Manual mode should not proactively continue or prompt, even for an obvious bounded follow-up.
+    trigger:
+      type: session_completed
+      source_session_id: sess-manual-1
+      summary: Claude finished, but a single targeted test remains.
+    primary_session:
+      session_id: sess-manual-1
+      provider: claude
+      status: completed
+      resumable: true
+      loop_mode: manual
+      project: zerg
+      last_user_message: Work on this, but stay fully manual.
+      last_ai_message: I fixed the hook, but the targeted tests were not run yet. Next step is to run the session-detail tests.
+      summary: Code change landed; verification still pending.
+      presence_state: idle
+    active_sessions: []
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    expected:
+      decision: ignore
+      action_count: 0
+      needs_human: false
+      forbidden_actions:
+        - continue_session
+        - notify_user
+
+  - id: manual_human_fork_ignore
+    description: Manual mode should not proactively escalate a product fork; the session stays visible, but Oikos remains hands-off.
+    trigger:
+      type: session_blocked
+      source_session_id: sess-manual-fork-1
+      summary: Claude is waiting on a product direction choice.
+      payload:
+        tool_name: AskUser
+    primary_session:
+      session_id: sess-manual-fork-1
+      provider: claude
+      status: blocked
+      resumable: true
+      loop_mode: manual
+      project: zerg
+      last_user_message: Keep this one manual unless I explicitly change the mode.
+      last_ai_message: I can continue, but I need to know whether to optimize for nonstop loops or event-driven wakeups first.
+      summary: Session reached a real product fork.
+      presence_state: blocked
+      blocked_reason: Needs user product decision about autonomy strategy.
+    active_sessions: []
+    policy:
+      shadow_mode: true
+      allow_continue: true
+      allow_notify: true
+    expected:
+      decision: ignore
+      action_count: 0
+      needs_human: false
+      forbidden_actions:
+        - continue_session
+        - notify_user
