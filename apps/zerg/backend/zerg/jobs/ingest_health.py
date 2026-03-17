@@ -1,7 +1,7 @@
 """Ingest health check — detects stale session ingest.
 
-Runs every 30 minutes. Creates a failure insight when no sessions have been
-ingested recently, and a recovery insight when ingest resumes.
+Runs every 30 minutes. Opens an operational incident when session ingest goes
+stale and resolves it when ingest resumes.
 """
 
 from __future__ import annotations
@@ -20,11 +20,16 @@ from zerg.database import db_session
 from zerg.jobs.registry import JobConfig
 from zerg.jobs.registry import job_registry
 from zerg.models.agents import AgentSession
+from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_OPEN
+from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_RESOLVED
+from zerg.models.work import OperationalIncident
 
 logger = logging.getLogger(__name__)
 
 _THRESHOLD_HOURS = float(os.getenv("INGEST_STALE_THRESHOLD_HOURS", "4"))
-_DEDUP_HOURS = 1.0  # Max one insight per hour
+INCIDENT_SOURCE = "ingest_health"
+INCIDENT_TYPE = "stale_ingest"
+INCIDENT_DEDUPE_KEY = "ingest-health:stale"
 
 
 def compute_ingest_health(db: DBSession) -> dict:
@@ -89,69 +94,75 @@ def compute_ingest_health(db: DBSession) -> dict:
 
 
 async def run() -> dict[str, Any]:
-    """Periodic stale ingest check. Creates insights on state transitions."""
+    """Periodic stale ingest check. Opens or resolves incidents on state transitions."""
     if _THRESHOLD_HOURS == 0:
         return {"skipped": True, "reason": "INGEST_STALE_THRESHOLD_HOURS=0"}
 
     with db_session() as db:
         health = compute_ingest_health(db)
         status = health["status"]
+        now = datetime.now(timezone.utc)
+        open_incident = (
+            db.query(OperationalIncident)
+            .filter(
+                OperationalIncident.dedupe_key == INCIDENT_DEDUPE_KEY,
+                OperationalIncident.status == OPERATIONAL_INCIDENT_STATUS_OPEN,
+            )
+            .order_by(OperationalIncident.opened_at.desc())
+            .first()
+        )
 
         if status not in ("ok", "stale"):
             return {"status": status, "action": "none"}
 
         if status == "stale":
-            # Check dedup: don't create insight if one exists within _DEDUP_HOURS
-            from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
-            from zerg.models.work import Insight
-
-            recent_cutoff = datetime.now(timezone.utc).timestamp() - (_DEDUP_HOURS * 3600)
-            recent = (
-                db.query(Insight)
-                .filter(
-                    Insight.title == "Stale ingest detected",
-                    Insight.created_at >= datetime.fromtimestamp(recent_cutoff, tz=timezone.utc),
-                )
-                .first()
+            summary = (
+                f"No sessions ingested for {health['gap_hours']:.1f} hours (threshold: {health['threshold_hours']}h)."
             )
-            if recent:
-                return {"status": "stale", "action": "dedup_skip"}
-
-            db.add(
-                Insight(
-                    insight_type="failure",
-                    title="Stale ingest detected",
-                    description=(
-                        f"No sessions ingested for {health['gap_hours']:.1f} hours "
-                        f"(threshold: {health['threshold_hours']}h). "
-                        "Check that the Rust engine (longhouse-engine) is running."
-                    ),
-                    origin=INSIGHT_ORIGIN_SYSTEM,
-                    severity="warning",
+            context = {
+                "gap_hours": health["gap_hours"],
+                "threshold_hours": health["threshold_hours"],
+                "last_session_at": health["last_session_at"].isoformat() if health["last_session_at"] else None,
+                "session_count": health["session_count"],
+                "observed_at": now.isoformat(),
+                "recommended_action": "Check that the Rust engine (longhouse-engine) is running.",
+            }
+            if open_incident is None:
+                db.add(
+                    OperationalIncident(
+                        incident_type=INCIDENT_TYPE,
+                        source=INCIDENT_SOURCE,
+                        dedupe_key=INCIDENT_DEDUPE_KEY,
+                        status=OPERATIONAL_INCIDENT_STATUS_OPEN,
+                        summary=summary,
+                        context=context,
+                        opened_at=now,
+                        last_observed_at=now,
+                    )
                 )
-            )
+                db.commit()
+                return {"status": "stale", "action": "incident_opened"}
+
+            open_incident.summary = summary
+            open_incident.context = context
+            open_incident.last_observed_at = now
             db.commit()
-            return {"status": "stale", "action": "insight_created"}
+            return {"status": "stale", "action": "incident_updated"}
 
-        # status == "ok": check if we were recently stale (recovery)
-        from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
-        from zerg.models.work import Insight
-
-        recent_stale = db.query(Insight).filter(Insight.title == "Stale ingest detected").order_by(Insight.created_at.desc()).first()
-        recovery_exists = db.query(Insight).filter(Insight.title == "Ingest recovered").order_by(Insight.created_at.desc()).first()
-
-        if recent_stale and (not recovery_exists or recovery_exists.created_at < recent_stale.created_at):
-            db.add(
-                Insight(
-                    insight_type="learning",
-                    title="Ingest recovered",
-                    description=f"Session ingest resumed. Last session: {health.get('last_session_at')}",
-                    origin=INSIGHT_ORIGIN_SYSTEM,
-                    severity="info",
-                )
-            )
+        if open_incident is not None:
+            open_incident.status = OPERATIONAL_INCIDENT_STATUS_RESOLVED
+            open_incident.summary = "Session ingest recovered"
+            open_incident.last_observed_at = now
+            open_incident.resolved_at = now
+            open_incident.context = {
+                **dict(open_incident.context or {}),
+                "resolved_at": now.isoformat(),
+                "resolved_last_session_at": health["last_session_at"].isoformat()
+                if health["last_session_at"]
+                else None,
+            }
             db.commit()
-            return {"status": "ok", "action": "recovery_insight_created"}
+            return {"status": "ok", "action": "incident_resolved"}
 
         return {"status": "ok", "action": "none"}
 

@@ -13,13 +13,13 @@ Last updated: 2026-03-17
 
 ## Phase 1: Move ops alerts out of insights
 
-- [ ] Add a tenant-local operational incident model plus startup-safe SQLite migration
-- [ ] Add a minimal admin/reliability read API for recent incidents
-- [ ] Repoint `check_stale_agents` to incidents instead of `Insight`
-- [ ] Repoint `ingest_health` to incidents instead of `Insight`
-- [ ] Stop backfilling or creating new system-origin insight rows for these jobs
-- [ ] Add/adjust focused tests for incident creation, dedup, and reads
-- [ ] Commit Phase 1
+- [x] Add a tenant-local operational incident model plus startup-safe SQLite migration
+- [x] Add a minimal admin/reliability read API for recent incidents
+- [x] Repoint `check_stale_agents` to incidents instead of `Insight`
+- [x] Repoint `ingest_health` to incidents instead of `Insight`
+- [x] Stop backfilling or creating new system-origin insight rows for these jobs
+- [x] Add/adjust focused tests for incident creation, dedup, and reads
+- [x] Commit Phase 1
 
 ## Phase 2: Remove planning artifacts from continuity context
 
@@ -59,3 +59,5 @@ Last updated: 2026-03-17
 Notes:
 - Keep this bounded. Do not redesign reflection into a full new workflow in the same pass.
 - The goal is a cleaner product boundary, not a richer feature set.
+- 2026-03-17: Phase 1 now uses `OperationalIncident` plus `GET /api/reliability/incidents`; stale-agent and ingest-health open/update/resolve incidents instead of writing new `system` insights. The new table comes in through `AgentsBase.metadata.create_all()`, so no extra SQLite ALTER path was needed.
+- 2026-03-17: Verification for this slice: `uv run --with ruff ruff check ...` passed and `make test-lite` passed (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`).
