@@ -30,6 +30,13 @@ jobs:
         working-directory: apps/zerg/backend
         run: uv build --wheel
 
+      - name: Upload release wheel assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          WHEEL=$(find apps/zerg/backend/dist -maxdepth 1 -name 'longhouse-*.whl' | head -1)
+          gh release upload "${{ github.event.release.tag_name }}" "$WHEEL" --clobber
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

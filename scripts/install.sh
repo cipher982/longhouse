@@ -31,6 +31,27 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 step() { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 
+resolve_release_wheel_url() {
+    python3 - <<'PY'
+import json
+import urllib.request
+
+request = urllib.request.Request(
+    "https://api.github.com/repos/cipher982/longhouse/releases/latest",
+    headers={"User-Agent": "longhouse-installer"},
+)
+with urllib.request.urlopen(request, timeout=15) as response:
+    payload = json.load(response)
+
+tag = payload.get("tag_name")
+if not tag:
+    raise SystemExit("latest release response missing tag_name")
+
+version = tag[1:] if tag.startswith("v") else tag
+print(f"https://github.com/cipher982/longhouse/releases/download/{tag}/longhouse-{version}-py3-none-any.whl")
+PY
+}
+
 # Detect platform
 detect_platform() {
     local os arch
@@ -107,18 +128,27 @@ install_python() {
 install_longhouse() {
     step "Installing Longhouse CLI"
 
-    # Package source - defaults to PyPI, can be overridden for dev installs
-    local pkg_source="${LONGHOUSE_PKG_SOURCE:-longhouse}"
-    local source_install=0
+    # Package source - defaults to the latest released wheel asset, can be
+    # overridden for local/dev installs.
+    local pkg_source="${LONGHOUSE_PKG_SOURCE:-}"
+    local custom_source=0
+
+    if [[ -z "$pkg_source" ]]; then
+        info "Resolving latest Longhouse release..."
+        pkg_source="$(resolve_release_wheel_url)" || {
+            error "Failed to resolve latest Longhouse release"
+            exit 1
+        }
+    fi
 
     if [[ "$pkg_source" != "longhouse" ]]; then
-        source_install=1
+        custom_source=1
     fi
 
     # Install the longhouse package as a tool
-    if [[ "$source_install" -eq 1 ]]; then
-        info "Installing longhouse from source..."
-        # Local-path source installs can otherwise reuse a stale cached wheel and miss
+    if [[ "$custom_source" -eq 1 ]]; then
+        info "Installing longhouse from configured source..."
+        # Non-PyPI sources can otherwise reuse a stale cached wheel and miss
         # recent code changes during disposable installer validation.
         uv tool uninstall longhouse 2>/dev/null || true
         uv tool install --force --no-cache "$pkg_source"
@@ -126,12 +156,12 @@ install_longhouse() {
         info "Upgrading existing longhouse installation..."
         uv tool upgrade longhouse || {
             # If upgrade fails (e.g., installed from different source), reinstall
-            info "Reinstalling from source..."
+            info "Reinstalling longhouse..."
             uv tool uninstall longhouse 2>/dev/null || true
             uv tool install "$pkg_source"
         }
     else
-        info "Installing longhouse from source..."
+        info "Installing longhouse..."
         uv tool install "$pkg_source"
     fi
 
