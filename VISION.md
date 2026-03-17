@@ -904,8 +904,9 @@ Hosted users authenticate via control plane, then get redirected to their instan
 2. Clicks "Sign In with Google"
 3. Control plane handles OAuth, creates/finds user record
 4. If no instance: redirect to checkout
-5. If instance exists: redirect to {user}.longhouse.ai?auth_token=xxx
-6. User instance validates token, sets session cookie
+5. If instance exists: redirect through control-plane open-instance flow to
+   {user}.longhouse.ai/api/auth/accept-token?token=xxx
+6. User instance validates token, sets session cookie, redirects to `/timeline`
 ```
 
 **Cross-subdomain token:**

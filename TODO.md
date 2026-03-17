@@ -165,7 +165,7 @@ Notes:
 
 ## [Tech Debt] Simplify hosted auth handoff (size: 4)
 
-Status (2026-03-16): Active.
+Status (2026-03-16): Done. Phase 6 shipped with one canonical hosted browser login handoff, explicit control-plane login URLs from tenant auth methods, and the hosted runtime verified end to end.
 
 **Goal:** Make hosted browser sign-in read like one coherent flow: the tenant sends users to one control-plane login URL, the control plane preserves that intent through login/OAuth, and the tenant accepts the resulting login token through one canonical browser handoff route.
 
@@ -176,16 +176,19 @@ Status (2026-03-16): Active.
 - `/api/auth/sso` and the landing-page `auth_token` JS handoff are removed
 - Focused auth regression coverage plus full ship verification pass
 
-- [ ] Write and commit the concise phase 6 spec
-- [ ] Add a canonical hosted control-plane login URL to tenant auth methods
-- [ ] Preserve hosted return intent through control-plane password and Google login
-- [ ] Collapse tenant browser token acceptance onto `/api/auth/accept-token` and remove `/api/auth/sso`
-- [ ] Remove the frontend landing `auth_token` bridge and update the hosted login UI to use the canonical URL
-- [ ] Ship and verify the hosted runtime after the cleanup
+- [x] Write and commit the concise phase 6 spec
+- [x] Add a canonical hosted control-plane login URL to tenant auth methods
+- [x] Preserve hosted return intent through control-plane password and Google login
+- [x] Collapse tenant browser token acceptance onto `/api/auth/accept-token` and remove `/api/auth/sso`
+- [x] Remove the frontend landing `auth_token` bridge and update the hosted login UI to use the canonical URL
+- [x] Ship and verify the hosted runtime after the cleanup
 
 Notes:
 - 2026-03-16: Keep this bounded to browser handoff cleanup. Do not fold in Gmail connector OAuth, device auth, or runner auth changes.
 - 2026-03-16: The target shape is one hosted browser login bridge, not multiple overlapping entry points that happen to work.
+- 2026-03-16: Hosted `/api/auth/methods` now returns both `sso_url` and the canonical `sso_login_url`, control-plane login preserves a signed local `return_to`, and `/dashboard/open-instance` now hands browsers off to tenant `/api/auth/accept-token?token=...`.
+- 2026-03-16: Final verification passed in a clean `origin/main` clone: focused control-plane and tenant auth regression suites, `make generate-sdk`, `make test-frontend-unit MINIMAL=1`, `bun run validate:types`, `make test`, `make test-e2e`, GHCR runtime build `23174816794`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, and live `make qa-live` (8/8).
+- Spec: `docs/specs/auth-handoff-simplification.md`
 
 ## [Tech Debt] Tighten browser-vs-machine auth boundary (size: 3)
 
