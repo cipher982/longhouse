@@ -29,7 +29,7 @@ export function DemoSection({ screenshotTheme }: DemoSectionProps) {
         <span className="landing-section-label">See it in action</span>
         <h2 className="landing-section-title">One Timeline. Every Agent.</h2>
         <p className="landing-section-subtitle">
-          Every Claude Code, Codex, and Gemini session — live, searchable, and resumable from any device.
+          Every Claude Code, Codex, and Gemini session lands in one searchable timeline. Claude continues directly from the web today; Codex and Gemini are archive-first for now.
         </p>
 
         <ProductShowcase screenshotTheme={screenshotTheme} />

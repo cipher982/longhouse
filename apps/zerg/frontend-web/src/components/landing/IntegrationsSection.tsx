@@ -7,45 +7,44 @@ import {
   TrashIcon,
   BanIcon,
 } from "../icons";
+import { getLaunchProviderSupportList } from "../../lib/providers";
 
 interface Provider {
   name: string;
   icon: React.ReactNode;
-  status: "syncing" | "coming";
+  status: "live" | "coming";
   description: string;
+  statusLabel: string;
 }
 
 export function IntegrationsSection() {
+  const providerIcons: Record<string, React.ReactNode> = {
+    claude: <SparklesIcon width={40} height={40} />,
+    codex: <CodeIcon width={40} height={40} />,
+    gemini: <SparklesIcon width={40} height={40} />,
+  };
+
   const providers: Provider[] = [
-    {
-      name: "Claude Code",
-      icon: <SparklesIcon width={40} height={40} />,
-      status: "syncing",
-      description: "Full session sync with tool calls",
-    },
-    {
-      name: "Codex CLI",
-      icon: <CodeIcon width={40} height={40} />,
-      status: "syncing",
-      description: "Full session sync with tool calls",
-    },
-    {
-      name: "Gemini CLI",
-      icon: <SparklesIcon width={40} height={40} />,
-      status: "syncing",
-      description: "Full session sync with tool calls",
-    },
+    ...getLaunchProviderSupportList().map((provider) => ({
+      name: provider.marketingName,
+      icon: providerIcons[provider.id],
+      status: "live" as const,
+      description: provider.cardDescription,
+      statusLabel: provider.statusLabel,
+    })),
     {
       name: "OpenCode",
       icon: <CodeIcon width={40} height={40} />,
       status: "coming",
       description: "Open-source AI terminal agent",
+      statusLabel: "Coming soon",
     },
     {
       name: "Cursor",
       icon: <CodeIcon width={40} height={40} />,
       status: "coming",
       description: "IDE-integrated AI sessions",
+      statusLabel: "Coming soon",
     },
   ];
 
@@ -61,7 +60,7 @@ export function IntegrationsSection() {
           {providers.map((provider, index) => (
             <div
               key={index}
-              className={`landing-provider-card ${provider.status === 'coming' ? 'coming-soon' : ''}`}
+              className={`landing-provider-card ${provider.status === "coming" ? "coming-soon" : ""}`}
               style={{ animationDelay: `${index * 100}ms` }}
             >
               <span className="landing-provider-icon">{provider.icon}</span>
@@ -70,14 +69,18 @@ export function IntegrationsSection() {
                 <span className="landing-provider-desc">{provider.description}</span>
               </div>
               <span className={`landing-provider-status ${provider.status}`}>
-                {provider.status === 'syncing' ? 'Syncing now' : 'Coming soon'}
+                {provider.statusLabel}
               </span>
             </div>
           ))}
         </div>
 
         <p className="landing-providers-tagline">
-          Find where you solved auth. Resume that refactor. All from one timeline.
+          Find where you solved auth. Resume that refactor. Start cloud work from the same timeline.
+        </p>
+
+        <p className="landing-providers-tagline landing-providers-tagline--subtle">
+          Claude currently has the richest hooks and telemetry. Codex and Gemini already sync into the timeline and can start cloud sessions, but direct web continuation is still Claude-first.
         </p>
 
         {/* Trust badges */}

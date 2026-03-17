@@ -44,7 +44,7 @@ export function HeroSection({
           </p>
 
           <p className="landing-hero-note">
-            Claude Code, Codex, and Gemini &mdash; one timeline, fully interactive. Self-host free, or we host it for $5/mo.
+            Claude Code, Codex, and Gemini in one timeline. Claude continues directly in the browser today; Codex and Gemini sync now and can start cloud sessions.
           </p>
 
           <div className="landing-hero-ctas">

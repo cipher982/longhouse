@@ -24,7 +24,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What AI coding agents do you support?",
-    answer: "Claude Code, Codex CLI, and Gemini CLI are fully supported today. OpenCode and Cursor are coming soon. Longhouse reads the session files these tools already produce — no plugins or config changes needed."
+    answer: "Claude Code currently has the strongest direct web continuation, hooks, and telemetry. Codex CLI and Gemini CLI already sync into the timeline and can start cloud sessions today, but direct web continuation is still Claude-first. OpenCode and Cursor are coming soon."
   }
 ];
 
