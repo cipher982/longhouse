@@ -1,5 +1,5 @@
 import { Badge, Button } from "../ui";
-import type { AgentSession } from "../../services/api/agents";
+import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -22,7 +22,19 @@ interface SessionContextPaneProps {
     title: string;
     body: string;
   } | null;
+  loopModePending?: boolean;
+  onLoopModeChange?: (nextMode: SessionLoopMode) => void;
 }
+
+const LOOP_MODE_OPTIONS: Array<{
+  value: SessionLoopMode;
+  label: string;
+  hint: string;
+}> = [
+  { value: "manual", label: "Manual", hint: "Observe only" },
+  { value: "assist", label: "Assist", hint: "Suggest next steps" },
+  { value: "autopilot", label: "Autopilot", hint: "Bounded continues" },
+];
 
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
@@ -42,6 +54,8 @@ export function SessionContextPane({
   onOpenSession,
   onOpenLatest,
   continuationNotice = null,
+  loopModePending = false,
+  onLoopModeChange,
 }: SessionContextPaneProps) {
   const turnCount = session.user_messages + session.assistant_messages;
 
@@ -93,6 +107,37 @@ export function SessionContextPane({
           {session.git_branch ? <MetaRow label="Branch" value={session.git_branch} /> : null}
           {session.cwd ? <MetaRow label="Workspace" value={truncatePath(session.cwd, 60)} /> : null}
           {session.project ? <MetaRow label="Project" value={session.project} /> : null}
+        </div>
+      </div>
+
+      <div className="session-pane-section">
+        <div className="session-pane-section-title">Loop Mode</div>
+        <div
+          className="session-loop-mode"
+          role="radiogroup"
+          aria-label="Session loop mode"
+          data-testid="session-loop-mode-group"
+        >
+          {LOOP_MODE_OPTIONS.map((option) => {
+            const isActive = session.loop_mode === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={isActive}
+                className={`session-loop-mode__option${isActive ? " is-active" : ""}`}
+                onClick={() => onLoopModeChange?.(option.value)}
+                disabled={loopModePending || !onLoopModeChange}
+              >
+                <span className="session-loop-mode__label">{option.label}</span>
+                <span className="session-loop-mode__hint">{option.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="session-loop-mode__caption">
+          Stored session preference for Oikos supervision. Live autonomy remains shadow-only for now.
         </div>
       </div>
 
