@@ -12,6 +12,7 @@ from zerg.services.oikos_autonomy_journeys import OikosAutonomyJourneyRunner
 from zerg.services.oikos_autonomy_journeys import baseline_shadow_decider
 from zerg.services.oikos_autonomy_journeys import load_autonomy_journey_cases
 from zerg.services.oikos_autonomy_journeys import run_autonomy_journeys
+from zerg.session_loop_mode import SessionLoopMode
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "oikos_autonomy_journeys.yml"
 
@@ -23,7 +24,7 @@ def _load_cases():
 def test_load_autonomy_journey_cases_reads_expected_fixture():
     cases = _load_cases()
 
-    assert len(cases) == 8
+    assert len(cases) == 11
     assert [case.id for case in cases] == [
         "completed_nothing_left",
         "completed_obvious_follow_up",
@@ -33,8 +34,14 @@ def test_load_autonomy_journey_cases_reads_expected_fixture():
         "duplicate_blocked_wakeup_noop",
         "blocked_bounded_follow_up",
         "competing_sessions_prioritize_human_fork",
+        "assist_bounded_follow_up_suggest",
+        "manual_bounded_follow_up_ignore",
+        "manual_human_fork_ignore",
     ]
     assert cases[1].artifacts[0].path == "/tmp/failing-tests.log"
+    assert cases[1].primary_session.loop_mode == SessionLoopMode.AUTOPILOT
+    assert cases[8].primary_session.loop_mode == SessionLoopMode.ASSIST
+    assert cases[10].primary_session.loop_mode == SessionLoopMode.MANUAL
 
 
 @pytest.mark.asyncio
@@ -49,6 +56,10 @@ async def test_runner_persists_artifacts_and_matches_expected_outcomes(tmp_path)
 
         assert result.decision.decision == case.expected.decision
         assert len(result.decision.proposed_actions) == case.expected.action_count
+
+        required = {action.kind for action in result.decision.proposed_actions}
+        for required_action in case.expected.required_actions:
+            assert required_action in required
 
         forbidden = {action.kind for action in result.decision.proposed_actions}
         for forbidden_action in case.expected.forbidden_actions:
@@ -90,6 +101,7 @@ async def test_runner_builds_compact_context_packet(tmp_path):
     assert packet.case_id == "blocked_human_fork"
     assert packet.trigger.type == "session_blocked"
     assert packet.primary_session.blocked_reason == "Needs user product decision about autonomy strategy."
+    assert packet.primary_session.loop_mode == SessionLoopMode.ASSIST
     assert packet.policy.shadow_mode is True
     assert packet.policy.allow_continue is True
 
@@ -110,6 +122,9 @@ async def test_run_autonomy_journeys_executes_fixture_file_into_stable_root(tmp_
         "duplicate_blocked_wakeup_noop",
         "blocked_bounded_follow_up",
         "competing_sessions_prioritize_human_fork",
+        "assist_bounded_follow_up_suggest",
+        "manual_bounded_follow_up_ignore",
+        "manual_human_fork_ignore",
     ]
     assert all(result.run_dir.parent == tmp_path for result in results)
     assert all(result.context_path.exists() for result in results)

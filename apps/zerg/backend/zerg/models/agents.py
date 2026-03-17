@@ -26,8 +26,8 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from zerg.models.enums import SessionLoopMode
 from zerg.models.types import GUID
+from zerg.session_loop_mode import SessionLoopMode
 
 if TYPE_CHECKING:
     pass

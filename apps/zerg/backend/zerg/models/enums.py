@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from enum import Enum
 
+from zerg.session_loop_mode import SessionLoopMode
+
 
 class UserRole(str, Enum):
     USER = "USER"
@@ -67,14 +69,6 @@ class RunnerJobStatus(str, Enum):
     FAILED = "failed"
     TIMEOUT = "timeout"
     CANCELED = "canceled"
-
-
-class SessionLoopMode(str, Enum):
-    """How much autonomy Oikos may exercise for a coding session."""
-
-    MANUAL = "manual"
-    ASSIST = "assist"
-    AUTOPILOT = "autopilot"
 
 
 __all__ = [
