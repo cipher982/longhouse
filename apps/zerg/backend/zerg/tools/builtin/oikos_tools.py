@@ -47,13 +47,13 @@ TOOLS: List[StructuredTool] = [
         func=spawn_workspace_commis,
         coroutine=spawn_workspace_commis_async,
         name="spawn_workspace_commis",
-        description="Spawn a commis to work in a workspace (PRIMARY tool for all commis work). "
+        description="Start a managed cloud session in a workspace (PRIMARY tool for deeper delegated work). "
         "Optionally clone a git repo by passing git_repo; otherwise uses an ephemeral scratch workspace. "
         "Pass resume_session_id to continue an existing coding session with one bounded follow-up. "
-        "Runs a CLI agent (Claude Code) in an isolated workspace and captures changes. "
+        "Runs a CLI agent in an isolated workspace and captures changes. "
         "Use this for: reading code, analyzing dependencies, making changes, running tests, research. "
         "When using resume_session_id, keep the task narrow and tied to that same session. "
-        "Pass skills=['skill-name'] to activate user skills in the commis prompt.",
+        "Pass skills=['skill-name'] to activate user skills in the cloud-session prompt.",
     ),
     StructuredTool.from_function(
         func=list_commiss,
