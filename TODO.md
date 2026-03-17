@@ -203,7 +203,7 @@ Notes:
 
 ## [Launch][Product][Tech Debt] Finish the continuity-memory boundary split (size: 4)
 
-Status (2026-03-17): In progress. The product boundary is clearer now, but it is not finished: ops alerts are still stored in `insights`, proposals still leak into briefings, and the insight corpus still lacks a small curation surface.
+Status (2026-03-17): Done. Ops alerts now live in incidents, briefings stay on session summaries plus curated gotchas, browser users can archive/unarchive insights, and the hosted rollout for `david010` is verified.
 
 **Goal:** Keep only archive + curated continuity memory + briefings in the Longhouse core loop, while moving ops alerts to reliability and demoting reflection/proposals to internal admin tooling.
 
@@ -219,7 +219,7 @@ Status (2026-03-17): In progress. The product boundary is clearer now, but it is
 - [x] Add a tenant-local incident path and repoint ops alert writers away from `Insight`
 - [x] Remove proposal data from briefing assembly and hide/remove the proposals surface
 - [x] Add minimal browser insight curation with archive/unarchive
-- [ ] Verify locally, ship, and re-run hosted QA
+- [x] Verify locally, ship, and re-run hosted QA
 
 Notes:
 - 2026-03-17: This is a product-boundary cleanup, not a push to make reflection/proposals bigger.
@@ -230,6 +230,7 @@ Notes:
 - 2026-03-17: Phase 2 landed in the clean clone: briefings no longer include approved proposals, `/proposals` now redirects to `/briefings`, proposal copy is explicitly internal/manual, `make test-lite` passed again, and `make test-frontend-unit` passed after installing the workspace dependencies in the temp clone.
 - 2026-03-17: Phase 3 landed in the clean clone: `Insight.archived_at` now hides archived rows from default machine/browser reads and briefing gotchas, browser users can archive or restore insights via `/insights`, and verification passed with backend `ruff check`, `make test-lite` (`878 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` (`31 passed, 1 skipped`).
 - 2026-03-17: Phase 4 updated the agent-facing/product-boundary docs only: `AGENTS.md` now describes insights as curated continuity memory with browser archive/unarchive, proposals as internal/manual tooling only, and the active continuity specs no longer describe the pre-cleanup product shape.
+- 2026-03-17: Shipped on `main` after rebasing onto current `origin/main`. Final continuity-boundary commits are `3b9afb83` (incidents), `a9f252a4` (briefings/proposals), `5f8a8f0d` (browser insight archiving), and `3fe60518` (docs). Verification on the rebased branch passed with `make test` (`881 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), `make qa-live` pre-push `8/8`, `runtime-image.yml` run `23205212659` success, `deploy-and-verify.yml` run `23205321095` success, direct hosted `/api/health` healthy, live `longhouse-david010` container revision `3fe605186c8b8a8ca6162da8d47f25958e856ba6`, and post-deploy `make qa-live` `8/8`.
 - Spec: `docs/specs/continuity-memory-boundary.md`
 - Tasks: `docs/tasks/continuity-memory-boundary.md`
 
