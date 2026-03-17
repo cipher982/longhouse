@@ -1,7 +1,7 @@
 """Scheduled reflection job — analyze recent sessions and extract insights.
 
-Thin wrapper around the reflection service. Runs every 6 hours by default
-(configurable via REFLECTION_CRON env var).
+Thin wrapper around the reflection service. The cron registration is disabled
+by default and can be opted back in with ``REFLECTION_JOB_ENABLED=1``.
 """
 
 from __future__ import annotations
@@ -16,6 +16,10 @@ from zerg.jobs.registry import job_registry
 from zerg.models_config import get_llm_client_with_db_fallback
 
 logger = logging.getLogger(__name__)
+
+
+def _reflection_job_enabled() -> bool:
+    return os.getenv("REFLECTION_JOB_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
 
 
 async def run() -> dict[str, Any]:
@@ -49,7 +53,7 @@ job_registry.register(
         id="session-reflection",
         cron=os.getenv("REFLECTION_CRON", "0 */6 * * *"),
         func=run,
-        enabled=True,
+        enabled=_reflection_job_enabled(),
         timeout_seconds=300,
         tags=["reflection", "insights", "builtin"],
         description="Analyze recent sessions and extract learnings",

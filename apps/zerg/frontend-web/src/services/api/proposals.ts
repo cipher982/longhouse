@@ -1,8 +1,8 @@
 /**
  * API functions for action proposal management.
  *
- * Action proposals are generated during reflection when insights have
- * concrete, actionable fixes. Users review and approve/decline them.
+ * Action proposals are created when reflection is explicitly run and an
+ * insight includes a concrete, actionable follow-up.
  */
 
 import { request } from "./base";
