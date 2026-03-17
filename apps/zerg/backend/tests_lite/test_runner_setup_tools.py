@@ -46,7 +46,12 @@ def test_runner_list_suggests_doctor_when_all_runners_are_offline(tmp_path: Path
             capabilities=["exec.full"],
             status="offline",
             last_seen_at=utc_now_naive() - timedelta(minutes=10),
-            runner_metadata={"capabilities": ["exec.full"], "heartbeat_interval_ms": 30000},
+            runner_metadata={
+                "capabilities": ["exec.full"],
+                "heartbeat_interval_ms": 30000,
+                "auto_update_policy": "notify",
+                "install_layout_version": 1,
+            },
         )
         db.add(runner)
         db.commit()
@@ -64,6 +69,8 @@ def test_runner_list_suggests_doctor_when_all_runners_are_offline(tmp_path: Path
         assert result["ok"] is True
         assert result["data"]["summary"] == "0/1 runners online"
         assert "runner_doctor" in result["data"]["suggested_next_step"]
+        assert result["data"]["runners"][0]["auto_update_policy"] == "notify"
+        assert result["data"]["runners"][0]["managed_install_ready"] is True
     finally:
         db.close()
 
@@ -88,6 +95,8 @@ def test_runner_doctor_returns_reason_coded_diagnosis(tmp_path: Path):
                 "platform": "linux",
                 "runner_version": "0.1.0",
                 "install_mode": "server",
+                "auto_update_policy": "notify",
+                "install_layout_version": 1,
                 "capabilities": ["exec.full"],
             },
         )

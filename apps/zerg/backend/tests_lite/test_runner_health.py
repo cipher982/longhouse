@@ -18,6 +18,8 @@ def _runner(**overrides):
         "capabilities": ["exec.full"],
         "runner_metadata": {
             "install_mode": "server",
+            "auto_update_policy": "notify",
+            "install_layout_version": 1,
             "runner_version": "0.1.0",
             "capabilities": ["exec.full"],
             "heartbeat_interval_ms": 30_000,
@@ -37,6 +39,9 @@ def test_assess_runner_health_marks_fresh_runner_online():
     assert health.effective_status == "online"
     assert health.status_reason == "fresh_heartbeat"
     assert health.install_mode == "server"
+    assert health.auto_update_policy == "notify"
+    assert health.install_layout_version == 1
+    assert health.managed_install_ready is True
     assert health.version_status == "outdated"
     assert health.capabilities_match is True
 
@@ -68,6 +73,7 @@ def test_assess_runner_health_marks_never_connected_runner_offline():
     assert health.effective_status == "offline"
     assert health.status_reason == "never_connected"
     assert health.capabilities_match is None
+    assert health.managed_install_ready is False
     assert health.version_status == "unknown"
 
 

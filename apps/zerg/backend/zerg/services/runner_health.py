@@ -17,6 +17,7 @@ DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000
 STALE_HEARTBEAT_MULTIPLIER = 3
 MIN_STALE_AFTER_SECONDS = 90
 KNOWN_INSTALL_MODES = {"desktop", "server"}
+KNOWN_AUTO_UPDATE_POLICIES = {"off", "notify", "apply"}
 _SEMVER_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 
@@ -33,6 +34,9 @@ class RunnerHealthAssessment:
     is_stale: bool
     is_connected: bool | None
     install_mode: str | None
+    auto_update_policy: str | None
+    install_layout_version: int | None
+    managed_install_ready: bool
     runner_version: str | None
     latest_runner_version: str | None
     version_status: str
@@ -87,6 +91,22 @@ def _install_mode(metadata: dict[str, Any]) -> str | None:
     return value if value in KNOWN_INSTALL_MODES else None
 
 
+def _auto_update_policy(metadata: dict[str, Any]) -> str | None:
+    value = metadata.get("auto_update_policy")
+    return value if value in KNOWN_AUTO_UPDATE_POLICIES else None
+
+
+def _install_layout_version(metadata: dict[str, Any]) -> int | None:
+    raw = metadata.get("install_layout_version")
+    if isinstance(raw, int) and raw > 0:
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        parsed = int(raw)
+        if parsed > 0:
+            return parsed
+    return None
+
+
 def _capabilities(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
@@ -128,6 +148,9 @@ def assess_runner_health(
     capabilities_match: bool | None = None
     if configured_capabilities and reported_capabilities:
         capabilities_match = configured_capabilities == reported_capabilities
+    auto_update_policy = _auto_update_policy(metadata)
+    install_layout_version = _install_layout_version(metadata)
+    managed_install_ready = install_layout_version is not None and install_layout_version >= 1
 
     runner_version = metadata.get("runner_version") if isinstance(metadata.get("runner_version"), str) else None
     latest_runner_version = latest_runner_version or normalize_runner_binary_tag(get_settings().runner_binary_tag)
@@ -192,6 +215,9 @@ def assess_runner_health(
         is_stale=is_stale,
         is_connected=is_connected,
         install_mode=_install_mode(metadata),
+        auto_update_policy=auto_update_policy,
+        install_layout_version=install_layout_version,
+        managed_install_ready=managed_install_ready,
         runner_version=runner_version,
         latest_runner_version=latest_runner_version,
         version_status=version_status,
@@ -232,6 +258,9 @@ def build_runner_response(
         stale_after_seconds=assessment.stale_after_seconds,
         runner_metadata=metadata,
         install_mode=assessment.install_mode,
+        auto_update_policy=assessment.auto_update_policy,
+        install_layout_version=assessment.install_layout_version,
+        managed_install_ready=assessment.managed_install_ready,
         runner_version=assessment.runner_version,
         latest_runner_version=assessment.latest_runner_version,
         version_status=assessment.version_status,

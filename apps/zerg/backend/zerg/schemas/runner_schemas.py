@@ -111,6 +111,9 @@ class RunnerResponse(UTCBaseModel):
     stale_after_seconds: int = Field(default=90, description="Seconds after which a heartbeat is treated as stale")
     runner_metadata: Optional[dict[str, Any]] = None
     install_mode: Optional[str] = None
+    auto_update_policy: Optional[str] = Field(default=None, description="off|notify|apply")
+    install_layout_version: Optional[int] = Field(default=None, description="Versioned install layout revision reported by the runner")
+    managed_install_ready: bool = Field(default=False, description="True when the runner reports a managed versioned install layout")
     runner_version: Optional[str] = None
     latest_runner_version: Optional[str] = None
     version_status: str = Field(default="unknown", description="current|outdated|ahead|unknown")
