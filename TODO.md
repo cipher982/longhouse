@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch][Infra][QA/Test] Unblock PyPI publish for the public CLI package (size: 2)
 
-Status (2026-03-17): In progress. The public installer now works from GitHub release wheels, but PyPI publishing still fails because the backend wheel declares an unused Git dependency that PyPI rejects.
+Status (2026-03-17): Done. The dead `hatch-agent` Git dependency is gone from the backend wheel, `v0.1.5` is published on GitHub Releases and PyPI, the public installer smoke passes against that release, and the hosted runtime has been redeployed and live-QA'd.
 
 **Goal:** Restore a clean public Python package story so GitHub release wheels and PyPI uploads both work without carrying dead `hatch-agent` baggage in the core Longhouse package.
 
@@ -30,7 +30,15 @@ Status (2026-03-17): In progress. The public installer now works from GitHub rel
 - [x] Remove the dead `hatch-agent` dependency from backend packaging
 - [x] Delete the unused backend compatibility shim that forced the dependency
 - [x] Add focused regression coverage for package metadata / direct dependencies
-- [ ] Cut and verify a fresh public release
+- [x] Cut and verify a fresh public release
+
+Notes:
+- 2026-03-17: `fix: drop dead hatch-agent packaging dependency` removed the unused backend compatibility shim plus the Git dependency that PyPI rejected, and added a test guard against direct-URL deps in the backend package metadata.
+- 2026-03-17: `build: release longhouse 0.1.5` cut the public package version used for the clean release.
+- 2026-03-17: The first `v0.1.5` release workflow proved the metadata issue was fixed, then failed on `gh release upload` because the workflow lacked `contents: write`.
+- 2026-03-17: `fix: allow release workflow republish from tags` added `contents: write`, a `workflow_dispatch` recovery path, and tag-based checkout for release republishing.
+- 2026-03-17: Manual workflow-dispatch publish run `23178019217` succeeded for `v0.1.5`; PyPI now serves `longhouse==0.1.5`, and the release page carries `longhouse-0.1.5-py3-none-any.whl`.
+- 2026-03-17: Verification passed locally (`make test`, `make test-install-runner`, `make validate`, backend wheel rebuild), in CI (`push-pr-ci` run `23177914117`, Launch Gate `23177914121`, Installer Validation Ring `23177914125`, Runner Onboarding Validation Ring `23177914114`, Publish Runtime Image `23177914116`, Publish to PyPI dispatch `23178019217`), and live (`./scripts/ci/installer-first-run.sh --installer remote --shell /bin/zsh`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, `make qa-live`, `make qa-live-conversations`).
 
 ## [Launch][Product][Tech Debt] Tighten insights to a thin continuity primitive (size: 3)
 
