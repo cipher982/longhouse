@@ -68,6 +68,11 @@ def test_install_script_defaults_to_desktop_mode_and_is_valid_bash(tmp_path):
     assert 'VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"' in response.text
     assert 'BINARY_PATH="$VERSION_DIR/longhouse-runner"' in response.text
     assert "For always-on servers, use RUNNER_INSTALL_MODE=server instead." in response.text
+    linux_desktop_start = response.text.index('if [ "$RUNNER_INSTALL_MODE" = "desktop" ]')
+    assert response.text.index('if systemctl --user is-active --quiet longhouse-runner', linux_desktop_start) < response.text.index(
+        'write_launcher "$LAUNCHER_PATH" "$CURRENT_LINK"',
+        linux_desktop_start,
+    )
 
     script_path = Path(tmp_path) / "install.sh"
     script_path.write_text(response.text)
@@ -90,6 +95,9 @@ def test_install_script_server_mode_exposes_system_service_contract(tmp_path):
     assert "WantedBy=multi-user.target" in response.text
     assert ".local/share/longhouse-runner" in response.text
     assert "sudo systemctl status longhouse-runner" in response.text
+    assert response.text.index('if $SUDO systemctl is-active --quiet longhouse-runner') < response.text.index(
+        '$SUDO install -m 755 -o "$INSTALL_USER" -g "$INSTALL_GROUP" "$TMP_LAUNCHER" "$LAUNCHER_PATH"'
+    )
 
     script_path = Path(tmp_path) / "install-server.sh"
     script_path.write_text(response.text)

@@ -323,6 +323,12 @@ EOF
       fi
       chmod +x "$TMP_BINARY"
       mv "$TMP_BINARY" "$BINARY_PATH"
+
+      if systemctl --user is-active --quiet longhouse-runner 2>/dev/null; then
+        echo "Stopping existing runner..."
+        systemctl --user stop longhouse-runner
+      fi
+
       ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
       write_launcher "$LAUNCHER_PATH" "$CURRENT_LINK"
 
@@ -363,11 +369,6 @@ WantedBy=default.target
 SERVICEEOF
 
       systemctl --user daemon-reload
-
-      if systemctl --user is-active --quiet longhouse-runner 2>/dev/null; then
-        echo "Stopping existing runner..."
-        systemctl --user stop longhouse-runner
-      fi
 
       echo "Starting runner service..."
       systemctl --user enable longhouse-runner
@@ -466,6 +467,11 @@ StartLimitBurst=3
 WantedBy=multi-user.target
 EOF
 
+      if $SUDO systemctl is-active --quiet longhouse-runner 2>/dev/null; then
+        echo "Stopping existing runner..."
+        $SUDO systemctl stop longhouse-runner
+      fi
+
       echo "Installing system service for user $INSTALL_USER..."
       $SUDO install -d -m 755 /etc/longhouse /etc/systemd/system
       $SUDO install -d -m 755 -o "$INSTALL_USER" -g "$INSTALL_GROUP" \
@@ -484,10 +490,6 @@ EOF
       $SUDO install -m 644 "$TMP_SERVICE" /etc/systemd/system/longhouse-runner.service
 
       $SUDO systemctl daemon-reload
-      if $SUDO systemctl is-active --quiet longhouse-runner 2>/dev/null; then
-        echo "Stopping existing runner..."
-        $SUDO systemctl stop longhouse-runner
-      fi
 
       echo "Starting runner service..."
       $SUDO systemctl enable longhouse-runner
