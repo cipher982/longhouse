@@ -1,6 +1,6 @@
 # AUTH_DISABLED And Startup Hardening
 
-Status: In progress
+Status: Done
 
 ## Scope
 
@@ -46,3 +46,4 @@ Out of scope:
 
 - 2026-03-16: This phase intentionally keeps `AUTH_DISABLED` for local browser ergonomics and dev-only helper routes; the change is that machine/internal surfaces stop inheriting that bypass implicitly.
 - 2026-03-16: Hosted instances already get `OWNER_EMAIL` from the control plane, so this hardening mainly removes ambiguous OSS/auth-enabled fallback behavior.
+- 2026-03-16: Shipped in commit `15a1fbd0` after local `make test`, `make test-e2e`, `make test-shipper-e2e`, GHCR runtime build `23173937151`, Coolify deploys for `longhouse-demo` and `longhouse-control-plane`, reprovision of `david010`, and live `make qa-live` (8/8).
