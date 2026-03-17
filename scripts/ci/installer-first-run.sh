@@ -333,7 +333,13 @@ fi
 rm -f "$DOCTOR_JSON"
 
 log "🧭 Running onboarding quickstart (safe mode)..."
-SSH_CONNECTION="installer-smoke" longhouse onboard --quick --no-shipper --no-demo --port "$PORT"
+ONBOARD_LOG="$(mktemp -t longhouse-onboard.XXXXXX.log)"
+SSH_CONNECTION="installer-smoke" longhouse onboard --quick --no-shipper --no-demo --port "$PORT" | tee "$ONBOARD_LOG"
+
+if grep -q "\[WARN\] Test event failed" "$ONBOARD_LOG"; then
+  fail "Onboarding verification emitted a test-event warning"
+fi
+rm -f "$ONBOARD_LOG"
 
 if ! wait_for_health "http://127.0.0.1:${PORT}/api/health" "Onboarded local server"; then
   fail "Onboarding server did not become healthy"
