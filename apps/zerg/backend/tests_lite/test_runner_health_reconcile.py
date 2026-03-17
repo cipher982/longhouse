@@ -133,6 +133,70 @@ async def test_reconcile_sends_one_telegram_alert_per_incident(tmp_path: Path):
         db.close()
 
 
+async def test_reconcile_suppresses_external_attention_for_desktop_runners(tmp_path: Path):
+    db = _make_db(tmp_path)
+    try:
+        now = utc_now_naive()
+        user = User(email="owner@test.local", role="ADMIN", context={"telegram_chat_id": "1234"})
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        runner = Runner(
+            owner_id=user.id,
+            name="cinder",
+            auth_secret_hash="hash",
+            capabilities=["exec.full"],
+            status="offline",
+            last_seen_at=now - timedelta(hours=1),
+            runner_metadata={"install_mode": "desktop", "capabilities": ["exec.full"], "heartbeat_interval_ms": 30000},
+        )
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+
+        incident = RunnerHealthIncident(
+            owner_id=user.id,
+            runner_id=runner.id,
+            incident_type="offline",
+            status=OPEN_INCIDENT_STATUS,
+            reason_code="stale_heartbeat",
+            summary="Offline. Last heartbeat 3600s ago.",
+            opened_at=now - timedelta(minutes=31),
+            last_observed_at=now - timedelta(minutes=1),
+            context={},
+        )
+        db.add(incident)
+        db.commit()
+
+        invoke_oikos = AsyncMock(return_value=123)
+        send_telegram = AsyncMock(return_value=True)
+        with (
+            patch(
+                "zerg.services.runner_health_reconciler.get_runner_connection_manager",
+                return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
+            ),
+            patch("zerg.services.runner_health_reconciler._send_telegram_alert", send_telegram),
+            patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=True),
+            patch("zerg.services.runner_health_reconciler.get_operator_policy", return_value=SimpleNamespace(enabled=True)),
+            patch("zerg.services.oikos_service.invoke_oikos", invoke_oikos),
+        ):
+            result = await reconcile_runner_health(db, now=now)
+
+        db.refresh(incident)
+
+        assert result["alerts_sent"] == 0
+        assert result["wakeups_sent"] == 0
+        assert incident.alert_sent_at is None
+        assert incident.wakeup_sent_at is None
+        assert incident.context["alert_suppressed_reason"] == "desktop_runner"
+        assert incident.context["wakeup_suppressed_reason"] == "desktop_runner"
+        send_telegram.assert_not_awaited()
+        invoke_oikos.assert_not_awaited()
+    finally:
+        db.close()
+
+
 async def test_reconcile_enqueues_one_oikos_wakeup_for_prolonged_offline_runner(tmp_path: Path):
     db = _make_db(tmp_path)
     try:
