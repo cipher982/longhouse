@@ -103,6 +103,13 @@ def test_install_script_rejects_invalid_mode():
     assert response.text == "Error: Invalid mode (use desktop or server)"
 
 
+def test_install_script_allows_env_supplied_enroll_token():
+    response = _fetch_install_script()
+
+    assert response.status_code == 200
+    assert 'ENROLL_TOKEN="${ENROLL_TOKEN:-}"' in response.text
+
+
 def test_uninstall_script_cleans_up_managed_layout_paths_and_server_contract(tmp_path):
     response = _fetch_uninstall_script()
 

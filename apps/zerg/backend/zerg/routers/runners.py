@@ -203,7 +203,7 @@ async def _handle_exec_chunk(
 
 @router.get("/install.sh")
 def get_install_script(
-    enroll_token: str,
+    enroll_token: str | None = None,
     runner_name: str | None = None,
     longhouse_url: str | None = None,
     mode: str | None = None,
@@ -233,8 +233,9 @@ def get_install_script(
 
     settings = get_settings()
 
-    # Validate enroll_token format (alphanumeric + dash/underscore only)
-    if not re.match(r"^[A-Za-z0-9_-]+$", enroll_token):
+    # Validate enroll_token format (alphanumeric + dash/underscore only).
+    # It may also be omitted entirely so callers can provide ENROLL_TOKEN via env.
+    if enroll_token is not None and not re.match(r"^[A-Za-z0-9_-]+$", enroll_token):
         return Response(
             content="Error: Invalid enroll_token format",
             media_type="text/plain",
@@ -284,7 +285,7 @@ def get_install_script(
     runner_binary_version = normalize_runner_binary_tag(settings.runner_binary_tag) or settings.runner_binary_tag
 
     # Shell-escape all substituted values to prevent injection
-    safe_enroll_token = shlex.quote(enroll_token)
+    safe_enroll_token = shlex.quote(enroll_token) if enroll_token else ""
     safe_runner_name_expr = shlex.quote(runner_name) if runner_name else "$(hostname)"
     safe_api_url = shlex.quote(api_url)
     safe_binary_url = shlex.quote(binary_url)
