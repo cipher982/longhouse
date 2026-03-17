@@ -104,6 +104,30 @@ Notes:
 - 2026-03-17: Hosted cleanup backed up the affected rows to `/var/app-data/longhouse/david010/insights-cleanup-backup-20260317-031820.db`, removed 157 reflection-generated insights plus all 133 proposals, and left `david010` with 128 insights and 0 proposals.
 - Spec: `docs/specs/insights-tightening.md`
 
+## [Launch][Product][Tech Debt] Add insight provenance and hide system alert noise by default (size: 2)
+
+Status (2026-03-17): In progress. The next slice should make the remaining insight store more trustworthy without adding a new subsystem: tag origins, keep system alerts out of default reads, and preserve manual/reflection learnings.
+
+**Goal:** Distinguish manual, reflection, and system-generated insight rows so default reads and AI briefings stop treating operational alerts as first-class learnings.
+
+**Done when:**
+- `Insight` rows carry an explicit origin for new writes
+- Existing stale-agent and ingest-health rows are backfilled to `system`
+- Default browser + machine insight reads exclude `system` rows, with an explicit opt-in to include them
+- Session briefings and reflection dedup context stop pulling `system` rows by default
+- Focused backend tests cover migration, default filtering, and writer tagging
+
+- [ ] Write and commit the bounded spec + TODO entry
+- [ ] Add `Insight.origin` plus startup-safe SQLite migration/backfill
+- [ ] Tag manual, reflection, and system insight writers explicitly
+- [ ] Exclude `system` rows from default insight/briefing reads and keep an opt-in path
+- [ ] Run focused verification, commit, deploy, and verify live behavior
+
+Notes:
+- 2026-03-17: Keep this bounded. Do not move alerts into a new table yet, and do not try to perfectly classify historic reflection rows.
+- 2026-03-17: Legacy `origin IS NULL` rows should stay visible; only explicit `system` rows should disappear from normal reads.
+- Spec: `docs/specs/insight-origin-filtering.md`
+
 ## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)
 
 Status (2026-03-17): Done. `runner-v0.1.7` is published with signed update metadata, the hosted backend advertises it as latest, the full personal fleet is current on the managed install layout, and `slim` proved unattended `apply` by upgrading itself from `0.1.6` to `0.1.7`.
