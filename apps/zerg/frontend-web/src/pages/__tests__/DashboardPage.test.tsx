@@ -7,21 +7,21 @@ import DashboardPage from "../DashboardPage";
 import { TestRouter } from "../../test/test-utils";
 import { ConfirmProvider } from "../../components/confirm";
 import {
-  fetchDashboardSnapshot,
-  runFiche,
-  updateFiche,
-  type FicheSummary,
+  fetchAutomationOverview,
+  runAutomation,
+  updateAutomation,
+  type AutomationSummary,
   type Run,
-  type DashboardSnapshot,
+  type AutomationOverviewSnapshot,
 } from "../../services/api";
 
 vi.mock("../../services/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/api")>();
   return {
     ...actual,
-    fetchDashboardSnapshot: vi.fn(),
-    runFiche: vi.fn(),
-    updateFiche: vi.fn(),
+    fetchAutomationOverview: vi.fn(),
+    runAutomation: vi.fn(),
+    updateAutomation: vi.fn(),
   };
 });
 
@@ -31,8 +31,8 @@ type MockWebSocketInstance = {
 };
 
 function buildFiche(
-  overrides: Partial<FicheSummary> & Pick<FicheSummary, "id" | "name" | "status" | "owner_id">
-): FicheSummary {
+  overrides: Partial<AutomationSummary> & Pick<AutomationSummary, "id" | "name" | "status" | "owner_id">
+): AutomationSummary {
   const now = new Date().toISOString();
   return {
     id: overrides.id,
@@ -56,9 +56,9 @@ function buildFiche(
 }
 
 describe("DashboardPage", () => {
-  const fetchDashboardSnapshotMock = fetchDashboardSnapshot as unknown as vi.MockedFunction<typeof fetchDashboardSnapshot>;
-  const runFicheMock = runFiche as unknown as vi.MockedFunction<typeof runFiche>;
-  const updateFicheMock = updateFiche as unknown as vi.MockedFunction<typeof updateFiche>;
+  const fetchAutomationOverviewMock = fetchAutomationOverview as unknown as vi.MockedFunction<typeof fetchAutomationOverview>;
+  const runAutomationMock = runAutomation as unknown as vi.MockedFunction<typeof runAutomation>;
+  const updateAutomationMock = updateAutomation as unknown as vi.MockedFunction<typeof updateAutomation>;
   const mockSockets: MockWebSocketInstance[] = [];
 
   beforeAll(() => {
@@ -89,10 +89,10 @@ describe("DashboardPage", () => {
 
   beforeEach(() => {
     mockSockets.length = 0;
-    fetchDashboardSnapshotMock.mockReset();
-    runFicheMock.mockReset();
-    updateFicheMock.mockReset();
-    runFicheMock.mockResolvedValue({ thread_id: 123 });
+    fetchAutomationOverviewMock.mockReset();
+    runAutomationMock.mockReset();
+    updateAutomationMock.mockReset();
+    runAutomationMock.mockResolvedValue({ thread_id: 123 });
   });
 
   afterEach(() => {
@@ -100,9 +100,9 @@ describe("DashboardPage", () => {
     window.localStorage.clear();
   });
 
-  function renderDashboard(initialFiches: FicheSummary[], runsByFiche?: Record<number, Run[]>) {
+  function renderDashboard(initialFiches: AutomationSummary[], runsByFiche?: Record<number, Run[]>) {
     const runsLookup = runsByFiche ?? {};
-    const snapshot: DashboardSnapshot = {
+    const snapshot: AutomationOverviewSnapshot = {
       scope: "my",
       fetchedAt: new Date().toISOString(),
       runsLimit: 50,
@@ -113,7 +113,7 @@ describe("DashboardPage", () => {
       })),
     };
 
-    fetchDashboardSnapshotMock.mockResolvedValue(snapshot);
+    fetchAutomationOverviewMock.mockResolvedValue(snapshot);
 
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -133,7 +133,7 @@ describe("DashboardPage", () => {
   }
 
   test("renders dashboard header and fiches table", async () => {
-    const fiches: FicheSummary[] = [
+    const fiches: AutomationSummary[] = [
       buildFiche({
         id: 1,
         name: "Alpha",
@@ -274,7 +274,7 @@ describe("DashboardPage", () => {
     const row = await screen.findByRole("row", { name: /Runner/ });
     await userEvent.click(row);
 
-    await waitFor(() => expect(fetchDashboardSnapshotMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchAutomationOverviewMock).toHaveBeenCalledTimes(1));
 
     await screen.findByText("Show all (6)");
     const tables = screen.getAllByRole("table");
@@ -291,7 +291,7 @@ describe("DashboardPage", () => {
   });
 
   test("sorts fiches by status and toggles sort direction", async () => {
-    const fiches: FicheSummary[] = [
+    const fiches: AutomationSummary[] = [
       buildFiche({ id: 1, name: "Alpha", status: "idle", owner_id: 1 }),
       buildFiche({ id: 2, name: "Beta", status: "running", owner_id: 1 }),
     ];

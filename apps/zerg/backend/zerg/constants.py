@@ -23,6 +23,7 @@ WS_ENDPOINT = "/ws"
 
 # Router prefixes (relative to API_PREFIX)
 FICHES_PREFIX = "/fiches"
+AUTOMATIONS_PREFIX = "/automations"
 THREADS_PREFIX = "/threads"
 MODELS_PREFIX = "/models"
 
@@ -67,6 +68,7 @@ __all__ = [
     "API_PREFIX",
     "WS_ENDPOINT",
     "FICHES_PREFIX",
+    "AUTOMATIONS_PREFIX",
     "THREADS_PREFIX",
     "MODELS_PREFIX",
     "get_full_path",

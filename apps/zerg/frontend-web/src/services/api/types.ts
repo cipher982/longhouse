@@ -4,6 +4,8 @@ type Schemas = components["schemas"];
 
 export type Fiche = Schemas["Fiche"];
 export type FicheSummary = Fiche;
+export type Automation = Fiche;
+export type AutomationSummary = Automation;
 export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
 export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
@@ -128,6 +130,8 @@ export type FicheCreatePayload = Pick<FicheCreate, "system_instructions" | "task
   Partial<Omit<FicheCreate, "system_instructions" | "task_instructions" | "model">>;
 
 export type FicheUpdatePayload = FicheUpdate;
+export type AutomationCreatePayload = FicheCreatePayload;
+export type AutomationUpdatePayload = FicheUpdatePayload;
 
 export interface DashboardRunsBundle {
   ficheId: number;
@@ -141,6 +145,9 @@ export interface DashboardSnapshot {
   fiches: FicheSummary[];
   runs: DashboardRunsBundle[];
 }
+
+export type AutomationRunsBundle = DashboardRunsBundle;
+export type AutomationOverviewSnapshot = DashboardSnapshot;
 
 export interface ModelConfig {
   id: string;
