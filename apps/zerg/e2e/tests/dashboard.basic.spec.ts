@@ -2,11 +2,11 @@
 
 import { test, expect } from './fixtures';
 
-test('Dashboard tab renders', async ({ page }) => {
+test('Dashboard route renders the automation surface', async ({ page }) => {
   // Load dashboard – webServer helper ensures the SPA is available.
   await page.goto('/dashboard');
 
-  // The header nav should be visible with Dashboard tab
-  await expect(page.locator('.header-nav')).toBeVisible();
-  await expect(page.locator('.nav-tab:has-text("Dashboard")')).toBeVisible();
+  await expect(page.locator('#dashboard-container')).toBeVisible();
+  await expect(page.getByTestId('create-fiche-btn')).toBeVisible();
+  await expect(page.locator('#fiches-table-body')).toBeVisible();
 });
