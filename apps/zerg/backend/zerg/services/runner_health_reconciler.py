@@ -29,6 +29,7 @@ OPEN_INCIDENT_STATUS = "open"
 RESOLVED_INCIDENT_STATUS = "resolved"
 ALERT_AFTER = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_ALERT_AFTER_MINUTES", "5")))
 WAKEUP_AFTER = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_WAKEUP_AFTER_MINUTES", "30")))
+DESKTOP_SUPPRESSED_REASON = "desktop_runner"
 
 
 def _format_duration(delta: timedelta) -> str:
@@ -201,6 +202,13 @@ def _build_external_alert_copy(
     return subject, telegram_text, body
 
 
+def _external_attention_allowed(health: RunnerHealthAssessment) -> tuple[bool, str | None]:
+    """Return whether this runner should page external attention channels."""
+    if health.install_mode == "desktop":
+        return False, DESKTOP_SUPPRESSED_REASON
+    return True, None
+
+
 async def _maybe_send_external_alert(
     db: Session,
     *,
@@ -211,6 +219,19 @@ async def _maybe_send_external_alert(
     now: datetime,
 ) -> bool:
     if incident.alert_sent_at is not None:
+        return False
+    allowed, suppressed_reason = _external_attention_allowed(health)
+    if not allowed:
+        context = dict(incident.context or {})
+        if context.get("alert_suppressed_reason") != suppressed_reason:
+            context.update(
+                {
+                    "alert_suppressed_at": now.isoformat(),
+                    "alert_suppressed_reason": suppressed_reason,
+                }
+            )
+            incident.context = context
+            db.flush()
         return False
     if now - incident.opened_at < ALERT_AFTER:
         return False
@@ -271,6 +292,19 @@ async def _maybe_enqueue_oikos_wakeup(
     now: datetime,
 ) -> bool:
     if incident.wakeup_sent_at is not None:
+        return False
+    allowed, suppressed_reason = _external_attention_allowed(health)
+    if not allowed:
+        context = dict(incident.context or {})
+        if context.get("wakeup_suppressed_reason") != suppressed_reason:
+            context.update(
+                {
+                    "wakeup_suppressed_at": now.isoformat(),
+                    "wakeup_suppressed_reason": suppressed_reason,
+                }
+            )
+            incident.context = context
+            db.flush()
         return False
     if now - incident.opened_at < WAKEUP_AFTER:
         return False
