@@ -14,7 +14,7 @@ import {
   useTestAccountConnectorBeforeSave,
 } from "../hooks/useAccountConnectors";
 import type { AccountConnectorStatus } from "../types/connectors";
-import { ConnectorConfigModal, type ConfigModalState } from "../components/fiche-settings/ConnectorConfigModal";
+import { ConnectorConfigModal, type ConfigModalState } from "../components/automation-settings/ConnectorConfigModal";
 import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
 import { useOAuthFlow } from "../hooks/useOAuthFlow";
 import { SectionHeader, EmptyState, Spinner, PageShell } from "../components/ui";

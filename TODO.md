@@ -576,6 +576,8 @@ Notes:
 - 2026-03-17: Verification for the Oikos run-surface slice passed via `make generate-sdk`, `make test-frontend-unit`, and `make test`.
 - 2026-03-17: Shipped the browser-side Oikos transport cleanup. `OikosAPIClient` now exposes only `onAutomationUpdated`; legacy `fiche_updated` events still flow through that one handler until the remaining automation browser surfaces are renamed.
 - 2026-03-17: Verification for the browser-side Oikos transport cleanup passed via `make test-frontend-unit`.
+- 2026-03-17: Shipped the frontend-only automation settings rename. The drawer/hooks now live under `automation-settings` / `useAutomation*` names, and the remaining backend/API/cache contract stays unchanged for now.
+- 2026-03-17: Verification for the frontend-only automation settings rename passed via `make test-frontend-unit`.
 - 2026-03-16: Restored the missing spec at `docs/specs/launch-runtime-simplification.md` so the bounded launch cleanup has an explicit vocabulary contract, provider matrix, and acceptance criteria again.
 - 2026-03-16: Current implementation scope for this pass is:
   1. restore the missing spec and lock the bounded cleanup plan,
