@@ -181,6 +181,71 @@ def _httpx_response(status_code: int, payload: dict[str, object] | None = None) 
     return httpx.Response(status_code=status_code, json=payload, request=request)
 
 
+def test_open_instance_redirects_anonymous_user_back_through_login(client):
+    response = client.get("/dashboard/open-instance", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?return_to=%2Fdashboard%2Fopen-instance"
+
+
+def test_open_instance_redirects_to_accept_token_for_authenticated_user(client, db_session):
+    user = _make_user(db_session, email="owner@test.com")
+    _make_instance(db_session, user, subdomain="testuser")
+    client.cookies.update(_login_cookie(user))
+
+    response = client.get("/dashboard/open-instance", follow_redirects=False)
+
+    assert response.status_code == 302
+    redirect_url = response.headers["location"]
+    parsed = urllib.parse.urlparse(redirect_url)
+    query = urllib.parse.parse_qs(parsed.query)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == f"testuser.{settings.root_domain}"
+    assert parsed.path == "/api/auth/accept-token"
+    assert "token" in query
+
+
+def test_email_login_respects_return_to(client, db_session):
+    _make_user(db_session, email="owner@test.com", password="testpass123")
+
+    response = client.post(
+        "/auth/login?return_to=%2Fdashboard%2Fopen-instance",
+        data={"email": "owner@test.com", "password": "testpass123"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/dashboard/open-instance"
+    assert "cp_session=" in response.headers.get("set-cookie", "")
+
+
+def test_google_callback_respects_return_to_state(client, db_session):
+    state = _encode_jwt(
+        {
+            "purpose": "control_plane_login_return",
+            "return_to": "/dashboard/open-instance",
+            "exp": int(time.time()) + 300,
+        },
+        settings.jwt_secret,
+    )
+
+    with (
+        patch.object(settings, "google_client_id", "cp-google-client"),
+        patch.object(settings, "google_client_secret", "cp-google-secret"),
+        patch("control_plane.routers.auth._exchange_code", return_value={"access_token": "fake-token"}),
+        patch("control_plane.routers.auth._get_userinfo", return_value={"email": "owner@test.com"}),
+    ):
+        response = client.get(
+            "/auth/google/callback",
+            params={"code": "fakecode", "state": state},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/dashboard/open-instance"
+    assert "cp_session=" in response.headers.get("set-cookie", "")
+
+
 def test_google_gmail_start_redirects_to_google_for_hosted_instance(client, db_session):
     user = _make_user(db_session, email="owner@test.com")
     _make_instance(db_session, user, subdomain="testuser")

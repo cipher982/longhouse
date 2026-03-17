@@ -63,6 +63,7 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GMAIL_CONNECT_SCOPES = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send"
 HOSTED_GMAIL_STATE_MAX_AGE = 10 * 60
+LOGIN_RETURN_STATE_MAX_AGE = 10 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +295,54 @@ def _issue_hosted_gmail_state(*, email: str, instance: str) -> str:
     )
 
 
+def _normalize_local_return_to(return_to: str | None) -> str | None:
+    if not return_to:
+        return None
+
+    parsed = urllib.parse.urlparse(return_to)
+    if parsed.scheme or parsed.netloc:
+        return None
+    if not return_to.startswith("/") or return_to.startswith("//"):
+        return None
+    return return_to
+
+
+def _append_return_to(path: str, return_to: str | None) -> str:
+    safe_return_to = _normalize_local_return_to(return_to)
+    if not safe_return_to:
+        return path
+
+    separator = "&" if "?" in path else "?"
+    query = urllib.parse.urlencode({"return_to": safe_return_to})
+    return f"{path}{separator}{query}"
+
+
+def _issue_login_return_state(*, return_to: str) -> str:
+    return _encode_jwt(
+        {
+            "purpose": "control_plane_login_return",
+            "return_to": return_to,
+            "exp": int(time.time()) + LOGIN_RETURN_STATE_MAX_AGE,
+        },
+        settings.jwt_secret,
+    )
+
+
+def _decode_login_return_state(state: str | None) -> str | None:
+    if not state:
+        return None
+
+    payload = _decode_jwt(state, settings.jwt_secret)
+    if payload.get("purpose") != "control_plane_login_return":
+        raise ValueError("Invalid login return state")
+
+    safe_return_to = _normalize_local_return_to(str(payload.get("return_to") or ""))
+    if not safe_return_to:
+        raise ValueError("Invalid login return target")
+
+    return safe_return_to
+
+
 def _issue_hosted_gmail_handoff_token(*, email: str, instance: str) -> str:
     return _encode_jwt(
         {
@@ -417,56 +466,72 @@ def email_login(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    return_to: str | None = None,
     db: Session = Depends(get_db),
 ):
     """Authenticate with email + password."""
     email = email.strip().lower()
+    safe_return_to = _normalize_local_return_to(return_to)
 
     user = db.query(User).filter(User.email == email).first()
     if not user or not user.password_hash:
         from fastapi.responses import RedirectResponse as _RR
 
-        return _RR("/?error=Invalid+email+or+password", status_code=303)
+        return _RR(_append_return_to("/?error=Invalid+email+or+password", safe_return_to), status_code=303)
 
     if not _verify_password(password, user.password_hash):
         from fastapi.responses import RedirectResponse as _RR
 
-        return _RR("/?error=Invalid+email+or+password", status_code=303)
+        return _RR(_append_return_to("/?error=Invalid+email+or+password", safe_return_to), status_code=303)
 
     logger.info(f"User logged in via email: {email}")
 
     session_token = _issue_session_token(user)
-    response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=303)
+    target = safe_return_to or f"https://control.{settings.root_domain}/dashboard"
+    response = RedirectResponse(target, status_code=303)
     _set_session(response, session_token)
     return response
 
 
 @router.get("/google")
-def google_login():
+def google_login(return_to: str | None = None):
     """Redirect to Google OAuth consent screen."""
     _require_oauth()
+    safe_return_to = _normalize_local_return_to(return_to)
 
-    params = urllib.parse.urlencode(
-        {
-            "client_id": settings.google_client_id,
-            "redirect_uri": _callback_url(),
-            "response_type": "code",
-            "scope": "openid email profile",
-            "access_type": "online",
-            "prompt": "select_account",
-        }
-    )
+    params_dict = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": _callback_url(),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "online",
+        "prompt": "select_account",
+    }
+    if safe_return_to:
+        params_dict["state"] = _issue_login_return_state(return_to=safe_return_to)
+
+    params = urllib.parse.urlencode(params_dict)
     return RedirectResponse(f"{GOOGLE_AUTH_URL}?{params}", status_code=302)
 
 
 @router.get("/google/callback")
-def google_callback(code: str | None = None, error: str | None = None, db: Session = Depends(get_db)):
+def google_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+):
     """Handle Google OAuth callback: exchange code, upsert user, redirect."""
     _require_oauth()
+    try:
+        return_to = _decode_login_return_state(state)
+    except ValueError:
+        return RedirectResponse("/?error=Sign-in+session+expired", status_code=302)
 
     if error:
         logger.warning(f"Google OAuth error: {error}")
-        return RedirectResponse(f"https://{settings.root_domain}?auth_error={error}", status_code=302)
+        redirect_target = "/?auth_error=" + urllib.parse.quote(error, safe="")
+        return RedirectResponse(_append_return_to(redirect_target, return_to), status_code=302)
 
     if not code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing authorization code")
@@ -511,7 +576,8 @@ def google_callback(code: str | None = None, error: str | None = None, db: Sessi
 
     # Issue session token + set cookie
     session_token = _issue_session_token(user)
-    response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=302)
+    target = return_to or f"https://control.{settings.root_domain}/dashboard"
+    response = RedirectResponse(target, status_code=302)
     _set_session(response, session_token)
     return response
 

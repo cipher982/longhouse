@@ -912,7 +912,7 @@ app = FastAPI(redirect_slashes=True, lifespan=lifespan)
 
 # API sub-application — owns all /api/* routes.
 # Mounted on the parent `app` at "/api" so the SPA catch-all can never
-# intercept API requests (wrong paths like /auth/sso get SPA HTML, not 200 JSON).
+# intercept API requests (wrong paths like /auth/accept-token get SPA HTML, not 200 JSON).
 api_app = FastAPI(redirect_slashes=True)
 
 

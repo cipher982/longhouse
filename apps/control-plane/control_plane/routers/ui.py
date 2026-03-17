@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import urllib.parse
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -18,6 +19,7 @@ from control_plane.db import get_db
 from control_plane.models import Instance
 from control_plane.models import User
 from control_plane.routers.auth import SESSION_COOKIE_NAME
+from control_plane.routers.auth import _append_return_to
 from control_plane.routers.auth import _decode_jwt
 from control_plane.routers.instances import _build_migration_status
 from control_plane.services.provisioner import Provisioner
@@ -151,10 +153,14 @@ def _get_user_from_cookie(request: Request, db: Session) -> User | None:
 
 
 @router.get("/", response_class=HTMLResponse)
-def home(request: Request, error: str | None = None, db: Session = Depends(get_db)):
+def home(request: Request, error: str | None = None, return_to: str | None = None, db: Session = Depends(get_db)):
     user = _get_user_from_cookie(request, db)
     if user:
         return RedirectResponse("/dashboard", status_code=302)
+
+    login_action = _append_return_to("/auth/login", return_to)
+    google_login_url = _append_return_to("/auth/google", return_to)
+    signup_url = _append_return_to("/signup", return_to)
 
     error_html = ""
     if error:
@@ -167,13 +173,13 @@ def home(request: Request, error: str | None = None, db: Session = Depends(get_d
     </div>
     <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
       {error_html}
-      <form method="post" action="/auth/login">
+      <form method="post" action="{html.escape(login_action)}">
         <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
         <label>Password <input type="password" name="password" required minlength="8" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"></label>
         <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Sign In</button>
       </form>
       <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
-        Don\'t have an account? <a href="/signup">Create one</a>
+        Don\'t have an account? <a href="{html.escape(signup_url)}">Create one</a>
       </p>
       <div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:0.6rem;margin-top:0.75rem;color:#a5b4fc;font-size:0.8rem;text-align:center;">
         New here? We recommend signing up with Google below.
@@ -185,7 +191,7 @@ def home(request: Request, error: str | None = None, db: Session = Depends(get_d
         <span style="color:#9898a3;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em;">or</span>
         <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
       </div>
-      <a href="/auth/google" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;">{_GOOGLE_ICON} Continue with Google</a>
+      <a href="{html.escape(google_login_url)}" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;">{_GOOGLE_ICON} Continue with Google</a>
       <p style="text-align:center;margin-top:2rem;"><a href="https://longhouse.ai" style="color:#9898a3;font-size:0.875rem;">&larr; Back to longhouse.ai</a></p>
     </div>
     """
@@ -193,10 +199,13 @@ def home(request: Request, error: str | None = None, db: Session = Depends(get_d
 
 
 @router.get("/signup", response_class=HTMLResponse)
-def signup_page(request: Request, error: str | None = None, db: Session = Depends(get_db)):
+def signup_page(request: Request, error: str | None = None, return_to: str | None = None, db: Session = Depends(get_db)):
     user = _get_user_from_cookie(request, db)
     if user:
         return RedirectResponse("/dashboard", status_code=302)
+
+    google_signup_url = _append_return_to("/auth/google", return_to)
+    signin_url = _append_return_to("/", return_to)
 
     error_html = ""
     if error:
@@ -208,7 +217,7 @@ def signup_page(request: Request, error: str | None = None, db: Session = Depend
       <p class="subtitle">Get started with Longhouse.</p>
     </div>
     <div style="max-width:400px;margin:0 auto 1.25rem;">
-      <a href="/auth/google" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;padding:0.85rem 1.75rem;font-size:1rem;">{_GOOGLE_ICON} Sign up with Google</a>
+      <a href="{html.escape(google_signup_url)}" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;padding:0.85rem 1.75rem;font-size:1rem;">{_GOOGLE_ICON} Sign up with Google</a>
     </div>
     <div style="max-width:400px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;">
@@ -226,7 +235,7 @@ def signup_page(request: Request, error: str | None = None, db: Session = Depend
         <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Create Account</button>
       </form>
       <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
-        Already have an account? <a href="/">Sign in</a>
+        Already have an account? <a href="{html.escape(signin_url)}">Sign in</a>
       </p>
     </div>
     <div style="max-width:400px;margin:0 auto;">
@@ -440,10 +449,10 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/dashboard/open-instance", response_class=HTMLResponse)
 def open_instance(request: Request, db: Session = Depends(get_db)):
-    """Issue a login token and redirect user to their instance with auto-auth."""
+    """Issue a tenant login token and redirect the browser back to the instance."""
     user = _get_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse("/", status_code=302)
+        return RedirectResponse(_append_return_to("/", "/dashboard/open-instance"), status_code=302)
 
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
     if not instance:
@@ -461,9 +470,8 @@ def open_instance(request: Request, db: Session = Depends(get_db)):
         settings.instance_jwt_secret,
     )
 
-    # Redirect to instance SSO endpoint — sets cookie and redirects to /timeline
-    sso_url = f"{instance_url}/api/auth/sso?token={token}"
-    return RedirectResponse(sso_url, status_code=302)
+    handoff_url = f"{instance_url}/api/auth/accept-token?token={urllib.parse.quote(token, safe='')}"
+    return RedirectResponse(handoff_url, status_code=302)
 
 
 @router.post("/dashboard/checkout")
@@ -550,7 +558,7 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
         return _page("Provisioning", body)
 
     if instance.status == "active":
-        # Already ready — redirect through SSO (auto-authenticates user)
+        # Already ready — redirect through the hosted browser handoff
         return RedirectResponse("/dashboard/open-instance", status_code=302)
 
     if instance.status == "failed":
@@ -566,9 +574,9 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
         """
         return _page("Provisioning Failed", body)
 
-    # Provisioning in progress — poll server-side health check
-    # On success, redirect through /dashboard/open-instance which issues an SSO
-    # token so the user is auto-authenticated on their instance (no re-login).
+    # Provisioning in progress — poll server-side health check.
+    # On success, redirect through /dashboard/open-instance which issues a
+    # tenant login token and returns the browser to the instance.
     instance_host = f"{instance.subdomain}.{settings.root_domain}"
 
     body = f"""
@@ -592,7 +600,7 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
             document.getElementById('status-text').textContent = 'Instance is ready! Redirecting...';
             document.getElementById('sub-text').textContent = '';
             document.getElementById('spinner').style.display = 'none';
-            // Redirect through SSO endpoint — auto-authenticates user on their instance
+            // Redirect through the hosted auth handoff — auto-authenticates the user on their instance
             setTimeout(() => window.location.href = '/dashboard/open-instance', 1500);
             return;
           }}

@@ -355,11 +355,13 @@ def logout(response: Response):
 def get_auth_methods():
     settings = get_settings()
     gmail_ready, gmail_setup_message = _gmail_setup_state(settings)
+    sso_base = settings.control_plane_url.rstrip("/") if settings.control_plane_url else None
     return {
         "google": bool(settings.google_client_id) and not bool(settings.control_plane_url),
         "password": bool(settings.longhouse_password or settings.longhouse_password_hash),
         "sso": bool(settings.control_plane_url),
-        "sso_url": settings.control_plane_url if settings.control_plane_url else None,
+        "sso_url": sso_base,
+        "sso_login_url": f"{sso_base}/dashboard/open-instance" if sso_base else None,
         "gmail_ready": gmail_ready,
         "gmail_setup_message": gmail_setup_message,
     }
