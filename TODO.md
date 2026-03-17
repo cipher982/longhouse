@@ -15,6 +15,30 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Product][Tech Debt] Tighten insights to a thin continuity primitive (size: 3)
+
+Status (2026-03-16): In progress. Audit is complete on the live `david010` instance. The current direction is to keep the useful insight store, restore machine-readable reads, and pause unattended reflection/proposal generation by default.
+
+**Goal:** Preserve insights as a lightweight continuity feature without continuing to generate low-signal reflection sludge before launch.
+
+**Done when:**
+- Machine sessions can query insights again through a machine-owned API path
+- Browser insight reads stay browser-session only
+- MCP `query_insights` no longer points at the browser-auth route
+- Scheduled reflection is disabled by default
+- Docs/copy stop claiming there is a first-class Insights page or default 6-hour reflection loop
+
+- [ ] Write and commit the bounded spec + TODO entry
+- [ ] Add `/api/agents/insights` and repoint MCP `query_insights`
+- [ ] Add focused tests for the browser/machine auth split and MCP query behavior
+- [ ] Disable scheduled reflection by default without deleting manual reflection endpoints
+- [ ] Clean stale docs/UI copy around insights/proposals/reflection
+
+Notes:
+- 2026-03-16: Live hosted DB (`david010`) has 285 insights and 133 proposals; local `~/.longhouse/dev.db` has none, so this feature should be judged from hosted runtime data, not local dev state.
+- 2026-03-16: The useful portion is mostly manual/system-written operational learnings. The low-signal portion strongly clusters around the scheduled reflection cadence.
+- Spec: `docs/specs/insights-tightening.md`
+
 ## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)
 
 Status (2026-03-16): Done. `runner-v0.1.5` is published with signed update metadata, the hosted backend advertises it as latest, and `slim` upgraded itself from `0.1.4` to `0.1.5` under policy `apply` without a manual reinstall.
