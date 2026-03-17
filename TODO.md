@@ -15,6 +15,23 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][QA/Test][Tech Debt] Sweep remaining hosted auth-boundary script drift (size: 1)
+
+Status (2026-03-17): Done. The hosted provisioning smoke now verifies browser-cookie access against the browser-owned timeline route and no longer implies that browser cookies might work on the machine-only sessions API.
+
+**Goal:** Remove the last obvious browser-vs-machine auth confusion from the hosted shell helpers so they model the product contract cleanly.
+
+**Done when:**
+- The hosted provisioning smoke verifies browser-cookie access against `/api/timeline/sessions`
+- The script comments/messages no longer imply that browser cookies might work on `/api/agents/sessions`
+- Focused hosted curl verification confirms the revised expectations
+
+- [x] Align the provisioning smoke's authenticated browser check with the timeline API
+- [x] Re-verify the hosted auth expectations with focused curl checks
+
+Notes:
+- 2026-03-17: Focused hosted verification on `david010` returned `401` for unauthenticated `/api/agents/sessions`, `200` for browser-cookie `/api/timeline/sessions`, and `401` for browser-cookie `/api/agents/sessions`, matching the intended auth boundary.
+
 ## [Launch][QA/Test][Tech Debt] Fix stale browser smoke checks after the auth split (size: 1)
 
 Status (2026-03-17): Done. The deploy smoke now follows the current auth contract: browser-cookie checks stay on `/api/timeline/*`, so hosted deploy verification no longer false-fails on the machine-only sessions API.
