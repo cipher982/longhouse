@@ -32,6 +32,21 @@ Status (2026-03-17): Done. The hosted provisioning smoke now verifies browser-co
 Notes:
 - 2026-03-17: Focused hosted verification on `david010` returned `401` for unauthenticated `/api/agents/sessions`, `200` for browser-cookie `/api/timeline/sessions`, and `401` for browser-cookie `/api/agents/sessions`, matching the intended auth boundary.
 
+## [Launch][QA/Test][Docs/Drift] Harden the solo QA loop for hosted runtime changes (size: 2)
+
+Status (2026-03-17): In progress. Installer and curl smoke are already automated, but the higher-signal hosted browser smoke still depends on a local device-token file and is not scheduled as part of the normal release loop.
+
+**Goal:** Make hosted live QA self-sufficient in CI and add one lightweight review checklist so risky changes always carry explicit test and rollback notes.
+
+**Done when:**
+- Hosted `qa-live` can mint and revoke an ephemeral device token using only hosted browser auth + control-plane admin auth
+- A scheduled/manual hosted live QA workflow runs `make qa-live` and `make qa-live-conversations`
+- PRs have a minimal template for summary, risk, tests, and rollback
+
+- [x] Make hosted live QA self-provision an ephemeral device token
+- [ ] Add a hosted live QA GitHub workflow
+- [ ] Add a minimal PR review template
+
 ## [Launch][QA/Test][Tech Debt] Fix stale browser smoke checks after the auth split (size: 1)
 
 Status (2026-03-17): Done. The deploy smoke now follows the current auth contract: browser-cookie checks stay on `/api/timeline/*`, so hosted deploy verification no longer false-fails on the machine-only sessions API.
