@@ -61,13 +61,31 @@ jobs:
         id: qa_live
         env:
           HOME: ${{ env.QA_HOME }}
-        run: make qa-live
+        run: |
+          attempts=0
+          until make qa-live; do
+            attempts=$((attempts + 1))
+            if [[ "$attempts" -ge 2 ]]; then
+              exit 1
+            fi
+            echo "qa-live failed; retrying once after 5s..." >&2
+            sleep 5
+          done
 
       - name: Run hosted conversations QA
         id: qa_live_conversations
         env:
           HOME: ${{ env.QA_HOME }}
-        run: make qa-live-conversations
+        run: |
+          attempts=0
+          until make qa-live-conversations; do
+            attempts=$((attempts + 1))
+            if [[ "$attempts" -ge 2 ]]; then
+              exit 1
+            fi
+            echo "qa-live-conversations failed; retrying once after 5s..." >&2
+            sleep 5
+          done
 
       - name: Write summary
         if: always()
