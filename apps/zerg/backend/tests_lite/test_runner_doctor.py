@@ -64,7 +64,7 @@ def test_runner_doctor_reports_healthy_online_runner(tmp_path: Path):
             runner_metadata={
                 "hostname": "clifford",
                 "platform": "linux",
-                "runner_version": "0.1.4",
+                "runner_version": "0.1.5",
                 "install_mode": "server",
                 "auto_update_policy": "notify",
                 "install_layout_version": 1,
@@ -205,7 +205,7 @@ def test_runner_doctor_warns_for_legacy_layout_even_when_online(tmp_path: Path):
             runner_metadata={
                 "hostname": "cube",
                 "platform": "linux",
-                "runner_version": "0.1.4",
+                "runner_version": "0.1.5",
                 "install_mode": "server",
                 "auto_update_policy": "notify",
                 "capabilities": ["exec.full"],
@@ -295,7 +295,7 @@ def test_runner_preflight_reports_authenticated_server_view(tmp_path: Path):
             metadata={
                 "hostname": "clifford",
                 "platform": "linux",
-                "runner_version": "0.1.4",
+                "runner_version": "0.1.5",
                 "install_mode": "server",
                 "auto_update_policy": "notify",
                 "install_layout_version": 1,

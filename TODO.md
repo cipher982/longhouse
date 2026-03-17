@@ -15,6 +15,26 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)
+
+Status (2026-03-16): In progress. The updater-capable runner is already live at `runner-v0.1.4`, the fleet is migrated onto the managed install layout, and `slim` is configured as the first `apply` canary. The remaining gate is publishing `0.1.5` and watching the canary move itself there without a manual reinstall.
+
+**Goal:** Validate that the shipped auto-update path works end to end on a real machine before enabling `apply` more broadly.
+
+**Done when:**
+- A newer runner release is published with signed update metadata
+- The hosted backend advertises the newer release as latest
+- The `slim` canary upgrades itself from `0.1.4` to the newer version under policy `apply`
+- Hosted runner health stays green before and after the self-update
+
+- [x] Put the existing fleet on the managed install layout
+- [ ] Publish a newer runner release for canary verification
+- [ ] Verify one real canary self-updates under policy `apply`
+
+Notes:
+- 2026-03-16: All five personal runners now report `managed_install_ready=true` and `install_layout_version=1`.
+- 2026-03-16: `slim` is already configured with `RUNNER_AUTO_UPDATE_POLICY=apply`, `RUNNER_UPDATE_CHECK_INTERVAL_SEC=30`, and `RUNNER_UPDATE_JITTER_SEC=1` for this verification window.
+
 ## [Launch][Product][QA/Test] Fix session workspace initial auto-scroll regression (size: 2)
 
 Status (2026-03-14): Done. Long session detail pages now retry auto-scroll until the timeline pane is actually ready, and the session-detail browser spec is green again.

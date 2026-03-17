@@ -1,4 +1,4 @@
-export const RUNNER_VERSION = '0.1.4';
+export const RUNNER_VERSION = '0.1.5';
 
 export const DEFAULT_UPDATE_MANIFEST_URL =
   'https://github.com/cipher982/longhouse/releases/latest/download/longhouse-runner-manifest.json';

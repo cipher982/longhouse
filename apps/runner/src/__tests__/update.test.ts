@@ -27,10 +27,10 @@ function buildSignedManifest(overrides: Partial<RunnerUpdateManifest> = {}) {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const manifest: RunnerUpdateManifest = {
     schema_version: 1,
-    runner_version: '0.1.4',
+    runner_version: '0.1.5',
     published_at: '2026-03-16T12:00:00Z',
     expires_at: '2099-03-16T12:00:00Z',
-    notes_url: 'https://github.com/cipher982/longhouse/releases/tag/runner-v0.1.4',
+    notes_url: 'https://github.com/cipher982/longhouse/releases/tag/runner-v0.1.5',
     assets: {
       'linux-x64': {
         filename: 'longhouse-runner-linux-x64',
@@ -63,8 +63,8 @@ function response(body: string | Buffer, url = 'https://example.com/file', statu
 
 describe('compareSemver', () => {
   it('orders versions as expected', () => {
-    expect(compareSemver('0.1.3', '0.1.4')).toBe(-1);
-    expect(compareSemver('0.1.4', '0.1.4')).toBe(0);
+    expect(compareSemver('0.1.3', '0.1.5')).toBe(-1);
+    expect(compareSemver('0.1.5', '0.1.5')).toBe(0);
     expect(compareSemver('0.2.0', '0.1.9')).toBe(1);
   });
 });
@@ -81,7 +81,7 @@ describe('parseAndValidateManifest', () => {
   it('accepts a valid signed manifest', () => {
     const signed = buildSignedManifest();
     const manifest = parseAndValidateManifest(signed.manifestBytes, signed.signature, signed.publicKeyPem);
-    expect(manifest.runner_version).toBe('0.1.4');
+    expect(manifest.runner_version).toBe('0.1.5');
   });
 
   it('rejects an invalid signature', () => {
@@ -159,7 +159,7 @@ describe('runner update flows', () => {
       });
       expect(check.update_available).toBe(true);
       expect(check.current_version).toBe('0.1.3');
-      expect(check.latest_version).toBe('0.1.4');
+      expect(check.latest_version).toBe('0.1.5');
 
       const apply = await applyRunnerUpdate({
         env: process.env,
@@ -170,8 +170,8 @@ describe('runner update flows', () => {
         fetchImpl,
       });
       expect(apply.from_version).toBe('0.1.3');
-      expect(apply.to_version).toBe('0.1.4');
-      expect(readFileSync(join(versionsDir, '0.1.4', 'longhouse-runner')).toString()).toBe('new-runner-binary');
+      expect(apply.to_version).toBe('0.1.5');
+      expect(readFileSync(join(versionsDir, '0.1.5', 'longhouse-runner')).toString()).toBe('new-runner-binary');
 
       const layout = resolveInstallLayout(process.env, dir);
       expect(readFileSync(layout.launcherPath, 'utf-8')).toContain(`${installRoot}/current`);
@@ -180,7 +180,7 @@ describe('runner update flows', () => {
         env: process.env,
         homeDir: dir,
       });
-      expect(rollback.from_version).toBe('0.1.4');
+      expect(rollback.from_version).toBe('0.1.5');
       expect(rollback.to_version).toBe('0.1.3');
     });
   });
