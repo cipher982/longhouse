@@ -197,7 +197,7 @@ class UserUpdateData(BaseModel):
 class OpsEventData(BaseModel):
     """Payload for OpsEventData messages"""
 
-    type: Literal['run_started', 'run_success', 'run_failed', 'fiche_created', 'fiche_updated', 'thread_message_created', 'budget_denied']
+    type: Literal['run_started', 'run_success', 'run_failed', 'automation_created', 'automation_updated', 'fiche_created', 'fiche_updated', 'thread_message_created', 'budget_denied']
     fiche_id: Optional[int] = Field(default=None, ge=1, description='')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
@@ -228,7 +228,7 @@ class MessageType(str, Enum):
     STREAM_CHUNK = "stream_chunk"
     STREAM_END = "stream_end"
     ASSISTANT_ID = "assistant_id"
-    FICHE_EVENT = "fiche_event"
+    AUTOMATION_EVENT = "automation_event"
     RUN_UPDATE = "run_update"
     USER_UPDATE = "user_update"
     OPS_EVENT = "ops_event"

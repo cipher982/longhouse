@@ -38,6 +38,27 @@ const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
 type Scope = "my" | "all";
 
 const RUNS_LIMIT = 50;
+const AUTOMATION_TOPIC_PREFIX = "automation:";
+const LEGACY_FICHE_TOPIC_PREFIX = "fiche:";
+
+function parseDashboardTopic(topic: string): number | null {
+  if (!(topic.startsWith(AUTOMATION_TOPIC_PREFIX) || topic.startsWith(LEGACY_FICHE_TOPIC_PREFIX))) {
+    return null;
+  }
+
+  const [, automationIdRaw] = topic.split(":");
+  const automationId = Number.parseInt(automationIdRaw ?? "", 10);
+  return Number.isFinite(automationId) ? automationId : null;
+}
+
+function isAutomationLifecycleEvent(eventType: string): boolean {
+  return (
+    eventType === "automation_state" ||
+    eventType === "automation_updated" ||
+    eventType === "fiche_state" ||
+    eventType === "fiche_updated"
+  );
+}
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -111,13 +132,8 @@ export default function DashboardPage() {
       }
 
       const topic = typeof message.topic === "string" ? message.topic : "";
-      if (!topic.startsWith("fiche:")) {
-        return;
-      }
-
-      const [, ficheIdRaw] = topic.split(":");
-      const ficheId = Number.parseInt(ficheIdRaw ?? "", 10);
-      if (!Number.isFinite(ficheId)) {
+      const automationId = parseDashboardTopic(topic);
+      if (automationId == null) {
         return;
       }
 
@@ -125,13 +141,13 @@ export default function DashboardPage() {
         typeof message.data === "object" && message.data !== null ? (message.data as Record<string, unknown>) : {};
       const eventType = message.type;
 
-      if (eventType === "fiche_state" || eventType === "fiche_updated") {
-        applyDashboardUpdate((current) => applyFicheStateUpdate(current, ficheId, dataPayload));
+      if (isAutomationLifecycleEvent(eventType)) {
+        applyDashboardUpdate((current) => applyFicheStateUpdate(current, automationId, dataPayload));
         return;
       }
 
       if (eventType === "run_update") {
-        applyDashboardUpdate((current) => applyRunUpdate(current, ficheId, dataPayload));
+        applyDashboardUpdate((current) => applyRunUpdate(current, automationId, dataPayload));
         return;
       }
     },
@@ -298,7 +314,7 @@ export default function DashboardPage() {
     const ficheIdsToSubscribe: number[] = [];
     for (const id of activeIds) {
       if (!subscribedFicheIdsRef.current.has(id) && !pendingFicheIds.has(id)) {
-        topicsToSubscribe.push(`fiche:${id}`);
+        topicsToSubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${id}`);
         ficheIdsToSubscribe.push(id);
       }
     }
@@ -307,7 +323,7 @@ export default function DashboardPage() {
     for (const id of Array.from(subscribedFicheIdsRef.current)) {
       if (!activeIds.has(id)) {
         subscribedFicheIdsRef.current.delete(id);
-        topicsToUnsubscribe.push(`fiche:${id}`);
+        topicsToUnsubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${id}`);
       }
     }
 
@@ -354,7 +370,7 @@ export default function DashboardPage() {
       return;
     }
 
-    const topics = Array.from(subscribedFicheIdsRef.current).map((id) => `fiche:${id}`);
+    const topics = Array.from(subscribedFicheIdsRef.current).map((id) => `${AUTOMATION_TOPIC_PREFIX}${id}`);
     const unsubId = generateMessageId();
     sendMessageRef.current?.(
       createEnvelope("unsubscribe", "system", { topics, message_id: unsubId }, unsubId),
@@ -381,7 +397,7 @@ export default function DashboardPage() {
       if (subscribedFicheIds.size === 0) {
         return;
       }
-      const topics = Array.from(subscribedFicheIds).map((id) => `fiche:${id}`);
+      const topics = Array.from(subscribedFicheIds).map((id) => `${AUTOMATION_TOPIC_PREFIX}${id}`);
       const cleanupMsgId = msgId();
       sendMessage?.(
         createEnvelope("unsubscribe", "system", { topics, message_id: cleanupMsgId }, cleanupMsgId),

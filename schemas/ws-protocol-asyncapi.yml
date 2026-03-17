@@ -4,7 +4,7 @@ info:
   title: Zerg WebSocket Protocol
   version: 1.0.0
   description: |
-    Comprehensive WebSocket protocol for the Zerg Fiche Platform.
+    Comprehensive WebSocket protocol for Longhouse realtime topics.
     Consolidates message types, payload schemas, and routing patterns into
     a single source of truth for contract-first development.
 
@@ -65,11 +65,11 @@ channels:
         $ref: '#/components/messages/AssistantId'
 
   FicheChannel:
-    address: fiche:{fiche_id}
-    description: Fiche lifecycle events and run updates
+    address: automation:{automation_id}
+    description: Automation lifecycle events and run updates
     parameters:
-      fiche_id:
-        description: Numeric identifier of the fiche
+      automation_id:
+        description: Numeric identifier of the automation
         examples: ["17", "42"]
     messages:
       FicheEvent:
@@ -114,12 +114,12 @@ operations:
       $ref: '#/channels/ThreadChannel'
     summary: Handle thread-level WebSocket operations
 
-  # Fiche operations
+  # Automation operations
   FicheOperations:
     action: send
     channel:
       $ref: '#/channels/FicheChannel'
-    summary: Handle fiche-level WebSocket operations
+    summary: Handle automation-level WebSocket operations
 
   # User operations
   UserOperations:
@@ -254,18 +254,26 @@ components:
       x-handler-method: handle_assistant_id
       x-aliases: []
 
-    # Fiche messages
+    # Automation messages
     FicheEvent:
-      name: fiche_event
-      summary: Fiche lifecycle or status event
+      name: automation_event
+      summary: Automation lifecycle or status event
       payload:
         $ref: '#/components/schemas/FicheEventData'
       x-handler-method: handle_fiche_event
-      x-aliases: ["fiche_created", "fiche_updated", "fiche_deleted", "fiche_state"]
+      x-aliases:
+        - automation_created
+        - automation_updated
+        - automation_deleted
+        - automation_state
+        - fiche_created
+        - fiche_updated
+        - fiche_deleted
+        - fiche_state
 
     RunUpdate:
       name: run_update
-      summary: Fiche run status update
+      summary: Automation run status update
       payload:
         $ref: '#/components/schemas/RunUpdateData'
       x-handler-method: handle_run_update
@@ -304,7 +312,7 @@ components:
           description: Message type identifier
         topic:
           type: string
-          description: Topic routing string (e.g., 'fiche:123', 'thread:456')
+          description: Topic routing string (e.g., 'automation:123', 'thread:456')
         req_id:
           type: string
           description: Optional request correlation ID
@@ -538,7 +546,7 @@ components:
           type: integer
           minimum: 1
 
-    # Fiche message payloads
+    # Automation message payloads
     FicheEventData:
       type: object
       required: [id]
@@ -627,6 +635,8 @@ components:
             - run_started
             - run_success
             - run_failed
+            - automation_created
+            - automation_updated
             - fiche_created
             - fiche_updated
             - thread_message_created

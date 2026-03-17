@@ -51,15 +51,28 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def handle_fiche_subscription(client_id: str, fiche_id: int, message_id: str, db: Session) -> None:
-    """Subscribe to fiche events."""
+async def handle_fiche_subscription(
+    client_id: str,
+    fiche_id: int,
+    message_id: str,
+    db: Session,
+    *,
+    topic_prefix: str = "fiche",
+    state_message_type: str = "fiche_state",
+) -> None:
+    """Subscribe to automation events via either the automation or fiche topic."""
     fiche = get_fiche(db, fiche_id)
     if not fiche:
         return await send_subscribe_error(
-            client_id, message_id, f"Fiche {fiche_id} not found", [f"fiche:{fiche_id}"], send_to_client, "NOT_FOUND"
+            client_id,
+            message_id,
+            f"Fiche {fiche_id} not found",
+            [f"{topic_prefix}:{fiche_id}"],
+            send_to_client,
+            "NOT_FOUND",
         )
 
-    topic = f"fiche:{fiche_id}"
+    topic = f"{topic_prefix}:{fiche_id}"
     last_run_at = getattr(fiche, "last_run_at", None)
     next_run_at = getattr(fiche, "next_run_at", None)
 
@@ -73,7 +86,7 @@ async def handle_fiche_subscription(client_id: str, fiche_id: int, message_id: s
         last_error=getattr(fiche, "last_error", None),
     )
 
-    await subscribe_and_send_state(client_id, topic, message_id, fiche_data, "fiche_state", send_to_client)
+    await subscribe_and_send_state(client_id, topic, message_id, fiche_data, state_message_type, send_to_client)
 
 
 async def handle_user_subscription(client_id: str, user_id: int, message_id: str, db: Session) -> None:
@@ -288,6 +301,15 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
                 # Simple routing - no fancy abstraction needed
                 if prefix == "fiche":
                     await handle_fiche_subscription(client_id, int(topic_id), message_id, db)
+                elif prefix == "automation":
+                    await handle_fiche_subscription(
+                        client_id,
+                        int(topic_id),
+                        message_id,
+                        db,
+                        topic_prefix="automation",
+                        state_message_type="automation_state",
+                    )
                 elif prefix == "user":
                     await handle_user_subscription(client_id, int(topic_id), message_id, db)
                 elif prefix == "ops" and topic_id == "events":

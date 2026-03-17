@@ -43,6 +43,15 @@ export interface OikosEventData {
   timestamp: string;
 }
 
+function parseEventData<T>(event: MessageEvent, eventName: string): T | null {
+  try {
+    return JSON.parse(event.data) as T;
+  } catch (err) {
+    console.error(`Failed to parse ${eventName} event:`, err);
+    return null;
+  }
+}
+
 /**
  * Prepare fetch options for cookie-based auth.
  * Auth is now handled via HttpOnly longhouse_session cookie.
@@ -161,6 +170,7 @@ export class OikosAPIClient {
   connectEventStream(handlers: {
     onConnected?: () => void;
     onHeartbeat?: (timestamp: string) => void;
+    onAutomationUpdated?: (event: OikosEventData) => void;
     onFicheUpdated?: (event: OikosEventData) => void;
     onRunCreated?: (event: OikosEventData) => void;
     onRunUpdated?: (event: OikosEventData) => void;
@@ -180,38 +190,42 @@ export class OikosAPIClient {
     });
 
     this.eventSource.addEventListener('heartbeat', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
+      const data = parseEventData<{ timestamp: string }>(e, 'heartbeat');
+      if (data) {
         handlers.onHeartbeat?.(data.timestamp);
-      } catch (err) {
-        console.error('Failed to parse heartbeat:', err);
+      }
+    });
+
+    const handleAutomationUpdate = (event: OikosEventData) => {
+      handlers.onAutomationUpdated?.(event);
+      handlers.onFicheUpdated?.(event);
+    };
+
+    this.eventSource.addEventListener('automation_updated', (e: MessageEvent) => {
+      const event = parseEventData<OikosEventData>(e, 'automation_updated');
+      if (event) {
+        handleAutomationUpdate(event);
       }
     });
 
     this.eventSource.addEventListener('fiche_updated', (e: MessageEvent) => {
-      try {
-        const event: OikosEventData = JSON.parse(e.data);
-        handlers.onFicheUpdated?.(event);
-      } catch (err) {
-        console.error('Failed to parse fiche_updated event:', err);
+      const event = parseEventData<OikosEventData>(e, 'fiche_updated');
+      if (event) {
+        handleAutomationUpdate(event);
       }
     });
 
     this.eventSource.addEventListener('run_created', (e: MessageEvent) => {
-      try {
-        const event: OikosEventData = JSON.parse(e.data);
+      const event = parseEventData<OikosEventData>(e, 'run_created');
+      if (event) {
         handlers.onRunCreated?.(event);
-      } catch (err) {
-        console.error('Failed to parse run_created event:', err);
       }
     });
 
     this.eventSource.addEventListener('run_updated', (e: MessageEvent) => {
-      try {
-        const event: OikosEventData = JSON.parse(e.data);
+      const event = parseEventData<OikosEventData>(e, 'run_updated');
+      if (event) {
         handlers.onRunUpdated?.(event);
-      } catch (err) {
-        console.error('Failed to parse run_updated event:', err);
       }
     });
 
