@@ -470,10 +470,6 @@ export default function App() {
                 ),
               },
               {
-                path: "/proposals",
-                element: <Navigate to="/briefings" replace />,
-              },
-              {
                 path: "/briefings",
                 element: (
                   <ErrorBoundary>

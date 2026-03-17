@@ -24,7 +24,6 @@ from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentsBase
 from zerg.models.work import INSIGHT_ORIGIN_SYSTEM
-from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
 
 
@@ -58,20 +57,6 @@ def _seed_insight(db, *, title: str = "Insight title", origin: str | None = None
     db.commit()
     db.refresh(insight)
     return insight
-
-
-def _seed_proposal(db, *, insight_id) -> ActionProposal:
-    proposal = ActionProposal(
-        insight_id=insight_id,
-        project="zerg",
-        title="Proposal title",
-        action_blurb="Do the thing",
-        status="pending",
-    )
-    db.add(proposal)
-    db.commit()
-    db.refresh(proposal)
-    return proposal
 
 
 def _issue_session_cookie(user_id: int = 1) -> str:
@@ -393,43 +378,5 @@ def test_insights_create_sets_manual_origin(tmp_path):
             insight = db.query(Insight).filter(Insight.title == "Created via API").first()
             assert insight is not None
             assert insight.origin == "manual"
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_proposals_routes_require_browser_session_not_agents_header(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        insight = _seed_insight(db)
-        _seed_proposal(db, insight_id=insight.id)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            response = client.get("/proposals", headers={"X-Agents-Token": "dev"})
-        assert response.status_code == 401
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_proposals_list_accepts_browser_session_cookie(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        insight = _seed_insight(db)
-        _seed_proposal(db, insight_id=insight.id)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get("/proposals")
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["total"] == 1
-        assert payload["proposals"][0]["title"] == "Proposal title"
     finally:
         api_app.dependency_overrides.clear()

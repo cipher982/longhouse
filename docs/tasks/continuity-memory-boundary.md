@@ -24,7 +24,7 @@ Last updated: 2026-03-17
 ## Phase 2: Remove planning artifacts from continuity context
 
 - [x] Stop including approved proposals in briefing assembly
-- [x] Remove or hide the `/proposals` route from the primary browser product surface
+- [x] Delete the dormant `/proposals` route and backend/frontend proposal surface
 - [x] Tighten any remaining proposal copy so it reads as admin/internal tooling only
 - [x] Add/adjust focused tests for the trimmed briefing composition
 - [x] Commit Phase 2
@@ -61,7 +61,7 @@ Notes:
 - The goal is a cleaner product boundary, not a richer feature set.
 - 2026-03-17: Phase 1 now uses `OperationalIncident` plus `GET /api/reliability/incidents`; stale-agent and ingest-health open/update/resolve incidents instead of writing new `system` insights. The new table comes in through `AgentsBase.metadata.create_all()`, so no extra SQLite ALTER path was needed.
 - 2026-03-17: Verification for this slice: `uv run --with ruff ruff check ...` passed and `make test-lite` passed (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`).
-- 2026-03-17: Phase 2 trims briefings back to session summaries plus curated gotchas, redirects `/proposals` to `/briefings`, and keeps the remaining proposals copy explicitly internal/manual-reflection-only.
+- 2026-03-17: Phase 2 trims briefings back to session summaries plus curated gotchas, and the later proposal-removal slice deletes the dormant `/proposals` route alias plus the remaining backend/frontend proposal code.
 - 2026-03-17: Verification for Phase 2: backend `ruff check` passed, `make test-lite` passed again (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` passed (`31 passed, 1 skipped`).
 - 2026-03-17: Phase 3 adds `Insight.archived_at`, hides archived rows from default browser/machine reads and briefing gotchas, exposes browser archive/unarchive actions plus a minimal `/insights` curation page reached from Briefings, and verified with backend `ruff check`, `make test-lite` (`878 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` (`31 passed, 1 skipped`).
 - 2026-03-17: Phase 4 is docs-only. `AGENTS.md` now treats insights as curated continuity memory with a small browser curation page, proposals as internal/manual tooling only, and the continuity specs are updated so they no longer describe the pre-cleanup product shape. No VISION change was needed for this pass.

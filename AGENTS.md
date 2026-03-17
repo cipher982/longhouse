@@ -82,7 +82,6 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 | Insights | `GET /api/insights`, `POST /api/insights/:id/archive`, `POST /api/insights/:id/unarchive` (browser); `GET /api/agents/insights` + `POST /api/insights` (machine) | InsightsPage | `log_insight`, `query_insights` | Curated continuity memory; browser users can archive/restore rows and machine reads stay separate |
 | Reflection / briefings | `POST /api/agents/reflect`, `GET /api/agents/reflections`, `GET /api/timeline/briefing` | BriefingsPage | — | Briefings are the user-facing continuity surface; reflection remains optional admin tooling and the cron job is paused by default |
 | Jobs/Scheduler | `GET /api/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
-| Action proposals | `GET/POST /api/proposals` | — | — | Internal manual-review queue for explicit reflection runs; `/proposals` redirects away and proposals no longer feed briefings |
 | Runner daemon | WebSocket from runner binary | — | — | Remote command execution on user infra |
 | **Session presence** | `POST /api/agents/presence` + `GET /api/agents/sessions/active` | ForumPage | — | Real-time state (thinking/running/idle) via Claude Code hooks; `session_presence` table, stale after 10min |
 | **Forum / live view** | `GET /api/agents/sessions/active` | ForumPage | — | Active session map; active rows glow green, canvas entities pulse; polls at 2s |
@@ -188,6 +187,7 @@ curl -s -H "X-Admin-Token: $TOKEN" https://control.longhouse.ai/api/instances
 curl -s -X POST -H "X-Admin-Token: $TOKEN" https://control.longhouse.ai/api/instances/<id>/reprovision
 ```
 Note: reprovisioning generates a new password. Data is safe — SQLite lives on a host bind mount at `/var/app-data/longhouse/<subdomain>`, not inside the container.
+For scripted admin calls, prefer `curl` or `scripts/lib/hosted-instance.sh`. Default Python `urllib` user-agents can trip Cloudflare `1010` on `control.longhouse.ai` even when the admin token is valid.
 
 ### Verify Deploy
 ```bash
@@ -285,3 +285,4 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-20) [auth] **Two auth systems — don't mix.** Browser pages: password-login JWT → `longhouse_session` cookie. `/api/agents/*` endpoints: device token → `X-Agents-Token` header (normally from `~/.claude/longhouse-device-token`; hosted live QA can mint a short-lived one via control-plane admin auth). Using JWT Bearer on agents endpoints gets 403.
 - (2026-02-20) [frontend] **ForumCanvas viewport snaps on poll** if ResizeObserver effect depends on `state.layout` (object ref). Must depend on `state.layout.grid.cols/rows` (primitives) — object ref changes every 2s poll causing viewport re-center while user pans.
 - (2026-03-09) [continuation] Keep the live `/api/sessions/{id}/chat` SSE route on direct `claude` invocation. Real provider-backed continuation smoke lives at `make test-e2e-continuation-provider` / `.github/workflows/continuation-provider-smoke.yml` with the CI-only `LONGHOUSE_CI_ANTHROPIC_API_KEY`; do not rely on ambient laptop Claude auth there.
+- (2026-03-17) [ops] **Control-plane admin calls are user-agent sensitive.** `curl` and `scripts/lib/hosted-instance.sh` work; raw Python `urllib` defaults can trigger Cloudflare `1010` on `control.longhouse.ai` even with a valid `X-Admin-Token`.

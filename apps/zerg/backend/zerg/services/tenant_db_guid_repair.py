@@ -47,9 +47,6 @@ GUID_COLUMN_SPECS: tuple[GuidColumnSpec, ...] = (
     GuidColumnSpec("commis_jobs", "trace_id", ("id",), "set_null"),
     GuidColumnSpec("llm_audit_log", "trace_id", ("id",), "set_null"),
     GuidColumnSpec("llm_audit_log", "span_id", ("id",), "set_null"),
-    GuidColumnSpec("action_proposals", "id", ("id",), "report_only"),
-    GuidColumnSpec("action_proposals", "insight_id", ("id",), "report_only"),
-    GuidColumnSpec("action_proposals", "reflection_run_id", ("id",), "set_null"),
     GuidColumnSpec("insights", "id", ("id",), "report_only"),
     GuidColumnSpec("insights", "session_id", ("id",), "set_null"),
     GuidColumnSpec("reflection_runs", "id", ("id",), "report_only"),
@@ -79,7 +76,12 @@ def _validate_uuid(raw: object) -> bool:
     return True
 
 
-def find_db_paths(*, root: str | Path | None = None, db_path: str | Path | None = None, instance: str | None = None) -> list[Path]:
+def find_db_paths(
+    *,
+    root: str | Path | None = None,
+    db_path: str | Path | None = None,
+    instance: str | None = None,
+) -> list[Path]:
     if db_path:
         path = Path(db_path)
         if not path.is_file():
@@ -162,14 +164,20 @@ def render_summary(summary: RepairSummary) -> str:
     lines = []
     for finding in summary.findings:
         pk = ", ".join(f"{key}={value}" for key, value in finding.primary_key.items()) or "<no-pk>"
-        lines.append(f"{finding.db_path}: {finding.table}.{finding.column} [{pk}] value={finding.value!r} action={finding.action}")
-    lines.append(f"Summary: findings={len(summary.findings)} repaired={summary.repaired_count} unsupported={summary.unsupported_count}")
+        lines.append(f"{finding.db_path}: {finding.table}.{finding.column} [{pk}] " f"value={finding.value!r} action={finding.action}")
+    lines.append(
+        "Summary: " f"findings={len(summary.findings)} " f"repaired={summary.repaired_count} " f"unsupported={summary.unsupported_count}"
+    )
     return "\n".join(lines)
 
 
 def run_cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Scan and repair malformed GUID values in tenant SQLite DBs.")
-    parser.add_argument("--root", default=str(_DEFAULT_ROOT), help="Instance root directory (default: /var/app-data/longhouse)")
+    parser.add_argument(
+        "--root",
+        default=str(_DEFAULT_ROOT),
+        help="Instance root directory (default: /var/app-data/longhouse)",
+    )
     parser.add_argument("--db-path", help="Single SQLite DB path to inspect")
     parser.add_argument("--instance", help="Inspect only one instance under --root")
     parser.add_argument("--apply", action="store_true", help="Apply safe repairs in-place")
@@ -182,7 +190,15 @@ def run_cli(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     for path in db_paths:
-        summary = repair_db(path) if args.apply else RepairSummary(tuple(scan_db(path)), repaired_count=0, unsupported_count=0)
+        summary = (
+            repair_db(path)
+            if args.apply
+            else RepairSummary(
+                tuple(scan_db(path)),
+                repaired_count=0,
+                unsupported_count=0,
+            )
+        )
         if not args.apply:
             summary = RepairSummary(
                 findings=summary.findings,
