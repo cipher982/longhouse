@@ -30,8 +30,17 @@ import yaml
 
 from zerg.session_loop_mode import SessionLoopMode
 
-_BACKEND_ROOT = Path(__file__).resolve().parents[2]
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_MODULE_PATH = Path(__file__).resolve()
+
+
+def _safe_parent(path: Path, index: int, fallback: Path) -> Path:
+    """Return ``path.parents[index]`` when available, otherwise the fallback."""
+
+    return path.parents[index] if len(path.parents) > index else fallback
+
+
+_BACKEND_ROOT = _safe_parent(_MODULE_PATH, 2, _MODULE_PATH.parent)
+_REPO_ROOT = _safe_parent(_MODULE_PATH, 5, _BACKEND_ROOT)
 DecisionCallable = Callable[["AutonomyContextPacket"], "AutonomyDecision | Awaitable[AutonomyDecision]"]
 DEFAULT_AUTONOMY_JOURNEY_FIXTURE_PATH = _BACKEND_ROOT / "tests_lite" / "fixtures" / "oikos_autonomy_journeys.yml"
 DEFAULT_AUTONOMY_ARTIFACT_ROOT = _REPO_ROOT / ".tmp" / "oikos-autonomy-journeys"
