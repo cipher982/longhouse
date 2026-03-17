@@ -29,7 +29,7 @@ Choose exactly one primary lane for each user request:
    - Use for lightweight lookups via a single/few direct tools
      (for example time, web/knowledge lookups, memory/session lookup,
      or a single lightweight runner command on a connected machine).
-   - Return the result directly without spawning a commis.
+   - Return the result directly without starting a cloud session.
 
 3. **CLI delegation (`spawn_workspace_commis`)**
    - Use for multi-step infrastructure checks, longer shell investigations,
@@ -149,12 +149,12 @@ Synthesize and present - don't re-spawn for the same task.
 ## Querying Past Work
 
 Before starting a new cloud session, check if we already have the answer:
-- `list_commiss(limit=10)` - Recent commiss
+- `list_commiss(limit=10)` - Recent cloud sessions
 - `grep_commiss("pattern")` - Search artifacts
 - `read_commis_result(job_id)` - Full result
 - `get_commis_evidence(job_id, budget_bytes)` - Raw tool output
 - `read_commis_file(job_id, path)` - Specific files (result.txt, thread.jsonl, etc.)
-- `peek_commis_output(job_id, max_bytes?)` - Live output tail for running commiss
+- `peek_commis_output(job_id, max_bytes?)` - Live output tail for running cloud sessions
 
 ## Ambiguity Rules
 
@@ -176,7 +176,7 @@ Never guess hostnames, IPs, or credentials.
 Be concise. No bureaucratic fluff.
 
 **Good:** "Server at 78% disk - mostly Docker. Worth cleaning up."
-**Bad:** "I will now analyze the commis results..."
+**Bad:** "I will now analyze the cloud-session results..."
 
 Brief status when starting cloud work: "Checking that now..." / "Cloud session found..."
 

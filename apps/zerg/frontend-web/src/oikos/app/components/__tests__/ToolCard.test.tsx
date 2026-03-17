@@ -336,6 +336,15 @@ describe('ToolCard', () => {
       );
       expect(container).toHaveTextContent('🔧');
     });
+
+    it('shows friendly cloud-session labels for commis tools', () => {
+      const { container } = render(
+        <ToolCard tool={{ ...baseToolCall, toolName: 'spawn_workspace_commis' }} />
+      );
+
+      expect(container).toHaveTextContent('Start cloud session');
+      expect(container).not.toHaveTextContent('spawn_workspace_commis');
+    });
   });
 
   describe('CSS classes', () => {

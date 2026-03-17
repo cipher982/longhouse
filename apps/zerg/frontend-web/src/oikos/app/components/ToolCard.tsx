@@ -37,8 +37,26 @@ const TOOL_ICONS: Record<string, string> = {
   knowledge_search: '🔍',
 };
 
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  spawn_workspace_commis: 'Start cloud session',
+  list_commiss: 'List cloud sessions',
+  read_commis_result: 'Read cloud session result',
+  get_commis_metadata: 'Inspect cloud session',
+  check_commis_status: 'Check cloud session status',
+  peek_commis_output: 'Peek cloud session output',
+  read_commis_file: 'Read cloud session file',
+  get_commis_evidence: 'Read cloud session evidence',
+  grep_commiss: 'Search cloud sessions',
+  cancel_commis: 'Cancel cloud session',
+  wait_for_commis: 'Wait for cloud session',
+};
+
 function getToolIcon(toolName: string): string {
   return TOOL_ICONS[toolName] || '🔧';
+}
+
+function getToolDisplayName(toolName: string): string {
+  return TOOL_DISPLAY_NAMES[toolName] || toolName;
 }
 
 function formatDuration(ms: number | undefined, startedAt: number, status: string): string {
@@ -89,6 +107,7 @@ export function ToolCard({ tool }: ToolCardProps): React.ReactElement {
   const [showRaw, setShowRaw] = useState(false);
 
   const icon = getToolIcon(tool.toolName);
+  const displayName = getToolDisplayName(tool.toolName);
   const statusIcon = getStatusIcon(tool.status);
   const duration = formatDuration(tool.durationMs, tool.startedAt, tool.status);
 
@@ -121,7 +140,7 @@ export function ToolCard({ tool }: ToolCardProps): React.ReactElement {
       {/* Header - always visible */}
       <div className="tool-card__header">
         <span className="tool-card__icon">{icon}</span>
-        <span className="tool-card__name">{tool.toolName}</span>
+        <span className="tool-card__name">{displayName}</span>
         {argsDisplay && !isExpanded && (
           <span className="tool-card__args-preview">{argsDisplay}</span>
         )}
