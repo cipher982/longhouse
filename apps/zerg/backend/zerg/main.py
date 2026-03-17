@@ -77,6 +77,7 @@ from zerg.routers.fiche_connectors import router as fiche_connectors_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.heartbeat import router as heartbeat_router
+from zerg.routers.insights import machine_router as machine_insights_router
 from zerg.routers.insights import router as insights_router
 from zerg.routers.job_settings import router as job_settings_router
 from zerg.routers.jobs import router as jobs_router
@@ -1049,6 +1050,7 @@ api_app.include_router(heartbeat_router)  # Engine daemon heartbeat ingest
 api_app.include_router(presence_router)  # Claude Code hook presence signals
 api_app.include_router(device_tokens_router)  # Per-device authentication tokens
 api_app.include_router(insights_router)  # Insights tracking for agent infrastructure
+api_app.include_router(machine_insights_router)  # Machine-auth insight reads for continuity tools
 api_app.include_router(proposals_router)  # Action proposals review queue
 
 # metrics_router stays on parent app — Prometheus expects /metrics at root

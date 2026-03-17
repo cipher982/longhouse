@@ -28,15 +28,16 @@ Status (2026-03-16): In progress. Audit is complete on the live `david010` insta
 - Scheduled reflection is disabled by default
 - Docs/copy stop claiming there is a first-class Insights page or default 6-hour reflection loop
 
-- [ ] Write and commit the bounded spec + TODO entry
-- [ ] Add `/api/agents/insights` and repoint MCP `query_insights`
-- [ ] Add focused tests for the browser/machine auth split and MCP query behavior
+- [x] Write and commit the bounded spec + TODO entry
+- [x] Add `/api/agents/insights` and repoint MCP `query_insights`
+- [x] Add focused tests for the browser/machine auth split and MCP query behavior
 - [ ] Disable scheduled reflection by default without deleting manual reflection endpoints
 - [ ] Clean stale docs/UI copy around insights/proposals/reflection
 
 Notes:
 - 2026-03-16: Live hosted DB (`david010`) has 285 insights and 133 proposals; local `~/.longhouse/dev.db` has none, so this feature should be judged from hosted runtime data, not local dev state.
 - 2026-03-16: The useful portion is mostly manual/system-written operational learnings. The low-signal portion strongly clusters around the scheduled reflection cadence.
+- 2026-03-16: Machine reads now live on `/api/agents/insights`, browser reads stay on `/api/insights`, `query_insights` points at the machine route again, and `make test-lite` is green on this slice.
 - Spec: `docs/specs/insights-tightening.md`
 
 ## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)

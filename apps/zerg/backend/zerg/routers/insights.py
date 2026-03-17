@@ -2,10 +2,8 @@
 
 Provides endpoints for:
 - POST /api/insights — create or deduplicate insight (same title+project within 7 days → update)
-- GET /api/insights — query insights with filters
-
-`POST /api/insights` is machine-authenticated via the agents token path.
-`GET /api/insights` is browser-authenticated via the normal session cookie.
+- GET /api/insights — browser-authenticated insight query
+- GET /api/agents/insights — machine-authenticated insight query
 """
 
 import logging
@@ -35,6 +33,7 @@ from zerg.utils.time import UTCBaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/insights", tags=["insights"])
+machine_router = APIRouter(prefix="/agents/insights", tags=["insights"])
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +198,32 @@ async def create_insight(
         )
 
 
+def _list_insights_response(
+    db: Session,
+    project: Optional[str] = None,
+    insight_type: Optional[str] = None,
+    since_hours: int = 168,
+    limit: int = 20,
+) -> InsightListResponse:
+    """Query insights with shared filtering for browser and machine reads."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+
+    query = db.query(Insight).filter(Insight.created_at >= cutoff)
+
+    if project is not None:
+        query = query.filter(Insight.project == project)
+    if insight_type is not None:
+        query = query.filter(Insight.insight_type == insight_type)
+
+    total = query.count()
+    insights = query.order_by(Insight.created_at.desc()).limit(limit).all()
+
+    return InsightListResponse(
+        insights=[_insight_to_response(i) for i in insights],
+        total=total,
+    )
+
+
 @router.get("", response_model=InsightListResponse)
 async def list_insights(
     project: Optional[str] = Query(None, description="Filter by project"),
@@ -209,27 +234,44 @@ async def list_insights(
     _browser_user=Depends(get_current_browser_user),
     _single: None = Depends(require_single_tenant),
 ) -> InsightListResponse:
-    """Query insights with filters."""
+    """Query insights for browser-owned UI reads."""
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-
-        query = db.query(Insight).filter(Insight.created_at >= cutoff)
-
-        if project is not None:
-            query = query.filter(Insight.project == project)
-        if insight_type is not None:
-            query = query.filter(Insight.insight_type == insight_type)
-
-        total = query.count()
-        insights = query.order_by(Insight.created_at.desc()).limit(limit).all()
-
-        return InsightListResponse(
-            insights=[_insight_to_response(i) for i in insights],
-            total=total,
+        return _list_insights_response(
+            db=db,
+            project=project,
+            insight_type=insight_type,
+            since_hours=since_hours,
+            limit=limit,
         )
-
     except Exception:
         logger.exception("Failed to list insights")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list insights",
+        )
+
+
+@machine_router.get("", response_model=InsightListResponse)
+async def list_machine_insights(
+    project: Optional[str] = Query(None, description="Filter by project"),
+    insight_type: Optional[str] = Query(None, description="Filter by type"),
+    since_hours: int = Query(168, ge=1, le=8760, description="Hours to look back (default 168 = 7 days)"),
+    limit: int = Query(20, ge=1, le=100, description="Max results"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> InsightListResponse:
+    """Query insights for machine-owned continuity reads."""
+    try:
+        return _list_insights_response(
+            db=db,
+            project=project,
+            insight_type=insight_type,
+            since_hours=since_hours,
+            limit=limit,
+        )
+    except Exception:
+        logger.exception("Failed to list machine insights")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list insights",
