@@ -25,7 +25,8 @@ jobs:
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
       QA_INSTANCE_SUBDOMAIN: david010
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+      QA_HOME: /tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
+      PLAYWRIGHT_BROWSERS_PATH: /tmp/hosted-live-qa-browsers-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@v4
@@ -54,18 +55,18 @@ jobs:
         run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
 
       - name: Prepare isolated QA home
-        run: mkdir -p "$RUNNER_TEMP/qa-home"
+        run: mkdir -p "$QA_HOME" "$PLAYWRIGHT_BROWSERS_PATH"
 
       - name: Run hosted live QA
         id: qa_live
         env:
-          HOME: ${{ runner.temp }}/qa-home
+          HOME: ${{ env.QA_HOME }}
         run: make qa-live
 
       - name: Run hosted conversations QA
         id: qa_live_conversations
         env:
-          HOME: ${{ runner.temp }}/qa-home
+          HOME: ${{ env.QA_HOME }}
         run: make qa-live-conversations
 
       - name: Write summary
