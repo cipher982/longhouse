@@ -513,10 +513,10 @@ Status (2026-03-16): In progress. This phase is now narrowed to contract truth, 
 - The default product path centers sessions, conversations, Oikos, and runners instead of fiche/dashboard-era concepts
 - Regression tests cover the prompt/tool contract, provider capability contract, and key renamed UI surfaces
 
-- [ ] Remove user-facing `commis` / `autonomous agents` / server-first wording from prompts, product copy, and operator pages
+- [x] Remove user-facing `commis` / `autonomous agents` / server-first wording from prompts, product copy, and operator pages
 - [x] Publish one honest provider capability story for archive, cloud session start, continuation, hooks, and telemetry
-- [ ] Rename launch-facing cloud work labels from `commis` to `cloud session` or equivalent while keeping internal symbol churn minimal
-- [ ] Remove fiche/dashboard-era surfaces from default onboarding and primary navigation unless they are directly required
+- [x] Rename launch-facing cloud work labels from `commis` to `cloud session` or equivalent while keeping internal symbol churn minimal
+- [x] Remove fiche/dashboard-era surfaces from default onboarding and primary navigation unless they are directly required
 - [ ] Define and begin the deletion path for the current Oikos harness (`OikosService` / `Runner` / `oikos_react_engine`) instead of treating it as a permanent subsystem
 
 Notes:
@@ -527,6 +527,8 @@ Notes:
 - 2026-03-17: Added a shared frontend provider capability contract in `src/lib/providers.ts` and rewired the landing hero/demo/how-it-works/provider cards/FAQ to use the Claude-first continuation truth instead of parity copy. Added fast regression coverage (`providers.test.ts`, `ProviderClaims.test.tsx`) plus the landing Playwright spec, and re-ran `bun run validate:types`, `make test-frontend-unit`, `make test`, `make test-e2e`, and `make test-e2e-single TEST=tests/landing-integrations.spec.ts`.
 - 2026-03-13: Phase 1 truth pass landed across Oikos prompt/tool copy, shared provider capability helpers, and the most visible launch/admin `commis` labels. `make test-frontend-unit` and `make test` are green. `make test-e2e-core` still has three unrelated chat/thread failures (`useAuth` / missing `create-fiche-btn`) that should be addressed during launch-surface cleanup.
 - 2026-03-17: Current slice: finish the remaining launch-path drift without touching the active automation rename work. Scope is Oikos prompt/tool wording (`managed cloud sessions`, not `autonomous agents on servers`), visible `commis` labels on Oikos/admin/operator pages, and legacy chat recovery paths that still bounce users back to `/dashboard` instead of `/timeline`.
+- 2026-03-17: Shipped the second launch-copy pass across prompt/tool guidance, Oikos/admin/operator labels, and legacy recovery paths. Visible `Commis` labels now render as `cloud session`, the Oikos header/nav no longer advertises `Dashboard`, and demo impersonation plus legacy chat recovery now land on `/timeline`.
+- 2026-03-17: Verification passed via `make test`, `make test-frontend-unit`, and `make test-e2e`.
 - 2026-03-16: Restored the missing spec at `docs/specs/launch-runtime-simplification.md` so the bounded launch cleanup has an explicit vocabulary contract, provider matrix, and acceptance criteria again.
 - 2026-03-16: Current implementation scope for this pass is:
   1. restore the missing spec and lock the bounded cleanup plan,
