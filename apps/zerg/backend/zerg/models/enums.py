@@ -69,6 +69,14 @@ class RunnerJobStatus(str, Enum):
     CANCELED = "canceled"
 
 
+class SessionLoopMode(str, Enum):
+    """How much autonomy Oikos may exercise for a coding session."""
+
+    MANUAL = "manual"
+    ASSIST = "assist"
+    AUTOPILOT = "autopilot"
+
+
 __all__ = [
     "UserRole",
     "FicheStatus",
@@ -77,4 +85,5 @@ __all__ = [
     "ThreadType",
     "RunnerStatus",
     "RunnerJobStatus",
+    "SessionLoopMode",
 ]

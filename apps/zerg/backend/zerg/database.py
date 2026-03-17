@@ -490,6 +490,18 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("UPDATE sessions SET user_state = 'active' WHERE user_state IS NULL"))
             if "user_state_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state_at DATETIME"))
+            if "loop_mode" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_mode VARCHAR(20) DEFAULT 'manual' NOT NULL"))
+            conn.execute(text("UPDATE sessions SET loop_mode = 'manual' WHERE loop_mode IS NULL"))
+            conn.execute(
+                text(
+                    """
+                    UPDATE sessions
+                    SET loop_mode = 'manual'
+                    WHERE loop_mode NOT IN ('manual', 'assist', 'autopilot')
+                    """
+                )
+            )
             if "is_sidechain" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"))
             if "thread_root_session_id" not in columns:
