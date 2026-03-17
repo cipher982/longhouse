@@ -1,5 +1,5 @@
 /**
- * React Query hooks for action proposal management.
+ * React Query hooks for the internal proposal review queue.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

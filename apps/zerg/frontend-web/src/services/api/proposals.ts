@@ -2,7 +2,8 @@
  * API functions for action proposal management.
  *
  * Action proposals are created when reflection is explicitly run and an
- * insight includes a concrete, actionable follow-up.
+ * insight includes a concrete, actionable follow-up. This is internal
+ * admin tooling, not part of the normal continuity flow.
  */
 
 import { request } from "./base";

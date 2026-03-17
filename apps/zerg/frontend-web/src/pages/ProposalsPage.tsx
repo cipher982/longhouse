@@ -119,7 +119,7 @@ export default function ProposalsPage() {
     <PageShell size="narrow">
       <SectionHeader
         title="Action Proposals"
-        description="Review actionable follow-ups when manual reflection is used."
+        description="Internal review queue for manual reflection output."
       />
 
       <div className="proposals-filters">
@@ -144,7 +144,7 @@ export default function ProposalsPage() {
           title="No proposals"
           description={
             activeStatus === "pending"
-              ? "No pending proposals. Automatic reflection is paused by default."
+              ? "No pending proposals. Reflection is paused by default and this queue is only used for manual review."
               : `No ${activeStatus} proposals found.`
           }
         />

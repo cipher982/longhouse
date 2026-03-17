@@ -217,7 +217,7 @@ Status (2026-03-17): In progress. The product boundary is clearer now, but it is
 
 - [x] Write and commit the boundary spec + task checklist
 - [x] Add a tenant-local incident path and repoint ops alert writers away from `Insight`
-- [ ] Remove proposal data from briefing assembly and hide/remove the proposals surface
+- [x] Remove proposal data from briefing assembly and hide/remove the proposals surface
 - [ ] Add minimal browser insight curation with archive/unarchive
 - [ ] Verify locally, ship, and re-run hosted QA
 
@@ -227,6 +227,7 @@ Notes:
 - 2026-03-17: Keep reflection manual/admin-only while this lands; do not revive unattended reflection before the boundary is clean.
 - 2026-03-17: Phase 1 is the bounded incident split only: add a tenant-local operational incident path, repoint stale-agent and ingest-health, and leave proposals/briefings for the next slice.
 - 2026-03-17: Phase 1 landed in the clean clone: `OperationalIncident` now holds stale-agent and ingest-health alerts, `/api/reliability/incidents` lists them for admins, and `make test-lite` passed on the final state.
+- 2026-03-17: Phase 2 landed in the clean clone: briefings no longer include approved proposals, `/proposals` now redirects to `/briefings`, proposal copy is explicitly internal/manual, `make test-lite` passed again, and `make test-frontend-unit` passed after installing the workspace dependencies in the temp clone.
 - Spec: `docs/specs/continuity-memory-boundary.md`
 - Tasks: `docs/tasks/continuity-memory-boundary.md`
 

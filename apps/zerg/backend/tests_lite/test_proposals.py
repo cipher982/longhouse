@@ -1,20 +1,19 @@
 """Tests for action proposals — model, writer integration, API router."""
 
+import asyncio
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
 
-import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
-from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 from zerg.models.work import ActionProposal
 from zerg.models.work import Insight
 from zerg.services.reflection.collector import ProjectBatch
 from zerg.services.reflection.collector import SessionInfo
-
 
 # ---------------------------------------------------------------------------
 # DB setup
@@ -89,7 +88,7 @@ class TestActionProposalModel:
         SessionLocal = _make_db(tmp_path)
         with SessionLocal() as db:
             insight = _make_insight(db)
-            proposal = _make_proposal(db, insight_id=insight.id)
+            _make_proposal(db, insight_id=insight.id)
 
             result = db.query(ActionProposal).filter(ActionProposal.project == "test-project").first()
             assert result is not None
@@ -175,27 +174,38 @@ class TestWriterProposalCreation:
         SessionLocal = _make_db(tmp_path)
         with SessionLocal() as db:
             session = _make_session(db)
-            batches = [ProjectBatch(
-                project="test-project",
-                sessions=[SessionInfo(
-                    id=str(session.id), project="test-project", provider="claude",
-                    summary="Test", summary_title="Test",
-                    started_at=datetime.now(timezone.utc), tool_calls=1, user_messages=1,
-                )],
-                existing_insights=[],
-            )]
+            batches = [
+                ProjectBatch(
+                    project="test-project",
+                    sessions=[
+                        SessionInfo(
+                            id=str(session.id),
+                            project="test-project",
+                            provider="claude",
+                            summary="Test",
+                            summary_title="Test",
+                            started_at=datetime.now(timezone.utc),
+                            tool_calls=1,
+                            user_messages=1,
+                        )
+                    ],
+                    existing_insights=[],
+                )
+            ]
 
-            actions = [{
-                "action": "create_insight",
-                "project": "test-project",
-                "insight_type": "failure",
-                "title": "Deploy fails without UFW rule",
-                "description": "Container networking blocked",
-                "severity": "warning",
-                "confidence": 0.9,
-                "tags": ["deploy"],
-                "action_blurb": "Add UFW allow rule for 172.16.0.0/12 to deploy checklist",
-            }]
+            actions = [
+                {
+                    "action": "create_insight",
+                    "project": "test-project",
+                    "insight_type": "failure",
+                    "title": "Deploy fails without UFW rule",
+                    "description": "Container networking blocked",
+                    "severity": "warning",
+                    "confidence": 0.9,
+                    "tags": ["deploy"],
+                    "action_blurb": "Add UFW allow rule for 172.16.0.0/12 to deploy checklist",
+                }
+            ]
 
             run_id = str(uuid4())
             created, merged, skipped = execute_actions(db, actions, batches, run_id=run_id)
@@ -222,25 +232,36 @@ class TestWriterProposalCreation:
         SessionLocal = _make_db(tmp_path)
         with SessionLocal() as db:
             session = _make_session(db)
-            batches = [ProjectBatch(
-                project="test-project",
-                sessions=[SessionInfo(
-                    id=str(session.id), project="test-project", provider="claude",
-                    summary="Test", summary_title="Test",
-                    started_at=datetime.now(timezone.utc), tool_calls=1, user_messages=1,
-                )],
-                existing_insights=[],
-            )]
+            batches = [
+                ProjectBatch(
+                    project="test-project",
+                    sessions=[
+                        SessionInfo(
+                            id=str(session.id),
+                            project="test-project",
+                            provider="claude",
+                            summary="Test",
+                            summary_title="Test",
+                            started_at=datetime.now(timezone.utc),
+                            tool_calls=1,
+                            user_messages=1,
+                        )
+                    ],
+                    existing_insights=[],
+                )
+            ]
 
-            actions = [{
-                "action": "create_insight",
-                "project": "test-project",
-                "insight_type": "learning",
-                "title": "Some learning without action",
-                "description": "Just a note",
-                "severity": "info",
-                "confidence": 0.5,
-            }]
+            actions = [
+                {
+                    "action": "create_insight",
+                    "project": "test-project",
+                    "insight_type": "learning",
+                    "title": "Some learning without action",
+                    "description": "Just a note",
+                    "severity": "info",
+                    "confidence": 0.5,
+                }
+            ]
 
             created, merged, skipped = execute_actions(db, actions, batches)
             assert created == 1
@@ -255,26 +276,37 @@ class TestWriterProposalCreation:
         SessionLocal = _make_db(tmp_path)
         with SessionLocal() as db:
             session = _make_session(db)
-            batches = [ProjectBatch(
-                project="test-project",
-                sessions=[SessionInfo(
-                    id=str(session.id), project="test-project", provider="claude",
-                    summary="Test", summary_title="Test",
-                    started_at=datetime.now(timezone.utc), tool_calls=1, user_messages=1,
-                )],
-                existing_insights=[],
-            )]
+            batches = [
+                ProjectBatch(
+                    project="test-project",
+                    sessions=[
+                        SessionInfo(
+                            id=str(session.id),
+                            project="test-project",
+                            provider="claude",
+                            summary="Test",
+                            summary_title="Test",
+                            started_at=datetime.now(timezone.utc),
+                            tool_calls=1,
+                            user_messages=1,
+                        )
+                    ],
+                    existing_insights=[],
+                )
+            ]
 
-            actions = [{
-                "action": "create_insight",
-                "project": "test-project",
-                "insight_type": "learning",
-                "title": "Some learning",
-                "description": "Just a note",
-                "severity": "info",
-                "confidence": 0.9,
-                "action_blurb": "   ",  # whitespace only
-            }]
+            actions = [
+                {
+                    "action": "create_insight",
+                    "project": "test-project",
+                    "insight_type": "learning",
+                    "title": "Some learning",
+                    "description": "Just a note",
+                    "severity": "info",
+                    "confidence": 0.9,
+                    "action_blurb": "   ",  # whitespace only
+                }
+            ]
 
             created, merged, skipped = execute_actions(db, actions, batches)
             assert created == 1
@@ -292,26 +324,37 @@ class TestWriterProposalCreation:
             existing = _make_insight(db, title="Known pattern", project="test-project")
 
             session = _make_session(db)
-            batches = [ProjectBatch(
-                project="test-project",
-                sessions=[SessionInfo(
-                    id=str(session.id), project="test-project", provider="claude",
-                    summary="Test", summary_title="Test",
-                    started_at=datetime.now(timezone.utc), tool_calls=1, user_messages=1,
-                )],
-                existing_insights=[],
-            )]
+            batches = [
+                ProjectBatch(
+                    project="test-project",
+                    sessions=[
+                        SessionInfo(
+                            id=str(session.id),
+                            project="test-project",
+                            provider="claude",
+                            summary="Test",
+                            summary_title="Test",
+                            started_at=datetime.now(timezone.utc),
+                            tool_calls=1,
+                            user_messages=1,
+                        )
+                    ],
+                    existing_insights=[],
+                )
+            ]
 
-            actions = [{
-                "action": "create_insight",
-                "project": "test-project",
-                "insight_type": "pattern",
-                "title": "Known pattern",  # same title — will dedup
-                "description": "Seen again",
-                "severity": "warning",
-                "confidence": 0.9,
-                "action_blurb": "Add a guard clause for this pattern",
-            }]
+            actions = [
+                {
+                    "action": "create_insight",
+                    "project": "test-project",
+                    "insight_type": "pattern",
+                    "title": "Known pattern",  # same title — will dedup
+                    "description": "Seen again",
+                    "severity": "warning",
+                    "confidence": 0.9,
+                    "action_blurb": "Add a guard clause for this pattern",
+                }
+            ]
 
             run_id = str(uuid4())
             created, merged, skipped = execute_actions(db, actions, batches, run_id=run_id)
@@ -331,27 +374,38 @@ class TestWriterProposalCreation:
         SessionLocal = _make_db(tmp_path)
         with SessionLocal() as db:
             session = _make_session(db)
-            batches = [ProjectBatch(
-                project="test-project",
-                sessions=[SessionInfo(
-                    id=str(session.id), project="test-project", provider="claude",
-                    summary="Test", summary_title="Test",
-                    started_at=datetime.now(timezone.utc), tool_calls=1, user_messages=1,
-                )],
-                existing_insights=[],
-            )]
+            batches = [
+                ProjectBatch(
+                    project="test-project",
+                    sessions=[
+                        SessionInfo(
+                            id=str(session.id),
+                            project="test-project",
+                            provider="claude",
+                            summary="Test",
+                            summary_title="Test",
+                            started_at=datetime.now(timezone.utc),
+                            tool_calls=1,
+                            user_messages=1,
+                        )
+                    ],
+                    existing_insights=[],
+                )
+            ]
 
             run_id = str(uuid4())
-            actions = [{
-                "action": "create_insight",
-                "project": "test-project",
-                "insight_type": "improvement",
-                "title": "Improvement with action",
-                "description": "Do this better",
-                "severity": "info",
-                "confidence": 0.85,
-                "action_blurb": "Create a pre-commit hook for this",
-            }]
+            actions = [
+                {
+                    "action": "create_insight",
+                    "project": "test-project",
+                    "insight_type": "improvement",
+                    "title": "Improvement with action",
+                    "description": "Do this better",
+                    "severity": "info",
+                    "confidence": 0.85,
+                    "action_blurb": "Create a pre-commit hook for this",
+                }
+            ]
 
             execute_actions(db, actions, batches, run_id=run_id)
 
@@ -371,18 +425,23 @@ class TestWriterProposalCreation:
 class TestJudgeActionBlurb:
     def test_parse_preserves_action_blurb(self):
         """Parser preserves action_blurb field on create_insight actions."""
-        from zerg.services.reflection.judge import _parse_actions
         import json
 
-        raw = json.dumps([{
-            "action": "create_insight",
-            "insight_type": "failure",
-            "title": "Test",
-            "description": "Desc",
-            "severity": "info",
-            "confidence": 0.9,
-            "action_blurb": "Add retry logic to the endpoint",
-        }])
+        from zerg.services.reflection.judge import _parse_actions
+
+        raw = json.dumps(
+            [
+                {
+                    "action": "create_insight",
+                    "insight_type": "failure",
+                    "title": "Test",
+                    "description": "Desc",
+                    "severity": "info",
+                    "confidence": 0.9,
+                    "action_blurb": "Add retry logic to the endpoint",
+                }
+            ]
+        )
 
         actions = _parse_actions(raw, "test-project")
         assert len(actions) == 1
@@ -390,18 +449,23 @@ class TestJudgeActionBlurb:
 
     def test_parse_strips_empty_action_blurb(self):
         """Parser removes empty action_blurb."""
-        from zerg.services.reflection.judge import _parse_actions
         import json
 
-        raw = json.dumps([{
-            "action": "create_insight",
-            "insight_type": "learning",
-            "title": "Test",
-            "description": "Desc",
-            "severity": "info",
-            "confidence": 0.5,
-            "action_blurb": "",
-        }])
+        from zerg.services.reflection.judge import _parse_actions
+
+        raw = json.dumps(
+            [
+                {
+                    "action": "create_insight",
+                    "insight_type": "learning",
+                    "title": "Test",
+                    "description": "Desc",
+                    "severity": "info",
+                    "confidence": 0.5,
+                    "action_blurb": "",
+                }
+            ]
+        )
 
         actions = _parse_actions(raw, "test-project")
         assert len(actions) == 1
@@ -409,18 +473,23 @@ class TestJudgeActionBlurb:
 
     def test_parse_strips_non_string_action_blurb(self):
         """Parser removes non-string action_blurb."""
-        from zerg.services.reflection.judge import _parse_actions
         import json
 
-        raw = json.dumps([{
-            "action": "create_insight",
-            "insight_type": "learning",
-            "title": "Test",
-            "description": "Desc",
-            "severity": "info",
-            "confidence": 0.5,
-            "action_blurb": 123,
-        }])
+        from zerg.services.reflection.judge import _parse_actions
+
+        raw = json.dumps(
+            [
+                {
+                    "action": "create_insight",
+                    "insight_type": "learning",
+                    "title": "Test",
+                    "description": "Desc",
+                    "severity": "info",
+                    "confidence": 0.5,
+                    "action_blurb": 123,
+                }
+            ]
+        )
 
         actions = _parse_actions(raw, "test-project")
         assert len(actions) == 1
@@ -428,17 +497,22 @@ class TestJudgeActionBlurb:
 
     def test_parse_no_action_blurb_is_fine(self):
         """Actions without action_blurb are valid."""
-        from zerg.services.reflection.judge import _parse_actions
         import json
 
-        raw = json.dumps([{
-            "action": "create_insight",
-            "insight_type": "learning",
-            "title": "Test",
-            "description": "Desc",
-            "severity": "info",
-            "confidence": 0.5,
-        }])
+        from zerg.services.reflection.judge import _parse_actions
+
+        raw = json.dumps(
+            [
+                {
+                    "action": "create_insight",
+                    "insight_type": "learning",
+                    "title": "Test",
+                    "description": "Desc",
+                    "severity": "info",
+                    "confidence": 0.5,
+                }
+            ]
+        )
 
         actions = _parse_actions(raw, "test-project")
         assert len(actions) == 1
@@ -450,38 +524,40 @@ class TestJudgeActionBlurb:
 # ---------------------------------------------------------------------------
 
 
-class TestBriefingWithProposals:
-    def test_approved_proposals_in_briefing(self, tmp_path):
-        """Approved proposals appear in the briefing text."""
+class TestProposalBriefingBoundary:
+    def test_approved_proposals_do_not_appear_in_briefing(self, tmp_path):
+        """Briefings stay limited to sessions and curated gotchas."""
+        from zerg.routers.agents import get_briefing
+
         SessionLocal = _make_db(tmp_path)
         with SessionLocal() as db:
-            # Create a session so briefing has content
             _make_session(db, project="test-project", summary="Did stuff")
-
-            # Create approved proposal
             insight = _make_insight(db, project="test-project")
-            proposal = ActionProposal(
-                insight_id=insight.id,
-                project="test-project",
-                title="Fix the deploy",
-                action_blurb="Add UFW rule for container networking",
-                status="approved",
-                decided_at=datetime.now(timezone.utc),
+            db.add(
+                ActionProposal(
+                    insight_id=insight.id,
+                    project="test-project",
+                    title="Fix the deploy",
+                    action_blurb="Add UFW rule for container networking",
+                    status="approved",
+                    decided_at=datetime.now(timezone.utc),
+                )
             )
-            db.add(proposal)
             db.commit()
 
-            # Query the way the briefing endpoint does
-            approved = (
-                db.query(ActionProposal)
-                .filter(
-                    ActionProposal.status == "approved",
-                    ActionProposal.project == "test-project",
+            response = asyncio.run(
+                get_briefing(
+                    project="test-project",
+                    limit=5,
+                    db=db,
+                    _auth=None,
+                    _single=None,
                 )
-                .all()
             )
-            assert len(approved) == 1
-            assert approved[0].action_blurb == "Add UFW rule for container networking"
+
+            assert response.briefing is not None
+            assert "Approved actions" not in response.briefing
+            assert "Add UFW rule for container networking" not in response.briefing
 
     def test_status_guard_prevents_double_approve(self, tmp_path):
         """Cannot approve/decline an already-decided proposal."""
@@ -505,18 +581,24 @@ class TestBriefingWithProposals:
             assert proposal.status != "pending"
 
     def test_pending_proposals_not_in_briefing(self, tmp_path):
-        """Pending proposals should not show up in briefing query."""
+        """Pending proposals also stay out of briefing context."""
+        from zerg.routers.agents import get_briefing
+
         SessionLocal = _make_db(tmp_path)
         with SessionLocal() as db:
+            _make_session(db, project="test-project", summary="Did stuff")
             insight = _make_insight(db, project="test-project")
             _make_proposal(db, insight.id, status="pending")
 
-            approved = (
-                db.query(ActionProposal)
-                .filter(
-                    ActionProposal.status == "approved",
-                    ActionProposal.project == "test-project",
+            response = asyncio.run(
+                get_briefing(
+                    project="test-project",
+                    limit=5,
+                    db=db,
+                    _auth=None,
+                    _single=None,
                 )
-                .all()
             )
-            assert len(approved) == 0
+            assert response.briefing is not None
+            assert "Approved actions" not in response.briefing
+            assert "Add a pre-commit hook to check for common mistakes" not in response.briefing

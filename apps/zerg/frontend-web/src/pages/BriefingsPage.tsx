@@ -1,8 +1,8 @@
 /**
  * BriefingsPage — Project briefings from recent sessions.
  *
- * Compiles recent session summaries, insights, and action proposals
- * into a readable briefing for a given project.
+ * Compiles recent session summaries and curated insights into a readable
+ * briefing for a given project.
  */
 
 import { useState, useCallback } from "react";
@@ -37,7 +37,7 @@ export function BriefingsPage() {
     <PageShell size="normal">
       <SectionHeader
         title="Briefings"
-        description="A summary of recent sessions, insights, and action items for a project."
+        description="A summary of recent sessions and known gotchas for a project."
         actions={
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             {data?.briefing && (
