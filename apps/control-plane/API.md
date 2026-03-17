@@ -21,7 +21,7 @@
 
 - `GET /dashboard` → instance status + billing actions
 - `GET /provisioning` → provisioning status + auto-redirect to instance
-- `GET /dashboard/open-instance` → issue short-lived SSO token + redirect to instance
+- `GET /dashboard/open-instance` → preserve hosted login intent, mint short-lived tenant login token, redirect to tenant `/api/auth/accept-token`
 
 ## Billing (Stripe)
 

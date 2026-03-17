@@ -1,6 +1,6 @@
 # Hosted Auth Handoff Simplification
 
-Status: Active
+Status: Done
 
 ## Scope
 
@@ -50,3 +50,11 @@ Out of scope:
 - 2026-03-16: The cleanup is aimed at coherence, not adding more auth surface.
 - 2026-03-16: Programmatic POST `/auth/accept-token` can stay for tests and
   smoke flows; the simplification target is the browser redirect path.
+- 2026-03-16: Tenant `/api/auth/methods` now exposes `sso_login_url`, the
+  control plane preserves a signed local `return_to` through password and
+  Google login, and browser handoff is canonicalized on
+  `/api/auth/accept-token?token=...`.
+- 2026-03-16: Verification passed through focused auth regression suites,
+  `make test`, `make test-e2e`, live deploys for `longhouse-demo` and
+  `longhouse-control-plane`, reprovision of `david010`, and live `make qa-live`
+  (8/8).
