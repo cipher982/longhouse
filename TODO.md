@@ -45,7 +45,7 @@ Notes:
 
 ## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)
 
-Status (2026-03-16): Done. `runner-v0.1.5` is published with signed update metadata, the hosted backend advertises it as latest, and `slim` upgraded itself from `0.1.4` to `0.1.5` under policy `apply` without a manual reinstall.
+Status (2026-03-17): Done. `runner-v0.1.7` is published with signed update metadata, the hosted backend advertises it as latest, the full personal fleet is current on the managed install layout, and `slim` proved unattended `apply` by upgrading itself from `0.1.6` to `0.1.7`.
 
 **Goal:** Validate that the shipped auto-update path works end to end on a real machine before enabling `apply` more broadly.
 
@@ -61,10 +61,9 @@ Status (2026-03-16): Done. `runner-v0.1.5` is published with signed update metad
 
 Notes:
 - 2026-03-16: All five personal runners now report `managed_install_ready=true` and `install_layout_version=1`.
-- 2026-03-16: `slim` was temporarily configured with `RUNNER_AUTO_UPDATE_POLICY=apply`, `RUNNER_UPDATE_CHECK_INTERVAL_SEC=30`, and `RUNNER_UPDATE_JITTER_SEC=1` for the verification window, then restored to `apply` with `14400s` / `300s` cadence once the proof completed.
-- 2026-03-17: Canary proof passed. Runtime image run `23176265819` and runner release run `23176266977` succeeded; `slim` detected `v0.1.5` at `02:58:25 UTC`, applied it, exited `75`, and systemd relaunched `Longhouse Runner v0.1.5` at `02:58:35 UTC`.
-- 2026-03-17: Live hosted verification passed on `david010`: `/api/health` healthy, `make qa-live` 8/8 passed, and `/api/runners/12` reports `slim 0.1.5 0.1.5 apply online fresh_heartbeat True`.
-- 2026-03-17: `Deploy and Verify` `23176312236` is a false-negative for this change; its smoke script still expects cookie-auth access to `GET /api/agents/sessions`, which now correctly returns `401` after the browser/machine auth split.
+- 2026-03-17: `cinder`, `clifford`, `cube`, and `zerg` were moved onto `0.1.7`; plain `longhouse-runner update check --json` now succeeds on each machine without a special `--envfile` path.
+- 2026-03-17: `slim` remained the `apply` canary. Its journal shows `Longhouse Runner v0.1.6` at startup, `Runner update available: v0.1.6 -> v0.1.7`, `Applied runner update to v0.1.7`, and a clean relaunch into `Longhouse Runner v0.1.7`.
+- 2026-03-17: Live hosted verification passed on `david010`: `/api/health` healthy, `/api/runners/` reports all five real runners online on `0.1.7` with `managed_install_ready=true`, and `make qa-live` passes 8/8.
 
 ## [Launch][Product][QA/Test] Fix session workspace initial auto-scroll regression (size: 2)
 
