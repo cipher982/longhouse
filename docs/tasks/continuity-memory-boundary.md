@@ -1,6 +1,6 @@
 # Continuity Memory Boundary Tasks
 
-Status: In progress
+Status: Done
 Spec: `docs/specs/continuity-memory-boundary.md`
 Last updated: 2026-03-17
 
@@ -48,13 +48,13 @@ Last updated: 2026-03-17
 
 ## Phase 5: Ship and verify
 
-- [ ] Push `main`
-- [ ] Wait for required CI/build workflows
-- [ ] Deploy hosted surfaces if image paths changed
-- [ ] Reprovision `david010`
-- [ ] Verify hosted health plus `make qa-live`
-- [ ] Update this task doc with final status notes
-- [ ] Commit any last status/doc updates if needed
+- [x] Push `main`
+- [x] Wait for required CI/build workflows
+- [x] Deploy hosted surfaces if image paths changed
+- [x] Reprovision `david010`
+- [x] Verify hosted health plus `make qa-live`
+- [x] Update this task doc with final status notes
+- [x] Commit any last status/doc updates if needed
 
 Notes:
 - Keep this bounded. Do not redesign reflection into a full new workflow in the same pass.
@@ -65,3 +65,4 @@ Notes:
 - 2026-03-17: Verification for Phase 2: backend `ruff check` passed, `make test-lite` passed again (`874 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` passed (`31 passed, 1 skipped`).
 - 2026-03-17: Phase 3 adds `Insight.archived_at`, hides archived rows from default browser/machine reads and briefing gotchas, exposes browser archive/unarchive actions plus a minimal `/insights` curation page reached from Briefings, and verified with backend `ruff check`, `make test-lite` (`878 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), and `make test-frontend-unit` (`31 passed, 1 skipped`).
 - 2026-03-17: Phase 4 is docs-only. `AGENTS.md` now treats insights as curated continuity memory with a small browser curation page, proposals as internal/manual tooling only, and the continuity specs are updated so they no longer describe the pre-cleanup product shape. No VISION change was needed for this pass.
+- 2026-03-17: Phase 5 shipped after rebasing the continuity-boundary stack onto current `origin/main`. `make test` passed on the rebased branch (`881 passed, 1 skipped`; control-plane `129 passed`; engine `114 + 6 + 3 passed`), pre-push `make qa-live` passed `8/8`, `runtime-image.yml` run `23205212659` succeeded, the follow-on `deploy-and-verify.yml` run `23205321095` succeeded, direct hosted `/api/health` returned `healthy`, `ssh zerg 'docker inspect longhouse-david010 ...'` showed revision `3fe605186c8b8a8ca6162da8d47f25958e856ba6`, and post-deploy `make qa-live` passed `8/8`.
