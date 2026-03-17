@@ -177,7 +177,6 @@ export class OikosAPIClient {
     onConnected?: () => void;
     onHeartbeat?: (timestamp: string) => void;
     onAutomationUpdated?: (event: OikosEventData) => void;
-    onFicheUpdated?: (event: OikosEventData) => void;
     onRunCreated?: (event: OikosEventData) => void;
     onRunUpdated?: (event: OikosEventData) => void;
     onError?: (error: Event) => void;
@@ -204,7 +203,6 @@ export class OikosAPIClient {
 
     const handleAutomationUpdate = (event: OikosEventData) => {
       handlers.onAutomationUpdated?.(event);
-      handlers.onFicheUpdated?.(event);
     };
 
     this.eventSource.addEventListener('automation_updated', (e: MessageEvent) => {
@@ -214,6 +212,7 @@ export class OikosAPIClient {
       }
     });
 
+    // Keep the legacy transport event wired until the remaining browser surfaces stop emitting/listening for it.
     this.eventSource.addEventListener('fiche_updated', (e: MessageEvent) => {
       const event = parseEventData<OikosEventData>(e, 'fiche_updated');
       if (event) {
