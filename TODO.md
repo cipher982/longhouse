@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch][Infra][QA/Test] Make control-plane health status explicit in Coolify (size: 1)
 
-Status (2026-03-17): In progress. The control plane is serving traffic and admin APIs correctly, but Coolify reports `running:unknown` because the Docker image has no container healthcheck.
+Status (2026-03-17): Done. The control-plane image now defines a Docker healthcheck, the hosted app is redeployed, and Coolify reports `running:healthy`.
 
 **Goal:** Make the hosted control plane surface an explicit healthy/unhealthy state instead of `unknown`, so ops status matches the real product state.
 
@@ -26,12 +26,15 @@ Status (2026-03-17): In progress. The control plane is serving traffic and admin
 - The change is deployed to the hosted control-plane app
 - Coolify reports `running:healthy` for `longhouse-control-plane`
 
-- [ ] Add a Docker healthcheck to the control-plane image
-- [ ] Verify the image/config locally with focused checks
-- [ ] Redeploy and confirm Coolify reports `running:healthy`
+- [x] Add a Docker healthcheck to the control-plane image
+- [x] Verify the image/config locally with focused checks
+- [x] Redeploy and confirm Coolify reports `running:healthy`
 
 Notes:
 - 2026-03-17: Live verification showed `https://control.longhouse.ai/` serving correctly, the admin reprovision API working, and the container state as running, but `docker inspect` reported `Config.Healthcheck = null`, which explains Coolify’s `running:unknown`.
+- 2026-03-17: Added a Docker `HEALTHCHECK` to `apps/control-plane/Dockerfile`, plus a focused `/health` regression test in `apps/control-plane/tests/test_health.py`.
+- 2026-03-17: Focused local verification passed via `make test-control-plane`, `docker build -q -f apps/control-plane/Dockerfile apps/control-plane`, and Docker image inspection confirming the healthcheck metadata.
+- 2026-03-17: Shipped as `2216aa44` on `origin/main`, redeployed `longhouse-control-plane`, and verified `https://control.longhouse.ai/health` returns `{\"status\":\"ok\"}` while Coolify now reports `running:healthy`.
 
 ## [Launch][Product][QA/Test] Let non-repo synced sessions cloud-continue without a local path (size: 1)
 
