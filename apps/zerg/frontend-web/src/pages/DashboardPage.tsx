@@ -17,7 +17,7 @@ import { ConnectionStatus, createEnvelope, useWebSocket } from "../lib/useWebSoc
 import { DEFAULT_TEXT_MODEL } from "../oikos/core/model-config";
 import { useAuth } from "../lib/auth";
 import { PlusIcon } from "../components/icons";
-import FicheSettingsDrawer from "../components/fiche-settings/FicheSettingsDrawer";
+import AutomationSettingsDrawer from "../components/automation-settings/AutomationSettingsDrawer";
 import UsageWidget from "../components/UsageWidget";
 import type { WebSocketMessage } from "../generated/ws-messages";
 import {
@@ -611,8 +611,8 @@ export default function DashboardPage() {
         </Table>
       </div>
       {settingsFicheId != null && (
-        <FicheSettingsDrawer
-          ficheId={settingsFicheId}
+        <AutomationSettingsDrawer
+          automationId={settingsFicheId}
           isOpen={settingsFicheId != null}
           onClose={() => setSettingsFicheId(null)}
         />

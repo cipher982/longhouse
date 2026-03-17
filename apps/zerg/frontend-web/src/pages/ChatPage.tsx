@@ -6,7 +6,7 @@ import clsx from "clsx";
 import { useShelf } from "../lib/useShelfState";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SettingsIcon, SidebarIcon } from "../components/icons";
-import FicheSettingsDrawer from "../components/fiche-settings/FicheSettingsDrawer";
+import AutomationSettingsDrawer from "../components/automation-settings/AutomationSettingsDrawer";
 import { ChatThreadList } from "../components/chat/ChatThreadList";
 import { ChatMessageList } from "../components/chat/ChatMessageList";
 import { ChatComposer } from "../components/chat/ChatComposer";
@@ -405,8 +405,8 @@ export default function ChatPage() {
         </div>
       </div>
       {ficheId != null && (
-        <FicheSettingsDrawer
-          ficheId={ficheId}
+        <AutomationSettingsDrawer
+          automationId={ficheId}
           isOpen={isSettingsDrawerOpen}
           onClose={() => setIsSettingsDrawerOpen(false)}
         />

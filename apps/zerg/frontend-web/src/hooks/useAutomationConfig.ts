@@ -27,16 +27,16 @@ export function useContainerPolicy() {
   });
 }
 
-export function useFicheDetails(ficheId: number | null) {
+export function useAutomationDetails(automationId: number | null) {
   return useQuery<Fiche>({
-    queryKey: ["fiche", ficheId],
+    queryKey: ["fiche", automationId],
     queryFn: () => {
-      if (ficheId == null) {
+      if (automationId == null) {
         return Promise.reject(new Error("Missing fiche id"));
       }
-      return fetchFiche(ficheId);
+      return fetchFiche(automationId);
     },
-    enabled: ficheId != null,
+    enabled: automationId != null,
   });
 }
 

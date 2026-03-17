@@ -3,19 +3,19 @@ import clsx from "clsx";
 import { useConfirm } from "../confirm";
 import {
   useAddMcpServer,
-  useFicheDetails,
+  useAutomationDetails,
   useContainerPolicy,
   useMcpServers,
   useRemoveMcpServer,
   useTestMcpServer,
   useToolOptions,
   useDebouncedUpdateAllowedTools,
-} from "../../hooks/useFicheConfig";
+} from "../../hooks/useAutomationConfig";
 import {
-  useFicheConnectors,
+  useAutomationConnectors,
   useConfigureConnector,
   useTestConnectorBeforeSave,
-} from "../../hooks/useFicheConnectors";
+} from "../../hooks/useAutomationConnectors";
 import { useAccountConnectors } from "../../hooks/useAccountConnectors";
 import { useAuth } from "../../lib/auth";
 import type { McpServerAddRequest, McpServerResponse } from "../../services/api";
@@ -26,8 +26,8 @@ import { Link } from "react-router-dom";
 import { PlugIcon } from "../icons";
 import { Button } from "../ui";
 
-type FicheSettingsDrawerProps = {
-  ficheId: number;
+type AutomationSettingsDrawerProps = {
+  automationId: number;
   isOpen: boolean;
   onClose: () => void;
 };
@@ -38,23 +38,23 @@ type AllowedToolOption = {
   source: "builtin" | `mcp:${string}`;
 };
 
-export function FicheSettingsDrawer({ ficheId, isOpen, onClose }: FicheSettingsDrawerProps) {
+export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: AutomationSettingsDrawerProps) {
   const { user } = useAuth();
   const confirm = useConfirm();
-  const { data: fiche } = useFicheDetails(isOpen ? ficheId : null);
+  const { data: fiche } = useAutomationDetails(isOpen ? automationId : null);
   const { data: policy } = useContainerPolicy();
-  const { data: servers, isLoading: loadingServers } = useMcpServers(isOpen ? ficheId : null);
-  const toolOptions = useToolOptions(isOpen ? ficheId : null) as AllowedToolOption[];
-  const debouncedUpdateAllowedTools = useDebouncedUpdateAllowedTools(isOpen ? ficheId : null);
-  const addMcpServer = useAddMcpServer(isOpen ? ficheId : null);
-  const removeMcpServer = useRemoveMcpServer(isOpen ? ficheId : null);
-  const testMcpServer = useTestMcpServer(isOpen ? ficheId : null);
+  const { data: servers, isLoading: loadingServers } = useMcpServers(isOpen ? automationId : null);
+  const toolOptions = useToolOptions(isOpen ? automationId : null) as AllowedToolOption[];
+  const debouncedUpdateAllowedTools = useDebouncedUpdateAllowedTools(isOpen ? automationId : null);
+  const addMcpServer = useAddMcpServer(isOpen ? automationId : null);
+  const removeMcpServer = useRemoveMcpServer(isOpen ? automationId : null);
+  const testMcpServer = useTestMcpServer(isOpen ? automationId : null);
 
   // Connector Hooks
-  const { data: connectors } = useFicheConnectors(isOpen ? ficheId : null);
+  const { data: connectors } = useAutomationConnectors(isOpen ? automationId : null);
   const { data: accountConnectors } = useAccountConnectors();
-  const configureConnector = useConfigureConnector(ficheId);
-  const testBeforeSave = useTestConnectorBeforeSave(ficheId);
+  const configureConnector = useConfigureConnector(automationId);
+  const testBeforeSave = useTestConnectorBeforeSave(automationId);
 
   // Helper to check ownership
   const isOwner = user?.id === fiche?.owner_id;
@@ -785,4 +785,4 @@ function parseAllowedTools(input: string): string[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
-export default FicheSettingsDrawer;
+export default AutomationSettingsDrawer;

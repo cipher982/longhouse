@@ -1,5 +1,5 @@
 /**
- * React Query hooks for fiche connector credentials API.
+ * React Query hooks for automation connector credentials API.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,18 +19,18 @@ import {
 } from "../services/api";
 
 /**
- * Fetch all connector statuses for a fiche.
+ * Fetch all connector statuses for an automation.
  */
-export function useFicheConnectors(ficheId: number | null) {
+export function useAutomationConnectors(automationId: number | null) {
   return useQuery<ConnectorStatus[]>({
-    queryKey: ["fiche", ficheId, "connectors"],
+    queryKey: ["fiche", automationId, "connectors"],
     queryFn: () => {
-      if (ficheId == null) {
+      if (automationId == null) {
         return Promise.reject(new Error("Missing fiche id"));
       }
-      return fetchFicheConnectors(ficheId);
+      return fetchFicheConnectors(automationId);
     },
-    enabled: ficheId != null,
+    enabled: automationId != null,
   });
 }
 
