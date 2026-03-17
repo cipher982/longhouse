@@ -47,6 +47,11 @@ LONGHOUSE_API_URL = os.getenv("LONGHOUSE_API_URL", "http://localhost:8080")
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def get_managed_workspace_base() -> Path:
+    """Return the base path for Longhouse-managed workspaces."""
+    return Path(os.getenv("OIKOS_WORKSPACE_PATH", str(Path.home() / ".longhouse" / "workspaces")))
+
+
 def get_claude_config_dir() -> Path:
     """Get the Claude config directory, respecting CLAUDE_CONFIG_DIR env var.
 
@@ -545,13 +550,16 @@ class WorkspaceResolver:
     """Resolves workspace paths for session resume.
 
     If the original workspace path exists locally, uses it directly.
-    Otherwise, clones the git repo to a temp directory.
+    Otherwise, clones the git repo to a temp directory or falls back to a
+    managed scratch workspace for non-repo sessions.
     """
 
     temp_base: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "zerg-session-workspaces")
+    scratch_base: Path = field(default_factory=lambda: get_managed_workspace_base() / "continuations")
 
     def __post_init__(self) -> None:
         self.temp_base.mkdir(parents=True, exist_ok=True)
+        self.scratch_base.mkdir(parents=True, exist_ok=True)
 
     async def resolve(
         self,
@@ -565,7 +573,8 @@ class WorkspaceResolver:
         Priority:
         1. If original_cwd exists locally, use it
         2. If git_repo provided, clone to temp
-        3. Return error if neither works
+        3. If session_id provided, create/reuse a managed scratch workspace
+        4. Return error if neither works
 
         Args:
             original_cwd: Original working directory from session
@@ -592,11 +601,34 @@ class WorkspaceResolver:
         if git_repo:
             return await self._clone_repo(git_repo, git_branch, session_id)
 
+        # Fall back to a managed scratch workspace for non-repo sessions.
+        if session_id:
+            return self._ensure_managed_scratch_workspace(session_id, original_cwd=original_cwd)
+
         # No workspace available
         return ResolvedWorkspace(
             path=Path("."),
             error="No workspace available: original path not found and no git repo provided",
         )
+
+    def _ensure_managed_scratch_workspace(
+        self,
+        session_id: str,
+        *,
+        original_cwd: str | None,
+    ) -> ResolvedWorkspace:
+        """Create or reuse a stable managed scratch workspace for a session."""
+        validate_session_id(session_id)
+
+        workspace_dir = self.scratch_base / f"session-{session_id}"
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Using managed scratch workspace %s for session %s (missing original cwd=%s)",
+            workspace_dir,
+            session_id,
+            original_cwd or "<none>",
+        )
+        return ResolvedWorkspace(path=workspace_dir, is_temp=False)
 
     async def _clone_repo(
         self,

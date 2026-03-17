@@ -15,6 +15,25 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## What's Next (Priority Order)
 
+## [Launch][Product][QA/Test] Let non-repo synced sessions cloud-continue without a local path (size: 1)
+
+Status (2026-03-17): Done. Session continuation now falls back to a stable Longhouse-managed scratch workspace when the original laptop cwd is unavailable and there is no git repo to clone.
+
+**Goal:** Make direct web continuation work for synced non-repo sessions by creating a Longhouse-managed scratch workspace instead of hard-failing when the original local path is unavailable.
+
+**Done when:**
+- `POST /api/sessions/{id}/chat` no longer returns `Cannot resolve workspace` for non-repo sessions whose original cwd is missing on the host
+- Continuation uses a stable Longhouse-managed scratch workspace so later turns can reuse the same hosted path
+- Focused backend tests cover the scratch fallback and the chat route
+
+- [x] Add a persistent scratch-workspace fallback to the session continuation resolver
+- [x] Add focused regression coverage for workspace resolution and session chat
+
+Notes:
+- 2026-03-17: Reproduced against a synced Claude session from `/Users/davidrose/git/zeta/hiring`; that folder is not a git repo, so hosted continuation had nothing to clone once the laptop-local path was unavailable.
+- 2026-03-17: `WorkspaceResolver` now creates/reuses `OIKOS_WORKSPACE_PATH/continuations/session-<session-id>` for non-repo continuations, so hosted follow-up turns get a stable managed cwd instead of a 400.
+- 2026-03-17: Focused verification passed via `apps/zerg/backend/run_backend_tests_lite.sh tests_lite/test_session_resume_prep.py` and `uv run --extra dev ruff check zerg/services/session_continuity.py tests_lite/test_session_resume_prep.py`.
+- 2026-03-17: `make test` in this tree still times out in unrelated `tests_lite/test_model_smoke.py`, so full-suite green was not re-established as part of this slice.
 ## [Docs/Drift][QA/Test][Tech Debt] Align marketing screenshot capture with browser auth ownership (size: 1)
 
 Status (2026-03-17): Done. The screenshot helper now resolves marketing session IDs through the browser-owned timeline API, and the duplicate session-fetch logic is collapsed into one helper.
@@ -52,7 +71,6 @@ Notes:
 - 2026-03-17: Upgraded `actions/checkout` to v6, `actions/setup-node` to v6, `actions/setup-python` to v6, `actions/upload-artifact` to v7, and `actions/download-artifact` to v8 across the workflow set.
 - 2026-03-17: GitHub-hosted validation passed via `Hosted Live QA` run `23202134083`.
 - 2026-03-17: Self-hosted validation passed via `CI Test Runner` run `23202134165` (`suite=validate`).
-
 ## [Launch][QA/Test][Tech Debt] Sweep remaining hosted auth-boundary script drift (size: 1)
 
 Status (2026-03-17): Done. The hosted provisioning smoke now verifies browser-cookie access against the browser-owned timeline route and no longer implies that browser cookies might work on the machine-only sessions API.

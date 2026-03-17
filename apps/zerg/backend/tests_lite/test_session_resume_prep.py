@@ -22,6 +22,7 @@ from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
 from zerg.services.session_continuity import ResolvedWorkspace
+from zerg.services.session_continuity import WorkspaceResolver
 from zerg.services.session_continuity import encode_cwd_for_claude
 from zerg.services.session_continuity import prepare_session_for_resume
 
@@ -34,7 +35,15 @@ def _make_db(tmp_path):
     return sessionmaker(bind=engine)
 
 
-def _seed_session(db, *, session_id=None, provider_session_id="resume-root"):
+def _seed_session(
+    db,
+    *,
+    session_id=None,
+    provider_session_id="resume-root",
+    cwd="/Users/davidrose/git/zerg",
+    git_repo="git@github.com:cipher982/longhouse.git",
+    git_branch="main",
+):
     session_id = session_id or uuid4()
     started_at = datetime(2026, 3, 8, 21, 30, tzinfo=timezone.utc)
     raw_line = json.dumps(
@@ -51,9 +60,9 @@ def _seed_session(db, *, session_id=None, provider_session_id="resume-root"):
             environment="Cinder",
             project="zerg",
             device_id="shipper-cinder",
-            cwd="/Users/davidrose/git/zerg",
-            git_repo="git@github.com:cipher982/longhouse.git",
-            git_branch="main",
+            cwd=cwd,
+            git_repo=git_repo,
+            git_branch=git_branch,
             started_at=started_at,
             provider_session_id=provider_session_id,
             events=[
@@ -106,6 +115,28 @@ def test_prepare_session_for_resume_uses_local_db_export(tmp_path, monkeypatch):
     session_file = claude_config / "projects" / encoded_cwd / "resume-root.jsonl"
     assert session_file.exists()
     assert "hello from cinder" in session_file.read_text()
+
+
+def test_workspace_resolver_creates_managed_scratch_workspace_for_missing_non_repo_session(tmp_path):
+    resolver = WorkspaceResolver(
+        temp_base=tmp_path / "temp-clones",
+        scratch_base=tmp_path / "managed-continuations",
+    )
+
+    resolved = asyncio.run(
+        resolver.resolve(
+            original_cwd="/Users/davidrose/git/nonexistent/session-workspace",
+            git_repo=None,
+            git_branch=None,
+            session_id="session-123",
+        )
+    )
+
+    assert resolved.error is None
+    assert resolved.is_temp is False
+    assert resolved.path == tmp_path / "managed-continuations" / "session-session-123"
+    assert resolved.path.exists()
+    assert resolved.path.is_dir()
 
 
 def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, monkeypatch):
@@ -189,6 +220,104 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
             assert target.is_writable_head == 1
             assert target.continued_from_session_id == source_session_id
             assert target.continuation_kind == "cloud"
+        finally:
+            api_app.dependency_overrides.clear()
+
+
+def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_missing(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    managed_base = tmp_path / "managed-workspaces"
+    claude_config = tmp_path / ".claude"
+    missing_workspace = "/Users/davidrose/git/nonexistent/session-workspace"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_config))
+
+    captured: dict[str, object] = {}
+
+    async def fail_get(*_args, **_kwargs):
+        raise AssertionError("session chat should not self-fetch exported sessions over HTTP")
+
+    async def fake_stream_claude_output(**kwargs):
+        captured["workspace_path"] = kwargs["workspace_path"]
+        captured["target_session_id"] = kwargs["target_session_id"]
+        yield session_chat.SSEEvent(
+            event="system",
+            data=json.dumps(
+                {
+                    "type": "session_started",
+                    "source_session_id": kwargs["source_session_id"],
+                    "session_id": kwargs["target_session_id"],
+                    "created_continuation": kwargs["created_continuation"],
+                    "workspace": str(kwargs["workspace_path"]),
+                }
+            ),
+        ).encode()
+        yield session_chat.SSEEvent(
+            event="done",
+            data=json.dumps(
+                {
+                    "session_id": kwargs["target_session_id"],
+                    "source_session_id": kwargs["source_session_id"],
+                    "shipped_session_id": kwargs["target_session_id"],
+                    "created_continuation": kwargs["created_continuation"],
+                    "exit_code": 0,
+                    "total_text_length": 0,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+        ).encode()
+
+    monkeypatch.setattr("zerg.services.session_continuity.httpx.AsyncClient.get", fail_get)
+    monkeypatch.setattr(
+        session_chat,
+        "workspace_resolver",
+        WorkspaceResolver(
+            temp_base=tmp_path / "temp-clones",
+            scratch_base=managed_base,
+        ),
+    )
+    monkeypatch.setattr(session_chat, "stream_claude_output", fake_stream_claude_output)
+
+    from zerg.main import api_app
+    from zerg.main import app
+
+    with SessionLocal() as db:
+        source_session_id = _seed_session(
+            db,
+            cwd=missing_workspace,
+            git_repo=None,
+            git_branch=None,
+        )
+
+        def override_get_db():
+            try:
+                yield db
+            finally:
+                pass
+
+        def override_current_user():
+            return SimpleNamespace(id=1, email="owner@local")
+
+        api_app.dependency_overrides[get_db] = override_get_db
+        api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+
+        try:
+            client = TestClient(app, backend="asyncio")
+            response = client.post(
+                f"/api/sessions/{source_session_id}/chat",
+                json={"message": "continue from cloud"},
+            )
+            assert response.status_code == 200
+            assert '"created_continuation": true' in response.text
+
+            target_session_id = str(captured["target_session_id"])
+            expected_workspace = managed_base / f"session-{target_session_id}"
+            assert captured["workspace_path"] == expected_workspace
+            assert expected_workspace.exists()
+
+            encoded_cwd = encode_cwd_for_claude(str(expected_workspace.absolute()))
+            session_file = claude_config / "projects" / encoded_cwd / "resume-root.jsonl"
+            assert session_file.exists()
+            assert "hello from cinder" in session_file.read_text()
         finally:
             api_app.dependency_overrides.clear()
 
