@@ -22,6 +22,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import typer
@@ -30,6 +31,9 @@ from zerg.cli.config_file import get_config_path
 from zerg.cli.config_file import save_config
 from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
+from zerg.services.shipper import load_token
+from zerg.services.shipper import save_token
+from zerg.services.shipper import save_zerg_url
 
 logger = logging.getLogger(__name__)
 
@@ -286,28 +290,60 @@ def verify_shell_path() -> list[str]:
 
 def _emit_test_event(api_url: str) -> bool:
     """Emit a test event to verify the pipeline."""
+    device_name = f"onboard-{socket.gethostname()}"
     try:
         # Create a minimal test session/event
         payload = {
-            "id": f"test-{int(time.time())}",
+            "id": str(uuid4()),
             "provider": "test",
             "environment": "onboarding",
             "project": "longhouse-test",
-            "device_id": f"onboard-{socket.gethostname()}",
+            "device_id": device_name,
             "cwd": str(Path.home()),
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "events": [
                 {
-                    "type": "user",
-                    "content": "Welcome to Longhouse! This is a test event from onboarding.",
+                    "role": "user",
+                    "content_text": "Welcome to Longhouse! This is a test event from onboarding.",
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "source_path": "onboard://verification",
+                    "source_offset": 0,
                 }
             ],
         }
 
         with httpx.Client(timeout=10) as client:
-            response = client.post(f"{api_url}/api/agents/ingest", json=payload)
-            return response.status_code in (200, 201)
+            token = load_token()
+            if not token:
+                from zerg.cli.connect import _auto_create_token
+
+                token = _auto_create_token(api_url, device_name)
+                if not token:
+                    return False
+                save_token(token)
+                save_zerg_url(api_url)
+
+            headers = {"X-Agents-Token": token}
+            response = client.post(f"{api_url}/api/agents/ingest", json=payload, headers=headers)
+            if response.status_code in (200, 201):
+                return True
+            if response.status_code != 401:
+                return False
+
+            from zerg.cli.connect import _auto_create_token
+
+            fresh_token = _auto_create_token(api_url, device_name)
+            if not fresh_token or fresh_token == token:
+                return False
+
+            save_token(fresh_token)
+            save_zerg_url(api_url)
+            retry_response = client.post(
+                f"{api_url}/api/agents/ingest",
+                json=payload,
+                headers={"X-Agents-Token": fresh_token},
+            )
+            return retry_response.status_code in (200, 201)
     except Exception as e:
         typer.echo(f"  Error: {e}")
         return False
