@@ -758,7 +758,7 @@ Status (2026-03-08): Standard CI is green, `cinder` + `clifford` installs are co
 - [ ] Verify Telegram can run `hostname` on the newly installed runners (`Oikos` already proved `cinder`, `clifford`, and the `cube` canary)
 - [x] Make the disposable `cube` VM canary prove `exec.full` by promoting capabilities and running a real bash command through Oikos
 - [ ] Do final iPhone Safari + Android Chrome spot checks (or BrowserStack/AWS Device Farm equivalent)
-- [ ] Triage remaining clean-clone polish warnings: oversized bundle warning and the non-fatal startup `pip install failed` log
+- [x] Triage remaining clean-clone polish warnings: oversized bundle warning and the stale non-fatal startup `pip install failed` log note
 
 Notes:
 - 2026-03-08: Current `main` at `1f01a3dd` has standard CI green: `push-pr-ci`, `Test Installer`, `Web Quality`, and `Provisioning E2E`.
@@ -769,6 +769,8 @@ Notes:
 - 2026-03-08: Live probing showed `cube` is `x86_64`, not ARM, so the disposable canary uses Ubuntu `amd64` cloud images there.
 - 2026-03-08: `cube` mounts both `/tmp` and `/var/tmp` as 2 GiB tmpfs, so `uvtool` image sync must use a disk-backed temp dir; the host harness now uses `/var/lib/longhouse-vm/tmp`.
 - 2026-03-08: Disposable `cube` canary now proves the full hosted contract: Ubuntu `noble` VM -> `RUNNER_INSTALL_MODE=server` install -> reboot -> Oikos `hostname -s` -> promote runner to `exec.full` -> re-enroll -> reboot -> Oikos `bash -lc 'hostname -s'` -> revoke -> destroy.
+- 2026-03-17: Vite build warning noise is down: the runtime `config.js` tag is injected via the Vite HTML transform instead of living as a raw classic script in `index.html`, and the chunk-size warning floor is set to 750 kB to match the intentional current shell split.
+- 2026-03-17: Searched recent onboarding/validation logs (`23185373738`, `23201048873`, `23202116494`) for `pip install failed` / `Job deps install failed` and found no hits; that half of the old clean-clone warning note was stale.
 
 ## [Infra][Product] Runner health truth, diagnosis, and attention (size: 5)
 

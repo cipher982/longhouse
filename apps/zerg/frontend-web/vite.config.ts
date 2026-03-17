@@ -16,7 +16,18 @@ function buildHashPlugin(): Plugin {
       }
     },
     transformIndexHtml(html) {
-      return html.replace(/__BUILD_HASH__/g, hash);
+      return {
+        html: html.replace(/__BUILD_HASH__/g, hash),
+        tags: [
+          {
+            tag: "script",
+            attrs: {
+              src: `/config.js?v=${hash}`,
+            },
+            injectTo: "head-prepend",
+          },
+        ],
+      };
     },
   };
 }
@@ -75,6 +86,9 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: true,
       outDir: "dist",
+      // The app shell already lazy-loads the heaviest routes; keep a warning floor
+      // that still catches regressions without tripping on the intentional shell size.
+      chunkSizeWarningLimit: 750,
     },
     test: {
       environment: "jsdom",
