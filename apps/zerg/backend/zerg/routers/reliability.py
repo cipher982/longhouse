@@ -21,6 +21,8 @@ from zerg.models.models import CommisJob
 from zerg.models.models import Run
 from zerg.models.models import Runner
 from zerg.models.work import OperationalIncident
+from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.runner_health import assess_runner_health
 
 # Secret patterns to redact (same as trace_debugger)
 SECRET_PATTERNS = [
@@ -73,9 +75,16 @@ async def system_health(
     now = datetime.now(timezone.utc)
     hour_ago = now - timedelta(hours=1)
 
-    # Commis pool: count runners by status
+    # Commis pool: count runners by cached status
     runner_counts = db.query(Runner.status, func.count(Runner.id)).group_by(Runner.status).all()
     commis_pool = {status: count for status, count in runner_counts}
+    runners = db.query(Runner).all()
+    connection_manager = get_runner_connection_manager()
+    always_on_health = [
+        assess_runner_health(runner, is_connected=connection_manager.is_online(runner.owner_id, runner.id))
+        for runner in runners
+        if getattr(runner, "availability_policy", "always_on") == "always_on"
+    ]
 
     # Recent errors: count failed runs in last hour
     error_count = (
@@ -102,19 +111,19 @@ async def system_health(
     # Determine overall status
     # Logic:
     # - unhealthy: Many errors (>10) in both run and commis categories
-    # - degraded: Some errors (>5), or all registered runners are offline
-    # - healthy: Low errors and at least some runners online (or no runners registered)
+    # - degraded: Some errors (>5), or all always-on runners are offline
+    # - healthy: Low errors and at least some always-on runners online (or no always-on runners registered)
     status = "healthy"
 
-    total_runners = sum(commis_pool.values())
-    online_runners = commis_pool.get("online", 0)
     has_high_errors = error_count > 10 or commis_error_count > 10
     has_some_errors = error_count > 5 or commis_error_count > 5
-    all_runners_offline = total_runners > 0 and online_runners == 0
+    all_always_on_runners_offline = bool(always_on_health) and not any(
+        runner_health.effective_status == "online" for runner_health in always_on_health
+    )
 
-    if has_high_errors and all_runners_offline:
+    if has_high_errors and all_always_on_runners_offline:
         status = "unhealthy"
-    elif has_high_errors or all_runners_offline:
+    elif has_high_errors or all_always_on_runners_offline:
         status = "degraded"
     elif has_some_errors:
         status = "degraded"
@@ -251,11 +260,7 @@ async def recent_incidents(
     if source:
         query = query.filter(OperationalIncident.source == source)
 
-    incidents = (
-        query.order_by(OperationalIncident.last_observed_at.desc(), OperationalIncident.opened_at.desc())
-        .limit(limit)
-        .all()
-    )
+    incidents = query.order_by(OperationalIncident.last_observed_at.desc(), OperationalIncident.opened_at.desc()).limit(limit).all()
 
     return {
         "total": len(incidents),

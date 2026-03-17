@@ -294,6 +294,7 @@ class Runner(Base):
 
     # Identity and configuration
     name = Column(String, nullable=False)  # User-editable, unique per owner
+    availability_policy = Column(String, nullable=False, default="always_on")  # always_on|on_demand|ephemeral
     labels = Column(MutableDict.as_mutable(JSON), nullable=True)  # e.g. {"role": "laptop", "env": "prod"}
     capabilities = Column(
         MutableList.as_mutable(JSON), nullable=False, default=lambda: ["exec.readonly"]

@@ -778,6 +778,32 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("job_runs table migration skipped (table may not exist yet)", exc_info=True)
 
+    # runners table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(runners)"))}
+            if columns:
+                if "availability_policy" not in columns:
+                    conn.execute(text("ALTER TABLE runners ADD COLUMN availability_policy VARCHAR(20)"))
+                conn.execute(
+                    text(
+                        """
+                        UPDATE runners
+                        SET availability_policy = CASE
+                            WHEN COALESCE(TRIM(availability_policy), '') != '' THEN availability_policy
+                            WHEN json_extract(runner_metadata, '$.availability_policy') IN ('always_on', 'on_demand', 'ephemeral')
+                                THEN json_extract(runner_metadata, '$.availability_policy')
+                            WHEN json_extract(runner_metadata, '$.install_mode') = 'desktop' THEN 'on_demand'
+                            ELSE 'always_on'
+                        END
+                        """
+                    )
+                )
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_runners_availability_policy ON runners(availability_policy)"))
+                conn.commit()
+    except Exception:
+        logger.debug("runners table migration skipped (table may not exist yet)", exc_info=True)
+
 
 def _cleanup_legacy_agents_tables(engine: Engine) -> None:
     """Drop removed legacy SQLite tables/columns so existing instances converge."""

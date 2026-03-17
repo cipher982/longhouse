@@ -10,6 +10,7 @@ from zerg.models.models import Runner
 from zerg.schemas.runner_schemas import RunnerDoctorCheck
 from zerg.schemas.runner_schemas import RunnerDoctorResponse
 from zerg.services.runner_health import assess_runner_health
+from zerg.services.runner_health import runner_requires_proactive_attention
 from zerg.utils.time import utc_now_naive
 
 KNOWN_INSTALL_MODES = {"desktop", "server"}
@@ -61,6 +62,7 @@ def diagnose_runner(
     health = assess_runner_health(runner, is_connected=is_connected)
     install_mode = _normalized_install_mode(metadata)
     auto_update_policy = _normalized_auto_update_policy(metadata)
+    availability_policy = health.availability_policy
     platform = metadata.get("platform") if isinstance(metadata.get("platform"), str) else None
     hostname = metadata.get("hostname") if isinstance(metadata.get("hostname"), str) else None
     reported_capabilities = health.reported_capabilities
@@ -79,6 +81,7 @@ def diagnose_runner(
             reason_code="runner_revoked",
             summary="This runner was revoked and will not reconnect.",
             recommended_action="Add a new runner for this machine if you want it online again.",
+            availability_policy=availability_policy,
             install_mode=install_mode,
             repair_install_mode=repair_install_mode,
             repair_supported=False,
@@ -110,6 +113,15 @@ def diagnose_runner(
         checks.append(_check("install_mode", "Install Mode", "warn", mode_message))
         if platform == "darwin":
             repair_install_mode = "desktop"
+
+    checks.append(
+        _check(
+            "availability_policy",
+            "Availability Policy",
+            "ok",
+            f"Runner is configured as `{availability_policy}`.",
+        )
+    )
 
     if health.managed_install_ready:
         checks.append(
@@ -217,6 +229,7 @@ def diagnose_runner(
             reason_code="runner_never_connected",
             summary="This runner has never connected to Longhouse.",
             recommended_action="Generate a repair command and run it on the target machine to finish installation.",
+            availability_policy=availability_policy,
             install_mode=install_mode,
             repair_install_mode=repair_install_mode,
             repair_supported=repair_supported,
@@ -230,6 +243,7 @@ def diagnose_runner(
             reason_code="runner_capabilities_mismatch",
             summary="This runner needs to re-enroll so its local capabilities match Longhouse.",
             recommended_action="Generate a repair command and re-run the installer on this machine.",
+            availability_policy=availability_policy,
             install_mode=install_mode,
             repair_install_mode=repair_install_mode,
             repair_supported=repair_supported,
@@ -243,6 +257,7 @@ def diagnose_runner(
             reason_code="runner_metadata_incomplete",
             summary="This runner is using older metadata and should be re-enrolled once for clearer diagnostics.",
             recommended_action="Generate a repair command and re-run the installer once on this machine.",
+            availability_policy=availability_policy,
             install_mode=install_mode,
             repair_install_mode=repair_install_mode,
             repair_supported=repair_supported,
@@ -265,6 +280,7 @@ def diagnose_runner(
             reason_code=reason_code,
             summary=summary,
             recommended_action=recommended_action,
+            availability_policy=availability_policy,
             install_mode=install_mode,
             repair_install_mode=repair_install_mode,
             repair_supported=repair_supported,
@@ -284,6 +300,7 @@ def diagnose_runner(
             reason_code="runner_version_outdated",
             summary=f"Runner is online but still on v{health.runner_version}; latest is v{health.latest_runner_version}.",
             recommended_action=recommended_action,
+            availability_policy=availability_policy,
             install_mode=install_mode,
             repair_install_mode=repair_install_mode,
             repair_supported=repair_supported,
@@ -296,6 +313,25 @@ def diagnose_runner(
             reason_code="healthy",
             summary="Runner is online and looks healthy.",
             recommended_action="No action needed.",
+            availability_policy=availability_policy,
+            install_mode=install_mode,
+            repair_install_mode=repair_install_mode,
+            repair_supported=False,
+            checks=checks,
+        )
+
+    if not runner_requires_proactive_attention(availability_policy):
+        policy_message = (
+            "This runner is offline, but that is expected because it is configured as on-demand."
+            if availability_policy == "on_demand"
+            else "This runner is offline, but that is expected because it is configured as ephemeral."
+        )
+        return RunnerDoctorResponse(
+            severity="warning",
+            reason_code=f"runner_{availability_policy}_offline",
+            summary=policy_message,
+            recommended_action="No repair is needed unless you want to use this runner now. Wake or reconnect the machine before targeting it.",
+            availability_policy=availability_policy,
             install_mode=install_mode,
             repair_install_mode=repair_install_mode,
             repair_supported=False,
@@ -330,6 +366,7 @@ def diagnose_runner(
         reason_code=reason_code,
         summary=summary,
         recommended_action=recommended_action,
+        availability_policy=availability_policy,
         install_mode=install_mode,
         repair_install_mode=repair_install_mode,
         repair_supported=repair_supported,

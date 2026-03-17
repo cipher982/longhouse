@@ -18,6 +18,7 @@ from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_health import RunnerHealthAssessment
 from zerg.services.runner_health import assess_runner_health
+from zerg.services.runner_health import runner_requires_proactive_attention
 from zerg.services.telegram_bridge import _format_for_telegram
 from zerg.shared.email import send_email
 from zerg.utils.time import utc_now_naive
@@ -29,7 +30,7 @@ OPEN_INCIDENT_STATUS = "open"
 RESOLVED_INCIDENT_STATUS = "resolved"
 ALERT_AFTER = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_ALERT_AFTER_MINUTES", "5")))
 WAKEUP_AFTER = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_WAKEUP_AFTER_MINUTES", "30")))
-DESKTOP_SUPPRESSED_REASON = "desktop_runner"
+NON_PROACTIVE_SUPPRESSED_REASON = "non_proactive_availability"
 
 
 def _format_duration(delta: timedelta) -> str:
@@ -58,6 +59,7 @@ def _open_incident_context(runner: Runner, health: RunnerHealthAssessment, now: 
     return {
         "runner_name": runner.name,
         "host_label": _runner_host_label(runner),
+        "availability_policy": health.availability_policy,
         "status_reason": health.status_reason,
         "status_summary": health.status_summary,
         "install_mode": health.install_mode,
@@ -138,6 +140,39 @@ def _resolve_open_incident(
     incident.context = context
 
 
+def _resolve_open_incident_as_non_actionable(
+    incident: RunnerHealthIncident,
+    *,
+    runner: Runner,
+    health: RunnerHealthAssessment,
+    now: datetime,
+) -> None:
+    incident.status = RESOLVED_INCIDENT_STATUS
+    incident.resolved_at = now
+    incident.last_observed_at = now
+    incident.reason_code = health.status_reason
+    incident.summary = (
+        "Offline is expected for this on-demand runner."
+        if health.availability_policy == "on_demand"
+        else "Offline is expected for this ephemeral runner."
+    )
+    context = dict(incident.context or {})
+    context.update(
+        {
+            "resolved_at": now.isoformat(),
+            "resolved_status_reason": "availability_policy_non_actionable",
+            "resolved_status_summary": incident.summary,
+            "resolved_by_policy": health.availability_policy,
+            "runner_name": runner.name,
+            "alert_suppressed_at": now.isoformat(),
+            "alert_suppressed_reason": NON_PROACTIVE_SUPPRESSED_REASON,
+            "wakeup_suppressed_at": now.isoformat(),
+            "wakeup_suppressed_reason": NON_PROACTIVE_SUPPRESSED_REASON,
+        }
+    )
+    incident.context = context
+
+
 async def _send_telegram_alert(user: User, text: str) -> bool:
     chat_id = str((user.context or {}).get("telegram_chat_id", "")).strip()
     if not chat_id:
@@ -204,8 +239,8 @@ def _build_external_alert_copy(
 
 def _external_attention_allowed(health: RunnerHealthAssessment) -> tuple[bool, str | None]:
     """Return whether this runner should page external attention channels."""
-    if health.install_mode == "desktop":
-        return False, DESKTOP_SUPPRESSED_REASON
+    if not runner_requires_proactive_attention(health.availability_policy):
+        return False, NON_PROACTIVE_SUPPRESSED_REASON
     return True, None
 
 
@@ -419,6 +454,13 @@ async def reconcile_runner_health(
 
             incident = _get_open_incident(db, runner.id)
             if health.effective_status == "offline" and runner.last_seen_at is not None:
+                if not runner_requires_proactive_attention(health.availability_policy):
+                    if incident is not None:
+                        _resolve_open_incident_as_non_actionable(incident, runner=runner, health=health, now=now)
+                        result["incidents_resolved"] += 1
+                    db.commit()
+                    continue
+
                 incident, created = _ensure_open_incident(db, runner=runner, health=health, now=now)
                 if created:
                     result["incidents_opened"] += 1

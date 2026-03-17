@@ -230,6 +230,46 @@ def test_runner_doctor_warns_for_legacy_layout_even_when_online(tmp_path: Path):
         db.close()
 
 
+def test_runner_doctor_treats_on_demand_offline_runner_as_non_actionable(tmp_path: Path):
+    client, api_app, db, user = _make_client(tmp_path)
+    try:
+        runner = Runner(
+            owner_id=user.id,
+            name="cinder",
+            auth_secret_hash="hash",
+            availability_policy="on_demand",
+            capabilities=["exec.full"],
+            status="offline",
+            runner_metadata={
+                "hostname": "cinder",
+                "platform": "darwin",
+                "runner_version": "0.1.7",
+                "install_mode": "desktop",
+                "auto_update_policy": "notify",
+                "install_layout_version": 1,
+                "capabilities": ["exec.full"],
+            },
+        )
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+
+        with patch(
+            "zerg.routers.runners.get_runner_connection_manager",
+            return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
+        ):
+            response = client.get(f"/runners/{runner.id}/doctor")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["severity"] == "warning"
+        assert payload["reason_code"] == "runner_on_demand_offline"
+        assert payload["repair_supported"] is False
+        assert payload["availability_policy"] == "on_demand"
+    finally:
+        api_app.dependency_overrides.clear()
+        db.close()
+
+
 def test_runner_doctor_distinguishes_outdated_runner_on_legacy_layout(tmp_path: Path):
     client, api_app, db, user = _make_client(tmp_path)
     try:

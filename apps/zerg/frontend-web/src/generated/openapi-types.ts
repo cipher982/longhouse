@@ -8341,6 +8341,8 @@ export interface components {
             summary: string;
             /** Recommended Action */
             recommended_action: string;
+            /** Availability Policy */
+            availability_policy?: ("always_on" | "on_demand" | "ephemeral") | null;
             /** Install Mode */
             install_mode?: string | null;
             /** Repair Install Mode */
@@ -8460,6 +8462,8 @@ export interface components {
             last_seen_at?: string | null;
             /** Last Seen Age Seconds */
             last_seen_age_seconds?: number | null;
+            /** Availability Policy */
+            availability_policy?: ("always_on" | "on_demand" | "ephemeral") | null;
             /** Install Mode */
             install_mode?: string | null;
             /** Runner Version */
@@ -8486,6 +8490,11 @@ export interface components {
              * @description Optional runner name (auto-generated if not provided)
              */
             name?: string | null;
+            /**
+             * Availability Policy
+             * @description Availability expectation for this runner: always_on | on_demand | ephemeral
+             */
+            availability_policy?: ("always_on" | "on_demand" | "ephemeral") | null;
             /**
              * Labels
              * @description Optional labels for runner targeting
@@ -8544,6 +8553,13 @@ export interface components {
             owner_id: number;
             /** Name */
             name: string;
+            /**
+             * Availability Policy
+             * @description always_on | on_demand | ephemeral
+             * @default always_on
+             * @enum {string}
+             */
+            availability_policy: "always_on" | "on_demand" | "ephemeral";
             /** Labels */
             labels?: {
                 [key: string]: string;
@@ -8678,6 +8694,8 @@ export interface components {
             name: string;
             /** Status */
             status: string;
+            /** Availability Policy */
+            availability_policy?: ("always_on" | "on_demand" | "ephemeral") | null;
             /** Status Reason */
             status_reason?: string | null;
             /** Status Summary */
@@ -8732,6 +8750,11 @@ export interface components {
              * @description New runner name
              */
             name?: string | null;
+            /**
+             * Availability Policy
+             * @description Availability expectation for this runner: always_on | on_demand | ephemeral
+             */
+            availability_policy?: ("always_on" | "on_demand" | "ephemeral") | null;
             /**
              * Labels
              * @description New labels

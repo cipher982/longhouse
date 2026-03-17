@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from zerg.models.models import Runner
 from zerg.models.models import RunnerEnrollToken
 from zerg.models.models import RunnerJob
+from zerg.services.runner_health import infer_runner_availability_policy
 from zerg.utils.time import utc_now_naive
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,7 @@ def create_runner(
     owner_id: int,
     name: str,
     auth_secret: str,
+    availability_policy: Optional[str] = None,
     labels: Optional[dict[str, str]] = None,
     capabilities: Optional[list[str]] = None,
     metadata: Optional[dict[str, Any]] = None,
@@ -161,11 +163,13 @@ def create_runner(
     """
     secret_hash = hash_token(auth_secret)
     normalized_capabilities = normalize_capabilities(capabilities)
+    resolved_availability_policy = infer_runner_availability_policy(policy=availability_policy, metadata=metadata)
 
     db_runner = Runner(
         owner_id=owner_id,
         name=name,
         auth_secret_hash=secret_hash,
+        availability_policy=resolved_availability_policy,
         labels=labels,
         capabilities=normalized_capabilities or ["exec.readonly"],
         runner_metadata=metadata,
@@ -213,6 +217,7 @@ def update_runner(
     db: Session,
     runner_id: int,
     name: Optional[str] = None,
+    availability_policy: Optional[str] = None,
     labels: Optional[dict[str, str]] = None,
     capabilities: Optional[list[str]] = None,
 ) -> Optional[Runner]:
@@ -234,6 +239,11 @@ def update_runner(
 
     if name is not None:
         db_runner.name = name
+    if availability_policy is not None:
+        db_runner.availability_policy = infer_runner_availability_policy(
+            policy=availability_policy,
+            metadata=db_runner.runner_metadata if isinstance(db_runner.runner_metadata, dict) else None,
+        )
     if labels is not None:
         db_runner.labels = labels
     if capabilities is not None:

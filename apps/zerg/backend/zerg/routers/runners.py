@@ -501,6 +501,7 @@ async def register_runner(
             owner_id=token_record.owner_id,
             name=request.name,
             auth_secret=auth_secret,
+            availability_policy=request.availability_policy,
             labels=request.labels,
             capabilities=requested_capabilities,
             metadata=request.metadata,
@@ -556,6 +557,7 @@ def get_runner_status(
         runners=[
             RunnerStatusItem(
                 name=runner.name,
+                availability_policy=runner.availability_policy,
                 status=runner.status,
                 status_reason=runner.status_reason,
                 status_summary=runner.status_summary,
@@ -643,6 +645,7 @@ def runner_preflight(
         status_summary=runner_response.status_summary,
         last_seen_at=runner_response.last_seen_at,
         last_seen_age_seconds=runner_response.last_seen_age_seconds,
+        availability_policy=runner_response.availability_policy,
         install_mode=runner_response.install_mode,
         runner_version=runner_response.runner_version,
         latest_runner_version=runner_response.latest_runner_version,
@@ -728,6 +731,7 @@ def update_runner(
             db=db,
             runner_id=runner_id,
             name=update.name,
+            availability_policy=update.availability_policy,
             labels=update.labels,
             capabilities=update.capabilities,
         )

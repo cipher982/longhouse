@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from typing import Literal
 from typing import Optional
 
 from pydantic import BaseModel
@@ -15,6 +16,8 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from zerg.utils.time import UTCBaseModel
+
+RunnerAvailabilityPolicy = Literal["always_on", "on_demand", "ephemeral"]
 
 # ---------------------------------------------------------------------------
 # Runner Enrollment
@@ -42,6 +45,10 @@ class RunnerRegisterRequest(BaseModel):
 
     enroll_token: str = Field(..., description="One-time enrollment token")
     name: Optional[str] = Field(None, description="Optional runner name (auto-generated if not provided)")
+    availability_policy: Optional[RunnerAvailabilityPolicy] = Field(
+        None,
+        description="Availability expectation for this runner: always_on | on_demand | ephemeral",
+    )
     labels: Optional[dict[str, str]] = Field(None, description="Optional labels for runner targeting")
     capabilities: Optional[list[str]] = Field(None, description="Optional capabilities for the new runner")
     metadata: Optional[dict[str, Any]] = Field(None, description="Runner metadata (hostname, os, arch, etc.)")
@@ -80,6 +87,7 @@ class RunnerPreflightResponse(UTCBaseModel):
     status_summary: Optional[str] = None
     last_seen_at: Optional[datetime] = None
     last_seen_age_seconds: Optional[int] = None
+    availability_policy: Optional[RunnerAvailabilityPolicy] = None
     install_mode: Optional[str] = None
     runner_version: Optional[str] = None
     latest_runner_version: Optional[str] = None
@@ -100,6 +108,10 @@ class RunnerResponse(UTCBaseModel):
     id: int
     owner_id: int
     name: str
+    availability_policy: RunnerAvailabilityPolicy = Field(
+        default="always_on",
+        description="always_on | on_demand | ephemeral",
+    )
     labels: Optional[dict[str, str]] = None
     capabilities: list[str] = Field(default_factory=lambda: ["exec.readonly"])
     status: str  # online|offline|revoked
@@ -127,6 +139,10 @@ class RunnerUpdate(BaseModel):
     """Request to update a runner's configuration."""
 
     name: Optional[str] = Field(None, description="New runner name")
+    availability_policy: Optional[RunnerAvailabilityPolicy] = Field(
+        None,
+        description="Availability expectation for this runner: always_on | on_demand | ephemeral",
+    )
     labels: Optional[dict[str, str]] = Field(None, description="New labels")
     capabilities: Optional[list[str]] = Field(None, description="New capabilities")
 
@@ -199,6 +215,7 @@ class RunnerStatusItem(BaseModel):
 
     name: str
     status: str  # online|offline|revoked
+    availability_policy: Optional[RunnerAvailabilityPolicy] = None
     status_reason: Optional[str] = None
     status_summary: Optional[str] = None
 
@@ -228,6 +245,7 @@ class RunnerDoctorResponse(BaseModel):
     reason_code: str
     summary: str
     recommended_action: str
+    availability_policy: Optional[RunnerAvailabilityPolicy] = None
     install_mode: Optional[str] = None
     repair_install_mode: Optional[str] = None
     repair_supported: bool = False

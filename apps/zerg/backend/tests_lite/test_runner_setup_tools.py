@@ -43,6 +43,7 @@ def test_runner_list_suggests_doctor_when_all_runners_are_offline(tmp_path: Path
             owner_id=user.id,
             name="cube",
             auth_secret_hash="hash",
+            availability_policy="always_on",
             capabilities=["exec.full"],
             status="offline",
             last_seen_at=utc_now_naive() - timedelta(minutes=10),
@@ -71,6 +72,49 @@ def test_runner_list_suggests_doctor_when_all_runners_are_offline(tmp_path: Path
         assert "runner_doctor" in result["data"]["suggested_next_step"]
         assert result["data"]["runners"][0]["auto_update_policy"] == "notify"
         assert result["data"]["runners"][0]["managed_install_ready"] is True
+    finally:
+        db.close()
+
+
+def test_runner_list_softens_message_for_on_demand_offline_runners(tmp_path: Path):
+    db = _make_db(tmp_path)
+    try:
+        user = User(email="owner@test.local", role="ADMIN")
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        runner = Runner(
+            owner_id=user.id,
+            name="cinder",
+            auth_secret_hash="hash",
+            availability_policy="on_demand",
+            capabilities=["exec.full"],
+            status="offline",
+            last_seen_at=utc_now_naive() - timedelta(minutes=10),
+            runner_metadata={
+                "install_mode": "desktop",
+                "capabilities": ["exec.full"],
+                "heartbeat_interval_ms": 30000,
+                "auto_update_policy": "notify",
+                "install_layout_version": 1,
+            },
+        )
+        db.add(runner)
+        db.commit()
+
+        with (
+            patch("zerg.tools.builtin.runner_setup_tools.get_credential_resolver", return_value=SimpleNamespace(owner_id=user.id)),
+            patch("zerg.tools.builtin.runner_setup_tools.db_session", return_value=_db_session(db)),
+            patch(
+                "zerg.tools.builtin.runner_setup_tools.get_runner_connection_manager",
+                return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
+            ),
+        ):
+            result = runner_setup_tools.runner_list()
+
+        assert result["ok"] is True
+        assert result["data"]["suggested_next_step"] == "No runners are online right now. That may be fine if these runners are on-demand."
     finally:
         db.close()
 
