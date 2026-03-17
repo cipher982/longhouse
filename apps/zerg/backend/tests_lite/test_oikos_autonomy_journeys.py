@@ -9,6 +9,7 @@ import pytest
 
 from zerg.services.oikos_autonomy_journeys import AutonomyJourneyResult
 from zerg.services.oikos_autonomy_journeys import OikosAutonomyJourneyRunner
+from zerg.services.oikos_autonomy_journeys import _safe_parent
 from zerg.services.oikos_autonomy_journeys import baseline_shadow_decider
 from zerg.services.oikos_autonomy_journeys import load_autonomy_journey_cases
 from zerg.services.oikos_autonomy_journeys import run_autonomy_journeys
@@ -19,6 +20,13 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "oikos_autonomy_journeys.yml
 
 def _load_cases():
     return load_autonomy_journey_cases(FIXTURE_PATH)
+
+
+def test_safe_parent_falls_back_for_packaged_runtime_paths():
+    runtime_path = Path("/app/zerg/services/oikos_autonomy_journeys.py")
+
+    assert _safe_parent(runtime_path, 2, runtime_path.parent) == Path("/app")
+    assert _safe_parent(runtime_path, 5, Path("/app")) == Path("/app")
 
 
 def test_load_autonomy_journey_cases_reads_expected_fixture():
