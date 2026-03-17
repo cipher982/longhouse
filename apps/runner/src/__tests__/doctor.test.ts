@@ -4,6 +4,11 @@ import { collectDoctorReport, detectInstallMode, expectedServicePath } from '../
 import type { DoctorDeps } from '../doctor';
 
 function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
+  const existingPaths = new Set<string>([
+    '/etc/systemd/system/longhouse-runner.service',
+    '/home/test/.local/bin/longhouse-runner',
+    '/home/test/.local/share/longhouse-runner/current',
+  ]);
   return {
     platform: 'linux',
     env: {
@@ -16,7 +21,7 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
     },
     homeDir: '/home/test',
     uid: 1000,
-    exists: (path: string) => path === '/etc/systemd/system/longhouse-runner.service',
+    exists: (path: string) => existingPaths.has(path),
     loadConfig: () => ({
       longhouseUrl: 'https://david010.longhouse.ai',
       longhouseUrls: ['https://david010.longhouse.ai'],
@@ -108,6 +113,7 @@ describe('collectDoctorReport', () => {
         RUNNER_SECRET: 'secret',
         RUNNER_INSTALL_MODE: 'server',
       },
+      exists: (path: string) => path === '/etc/systemd/system/longhouse-runner.service',
     }));
     expect(report.checks.some((check) => check.key === 'update_layout' && check.status === 'warn')).toBe(true);
   });

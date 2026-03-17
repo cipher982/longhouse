@@ -299,7 +299,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}, deps: Doc
     checks.push({ key: 'install_mode', label: 'Install Mode', status: 'ok', message: `Detected ${installMode} install mode.` });
   }
 
-  if (hasManagedInstallLayout(deps.env)) {
+  if (hasManagedInstallLayout(deps.env, deps.homeDir, deps.exists)) {
     checks.push({
       key: 'update_layout',
       label: 'Update Layout',
