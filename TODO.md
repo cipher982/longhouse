@@ -17,7 +17,7 @@ Classification tags: [Launch], [Product], [Infra], [QA/Test], [Docs/Drift], [Tec
 
 ## [Launch][Product][Tech Debt] Tighten insights to a thin continuity primitive (size: 3)
 
-Status (2026-03-16): In progress. Audit is complete on the live `david010` instance. The current direction is to keep the useful insight store, restore machine-readable reads, and pause unattended reflection/proposal generation by default.
+Status (2026-03-16): Done. The useful insight store remains in place, machine-readable reads are restored, and unattended reflection/proposal generation is paused by default before launch.
 
 **Goal:** Preserve insights as a lightweight continuity feature without continuing to generate low-signal reflection sludge before launch.
 
@@ -31,13 +31,14 @@ Status (2026-03-16): In progress. Audit is complete on the live `david010` insta
 - [x] Write and commit the bounded spec + TODO entry
 - [x] Add `/api/agents/insights` and repoint MCP `query_insights`
 - [x] Add focused tests for the browser/machine auth split and MCP query behavior
-- [ ] Disable scheduled reflection by default without deleting manual reflection endpoints
-- [ ] Clean stale docs/UI copy around insights/proposals/reflection
+- [x] Disable scheduled reflection by default without deleting manual reflection endpoints
+- [x] Clean stale docs/UI copy around insights/proposals/reflection
 
 Notes:
 - 2026-03-16: Live hosted DB (`david010`) has 285 insights and 133 proposals; local `~/.longhouse/dev.db` has none, so this feature should be judged from hosted runtime data, not local dev state.
 - 2026-03-16: The useful portion is mostly manual/system-written operational learnings. The low-signal portion strongly clusters around the scheduled reflection cadence.
 - 2026-03-16: Machine reads now live on `/api/agents/insights`, browser reads stay on `/api/insights`, `query_insights` points at the machine route again, and `make test-lite` is green on this slice.
+- 2026-03-16: `session-reflection` is now opt-in via `REFLECTION_JOB_ENABLED=1`, proposal/briefing copy no longer implies a default 6-hour automation loop, and `AGENTS.md` reflects the current product surface.
 - Spec: `docs/specs/insights-tightening.md`
 
 ## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)

@@ -119,7 +119,7 @@ export default function ProposalsPage() {
     <PageShell size="narrow">
       <SectionHeader
         title="Action Proposals"
-        description="Review actionable insights from reflection. Approved proposals become tasks for agents."
+        description="Review actionable follow-ups when manual reflection is used."
       />
 
       <div className="proposals-filters">
@@ -144,7 +144,7 @@ export default function ProposalsPage() {
           title="No proposals"
           description={
             activeStatus === "pending"
-              ? "No pending proposals. Reflection runs every 6 hours."
+              ? "No pending proposals. Automatic reflection is paused by default."
               : `No ${activeStatus} proposals found.`
           }
         />
