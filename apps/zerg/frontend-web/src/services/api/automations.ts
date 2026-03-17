@@ -136,7 +136,7 @@ export async function runAutomation(automationId: number): Promise<RunAutomation
 }
 
 export async function fetchAutomationRuns(automationId: number, limit = 20): Promise<Run[]> {
-  return request<Run[]>(`/fiches/${automationId}/runs?limit=${limit}`);
+  return request<Run[]>(`/automations/${automationId}/runs?limit=${limit}`);
 }
 
 export async function fetchContainerPolicy(): Promise<ContainerPolicy> {
@@ -144,25 +144,25 @@ export async function fetchContainerPolicy(): Promise<ContainerPolicy> {
 }
 
 export async function fetchAutomationAvailableTools(automationId: number): Promise<AvailableToolsResponse> {
-  return request<AvailableToolsResponse>(`/fiches/${automationId}/mcp-servers/available-tools`);
+  return request<AvailableToolsResponse>(`/automations/${automationId}/mcp-servers/available-tools`);
 }
 
 export async function fetchAutomationMcpServers(automationId: number): Promise<McpServerResponse[]> {
-  return request<McpServerResponse[]>(`/fiches/${automationId}/mcp-servers/`);
+  return request<McpServerResponse[]>(`/automations/${automationId}/mcp-servers/`);
 }
 
 export async function addAutomationMcpServer(
   automationId: number,
   payload: McpServerAddRequest
 ): Promise<Automation> {
-  return request<Automation>(`/fiches/${automationId}/mcp-servers/`, {
+  return request<Automation>(`/automations/${automationId}/mcp-servers/`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
 export async function removeAutomationMcpServer(automationId: number, serverName: string): Promise<void> {
-  await request<void>(`/fiches/${automationId}/mcp-servers/${encodeURIComponent(serverName)}`, {
+  await request<void>(`/automations/${automationId}/mcp-servers/${encodeURIComponent(serverName)}`, {
     method: "DELETE",
   });
 }
@@ -171,7 +171,7 @@ export async function testAutomationMcpServer(
   automationId: number,
   payload: McpServerAddRequest
 ): Promise<McpTestConnectionResponse> {
-  return request<McpTestConnectionResponse>(`/fiches/${automationId}/mcp-servers/test`, {
+  return request<McpTestConnectionResponse>(`/automations/${automationId}/mcp-servers/test`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

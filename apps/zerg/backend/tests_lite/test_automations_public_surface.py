@@ -12,8 +12,13 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.auth import get_current_user
 from zerg.models import Fiche
+from zerg.models import Run
+from zerg.models import Thread
 from zerg.models import User
 from zerg.models.enums import FicheStatus
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
+from zerg.models.enums import ThreadType
 from zerg.models.enums import UserRole
 
 
@@ -137,5 +142,70 @@ def test_automations_alias_supports_task_endpoint(tmp_path, monkeypatch):
         response = client.post(f"/automations/{automation_id}/task")
         assert response.status_code == 202, response.text
         assert response.json() == {"thread_id": 99}
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_automation_nested_aliases_cover_runs_connectors_and_mcp_servers(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        owner = User(email="owner@test.local", role=UserRole.ADMIN.value)
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        fiche = Fiche(
+            owner_id=owner.id,
+            name="Existing automation",
+            status=FicheStatus.IDLE.value,
+            system_instructions="You are helpful.",
+            task_instructions="Run the automation.",
+            model="gpt-mock",
+        )
+        db.add(fiche)
+        db.commit()
+        db.refresh(fiche)
+
+        thread = Thread(
+            fiche_id=fiche.id,
+            title="Automation thread",
+            thread_type=ThreadType.MANUAL.value,
+        )
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+
+        run = Run(
+            fiche_id=fiche.id,
+            thread_id=thread.id,
+            status=RunStatus.SUCCESS.value,
+            trigger=RunTrigger.MANUAL.value,
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+
+        automation_id = fiche.id
+
+    current_user = SimpleNamespace(id=owner.id, email=owner.email, role=owner.role)
+    client, api_app = _make_client(session_local, current_user)
+
+    try:
+        runs_response = client.get(f"/automations/{automation_id}/runs")
+        assert runs_response.status_code == 200, runs_response.text
+        assert [row["id"] for row in runs_response.json()] == [run.id]
+
+        connectors_response = client.get(f"/automations/{automation_id}/connectors/")
+        assert connectors_response.status_code == 200, connectors_response.text
+        assert len(connectors_response.json()) > 0
+
+        mcp_response = client.get(f"/automations/{automation_id}/mcp-servers/")
+        assert mcp_response.status_code == 200, mcp_response.text
+        assert mcp_response.json() == []
+
+        tools_response = client.get(f"/automations/{automation_id}/mcp-servers/available-tools")
+        assert tools_response.status_code == 200, tools_response.text
+        assert set(tools_response.json().keys()) == {"builtin", "mcp"}
     finally:
         api_app.dependency_overrides.clear()

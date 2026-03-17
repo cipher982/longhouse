@@ -2146,6 +2146,29 @@ Notes:
 
 ---
 
+## [Refactor][Product] Rename Nested Automation Routes + Event Surface
+
+**Status (2026-03-17):** In progress.
+
+**Goal:** Finish the public automation rename where users and browser clients still see `fiches`: nested REST paths, websocket topics, and event names.
+
+**Done when:**
+- Canonical browser-facing nested automation APIs use `/api/automations/{id}/runs`, `/connectors`, and `/mcp-servers`
+- Shared frontend automation helpers call the automation paths by default, with fiche-path compatibility retained only where still needed
+- Live dashboard/websocket automation updates use automation-named topics/events (with bounded compatibility if required)
+- Generated contracts and focused tests are updated for the renamed nested route/event surface
+
+- [x] Add nested `/api/automations/{id}/runs`, `/connectors`, and `/mcp-servers` aliases
+- [x] Repoint canonical frontend automation/connectors helpers to the nested automation paths
+- [ ] Rename the live automation websocket/event contract off `fiche:*` / `fiche_updated` / `fiche_state`
+- [ ] Verify with SDK generation, frontend units, and `make test`
+
+Notes:
+- 2026-03-17: Inventory confirmed the remaining hot spots are `routers/runs.py`, `routers/fiche_connectors.py`, `routers/mcp_servers.py`, `services/api/connectors.ts`, `services/api/automations.ts`, `hooks/useFicheConfig.ts`, `hooks/useFicheConnectors.ts`, `pages/DashboardPage.tsx`, `websocket/manager.py`, `websocket/handlers.py`, `events/event_bus.py`, and the generated WS/OpenAPI contracts.
+- 2026-03-17: Landed the nested REST alias tranche. Canonical browser helpers now hit `/api/automations/{id}/runs`, `/connectors`, and `/mcp-servers`, while the old fiche helpers stay as compatibility aliases. Added focused frontend API-path tests plus backend HTTP coverage for the new nested aliases. Verification is green via `make generate-sdk`, `make test-frontend-unit`, and `make test`; only the websocket/event rename remains in this task.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

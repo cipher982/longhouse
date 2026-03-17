@@ -17,54 +17,54 @@ export type {
   AccountConnectorStatus,
 };
 
-// Fiche-level connectors
-export async function fetchFicheConnectors(ficheId: number): Promise<ConnectorStatus[]> {
-  return request<ConnectorStatus[]>(`/fiches/${ficheId}/connectors`);
+// Automation-level connectors
+export async function fetchAutomationConnectors(automationId: number): Promise<ConnectorStatus[]> {
+  return request<ConnectorStatus[]>(`/automations/${automationId}/connectors`);
 }
 
-export async function configureFicheConnector(
-  ficheId: number,
+export async function configureAutomationConnector(
+  automationId: number,
   payload: ConnectorConfigureRequest
 ): Promise<ConnectorSuccessResponse> {
-  return request<ConnectorSuccessResponse>(`/fiches/${ficheId}/connectors`, {
+  return request<ConnectorSuccessResponse>(`/automations/${automationId}/connectors`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export async function testFicheConnectorBeforeSave(
-  ficheId: number,
+export async function testAutomationConnectorBeforeSave(
+  automationId: number,
   payload: ConnectorTestRequest
 ): Promise<ConnectorTestResponse> {
-  return request<ConnectorTestResponse>(`/fiches/${ficheId}/connectors/test`, {
+  return request<ConnectorTestResponse>(`/automations/${automationId}/connectors/test`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export async function testFicheConnector(
-  ficheId: number,
+export async function testAutomationConnector(
+  automationId: number,
   connectorType: string
 ): Promise<ConnectorTestResponse> {
-  return request<ConnectorTestResponse>(`/fiches/${ficheId}/connectors/${connectorType}/test`, {
+  return request<ConnectorTestResponse>(`/automations/${automationId}/connectors/${connectorType}/test`, {
     method: "POST",
   });
 }
 
-export async function deleteFicheConnector(
-  ficheId: number,
+export async function deleteAutomationConnector(
+  automationId: number,
   connectorType: string
 ): Promise<void> {
-  return request<void>(`/fiches/${ficheId}/connectors/${connectorType}`, {
+  return request<void>(`/automations/${automationId}/connectors/${connectorType}`, {
     method: "DELETE",
   });
 }
 
-export const fetchAutomationConnectors = fetchFicheConnectors;
-export const configureAutomationConnector = configureFicheConnector;
-export const testAutomationConnectorBeforeSave = testFicheConnectorBeforeSave;
-export const testAutomationConnector = testFicheConnector;
-export const deleteAutomationConnector = deleteFicheConnector;
+export const fetchFicheConnectors = fetchAutomationConnectors;
+export const configureFicheConnector = configureAutomationConnector;
+export const testFicheConnectorBeforeSave = testAutomationConnectorBeforeSave;
+export const testFicheConnector = testAutomationConnector;
+export const deleteFicheConnector = deleteAutomationConnector;
 
 // Account-level connectors
 export async function fetchAccountConnectors(): Promise<AccountConnectorStatus[]> {

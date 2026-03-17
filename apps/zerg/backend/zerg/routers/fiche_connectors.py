@@ -50,6 +50,11 @@ router = APIRouter(
     tags=["fiche-connectors"],
 )
 
+automation_router = APIRouter(
+    prefix="/automations/{automation_id}/connectors",
+    tags=["fiche-connectors"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -312,3 +317,57 @@ def delete_connector(
 
     logger.info("Deleted %s credentials for fiche %d", connector_type, fiche_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@automation_router.get("/", response_model=list[ConnectorStatusResponse])
+def list_automation_connectors(
+    automation_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> list[ConnectorStatusResponse]:
+    return list_fiche_connectors(fiche_id=automation_id, db=db, current_user=current_user)
+
+
+@automation_router.post("/", response_model=ConnectorSuccessResponse, status_code=status.HTTP_201_CREATED)
+def configure_automation_connector(
+    request: ConnectorConfigureRequest,
+    automation_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> ConnectorSuccessResponse:
+    return configure_connector(request=request, fiche_id=automation_id, db=db, current_user=current_user)
+
+
+@automation_router.post("/test", response_model=ConnectorTestResponse)
+def test_automation_credentials_before_save(
+    request: ConnectorTestRequest,
+    automation_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> ConnectorTestResponse:
+    return test_credentials_before_save(request=request, fiche_id=automation_id, db=db, current_user=current_user)
+
+
+@automation_router.post("/{connector_type}/test", response_model=ConnectorTestResponse)
+def test_configured_automation_connector(
+    connector_type: str = Path(...),
+    automation_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> ConnectorTestResponse:
+    return test_configured_connector(
+        connector_type=connector_type,
+        fiche_id=automation_id,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@automation_router.delete("/{connector_type}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_automation_connector(
+    connector_type: str = Path(...),
+    automation_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> Response:
+    return delete_connector(connector_type=connector_type, fiche_id=automation_id, db=db, current_user=current_user)
