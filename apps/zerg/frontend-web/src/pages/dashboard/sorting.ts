@@ -1,4 +1,4 @@
-import type { FicheSummary, Run } from "../../services/api";
+import type { AutomationSummary, Run } from "../../services/api";
 import { formatDateTimeShort } from "./formatters";
 
 export type SortKey = "name" | "status" | "created_at" | "last_run" | "next_run" | "success";
@@ -8,7 +8,7 @@ export type SortConfig = {
   ascending: boolean;
 };
 
-export type FicheRunsState = Record<number, Run[]>;
+export type AutomationRunsState = Record<number, Run[]>;
 
 const STATUS_ORDER: Record<string, number> = {
   running: 0,
@@ -50,10 +50,14 @@ export function persistSortConfig(config: SortConfig) {
   window.localStorage.setItem(STORAGE_KEY_ASC, config.ascending ? "1" : "0");
 }
 
-export function sortFiches(fiches: FicheSummary[], runsByFiche: FicheRunsState, sortConfig: SortConfig): FicheSummary[] {
-  const sorted = [...fiches];
+export function sortAutomations(
+  automations: AutomationSummary[],
+  runsByAutomation: AutomationRunsState,
+  sortConfig: SortConfig
+): AutomationSummary[] {
+  const sorted = [...automations];
   sorted.sort((left, right) => {
-    const comparison = compareFiches(left, right, runsByFiche, sortConfig.key);
+    const comparison = compareAutomations(left, right, runsByAutomation, sortConfig.key);
     if (comparison !== 0) {
       return sortConfig.ascending ? comparison : -comparison;
     }
@@ -63,10 +67,10 @@ export function sortFiches(fiches: FicheSummary[], runsByFiche: FicheRunsState, 
   return sorted;
 }
 
-function compareFiches(
-  left: FicheSummary,
-  right: FicheSummary,
-  runsByFiche: FicheRunsState,
+function compareAutomations(
+  left: AutomationSummary,
+  right: AutomationSummary,
+  runsByAutomation: AutomationRunsState,
   sortKey: SortKey
 ): number {
   switch (sortKey) {
@@ -87,8 +91,8 @@ function compareFiches(
         formatDateTimeShort(right.next_run_at ?? null)
       );
     case "success": {
-      const leftStats = computeRunSuccessStats(runsByFiche[left.id]);
-      const rightStats = computeRunSuccessStats(runsByFiche[right.id]);
+      const leftStats = computeRunSuccessStats(runsByAutomation[left.id]);
+      const rightStats = computeRunSuccessStats(runsByAutomation[right.id]);
       if (leftStats.rate === rightStats.rate) {
         return leftStats.count - rightStats.count;
       }

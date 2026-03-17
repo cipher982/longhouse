@@ -30,7 +30,7 @@ type MockWebSocketInstance = {
   close: () => void;
 };
 
-function buildFiche(
+function buildAutomation(
   overrides: Partial<AutomationSummary> & Pick<AutomationSummary, "id" | "name" | "status" | "owner_id">
 ): AutomationSummary {
   const now = new Date().toISOString();
@@ -100,16 +100,16 @@ describe("DashboardPage", () => {
     window.localStorage.clear();
   });
 
-  function renderDashboard(initialFiches: AutomationSummary[], runsByFiche?: Record<number, Run[]>) {
-    const runsLookup = runsByFiche ?? {};
+  function renderDashboard(initialAutomations: AutomationSummary[], runsByAutomation?: Record<number, Run[]>) {
+    const runsLookup = runsByAutomation ?? {};
     const snapshot: AutomationOverviewSnapshot = {
       scope: "my",
       fetchedAt: new Date().toISOString(),
       runsLimit: 50,
-      fiches: initialFiches,
-      runs: initialFiches.map((fiche) => ({
-        ficheId: fiche.id,
-        runs: runsLookup[fiche.id] ?? [],
+      fiches: initialAutomations,
+      runs: initialAutomations.map((automation) => ({
+        ficheId: automation.id,
+        runs: runsLookup[automation.id] ?? [],
       })),
     };
 
@@ -132,9 +132,9 @@ describe("DashboardPage", () => {
     );
   }
 
-  test("renders dashboard header and fiches table", async () => {
-    const fiches: AutomationSummary[] = [
-      buildFiche({
+  test("renders dashboard header and automations table", async () => {
+    const automations: AutomationSummary[] = [
+      buildAutomation({
         id: 1,
         name: "Alpha",
         status: "running",
@@ -151,7 +151,7 @@ describe("DashboardPage", () => {
         last_run_at: "2025-09-24T10:00:00.000Z",
         next_run_at: "2025-09-24T12:00:00.000Z",
       }),
-      buildFiche({
+      buildAutomation({
         id: 2,
         name: "Beta",
         status: "error",
@@ -163,24 +163,24 @@ describe("DashboardPage", () => {
       }),
     ];
 
-    renderDashboard(fiches);
+    renderDashboard(automations);
 
     await screen.findByText("Alpha");
 
-    expect(screen.getByRole("button", { name: /Create Fiche/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Create Automation/i })).toBeInTheDocument();
 
     const allRows = screen.getAllByRole("row");
-    const [headerRow, ...ficheRows] = allRows;
+    const [headerRow, ...automationRows] = allRows;
     expect(within(headerRow).getByText("Name")).toBeInTheDocument();
     expect(within(headerRow).getByText("Status")).toBeInTheDocument();
 
-    expect(ficheRows).toHaveLength(2);
-    expect(within(ficheRows[0]).getByText("Alpha")).toBeInTheDocument();
-    expect(within(ficheRows[1]).getByText("Beta")).toBeInTheDocument();
+    expect(automationRows).toHaveLength(2);
+    expect(within(automationRows[0]).getByText("Alpha")).toBeInTheDocument();
+    expect(within(automationRows[1]).getByText("Beta")).toBeInTheDocument();
   });
 
-  test("expands a fiche row and shows run history", async () => {
-    const fiche = buildFiche({
+  test("expands an automation row and shows run history", async () => {
+    const automation = buildAutomation({
       id: 1,
       name: "Runner",
       status: "idle",
@@ -269,7 +269,7 @@ describe("DashboardPage", () => {
       },
     ];
 
-    renderDashboard([fiche], { 1: runs });
+    renderDashboard([automation], { 1: runs });
 
     const row = await screen.findByRole("row", { name: /Runner/ });
     await userEvent.click(row);
@@ -290,13 +290,13 @@ describe("DashboardPage", () => {
     expect(screen.getByText("Show less")).toBeInTheDocument();
   });
 
-  test("sorts fiches by status and toggles sort direction", async () => {
-    const fiches: AutomationSummary[] = [
-      buildFiche({ id: 1, name: "Alpha", status: "idle", owner_id: 1 }),
-      buildFiche({ id: 2, name: "Beta", status: "running", owner_id: 1 }),
+  test("sorts automations by status and toggles sort direction", async () => {
+    const automations: AutomationSummary[] = [
+      buildAutomation({ id: 1, name: "Alpha", status: "idle", owner_id: 1 }),
+      buildAutomation({ id: 2, name: "Beta", status: "running", owner_id: 1 }),
     ];
 
-    renderDashboard(fiches);
+    renderDashboard(automations);
 
     const rows = await screen.findAllByRole("row");
     expect(rows[1]).toHaveTextContent("Alpha");
@@ -312,33 +312,33 @@ describe("DashboardPage", () => {
     });
 
     await waitFor(() => {
-      const rowOrder = Array.from(document.querySelectorAll<HTMLElement>('[data-fiche-id]'))
-        .map((row) => row.getAttribute("data-fiche-id"))
-        .slice(0, fiches.length);
+      const rowOrder = Array.from(document.querySelectorAll<HTMLElement>('[data-automation-id]'))
+        .map((row) => row.getAttribute("data-automation-id"))
+        .slice(0, automations.length);
       expect(rowOrder).toEqual(["2", "1"]);
     });
 
     fireEvent.click(statusHeader);
 
     await waitFor(() => {
-      const rowOrder = Array.from(document.querySelectorAll<HTMLElement>('[data-fiche-id]'))
-        .map((row) => row.getAttribute("data-fiche-id"))
-        .slice(0, fiches.length);
+      const rowOrder = Array.from(document.querySelectorAll<HTMLElement>('[data-automation-id]'))
+        .map((row) => row.getAttribute("data-automation-id"))
+        .slice(0, automations.length);
       expect(rowOrder).toEqual(["1", "2"]);
     });
   });
 
-  test("applies fiche status updates from websocket events", async () => {
-    const fiche = buildFiche({
+  test("applies automation status updates from websocket events", async () => {
+    const automation = buildAutomation({
       id: 42,
       name: "Speedy",
       status: "idle",
       owner_id: 9,
     });
 
-    renderDashboard([fiche]);
+    renderDashboard([automation]);
 
-    // Ensure fiche row rendered
+    // Ensure automation row rendered
     await screen.findByText("Speedy");
     const socket = mockSockets[0];
     expect(socket).toBeDefined();
@@ -351,7 +351,7 @@ describe("DashboardPage", () => {
       expect(socket.send).toHaveBeenCalledWith(expect.stringContaining("\"type\":\"subscribe\""));
     });
 
-    const statusCell = document.querySelector<HTMLElement>('[data-fiche-id="42"] [data-label="Status"]');
+    const statusCell = document.querySelector<HTMLElement>('[data-automation-id="42"] [data-label="Status"]');
     expect(statusCell).not.toBeNull();
     if (!statusCell) {
       throw new Error("Status cell not found");

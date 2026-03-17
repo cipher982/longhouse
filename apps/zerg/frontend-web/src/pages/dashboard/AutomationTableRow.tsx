@@ -13,32 +13,36 @@ import {
   LoaderIcon,
   AlertTriangleIcon,
 } from "../../components/icons";
-import type { FicheSummary, Run } from "../../services/api";
+import type { AutomationSummary, Run } from "../../services/api";
 import { Table, Badge, IconButton } from "../../components/ui";
 import { formatDateTimeShort, formatDuration, capitaliseFirst, formatTokens, formatCost } from "./formatters";
 import { computeRunSuccessStats, determineLastRunIndicator } from "./sorting";
 
-interface FicheTableRowProps {
-  fiche: FicheSummary;
+interface AutomationTableRowProps {
+  automation: AutomationSummary;
   runs: Run[];
   includeOwner: boolean;
   isExpanded: boolean;
   isRunHistoryExpanded: boolean;
   isPendingRun: boolean;
   runsDataLoading: boolean;
-  editingFicheId: number | null;
+  editingAutomationId: number | null;
   editingName: string;
-  onToggleRow: (ficheId: number) => void;
-  onToggleRunHistory: (ficheId: number) => void;
-  onRunFiche: (event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, status: string) => void;
-  onChatFiche: (event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, ficheName: string) => void;
-  onDebugFiche: (event: ReactMouseEvent<HTMLButtonElement>, ficheId: number) => void;
-  onDeleteFiche: (event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, name: string) => void;
-  onStartEditingName: (ficheId: number, currentName: string) => void;
-  onSaveNameAndExit: (ficheId: number) => void;
+  onToggleRow: (automationId: number) => void;
+  onToggleRunHistory: (automationId: number) => void;
+  onRunAutomation: (event: ReactMouseEvent<HTMLButtonElement>, automationId: number, status: string) => void;
+  onChatAutomation: (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    automationId: number,
+    automationName: string
+  ) => void;
+  onDebugAutomation: (event: ReactMouseEvent<HTMLButtonElement>, automationId: number) => void;
+  onDeleteAutomation: (event: ReactMouseEvent<HTMLButtonElement>, automationId: number, name: string) => void;
+  onStartEditingName: (automationId: number, currentName: string) => void;
+  onSaveNameAndExit: (automationId: number) => void;
   onCancelEditing: () => void;
   onEditingNameChange: (name: string) => void;
-  onRunActionsClick: (ficheId: number, runId: number) => void;
+  onRunActionsClick: (automationId: number, runId: number) => void;
 }
 
 function formatStatus(status: string): ReactElement {
@@ -70,59 +74,61 @@ function formatRunStatusIcon(status: Run["status"]): ReactElement {
   }
 }
 
-function renderOwnerCell(fiche: FicheSummary) {
-  if (!fiche.owner) {
+function renderOwnerCell(automation: AutomationSummary) {
+  if (!automation.owner) {
     return <span>-</span>;
   }
 
-  const label = fiche.owner.display_name?.trim() || fiche.owner.email;
+  const label = automation.owner.display_name?.trim() || automation.owner.email;
   if (!label) {
     return <span>-</span>;
   }
 
   return (
     <div className="owner-wrapper">
-      {fiche.owner.avatar_url && <img src={fiche.owner.avatar_url} alt="" className="owner-avatar" aria-hidden="true" />}
+      {automation.owner.avatar_url && (
+        <img src={automation.owner.avatar_url} alt="" className="owner-avatar" aria-hidden="true" />
+      )}
       <span>{label}</span>
     </div>
   );
 }
 
-function FicheTableRowComponent({
-  fiche,
+function AutomationTableRowComponent({
+  automation,
   runs,
   includeOwner,
   isExpanded,
   isRunHistoryExpanded,
   isPendingRun,
   runsDataLoading,
-  editingFicheId,
+  editingAutomationId,
   editingName,
   onToggleRow,
   onToggleRunHistory,
-  onRunFiche,
-  onChatFiche,
-  onDebugFiche,
-  onDeleteFiche,
+  onRunAutomation,
+  onChatAutomation,
+  onDebugAutomation,
+  onDeleteAutomation,
   onStartEditingName,
   onSaveNameAndExit,
   onCancelEditing,
   onEditingNameChange,
   onRunActionsClick,
-}: FicheTableRowProps) {
+}: AutomationTableRowProps) {
   const successStats = computeRunSuccessStats(runs);
   const lastRunIndicator = determineLastRunIndicator(runs);
-  const isRunning = fiche.status === "running";
-  const createdDisplay = formatDateTimeShort(fiche.created_at ?? null);
-  const lastRunDisplay = formatDateTimeShort(fiche.last_run_at ?? null);
-  const nextRunDisplay = formatDateTimeShort(fiche.next_run_at ?? null);
+  const isRunning = automation.status === "running";
+  const createdDisplay = formatDateTimeShort(automation.created_at ?? null);
+  const lastRunDisplay = formatDateTimeShort(automation.last_run_at ?? null);
+  const nextRunDisplay = formatDateTimeShort(automation.next_run_at ?? null);
   const emptyColspan = includeOwner ? 8 : 7;
 
   const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
     const key = event.key;
     if (key === "Enter") {
       event.preventDefault();
-      onToggleRow(fiche.id);
+      onToggleRow(automation.id);
       return;
     }
 
@@ -136,7 +142,7 @@ function FicheTableRowComponent({
     if (!tbody) {
       return;
     }
-    const rows = Array.from(tbody.querySelectorAll<HTMLTableRowElement>("tr[data-fiche-id]"));
+    const rows = Array.from(tbody.querySelectorAll<HTMLTableRowElement>("tr[data-automation-id]"));
     const index = rows.indexOf(current);
     if (index === -1) {
       return;
@@ -148,22 +154,22 @@ function FicheTableRowComponent({
   return (
     <Fragment>
       <Table.Row
-        data-fiche-id={fiche.id}
-        className={clsx('fiche-row', fiche.status === "error" && "error-row")}
-        onClick={() => onToggleRow(fiche.id)}
+        data-automation-id={automation.id}
+        className={clsx('fiche-row', automation.status === "error" && "error-row")}
+        onClick={() => onToggleRow(automation.id)}
         onKeyDown={handleRowKeyDown}
       >
         <Table.Cell data-label="Name" className="name-cell">
-          {editingFicheId === fiche.id ? (
+          {editingAutomationId === automation.id ? (
             <input
               className="inline-edit-input"
               value={editingName}
               onChange={(e) => onEditingNameChange(e.target.value)}
-              onBlur={() => onSaveNameAndExit(fiche.id)}
+              onBlur={() => onSaveNameAndExit(automation.id)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.stopPropagation();
-                  onSaveNameAndExit(fiche.id);
+                  onSaveNameAndExit(automation.id);
                 }
                 if (e.key === "Escape") {
                   e.stopPropagation();
@@ -177,24 +183,24 @@ function FicheTableRowComponent({
           ) : (
             <span
               className="editable-name"
-              onClick={() => onStartEditingName(fiche.id, fiche.name)}
+              onClick={() => onStartEditingName(automation.id, automation.name)}
               title="Click to rename"
             >
-              {fiche.name}
+              {automation.name}
             </span>
           )}
         </Table.Cell>
         {includeOwner && (
           <Table.Cell className="owner-cell" data-label="Owner">
-            {renderOwnerCell(fiche)}
+            {renderOwnerCell(automation)}
           </Table.Cell>
         )}
         <Table.Cell data-label="Status">
-          <Badge variant={fiche.status === 'error' ? 'error' : fiche.status === 'running' || fiche.status === 'processing' ? 'warning' : 'success'}>
-            {formatStatus(fiche.status)}
+          <Badge variant={automation.status === 'error' ? 'error' : automation.status === 'running' || automation.status === 'processing' ? 'warning' : 'success'}>
+            {formatStatus(automation.status)}
           </Badge>
-          {fiche.last_error && fiche.last_error.trim() && (
-            <span className="info-icon" title={fiche.last_error}>
+          {automation.last_error && automation.last_error.trim() && (
+            <span className="info-icon" title={automation.last_error}>
               <InfoCircleIcon width={14} height={14} />
             </span>
           )}
@@ -216,34 +222,34 @@ function FicheTableRowComponent({
           <div className="actions-cell-inner">
             <IconButton
               className={clsx("run-btn", (isRunning || isPendingRun) && "disabled")}
-              data-testid={`run-fiche-${fiche.id}`}
+              data-testid={`run-automation-${automation.id}`}
               disabled={isRunning || isPendingRun}
-              title={isRunning ? "Fiche is already running" : "Run Fiche"}
-              onClick={(event) => onRunFiche(event, fiche.id, fiche.status)}
+              title={isRunning ? "Automation is already running" : "Run automation"}
+              onClick={(event) => onRunAutomation(event, automation.id, automation.status)}
             >
               <PlayIcon />
             </IconButton>
             <IconButton
               className="chat-btn"
-              data-testid={`chat-fiche-${fiche.id}`}
-              title="Chat with Fiche"
-              onClick={(event) => onChatFiche(event, fiche.id, fiche.name)}
+              data-testid={`chat-automation-${automation.id}`}
+              title="Open automation chat"
+              onClick={(event) => onChatAutomation(event, automation.id, automation.name)}
             >
               <MessageCircleIcon />
             </IconButton>
             <IconButton
               className="debug-btn"
-              data-testid={`debug-fiche-${fiche.id}`}
-              title="Debug / Info"
-              onClick={(event) => onDebugFiche(event, fiche.id)}
+              data-testid={`debug-automation-${automation.id}`}
+              title="Automation settings"
+              onClick={(event) => onDebugAutomation(event, automation.id)}
             >
               <SettingsIcon />
             </IconButton>
             <IconButton
               className="delete-btn"
-              data-testid={`delete-fiche-${fiche.id}`}
-              title="Delete Fiche"
-              onClick={(event) => onDeleteFiche(event, fiche.id, fiche.name)}
+              data-testid={`delete-automation-${automation.id}`}
+              title="Delete automation"
+              onClick={(event) => onDeleteAutomation(event, automation.id, automation.name)}
             >
               <TrashIcon />
             </IconButton>
@@ -251,7 +257,7 @@ function FicheTableRowComponent({
         </Table.Cell>
       </Table.Row>
       {isExpanded && (
-        <tr className="fiche-detail-row" key={`detail-${fiche.id}`}>
+        <tr className="fiche-detail-row" key={`detail-${automation.id}`}>
           <td colSpan={emptyColspan}>
             <div className="fiche-detail-container">
               {runsDataLoading && <span>Loading run history...</span>}
@@ -291,13 +297,13 @@ function FicheTableRowComponent({
                                 onClick={(event) => {
                                   event.preventDefault();
                                   event.stopPropagation();
-                                  onRunActionsClick(fiche.id, run.id);
+                                  onRunActionsClick(automation.id, run.id);
                                 }}
                                 onKeyDown={(event) => {
                                   if (event.key === "Enter" || event.key === " ") {
                                     event.preventDefault();
                                     event.stopPropagation();
-                                    onRunActionsClick(fiche.id, run.id);
+                                    onRunActionsClick(automation.id, run.id);
                                   }
                                 }}
                               >
@@ -315,7 +321,7 @@ function FicheTableRowComponent({
                       aria-expanded={isRunHistoryExpanded ? "true" : "false"}
                       onClick={(event) => {
                         event.preventDefault();
-                        onToggleRunHistory(fiche.id);
+                        onToggleRunHistory(automation.id);
                       }}
                     >
                       {isRunHistoryExpanded ? "Show less" : `Show all (${runs.length})`}
@@ -333,4 +339,4 @@ function FicheTableRowComponent({
 
 // Wrap with React.memo for performance optimization
 // The component will only re-render when its props change
-export const FicheTableRow = memo(FicheTableRowComponent);
+export const AutomationTableRow = memo(AutomationTableRowComponent);

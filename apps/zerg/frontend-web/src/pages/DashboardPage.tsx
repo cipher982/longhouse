@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
-  createAutomation,
-  deleteAutomation,
+  createAutomation as createAutomationRecord,
+  deleteAutomation as deleteAutomationRecord,
   fetchAutomationOverview,
-  runAutomation,
-  updateAutomation,
+  runAutomation as runAutomationTask,
+  updateAutomation as updateAutomationRecord,
   fetchModels,
   type Run,
   type AutomationSummary,
@@ -28,9 +28,9 @@ import {
   Spinner
 } from "../components/ui";
 import { useConfirm } from "../components/confirm";
-import { FicheTableRow } from "./dashboard/FicheTableRow";
-import { sortFiches, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type FicheRunsState } from "./dashboard/sorting";
-import { applyRunUpdate, applyFicheStateUpdate } from "./dashboard/websocketHandlers";
+import { AutomationTableRow } from "./dashboard/AutomationTableRow";
+import { sortAutomations, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type AutomationRunsState } from "./dashboard/sorting";
+import { applyRunUpdate, applyAutomationStateUpdate } from "./dashboard/websocketHandlers";
 
 // App logo (served from public folder)
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
@@ -67,22 +67,22 @@ export default function DashboardPage() {
   const confirm = useConfirm();
   const [scope, setScope] = useState<Scope>("my");
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => loadSortConfig());
-  const [expandedFicheId, setExpandedFicheId] = useState<number | null>(null);
+  const [expandedAutomationId, setExpandedAutomationId] = useState<number | null>(null);
   const dashboardQueryKey = useMemo(() => ["dashboard", scope, RUNS_LIMIT] as const, [scope]);
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
-  const [settingsFicheId, setSettingsFicheId] = useState<number | null>(null);
-  const [editingFicheId, setEditingFicheId] = useState<number | null>(null);
+  const [settingsAutomationId, setSettingsAutomationId] = useState<number | null>(null);
+  const [editingAutomationId, setEditingAutomationId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState<string>("");
 
   // WebSocket state - must be declared before useQuery to avoid reference errors
-  const subscribedFicheIdsRef = useRef<Set<number>>(new Set());
+  const subscribedAutomationIdsRef = useRef<Set<number>>(new Set());
   const [wsReconnectToken, setWsReconnectToken] = useState(0);
   const sendMessageRef = useRef<((message: any) => void) | null>(null);
   const messageIdCounterRef = useRef(0);
 
   // Track pending subscriptions to handle confirmations and timeouts
   // Don't mark as subscribed until we get subscribe_ack to enable automatic retry
-  const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number; ficheIds: number[] }>>(new Map());
+  const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number; automationIds: number[] }>>(new Map());
 
   // Generate unique message IDs to prevent collision
   const generateMessageId = useCallback(() => {
@@ -119,8 +119,8 @@ export default function DashboardPage() {
             pendingSubscriptionsRef.current.delete(messageId);
 
             if (message.type === "subscribe_ack") {
-              pending.ficheIds.forEach((ficheId) => {
-                subscribedFicheIdsRef.current.add(ficheId);
+              pending.automationIds.forEach((automationId) => {
+                subscribedAutomationIdsRef.current.add(automationId);
               });
             } else {
               console.error("[WS] Subscription failed for topics:", pending.topics);
@@ -142,7 +142,7 @@ export default function DashboardPage() {
       const eventType = message.type;
 
       if (isAutomationLifecycleEvent(eventType)) {
-        applyDashboardUpdate((current) => applyFicheStateUpdate(current, automationId, dataPayload));
+        applyDashboardUpdate((current) => applyAutomationStateUpdate(current, automationId, dataPayload));
         return;
       }
 
@@ -157,7 +157,7 @@ export default function DashboardPage() {
   const { connectionStatus, sendMessage } = useWebSocket(isAuthenticated, {
     onMessage: handleWebSocketMessage,
     onConnect: () => {
-      subscribedFicheIdsRef.current.clear();
+      subscribedAutomationIdsRef.current.clear();
       // Clear any pending subscriptions from previous connection
       pendingSubscriptionsRef.current.forEach((pending) => {
         clearTimeout(pending.timeoutId);
@@ -189,21 +189,21 @@ export default function DashboardPage() {
     refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
-  const fiches: AutomationSummary[] = useMemo(() => dashboardData?.fiches ?? [], [dashboardData]);
+  const automations: AutomationSummary[] = useMemo(() => dashboardData?.fiches ?? [], [dashboardData]);
 
-  const runsByFiche: FicheRunsState = useMemo(() => {
+  const runsByAutomation: AutomationRunsState = useMemo(() => {
     if (!dashboardData) {
       return {};
     }
 
-    const lookup: FicheRunsState = {};
+    const lookup: AutomationRunsState = {};
     for (const bundle of dashboardData.runs) {
       lookup[bundle.ficheId] = bundle.runs;
     }
 
-    for (const fiche of dashboardData.fiches) {
-      if (!lookup[fiche.id]) {
-        lookup[fiche.id] = [];
+    for (const automation of dashboardData.fiches) {
+      if (!lookup[automation.id]) {
+        lookup[automation.id] = [];
       }
     }
 
@@ -218,8 +218,8 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!isLoading) {
       document.body.setAttribute('data-ready', 'true');
-      // Dashboard is screenshot-ready as soon as it's interactive
-      // (fiches table is visible even if empty)
+      // Dashboard is screenshot-ready as soon as it's interactive.
+      // The automations table is visible even if empty.
       document.body.setAttribute('data-screenshot-ready', 'true');
     }
     return () => {
@@ -233,10 +233,10 @@ export default function DashboardPage() {
     sendMessageRef.current = sendMessage;
   }, [sendMessage]);
 
-  // Mutation for starting a fiche run (hybrid: optimistic + WebSocket)
+  // Mutation for starting an automation run (hybrid: optimistic + WebSocket)
   const startRunMutation = useMutation({
-    mutationFn: runAutomation,
-    onMutate: async (ficheId: number) => {
+    mutationFn: runAutomationTask,
+    onMutate: async (automationId: number) => {
       await queryClient.cancelQueries({ queryKey: dashboardQueryKey });
 
       const previousSnapshot = queryClient.getQueryData<AutomationOverviewSnapshot>(dashboardQueryKey);
@@ -249,21 +249,21 @@ export default function DashboardPage() {
         return {
           ...current,
           fiches: current.fiches.map((fiche) =>
-            fiche.id === ficheId ? { ...fiche, status: "running" as const } : fiche
+            fiche.id === automationId ? { ...fiche, status: "running" as const } : fiche
           ),
         };
       });
 
       return { previousSnapshot };
     },
-    onError: (err: Error, ficheId: number, context) => {
+    onError: (err: Error, automationId: number, context) => {
       if (context?.previousSnapshot) {
         queryClient.setQueryData(dashboardQueryKey, context.previousSnapshot);
       }
       console.error("Failed to start run:", err);
     },
-    onSettled: (_, __, ficheId) => {
-      dispatchDashboardEvent("run", ficheId);
+    onSettled: (_, __, automationId) => {
+      dispatchDashboardEvent("run", automationId);
     },
   });
 
@@ -283,14 +283,14 @@ export default function DashboardPage() {
   }, [error]);
 
   useEffect(() => {
-    if (expandedFicheId === null) {
+    if (expandedAutomationId === null) {
       return;
     }
-    if (fiches.some((fiche) => fiche.id === expandedFicheId)) {
+    if (automations.some((automation) => automation.id === expandedAutomationId)) {
       return;
     }
-    setExpandedFicheId(null);
-  }, [fiches, expandedFicheId]);
+    setExpandedAutomationId(null);
+  }, [automations, expandedAutomationId]);
 
   // Use unified WebSocket hook for real-time updates
   // Only connect when authenticated to avoid auth failure spam
@@ -302,27 +302,27 @@ export default function DashboardPage() {
       return;
     }
 
-    const activeIds = new Set(fiches.map((fiche) => fiche.id));
+    const activeIds = new Set(automations.map((automation) => automation.id));
 
-    // Find fiches that need subscription (not currently subscribed AND not pending)
-    const pendingFicheIds = new Set<number>();
+    // Find automations that need subscription (not currently subscribed AND not pending).
+    const pendingAutomationIds = new Set<number>();
     pendingSubscriptionsRef.current.forEach((pending) => {
-      pending.ficheIds.forEach((id) => pendingFicheIds.add(id));
+      pending.automationIds.forEach((id) => pendingAutomationIds.add(id));
     });
 
     const topicsToSubscribe: string[] = [];
-    const ficheIdsToSubscribe: number[] = [];
+    const automationIdsToSubscribe: number[] = [];
     for (const id of activeIds) {
-      if (!subscribedFicheIdsRef.current.has(id) && !pendingFicheIds.has(id)) {
+      if (!subscribedAutomationIdsRef.current.has(id) && !pendingAutomationIds.has(id)) {
         topicsToSubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${id}`);
-        ficheIdsToSubscribe.push(id);
+        automationIdsToSubscribe.push(id);
       }
     }
 
     const topicsToUnsubscribe: string[] = [];
-    for (const id of Array.from(subscribedFicheIdsRef.current)) {
+    for (const id of Array.from(subscribedAutomationIdsRef.current)) {
       if (!activeIds.has(id)) {
-        subscribedFicheIdsRef.current.delete(id);
+        subscribedAutomationIdsRef.current.delete(id);
         topicsToUnsubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${id}`);
       }
     }
@@ -345,7 +345,7 @@ export default function DashboardPage() {
       pendingSubscriptionsRef.current.set(messageId, {
         topics: topicsToSubscribe,
         timeoutId,
-        ficheIds: ficheIdsToSubscribe
+        automationIds: automationIdsToSubscribe
       });
 
       sendMessageRef.current?.(
@@ -359,31 +359,31 @@ export default function DashboardPage() {
         createEnvelope("unsubscribe", "system", { topics: topicsToUnsubscribe, message_id: unsubMsgId }, unsubMsgId),
       );
     }
-  }, [fiches, connectionStatus, isAuthenticated, wsReconnectToken, generateMessageId]);
+  }, [automations, connectionStatus, isAuthenticated, wsReconnectToken, generateMessageId]);
 
   useEffect(() => {
     if (isAuthenticated) {
       return;
     }
 
-    if (subscribedFicheIdsRef.current.size === 0) {
+    if (subscribedAutomationIdsRef.current.size === 0) {
       return;
     }
 
-    const topics = Array.from(subscribedFicheIdsRef.current).map((id) => `${AUTOMATION_TOPIC_PREFIX}${id}`);
+    const topics = Array.from(subscribedAutomationIdsRef.current).map((id) => `${AUTOMATION_TOPIC_PREFIX}${id}`);
     const unsubId = generateMessageId();
     sendMessageRef.current?.(
       createEnvelope("unsubscribe", "system", { topics, message_id: unsubId }, unsubId),
     );
-    subscribedFicheIdsRef.current.clear();
+    subscribedAutomationIdsRef.current.clear();
   }, [isAuthenticated, generateMessageId]);
 
-  // Cleanup effect - runs only on unmount to unsubscribe from all fiches
+  // Cleanup effect - runs only on unmount to unsubscribe from all automations
   /* eslint-disable react-hooks/exhaustive-deps -- Intentional: cleanup reads current values at unmount time */
   useEffect(() => {
     // Capture refs for cleanup (ESLint wants this pattern)
     const pendingSubscriptions = pendingSubscriptionsRef.current;
-    const subscribedFicheIds = subscribedFicheIdsRef.current;
+    const subscribedAutomationIds = subscribedAutomationIdsRef.current;
     const sendMessage = sendMessageRef.current;
     const msgId = generateMessageId; // Capture for cleanup
 
@@ -394,15 +394,15 @@ export default function DashboardPage() {
       });
       pendingSubscriptions.clear();
 
-      if (subscribedFicheIds.size === 0) {
+      if (subscribedAutomationIds.size === 0) {
         return;
       }
-      const topics = Array.from(subscribedFicheIds).map((id) => `${AUTOMATION_TOPIC_PREFIX}${id}`);
+      const topics = Array.from(subscribedAutomationIds).map((id) => `${AUTOMATION_TOPIC_PREFIX}${id}`);
       const cleanupMsgId = msgId();
       sendMessage?.(
         createEnvelope("unsubscribe", "system", { topics, message_id: cleanupMsgId }, cleanupMsgId),
       );
-      subscribedFicheIds.clear();
+      subscribedAutomationIds.clear();
     };
   }, []);
   /* eslint-enable react-hooks/exhaustive-deps */
@@ -410,14 +410,14 @@ export default function DashboardPage() {
   // Generate idempotency key per mutation to prevent double-creates
   const idempotencyKeyRef = useRef<string | null>(null);
 
-  const createFicheMutation = useMutation({
+  const createAutomationMutation = useMutation({
     mutationFn: async () => {
       // Generate fresh key for each create attempt
-      const key = `create-fiche-${Date.now()}-${Math.random()}`;
+      const key = `create-automation-${Date.now()}-${Math.random()}`;
       idempotencyKeyRef.current = key;
 
-      // Backend auto-generates name as "Fiche #<id>"
-      return createAutomation(
+      // Backend auto-generates a placeholder name.
+      return createAutomationRecord(
         {
           system_instructions: "You are a helpful AI assistant.",
           task_instructions: "Complete the given task.",
@@ -429,66 +429,66 @@ export default function DashboardPage() {
       );
     },
     onSuccess: () => {
-      // WebSocket will deliver the fiche with real name
+      // WebSocket will deliver the automation with its final name.
       queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
       idempotencyKeyRef.current = null; // Reset for next creation
     },
   });
 
-  // Delete fiche mutation
-  const deleteFicheMutation = useMutation({
-    mutationFn: deleteAutomation,
+  // Delete automation mutation
+  const deleteAutomationMutation = useMutation({
+    mutationFn: deleteAutomationRecord,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
     },
   });
 
   // Inline name editing handlers
-  function startEditingName(ficheId: number, currentName: string) {
-    setEditingFicheId(ficheId);
+  function startEditingName(automationId: number, currentName: string) {
+    setEditingAutomationId(automationId);
     setEditingName(currentName);
   }
 
-  async function saveNameAndExit(ficheId: number) {
+  async function saveNameAndExit(automationId: number) {
     if (!editingName.trim()) {
       // Don't allow empty names
       return;
     }
 
     try {
-      await updateAutomation(ficheId, { name: editingName });
+      await updateAutomationRecord(automationId, { name: editingName });
       queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
     } catch (error) {
       console.error("Failed to rename:", error);
     }
 
-    setEditingFicheId(null);
+    setEditingAutomationId(null);
     setEditingName("");
   }
 
   function cancelEditing() {
-    setEditingFicheId(null);
+    setEditingAutomationId(null);
     setEditingName("");
   }
 
-  const sortedFiches = useMemo(() => {
-    return sortFiches(fiches, runsByFiche, sortConfig);
-  }, [fiches, runsByFiche, sortConfig]);
+  const sortedAutomations = useMemo(() => {
+    return sortAutomations(automations, runsByAutomation, sortConfig);
+  }, [automations, runsByAutomation, sortConfig]);
 
   if (isLoading) {
     return (
       <div id="dashboard-container" className="dashboard-page">
         <EmptyState
           icon={<Spinner size="lg" />}
-          title="Loading fiches..."
-          description="Fetching your fiches."
+          title="Loading automations..."
+          description="Fetching your automations."
         />
       </div>
     );
   }
 
   if (error) {
-    const message = error instanceof Error ? error.message : "Failed to load fiches";
+    const message = error instanceof Error ? error.message : "Failed to load automations";
     return (
       <div id="dashboard-container" className="dashboard-page">
         <EmptyState
@@ -512,8 +512,8 @@ export default function DashboardPage() {
     <div id="dashboard-container" className="dashboard-page">
       <SectionHeader
         className="dashboard-hero"
-        title={scope === "all" ? "All fiches" : "My fiches"}
-        description="Monitor and manage your fiches."
+        title={scope === "all" ? "All automations" : "My automations"}
+        description="Monitor and manage your automations."
         actions={
           <div className="dashboard-actions">
             <div className="dashboard-actions__stats">
@@ -526,7 +526,7 @@ export default function DashboardPage() {
                     type="checkbox"
                     id="dashboard-scope-toggle"
                     data-testid="dashboard-scope-toggle"
-                    aria-label="Toggle between my fiches and all fiches"
+                    aria-label="Toggle between my automations and all automations"
                     checked={scope === "all"}
                     onChange={(e) => {
                       const newScope = e.target.checked ? "all" : "my";
@@ -538,16 +538,16 @@ export default function DashboardPage() {
               </div>
               <Button
                 variant="primary"
-                onClick={() => createFicheMutation.mutate()}
-                disabled={createFicheMutation.isPending}
-                data-testid="create-fiche-btn"
+                onClick={() => createAutomationMutation.mutate()}
+                disabled={createAutomationMutation.isPending}
+                data-testid="create-automation-btn"
               >
-                {createFicheMutation.isPending ? (
+                {createAutomationMutation.isPending ? (
                   <Spinner size="sm" />
                 ) : (
                   <>
                     <PlusIcon />
-                    Create Fiche
+                    Create Automation
                   </>
                 )}
               </Button>
@@ -570,25 +570,25 @@ export default function DashboardPage() {
               Actions
             </Table.Cell>
           </Table.Header>
-          <Table.Body id="fiches-table-body">
-            {sortedFiches.map((fiche) => (
-              <FicheTableRow
-                key={fiche.id}
-                fiche={fiche}
-                runs={runsByFiche[fiche.id] || []}
+          <Table.Body id="automations-table-body">
+            {sortedAutomations.map((automation) => (
+              <AutomationTableRow
+                key={automation.id}
+                automation={automation}
+                runs={runsByAutomation[automation.id] || []}
                 includeOwner={includeOwner}
-                isExpanded={expandedFicheId === fiche.id}
-                isRunHistoryExpanded={expandedRunHistory.has(fiche.id)}
-                isPendingRun={startRunMutation.isPending && startRunMutation.variables === fiche.id}
+                isExpanded={expandedAutomationId === automation.id}
+                isRunHistoryExpanded={expandedRunHistory.has(automation.id)}
+                isPendingRun={startRunMutation.isPending && startRunMutation.variables === automation.id}
                 runsDataLoading={runsDataLoading}
-                editingFicheId={editingFicheId}
+                editingAutomationId={editingAutomationId}
                 editingName={editingName}
-                onToggleRow={toggleFicheRow}
+                onToggleRow={toggleAutomationRow}
                 onToggleRunHistory={toggleRunHistory}
-                onRunFiche={handleStartRun}
-                onChatFiche={handleChatFiche}
-                onDebugFiche={handleDebugFiche}
-                onDeleteFiche={handleDeleteFiche}
+                onRunAutomation={handleStartRun}
+                onChatAutomation={handleChatAutomation}
+                onDebugAutomation={handleDebugAutomation}
+                onDeleteAutomation={handleDeleteAutomation}
                 onStartEditingName={startEditingName}
                 onSaveNameAndExit={saveNameAndExit}
                 onCancelEditing={cancelEditing}
@@ -596,13 +596,13 @@ export default function DashboardPage() {
                 onRunActionsClick={dispatchDashboardEvent.bind(null, "run-actions")}
               />
             ))}
-            {sortedFiches.length === 0 && (
+            {sortedAutomations.length === 0 && (
               <Table.Row className="fiches-empty-row">
                 <Table.Cell colSpan={emptyColspan} className="fiches-empty-cell">
                   <EmptyState
                     icon={<img src={appLogo} alt="Longhouse Logo" className="dashboard-empty-logo" />}
-                    title="No fiches found"
-                    description="Click 'Create Fiche' to get started."
+                    title="No automations found"
+                    description="Click 'Create Automation' to get started."
                   />
                 </Table.Cell>
               </Table.Row>
@@ -610,28 +610,28 @@ export default function DashboardPage() {
           </Table.Body>
         </Table>
       </div>
-      {settingsFicheId != null && (
+      {settingsAutomationId != null && (
         <AutomationSettingsDrawer
-          automationId={settingsFicheId}
-          isOpen={settingsFicheId != null}
-          onClose={() => setSettingsFicheId(null)}
+          automationId={settingsAutomationId}
+          isOpen={settingsAutomationId != null}
+          onClose={() => setSettingsAutomationId(null)}
         />
       )}
     </div>
   );
 
-  function toggleFicheRow(ficheId: number) {
-    setExpandedFicheId((prev) => (prev === ficheId ? null : ficheId));
+  function toggleAutomationRow(automationId: number) {
+    setExpandedAutomationId((prev) => (prev === automationId ? null : automationId));
   }
 
-  function toggleRunHistory(ficheId: number) {
+  function toggleRunHistory(automationId: number) {
     setExpandedRunHistory((prev) => {
       const next = new Set(prev);
-      if (next.has(ficheId)) {
-        next.delete(ficheId);
+      if (next.has(automationId)) {
+        next.delete(automationId);
       } else {
         next.clear();
-        next.add(ficheId);
+        next.add(automationId);
       }
       return next;
     });
@@ -646,30 +646,34 @@ export default function DashboardPage() {
     });
   }
 
-  function handleStartRun(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, status: string) {
+  function handleStartRun(event: ReactMouseEvent<HTMLButtonElement>, automationId: number, status: string) {
     event.stopPropagation();
     // Don't run if already running
     if (status === "running") {
       return;
     }
     // Use the optimistic mutation
-    startRunMutation.mutate(ficheId);
+    startRunMutation.mutate(automationId);
   }
 
-  function handleChatFiche(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, ficheName: string) {
+  function handleChatAutomation(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    automationId: number,
+    automationName: string
+  ) {
     event.stopPropagation();
-    navigate(`/fiche/${ficheId}/thread/?name=${encodeURIComponent(ficheName)}`);
+    navigate(`/fiche/${automationId}/thread/?name=${encodeURIComponent(automationName)}`);
   }
 
-  function handleDebugFiche(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number) {
+  function handleDebugAutomation(event: ReactMouseEvent<HTMLButtonElement>, automationId: number) {
     event.stopPropagation();
-    setSettingsFicheId(ficheId);
+    setSettingsAutomationId(automationId);
   }
 
-  async function handleDeleteFiche(event: ReactMouseEvent<HTMLButtonElement>, ficheId: number, name: string) {
+  async function handleDeleteAutomation(event: ReactMouseEvent<HTMLButtonElement>, automationId: number, name: string) {
     event.stopPropagation();
     const confirmed = await confirm({
-      title: `Delete fiche "${name}"?`,
+      title: `Delete automation "${name}"?`,
       message: 'This action cannot be undone. All associated data will be permanently removed.',
       confirmLabel: 'Delete',
       cancelLabel: 'Keep',
@@ -678,7 +682,7 @@ export default function DashboardPage() {
     if (!confirmed) {
       return;
     }
-    deleteFicheMutation.mutate(ficheId);
+    deleteAutomationMutation.mutate(automationId);
   }
 }
 
@@ -712,14 +716,14 @@ const renderHeaderCell: HeaderRenderer = (label, sortKey, sortConfig, onSort, so
 
 type DashboardEventType = "run" | "edit" | "debug" | "delete" | "run-actions";
 
-function dispatchDashboardEvent(type: DashboardEventType, ficheId: number, runId?: number) {
+function dispatchDashboardEvent(type: DashboardEventType, automationId: number, runId?: number) {
   if (typeof window === "undefined") {
     return;
   }
   const event = new CustomEvent("dashboard:event", {
     detail: {
       type,
-      ficheId,
+      automationId,
       runId,
     },
   });

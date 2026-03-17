@@ -1,14 +1,14 @@
-import type { DashboardSnapshot, FicheSummary, Run } from "../../services/api";
+import type { AutomationOverviewSnapshot, AutomationSummary, Run } from "../../services/api";
 
-export function applyFicheStateUpdate(
-  current: DashboardSnapshot,
-  ficheId: number,
+export function applyAutomationStateUpdate(
+  current: AutomationOverviewSnapshot,
+  automationId: number,
   dataPayload: Record<string, unknown>
-): DashboardSnapshot {
+): AutomationOverviewSnapshot {
   const validStatuses = ["idle", "running", "processing", "error"] as const;
   const statusValue =
     typeof dataPayload.status === "string" && validStatuses.includes(dataPayload.status as (typeof validStatuses)[number])
-      ? (dataPayload.status as FicheSummary["status"])
+      ? (dataPayload.status as AutomationSummary["status"])
       : undefined;
   const lastRunAtValue = typeof dataPayload.last_run_at === "string" ? dataPayload.last_run_at : undefined;
   const nextRunAtValue = typeof dataPayload.next_run_at === "string" ? dataPayload.next_run_at : undefined;
@@ -18,29 +18,29 @@ export function applyFicheStateUpdate(
       : undefined;
 
   let changed = false;
-  const nextFiches = current.fiches.map((fiche) => {
-    if (fiche.id !== ficheId) {
-      return fiche;
+  const nextAutomations = current.fiches.map((automation) => {
+    if (automation.id !== automationId) {
+      return automation;
     }
 
-    const nextFiche: FicheSummary = {
-      ...fiche,
-      status: statusValue ?? fiche.status,
-      last_run_at: lastRunAtValue ?? fiche.last_run_at,
-      next_run_at: nextRunAtValue ?? fiche.next_run_at,
-      last_error: lastErrorValue !== undefined ? lastErrorValue : fiche.last_error,
+    const nextAutomation: AutomationSummary = {
+      ...automation,
+      status: statusValue ?? automation.status,
+      last_run_at: lastRunAtValue ?? automation.last_run_at,
+      next_run_at: nextRunAtValue ?? automation.next_run_at,
+      last_error: lastErrorValue !== undefined ? lastErrorValue : automation.last_error,
     };
 
     if (
-      nextFiche.status !== fiche.status ||
-      nextFiche.last_run_at !== fiche.last_run_at ||
-      nextFiche.next_run_at !== fiche.next_run_at ||
-      nextFiche.last_error !== fiche.last_error
+      nextAutomation.status !== automation.status ||
+      nextAutomation.last_run_at !== automation.last_run_at ||
+      nextAutomation.next_run_at !== automation.next_run_at ||
+      nextAutomation.last_error !== automation.last_error
     ) {
       changed = true;
-      return nextFiche;
+      return nextAutomation;
     }
-    return fiche;
+    return automation;
   });
 
   if (!changed) {
@@ -49,15 +49,15 @@ export function applyFicheStateUpdate(
 
   return {
     ...current,
-    fiches: nextFiches,
+    fiches: nextAutomations,
   };
 }
 
 export function applyRunUpdate(
-  current: DashboardSnapshot,
-  ficheId: number,
+  current: AutomationOverviewSnapshot,
+  automationId: number,
   dataPayload: Record<string, unknown>
-): DashboardSnapshot {
+): AutomationOverviewSnapshot {
   const runIdCandidate = dataPayload.id ?? dataPayload.run_id;
   const runId = typeof runIdCandidate === "number" ? runIdCandidate : null;
   if (runId == null) {
@@ -68,11 +68,11 @@ export function applyRunUpdate(
     typeof dataPayload.thread_id === "number" ? (dataPayload.thread_id as number) : undefined;
 
   const runBundles = current.runs.slice();
-  let bundleIndex = runBundles.findIndex((bundle) => bundle.ficheId === ficheId);
+  let bundleIndex = runBundles.findIndex((bundle) => bundle.ficheId === automationId);
   let runsChanged = false;
 
   if (bundleIndex === -1) {
-    runBundles.push({ ficheId, runs: [] });
+    runBundles.push({ ficheId: automationId, runs: [] });
     bundleIndex = runBundles.length - 1;
     runsChanged = true;
   }
@@ -89,7 +89,7 @@ export function applyRunUpdate(
 
     const newRun: Run = {
       id: runId,
-      fiche_id: ficheId,
+      fiche_id: automationId,
       thread_id: threadId,
       status:
         typeof dataPayload.status === "string"
@@ -170,44 +170,45 @@ export function applyRunUpdate(
 
   if (runsChanged) {
     runBundles[bundleIndex] = {
-      ficheId,
+      ficheId: automationId,
       runs: nextRuns,
     };
   }
 
-  let fichesChanged = false;
-  const validFicheStatuses = ["idle", "running", "processing", "error"] as const;
-  const updatedFiches = current.fiches.map((fiche) => {
-    if (fiche.id !== ficheId) {
-      return fiche;
+  let automationsChanged = false;
+  const validAutomationStatuses = ["idle", "running", "processing", "error"] as const;
+  const updatedAutomations = current.fiches.map((automation) => {
+    if (automation.id !== automationId) {
+      return automation;
     }
 
     const statusValue =
-      typeof dataPayload.status === "string" && validFicheStatuses.includes(dataPayload.status as (typeof validFicheStatuses)[number])
-        ? (dataPayload.status as FicheSummary["status"])
-        : fiche.status;
+      typeof dataPayload.status === "string" &&
+      validAutomationStatuses.includes(dataPayload.status as (typeof validAutomationStatuses)[number])
+        ? (dataPayload.status as AutomationSummary["status"])
+        : automation.status;
     const lastRunValue =
-      typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : fiche.last_run_at;
+      typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : automation.last_run_at;
 
-    if (statusValue === fiche.status && lastRunValue === fiche.last_run_at) {
-      return fiche;
+    if (statusValue === automation.status && lastRunValue === automation.last_run_at) {
+      return automation;
     }
 
-    fichesChanged = true;
+    automationsChanged = true;
     return {
-      ...fiche,
+      ...automation,
       status: statusValue,
       last_run_at: lastRunValue,
     };
   });
 
-  if (!runsChanged && !fichesChanged) {
+  if (!runsChanged && !automationsChanged) {
     return current;
   }
 
   return {
     ...current,
-    fiches: fichesChanged ? updatedFiches : current.fiches,
+    fiches: automationsChanged ? updatedAutomations : current.fiches,
     runs: runsChanged ? runBundles : current.runs,
   };
 }
