@@ -2123,6 +2123,29 @@ Make `model` an explicit override only, not a forced default. New execution logi
 
 ---
 
+## [Refactor][Product] Canonicalize Automation Public Surface
+
+**Status (2026-03-17):** Shipped.
+
+**Goal:** Make `automation` the canonical product/API/client noun without doing a risky storage rename in the same tranche.
+
+**Done when:**
+- `/api/automations` exists for the top-level list/create/read/update/task/snapshot surface while `/api/fiches` stays as compatibility
+- Frontend shared API exports `automations` as the canonical module and keeps `fiches` as compatibility only
+- Dashboard and its focused tests consume automation-named client helpers/types instead of the fiche names
+- Fast verification covers both the new backend alias route and the renamed frontend consumer surface
+
+- [x] Add `/api/automations` alias for the top-level automation CRUD/task/snapshot surface
+- [x] Add `src/services/api/automations.ts` as the canonical frontend module and demote `fiches.ts` to compatibility
+- [x] Move dashboard-facing consumers/tests onto automation-named API helpers and type aliases
+- [x] Verify with `make generate-sdk`, `make test-frontend-unit`, and `make test`
+
+Notes:
+- 2026-03-17: Keep this slice intentionally narrow. Nested runs/connectors/MCP endpoints can stay on `/fiches/...` for now; move them in the follow-up route/event rename tranche.
+- 2026-03-17: Landed `/api/automations` for the top-level CRUD/task/dashboard surface, added `src/services/api/automations.ts` as the canonical frontend module, demoted `fiches.ts` to compatibility re-exports, and moved the dashboard page/tests to automation-named client helpers and aliases. Verification passed via `make generate-sdk`, `make test-frontend-unit`, and `make test`.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

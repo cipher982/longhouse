@@ -3,7 +3,7 @@ export * from "./base";
 export * from "./auth";
 export * from "./types";
 export * from "./conversations";
-export * from "./fiches";
+export * from "./automations";
 export * from "./threads";
 export * from "./models";
 export * from "./connectors";

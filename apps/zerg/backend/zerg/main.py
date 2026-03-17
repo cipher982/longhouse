@@ -50,6 +50,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from zerg.constants import AUTOMATIONS_PREFIX
 from zerg.constants import FICHES_PREFIX
 from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
@@ -1017,6 +1018,7 @@ app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 # Include API routers on the api_app sub-application (mounted at /api).
 # Routers that previously used API_PREFIX ("/api") now use no prefix or their
 # relative sub-prefix since the /api mount point handles the top-level prefix.
+api_app.include_router(fiches_router, prefix=AUTOMATIONS_PREFIX)
 api_app.include_router(fiches_router, prefix=FICHES_PREFIX)
 api_app.include_router(mcp_servers_router)  # MCP servers nested under fiches
 api_app.include_router(threads_router, prefix=THREADS_PREFIX)

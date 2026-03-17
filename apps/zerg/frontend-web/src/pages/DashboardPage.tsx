@@ -2,16 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
-  fetchDashboardSnapshot,
-  runFiche,
-  updateFiche,
+  createAutomation,
+  deleteAutomation,
+  fetchAutomationOverview,
+  runAutomation,
+  updateAutomation,
   fetchModels,
   type Run,
-  type FicheSummary,
-  type DashboardSnapshot,
+  type AutomationSummary,
+  type AutomationOverviewSnapshot,
   type ModelConfig,
 } from "../services/api";
-import { buildUrl } from "../services/api";
 import { ConnectionStatus, createEnvelope, useWebSocket } from "../lib/useWebSocket";
 import { DEFAULT_TEXT_MODEL } from "../oikos/core/model-config";
 import { useAuth } from "../lib/auth";
@@ -69,8 +70,8 @@ export default function DashboardPage() {
   }, []);
 
   const applyDashboardUpdate = useCallback(
-    (updater: (current: DashboardSnapshot) => DashboardSnapshot) => {
-      queryClient.setQueryData<DashboardSnapshot>(dashboardQueryKey, (current) => {
+    (updater: (current: AutomationOverviewSnapshot) => AutomationOverviewSnapshot) => {
+      queryClient.setQueryData<AutomationOverviewSnapshot>(dashboardQueryKey, (current) => {
         if (!current) {
           return current;
         }
@@ -166,13 +167,13 @@ export default function DashboardPage() {
     data: dashboardData,
     isLoading,
     error,
-  } = useQuery<DashboardSnapshot>({
+  } = useQuery<AutomationOverviewSnapshot>({
     queryKey: dashboardQueryKey,
-    queryFn: () => fetchDashboardSnapshot({ scope, runsLimit: RUNS_LIMIT }),
+    queryFn: () => fetchAutomationOverview({ scope, runsLimit: RUNS_LIMIT }),
     refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
-  const fiches: FicheSummary[] = useMemo(() => dashboardData?.fiches ?? [], [dashboardData]);
+  const fiches: AutomationSummary[] = useMemo(() => dashboardData?.fiches ?? [], [dashboardData]);
 
   const runsByFiche: FicheRunsState = useMemo(() => {
     if (!dashboardData) {
@@ -218,13 +219,13 @@ export default function DashboardPage() {
 
   // Mutation for starting a fiche run (hybrid: optimistic + WebSocket)
   const startRunMutation = useMutation({
-    mutationFn: runFiche,
+    mutationFn: runAutomation,
     onMutate: async (ficheId: number) => {
       await queryClient.cancelQueries({ queryKey: dashboardQueryKey });
 
-      const previousSnapshot = queryClient.getQueryData<DashboardSnapshot>(dashboardQueryKey);
+      const previousSnapshot = queryClient.getQueryData<AutomationOverviewSnapshot>(dashboardQueryKey);
 
-      queryClient.setQueryData<DashboardSnapshot>(dashboardQueryKey, (current) => {
+      queryClient.setQueryData<AutomationOverviewSnapshot>(dashboardQueryKey, (current) => {
         if (!current) {
           return current;
         }
@@ -400,25 +401,16 @@ export default function DashboardPage() {
       idempotencyKeyRef.current = key;
 
       // Backend auto-generates name as "Fiche #<id>"
-      const response = await fetch(buildUrl("/fiches"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": key,
-        },
-        credentials: 'include', // Cookie auth
-        body: JSON.stringify({
+      return createAutomation(
+        {
           system_instructions: "You are a helpful AI assistant.",
           task_instructions: "Complete the given task.",
           model: defaultModel,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to create fiche: ${response.status}`);
-      }
-
-      return response.json();
+        },
+        {
+          idempotencyKey: key,
+        }
+      );
     },
     onSuccess: () => {
       // WebSocket will deliver the fiche with real name
@@ -429,14 +421,7 @@ export default function DashboardPage() {
 
   // Delete fiche mutation
   const deleteFicheMutation = useMutation({
-    mutationFn: async (ficheId: number) => {
-      const response = await fetch(buildUrl(`/fiches/${ficheId}`), {
-        method: "DELETE",
-        credentials: 'include', // Cookie auth
-      });
-      if (!response.ok) throw new Error("Delete failed");
-      return response;
-    },
+    mutationFn: deleteAutomation,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
     },
@@ -455,7 +440,7 @@ export default function DashboardPage() {
     }
 
     try {
-      await updateFiche(ficheId, { name: editingName });
+      await updateAutomation(ficheId, { name: editingName });
       queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
     } catch (error) {
       console.error("Failed to rename:", error);

@@ -60,6 +60,12 @@ export async function deleteFicheConnector(
   });
 }
 
+export const fetchAutomationConnectors = fetchFicheConnectors;
+export const configureAutomationConnector = configureFicheConnector;
+export const testAutomationConnectorBeforeSave = testFicheConnectorBeforeSave;
+export const testAutomationConnector = testFicheConnector;
+export const deleteAutomationConnector = deleteFicheConnector;
+
 // Account-level connectors
 export async function fetchAccountConnectors(): Promise<AccountConnectorStatus[]> {
   return request<AccountConnectorStatus[]>(`/account/connectors/`);
