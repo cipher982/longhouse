@@ -119,7 +119,7 @@ def test_emit_job_run_persists_record(tmp_path):
     with patch("zerg.database.db_session", _mock_db_session(SessionLocal)):
         from zerg.jobs.ops_db import emit_job_run
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             emit_job_run(
                 job_id="test-job",
                 status="success",
@@ -153,7 +153,7 @@ def test_emit_job_run_stores_error(tmp_path):
     with patch("zerg.database.db_session", _mock_db_session(SessionLocal)):
         from zerg.jobs.ops_db import emit_job_run
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             emit_job_run(
                 job_id="failing-job",
                 status="failure",
@@ -179,7 +179,7 @@ def test_emit_job_run_nonfatal_on_db_error():
         from zerg.jobs.ops_db import emit_job_run
 
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             emit_job_run(
                 job_id="test",
                 status="failure",
@@ -197,7 +197,7 @@ def test_emit_job_run_metadata_combined(tmp_path):
     with patch("zerg.database.db_session", _mock_db_session(SessionLocal)):
         from zerg.jobs.ops_db import emit_job_run
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             emit_job_run(
                 job_id="meta-job",
                 status="success",
