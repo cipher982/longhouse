@@ -793,6 +793,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                             WHEN COALESCE(TRIM(availability_policy), '') != '' THEN availability_policy
                             WHEN json_extract(runner_metadata, '$.availability_policy') IN ('always_on', 'on_demand', 'ephemeral')
                                 THEN json_extract(runner_metadata, '$.availability_policy')
+                            WHEN name LIKE 'lh-vm-canary-%' THEN 'ephemeral'
                             WHEN json_extract(runner_metadata, '$.install_mode') = 'desktop' THEN 'on_demand'
                             ELSE 'always_on'
                         END

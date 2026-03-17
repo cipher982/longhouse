@@ -124,6 +124,7 @@ run_host_action() {
       "VM_DISK_GB=$RUNNER_VM_DISK_GB"
       "VM_WAIT_TIMEOUT=$RUNNER_VM_WAIT_TIMEOUT"
       "RUNNER_INSTALL_MODE=server"
+      "RUNNER_AVAILABILITY_POLICY=ephemeral"
       "KEEP_VM=$KEEP_VM"
       "LONGHOUSE_URL=$LONGHOUSE_URL"
     )
@@ -146,6 +147,7 @@ run_host_action() {
       "VM_DISK_GB=$(printf '%q' "$RUNNER_VM_DISK_GB")"
       "VM_WAIT_TIMEOUT=$(printf '%q' "$RUNNER_VM_WAIT_TIMEOUT")"
       "RUNNER_INSTALL_MODE=server"
+      "RUNNER_AVAILABILITY_POLICY=ephemeral"
       "KEEP_VM=$(printf '%q' "$KEEP_VM")"
       "LONGHOUSE_URL=$(printf '%q' "$LONGHOUSE_URL")"
     )
