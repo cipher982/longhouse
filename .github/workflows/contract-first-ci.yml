@@ -75,6 +75,9 @@ jobs:
     - name: Run Install-Runner Tests
       run: make test-install-runner
 
+    - name: Run Hosted-Instance Helper Tests
+      run: make test-hosted-instance
+
   frontend-tests:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: cube-fast

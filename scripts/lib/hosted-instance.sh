@@ -344,6 +344,45 @@ print(token)
 PY
 }
 
+_lh_hosted_parse_access_token() {
+  local response_file="$1"
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+
+  "$python_bin" - "$response_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+token = payload.get("access_token")
+if not token:
+    sys.exit(1)
+print(token)
+PY
+}
+
+_lh_hosted_parse_device_token_payload() {
+  local response_file="$1"
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+
+  "$python_bin" - "$response_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+token_id = payload.get("id")
+token = payload.get("token")
+if not token_id or not token:
+    sys.exit(1)
+print(f"{token_id}\t{token}")
+PY
+}
+
 lh_hosted_issue_login_token() {
   local instance_id="${1:-${LH_INSTANCE_ID:-}}"
   local response_file=""
@@ -377,6 +416,111 @@ lh_hosted_issue_login_token() {
   }
   rm -f "$response_file"
   printf '%s\n' "$token"
+}
+
+lh_hosted_exchange_login_token() {
+  local token="$1"
+  local instance_url="${2:-${LH_INSTANCE_URL:-}}"
+  local response_file=""
+  local http_code=""
+  local access_token=""
+  local payload=""
+
+  if [[ -z "$token" || -z "$instance_url" ]]; then
+    echo "Usage: lh_hosted_exchange_login_token <token> [instance_url]" >&2
+    return 1
+  fi
+
+  payload="$(_lh_hosted_json_object token "$token")" || return 1
+  response_file="$(mktemp)"
+  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "${instance_url%/}/api/auth/accept-token")"
+
+  if [[ "$http_code" != "200" ]]; then
+    echo "Instance rejected login token at ${instance_url} (HTTP ${http_code})" >&2
+    cat "$response_file" >&2
+    rm -f "$response_file"
+    return 1
+  fi
+
+  access_token="$(_lh_hosted_parse_access_token "$response_file")" || {
+    echo "Accept-token response missing access_token for instance ${instance_url}" >&2
+    rm -f "$response_file"
+    return 1
+  }
+
+  rm -f "$response_file"
+  printf '%s\n' "$access_token"
+}
+
+lh_hosted_create_device_token() {
+  local access_token="$1"
+  local api_url="$2"
+  local device_id="${3:-hosted-smoke-$(date +%Y%m%d-%H%M%S)-$RANDOM}"
+  local response_file=""
+  local http_code=""
+  local payload=""
+  local parsed=""
+
+  if [[ -z "$access_token" || -z "$api_url" ]]; then
+    echo "Usage: lh_hosted_create_device_token <access_token> <api_url> [device_id]" >&2
+    return 1
+  fi
+
+  payload="$(_lh_hosted_json_object device_id "$device_id")" || return 1
+  response_file="$(mktemp)"
+  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+    -X POST \
+    -H "Authorization: Bearer ${access_token}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "${api_url%/}/api/devices/tokens")"
+
+  if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
+    echo "Failed to create device token at ${api_url} (HTTP ${http_code})" >&2
+    cat "$response_file" >&2
+    rm -f "$response_file"
+    return 1
+  fi
+
+  parsed="$(_lh_hosted_parse_device_token_payload "$response_file")" || {
+    echo "Device-token response missing id/token for ${device_id}" >&2
+    rm -f "$response_file"
+    return 1
+  }
+
+  rm -f "$response_file"
+  printf '%s\n' "$parsed"
+}
+
+lh_hosted_revoke_device_token() {
+  local access_token="$1"
+  local token_id="$2"
+  local api_url="$3"
+  local response_file=""
+  local http_code=""
+
+  if [[ -z "$access_token" || -z "$token_id" || -z "$api_url" ]]; then
+    echo "Usage: lh_hosted_revoke_device_token <access_token> <token_id> <api_url>" >&2
+    return 1
+  fi
+
+  response_file="$(mktemp)"
+  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+    -X DELETE \
+    -H "Authorization: Bearer ${access_token}" \
+    "${api_url%/}/api/devices/tokens/${token_id}")"
+
+  if [[ "$http_code" != "200" && "$http_code" != "204" ]]; then
+    echo "Failed to revoke device token ${token_id} at ${api_url} (HTTP ${http_code})" >&2
+    cat "$response_file" >&2
+    rm -f "$response_file"
+    return 1
+  fi
+
+  rm -f "$response_file"
 }
 
 lh_hosted_accept_login_token() {

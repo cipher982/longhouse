@@ -36,4 +36,25 @@ if [[ "$json_payload" != '{"email":"quote\"@example.com","subdomain":"demo\\slas
   exit 1
 fi
 
+temp_json="$(mktemp)"
+trap 'rm -f "$temp_json"' EXIT
+
+cat >"$temp_json" <<'JSON'
+{"access_token":"access-123"}
+JSON
+
+if [[ "$(_lh_hosted_parse_access_token "$temp_json")" != "access-123" ]]; then
+  echo "Expected access-token parser to read access_token payload"
+  exit 1
+fi
+
+cat >"$temp_json" <<'JSON'
+{"id":"device-token-id","token":"zdt_smoke"}
+JSON
+
+if [[ "$(_lh_hosted_parse_device_token_payload "$temp_json")" != $'device-token-id\tzdt_smoke' ]]; then
+  echo "Expected device-token parser to return token id and token"
+  exit 1
+fi
+
 echo "hosted-instance auth tests passed"
