@@ -183,6 +183,33 @@ Notes:
 - 2026-03-17: Hosted `/api/agents/insights` now returns `124` rows by default vs `128` with `include_system=true`, confirming that 4 backfilled `system` rows are hidden from normal reads on `david010`.
 - Spec: `docs/specs/insight-origin-filtering.md`
 
+## [Launch][Product][Tech Debt] Finish the continuity-memory boundary split (size: 4)
+
+Status (2026-03-17): In progress. The product boundary is clearer now, but it is not finished: ops alerts are still stored in `insights`, proposals still leak into briefings, and the insight corpus still lacks a small curation surface.
+
+**Goal:** Keep only archive + curated continuity memory + briefings in the Longhouse core loop, while moving ops alerts to reliability and demoting reflection/proposals to internal admin tooling.
+
+**Done when:**
+- stale-agent and ingest-health stop writing `Insight` rows
+- tenant ops alerts are visible via a dedicated incident/reliability path instead of insight queries
+- briefings contain only recent session summaries plus curated gotchas
+- approved proposals no longer appear in briefing context and proposals are no longer part of the normal product surface
+- browser users can inspect and archive/unarchive insights without touching SQLite directly
+- docs and product copy describe insights as continuity memory, not a separate product
+
+- [ ] Write and commit the boundary spec + task checklist
+- [ ] Add a tenant-local incident path and repoint ops alert writers away from `Insight`
+- [ ] Remove proposal data from briefing assembly and hide/remove the proposals surface
+- [ ] Add minimal browser insight curation with archive/unarchive
+- [ ] Verify locally, ship, and re-run hosted QA
+
+Notes:
+- 2026-03-17: This is a product-boundary cleanup, not a push to make reflection/proposals bigger.
+- 2026-03-17: The thin Longhouse-native core is sessions/search/recall, briefings, and curated insights. Ops monitoring and planning artifacts should sit adjacent to that core, not inside it.
+- 2026-03-17: Keep reflection manual/admin-only while this lands; do not revive unattended reflection before the boundary is clean.
+- Spec: `docs/specs/continuity-memory-boundary.md`
+- Tasks: `docs/tasks/continuity-memory-boundary.md`
+
 ## [Product][Infra][QA/Test] Prove unattended runner auto-update on a real canary (size: 2)
 
 Status (2026-03-17): Done. `runner-v0.1.7` is published with signed update metadata, the hosted backend advertises it as latest, the full personal fleet is current on the managed install layout, and `slim` proved unattended `apply` by upgrading itself from `0.1.6` to `0.1.7`.
