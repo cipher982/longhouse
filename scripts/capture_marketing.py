@@ -55,7 +55,9 @@ def resolve_url_templates(url: str, base_url: str) -> str:
     {featured_session_id} picks the completed session with the most tool_calls
     — better for marketing as it shows a dense, interesting event timeline.
     """
-    api_url = base_url.replace("://localhost:47200", "://localhost:47300")
+    # Screenshot base URLs are UI origins with /api available via the same host
+    # (Vite proxy in dev, nginx in demo/prod-like capture flows).
+    api_url = base_url
 
     if "{featured_session_id}" in url:
         try:
