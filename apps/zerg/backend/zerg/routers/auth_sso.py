@@ -29,11 +29,8 @@ from zerg.services import sso_keys as sso_keys_service
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/accept-token", response_model=TokenOut)
-def accept_token(response: Response, body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:
-    """Accept a JWT token from cross-subdomain auth redirect."""
-    token = body.get("token")
-    if not token or not isinstance(token, str):
+def _accept_token(response: Response, token: str, db: Session) -> TokenOut:
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="token must be provided",
@@ -123,11 +120,22 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
     return TokenOut(access_token=access_token, expires_in=expires_in)
 
 
-@router.get("/sso")
-def sso_redirect(token: str, response: Response, db: Session = Depends(get_db)):
-    """Cross-subdomain SSO: accept token via URL param, set cookie, redirect."""
-    accept_token(response, {"token": token}, db)
+@router.post("/accept-token", response_model=TokenOut)
+def accept_token(response: Response, body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:
+    """Accept a JWT token from cross-subdomain auth redirect."""
+    token = body.get("token")
+    if not token or not isinstance(token, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="token must be provided",
+        )
+    return _accept_token(response, token, db)
 
+
+@router.get("/accept-token")
+def accept_token_redirect(token: str, response: Response, db: Session = Depends(get_db)):
+    """Accept a hosted login token, set the cookie, and continue to the app."""
+    _accept_token(response, token, db)
     redirect = RedirectResponse("/timeline", status_code=302)
     for header_name, header_value in response.headers.items():
         if header_name.lower() == "set-cookie":
@@ -135,4 +143,4 @@ def sso_redirect(token: str, response: Response, db: Session = Depends(get_db)):
     return redirect
 
 
-__all__ = ["accept_token", "router", "sso_redirect"]
+__all__ = ["accept_token", "accept_token_redirect", "router"]

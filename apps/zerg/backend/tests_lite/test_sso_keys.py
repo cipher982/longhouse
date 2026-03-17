@@ -345,6 +345,31 @@ def test_accept_token_accepts_correct_instance_claim(tmp_path):
     cleanup()
 
 
+def test_accept_token_get_redirect_sets_cookie_and_redirects(tmp_path):
+    """GET /auth/accept-token should set the session cookie and redirect to /timeline."""
+    from fastapi.testclient import TestClient
+
+    app, cleanup = _setup_test_db(tmp_path)
+    secret = "test-secret"
+
+    token = _make_jwt(
+        {"sub": "99", "email": "alice@example.com", "instance": "alice", "exp": int(time.time()) + 300},
+        secret,
+    )
+
+    with (
+        patch("zerg.services.sso_keys.get_sso_keys", return_value=[secret]),
+        patch.dict("os.environ", {"INSTANCE_ID": "alice"}),
+    ):
+        client = TestClient(app)
+        resp = client.get("/auth/accept-token", params={"token": token}, follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/timeline"
+    assert "longhouse_session=" in resp.headers.get("set-cookie", "")
+    cleanup()
+
+
 def test_accept_token_accepts_no_instance_claim(tmp_path):
     """Token without instance claim should be accepted (backward compat)."""
     from fastapi.testclient import TestClient
@@ -420,6 +445,7 @@ def test_auth_methods_returns_sso_when_cp_url_set():
     data = resp.json()
     assert data["sso"] is True
     assert data["sso_url"] == "https://control.longhouse.ai"
+    assert data["sso_login_url"] == "https://control.longhouse.ai/dashboard/open-instance"
     assert data["google"] is False
     assert data["password"] is False
     assert data["gmail_ready"] is False
@@ -446,6 +472,7 @@ def test_auth_methods_hide_google_when_control_plane_is_enabled():
     assert resp.status_code == 200
     data = resp.json()
     assert data["sso"] is True
+    assert data["sso_login_url"] == "https://control.longhouse.ai/dashboard/open-instance"
     assert data["google"] is False
     assert data["gmail_ready"] is True
     assert data["gmail_setup_message"] is None
@@ -471,6 +498,7 @@ def test_auth_methods_report_missing_oss_gmail_setup():
     assert resp.status_code == 200
     data = resp.json()
     assert data["google"] is True
+    assert data["sso_login_url"] is None
     assert data["gmail_ready"] is False
     assert data["gmail_setup_message"] == (
         "This instance still needs BYO Google config before anyone can connect Gmail. "

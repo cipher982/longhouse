@@ -317,6 +317,7 @@ export interface AuthMethods {
   password: boolean;
   sso: boolean;
   sso_url: string | null;
+  sso_login_url?: string | null;
   gmail_ready?: boolean;
   gmail_setup_message?: string | null;
 }
@@ -331,12 +332,28 @@ export async function getAuthMethods(): Promise<AuthMethods> {
   try {
     const response = await fetch(`${config.apiBaseUrl}/auth/methods`);
     if (!response.ok) {
-      return { google: true, password: true, sso: false, sso_url: null, gmail_ready: true, gmail_setup_message: null };
+      return {
+        google: true,
+        password: true,
+        sso: false,
+        sso_url: null,
+        sso_login_url: null,
+        gmail_ready: true,
+        gmail_setup_message: null,
+      };
     }
     return response.json();
   } catch {
     // Default to showing both on network errors
-    return { google: true, password: true, sso: false, sso_url: null, gmail_ready: true, gmail_setup_message: null };
+    return {
+      google: true,
+      password: true,
+      sso: false,
+      sso_url: null,
+      sso_login_url: null,
+      gmail_ready: true,
+      gmail_setup_message: null,
+    };
   }
 }
 
@@ -403,9 +420,10 @@ function LoginOverlay({ clientId }: LoginOverlayProps) {
 
   // SSO-only: no local Google or password, redirect to control plane
   useEffect(() => {
-    if (authMethods && authMethods.sso && !authMethods.google && !authMethods.password && authMethods.sso_url) {
+    const hostedLoginUrl = authMethods?.sso_login_url || authMethods?.sso_url;
+    if (authMethods && authMethods.sso && !authMethods.google && !authMethods.password && hostedLoginUrl) {
       setSsoRedirecting(true);
-      window.location.href = authMethods.sso_url;
+      window.location.href = hostedLoginUrl;
     }
   }, [authMethods]);
 
@@ -463,6 +481,7 @@ function LoginOverlay({ clientId }: LoginOverlayProps) {
   const showGoogle = authMethods?.google ?? false;
   const showPassword = authMethods?.password ?? false;
   const showSso = authMethods?.sso && authMethods?.sso_url;
+  const hostedLoginUrl = authMethods?.sso_login_url || authMethods?.sso_url || null;
   const ssoBase = authMethods?.sso_url ? authMethods.sso_url.replace(/\/+$/, '') : null;
   const ssoHost = (() => {
     if (!ssoBase) return null;
@@ -513,7 +532,7 @@ function LoginOverlay({ clientId }: LoginOverlayProps) {
         {showSso && (
           <>
             <button
-              onClick={() => { window.location.href = authMethods!.sso_url!; }}
+              onClick={() => { window.location.href = hostedLoginUrl!; }}
               style={{
                 width: '100%',
                 padding: '0.75rem',

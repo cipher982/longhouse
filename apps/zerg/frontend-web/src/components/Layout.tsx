@@ -105,6 +105,7 @@ function WelcomeHeader() {
   const userInitials = getUserInitials(user);
 
   const controlPlaneBase = authMethods?.sso_url ? authMethods.sso_url.replace(/\/+$/, "") : null;
+  const controlPlaneLoginUrl = authMethods?.sso_login_url ?? null;
 
   const handleLogout = async () => {
     const confirmed = await confirm({
@@ -149,7 +150,7 @@ function WelcomeHeader() {
     closeUserMenu();
     await logout();
     if (controlPlaneBase) {
-      const returnTo = `${controlPlaneBase}/?switch=1`;
+      const returnTo = controlPlaneLoginUrl ?? `${controlPlaneBase}/?switch=1`;
       window.location.href = `${controlPlaneBase}/auth/logout?return_to=${encodeURIComponent(returnTo)}`;
     }
   };

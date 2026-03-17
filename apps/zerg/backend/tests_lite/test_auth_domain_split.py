@@ -31,7 +31,6 @@ def test_auth_router_aggregates_browser_sso_and_gmail_routes():
         "/auth/verify",
         "/auth/password",
         "/auth/accept-token",
-        "/auth/sso",
         "/auth/google/gmail/start",
         "/auth/google/gmail",
     } <= aggregate_paths

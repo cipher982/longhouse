@@ -126,9 +126,8 @@ function LandingPerfHud({
 }
 
 export default function LandingPage() {
-  const { isAuthenticated, isLoading, refreshAuth } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
-  const [isAcceptingToken, setIsAcceptingToken] = useState(false);
 
   const {
     fxEnabled,
@@ -142,40 +141,6 @@ export default function LandingPage() {
 
   // Enable normal document scrolling (app shell locks root by default)
   usePublicPageScroll();
-
-  // Handle auth token from URL parameter (for cross-domain auth redirects)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const authToken = params.get('auth_token');
-
-    if (!authToken) return;
-
-    setIsAcceptingToken(true);
-
-    // Call backend to validate token and set cookie
-    fetch(`${config.apiBaseUrl}/auth/accept-token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ token: authToken }),
-    })
-      .then(async (response) => {
-        if (response.ok) {
-          // Token accepted, cookie set - redirect to timeline
-          if (refreshAuth) await refreshAuth();
-          window.location.href = '/timeline';
-        } else {
-          console.error('Token acceptance failed:', await response.text());
-          params.delete('auth_token');
-          window.history.replaceState({}, '', window.location.pathname);
-          setIsAcceptingToken(false);
-        }
-      })
-      .catch((error) => {
-        console.error('Token acceptance error:', error);
-        setIsAcceptingToken(false);
-      });
-  }, [refreshAuth]);
 
   // Control global UI effects based on landing page effects
   useEffect(() => {
@@ -203,11 +168,10 @@ export default function LandingPage() {
   }, [isAuthenticated, isLoading, navigate]);
 
   // Show loading while checking auth or accepting token
-  if (isLoading || isAcceptingToken) {
+  if (isLoading) {
     return (
       <div className="landing-loading">
         <SwarmLogo size={64} className="landing-loading-logo" />
-        {isAcceptingToken && <p style={{ marginTop: '1rem', color: 'var(--color-text-secondary)' }}>Signing in...</p>}
       </div>
     );
   }

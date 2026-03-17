@@ -1592,33 +1592,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Accept Token Redirect
+         * @description Accept a hosted login token, set the cookie, and continue to the app.
+         */
+        get: operations["accept_token_redirect_auth_accept_token_get"];
         put?: never;
         /**
          * Accept Token
          * @description Accept a JWT token from cross-subdomain auth redirect.
          */
         post: operations["accept_token_auth_accept_token_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/auth/sso": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Sso Redirect
-         * @description Cross-subdomain SSO: accept token via URL param, set cookie, redirect.
-         */
-        get: operations["sso_redirect_auth_sso_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13120,6 +13104,38 @@ export interface operations {
             };
         };
     };
+    accept_token_redirect_auth_accept_token_get: {
+        parameters: {
+            query: {
+                token: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     accept_token_auth_accept_token_post: {
         parameters: {
             query?: {
@@ -13144,38 +13160,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TokenOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sso_redirect_auth_sso_get: {
-        parameters: {
-            query: {
-                token: string;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
