@@ -239,7 +239,7 @@ async def test_run_oikos_marks_shadow_alignment_more_conservative_when_notify_on
                 )
                 return [assistant]
 
-        monkeypatch.setattr("zerg.services.oikos_service.Runner", FakeRunner)
+        monkeypatch.setattr("zerg.services.oikos_service.RuntimeRunner", FakeRunner)
 
         service = OikosService(db)
         result = await service.run_oikos(
