@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> DeviceToken | None:
     """Verify the agents API token for write operations."""
+    settings = get_settings()
+    if settings.auth_disabled:
+        request.state.agents_rate_key = "auth-disabled"
+        return None
+
     provided_token = request.headers.get("X-Agents-Token")
     if not provided_token:
         raise HTTPException(

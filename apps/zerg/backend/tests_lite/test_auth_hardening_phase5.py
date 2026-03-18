@@ -26,7 +26,7 @@ def _make_db(tmp_path):
     return make_sessionmaker(engine)
 
 
-def test_agents_routes_require_device_token_even_when_auth_disabled(tmp_path):
+def test_agents_routes_allow_missing_device_token_when_auth_disabled(tmp_path):
     session_local = _make_db(tmp_path)
 
     def override_db():
@@ -38,8 +38,48 @@ def test_agents_routes_require_device_token_even_when_auth_disabled(tmp_path):
     try:
         client = TestClient(api_app)
         response = client.get("/agents/sessions")
-        assert response.status_code == 401
-        assert response.json()["detail"] == "Missing authentication - provide X-Agents-Token header"
+        assert response.status_code == 200
+        assert response.json()["total"] == 0
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_agents_ingest_allows_missing_device_token_when_auth_disabled(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    def override_db():
+        with session_local() as db:
+            yield db
+
+    api_app.dependency_overrides[get_db] = override_db
+
+    try:
+        client = TestClient(api_app)
+        response = client.post(
+            "/agents/ingest",
+            json={
+                "provider": "claude",
+                "environment": "development",
+                "project": "provider-smoke",
+                "device_id": "auth-disabled-dev",
+                "cwd": "/tmp/provider-smoke",
+                "started_at": "2026-03-18T00:00:00Z",
+                "events": [
+                    {
+                        "role": "user",
+                        "content_text": "seed",
+                        "timestamp": "2026-03-18T00:00:01Z",
+                        "source_path": "/tmp/provider-smoke.jsonl",
+                        "source_offset": 0,
+                        "raw_json": "{\"type\":\"user\",\"text\":\"seed\"}",
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["events_inserted"] == 1
     finally:
         api_app.dependency_overrides.clear()
 
