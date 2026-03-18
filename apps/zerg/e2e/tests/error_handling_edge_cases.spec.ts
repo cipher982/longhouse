@@ -24,7 +24,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 1: Invalid fiche creation - missing required fields
     console.log('📊 Test 1: Invalid fiche creation - missing fields');
     try {
-      const response = await request.post('/api/fiches', {
+      const response = await request.post('/api/automations', {
         headers: {
           'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
@@ -49,7 +49,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 2: Invalid JSON payload
     console.log('📊 Test 2: Invalid JSON payload');
     try {
-      const response = await request.post('/api/fiches', {
+      const response = await request.post('/api/automations', {
         headers: {
           'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
@@ -68,7 +68,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 3: Large payload handling');
     try {
       const largeString = 'x'.repeat(10000); // 10KB string
-      const response = await request.post('/api/fiches', {
+      const response = await request.post('/api/automations', {
         headers: {
           'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
@@ -94,7 +94,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 4: Invalid HTTP methods
     console.log('📊 Test 4: Invalid HTTP methods');
     try {
-      const response = await request.patch('/api/fiches', {
+      const response = await request.patch('/api/automations', {
         headers: { 'X-Test-Commis': commisId },
         data: { test: 'data' }
       });
@@ -109,7 +109,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 5: Non-existent resource access
     console.log('📊 Test 5: Non-existent resource access');
     try {
-      const response = await request.get('/api/fiches/999999', {
+      const response = await request.get('/api/automations/999999', {
         headers: { 'X-Test-Commis': commisId }
       });
 
@@ -133,7 +133,7 @@ test.describe('Error Handling and Edge Cases', () => {
     const ficheName = `Duplicate Test Fiche ${Date.now()}`;
 
     // Create first fiche
-    const firstResponse = await request.post('/api/fiches', {
+    const firstResponse = await request.post('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
@@ -151,7 +151,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 First fiche created:', firstFiche.id);
 
     // Attempt to create duplicate
-    const duplicateResponse = await request.post('/api/fiches', {
+    const duplicateResponse = await request.post('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
@@ -175,7 +175,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 2: Field length validation');
     const extremelyLongName = 'x'.repeat(1000);
 
-    const longFieldResponse = await request.post('/api/fiches', {
+    const longFieldResponse = await request.post('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
@@ -207,7 +207,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 1: Concurrent fiche creation
     console.log('📊 Test 1: Concurrent fiche creation');
     const concurrentRequests = Array.from({ length: 5 }, (_, i) =>
-      request.post('/api/fiches', {
+      request.post('/api/automations', {
         headers: {
           'X-Test-Commis': commisId,
           'Content-Type': 'application/json',
@@ -235,7 +235,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 2: Rapid-fire requests to same endpoint
     console.log('📊 Test 2: Rapid-fire GET requests');
     const rapidRequests = Array.from({ length: 10 }, () =>
-      request.get('/api/fiches', {
+      request.get('/api/automations', {
         headers: { 'X-Test-Commis': commisId }
       })
     );
@@ -256,9 +256,10 @@ test.describe('Error Handling and Edge Cases', () => {
 
     const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Navigate to application
-    await page.goto('/');
-    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
+    // Navigate to the live dashboard surface.
+    await page.goto('/dashboard');
+    const createAutomationButton = page.locator('[data-testid="create-automation-btn"]');
+    await expect(createAutomationButton).toBeVisible({ timeout: 10000 });
 
     // Test 1: Network connectivity loss simulation
     console.log('📊 Test 1: Network connectivity simulation');
@@ -266,11 +267,10 @@ test.describe('Error Handling and Edge Cases', () => {
       // Simulate offline state
       await page.context().setOffline(true);
 
-      // Try to interact with UI while offline - use locator with wait
-      const headerNav = page.locator('.header-nav');
-      if (await headerNav.count() > 0) {
-        await headerNav.click({ timeout: 2000 }).catch(() => {
-          console.log('📊 Header nav click failed (expected while offline)');
+      // Try to interact with the live dashboard CTA while offline.
+      if (await createAutomationButton.count() > 0) {
+        await createAutomationButton.click({ timeout: 2000 }).catch(() => {
+          console.log('📊 Create automation click failed (expected while offline)');
         });
       }
 
@@ -280,7 +280,7 @@ test.describe('Error Handling and Edge Cases', () => {
 
       // Restore connectivity
       await page.context().setOffline(false);
-      await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
+      await expect(createAutomationButton).toBeVisible({ timeout: 10000 });
 
       console.log('✅ Network connectivity simulation completed');
     } catch (error) {
@@ -319,19 +319,20 @@ test.describe('Error Handling and Edge Cases', () => {
       console.log('📊 JavaScript error caught:', error.message);
     });
 
-    // Navigate back to main app
-    await page.goto('/');
-    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
+    // Navigate back to the live dashboard surface.
+    await page.goto('/dashboard');
+    await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 10000 });
 
-    // Try various UI interactions that might cause errors - wait for elements
+    // Try various UI interactions that might cause errors - wait for stable nav items
     const chatTab = page.getByTestId('global-chat-tab');
     await expect(chatTab).toBeVisible({ timeout: 5000 });
     await chatTab.click();
+    await page.waitForURL(/\/chat/, { timeout: 10000 });
 
-    const headerNav = page.locator('.header-nav');
-    if (await headerNav.count() > 0) {
-      await headerNav.click();
-    }
+    const timelineTab = page.getByTestId('global-timeline-tab');
+    await expect(timelineTab).toBeVisible({ timeout: 5000 });
+    await timelineTab.click();
+    await page.waitForURL(/\/timeline/, { timeout: 10000 });
 
     console.log('📊 JavaScript errors detected:', jsErrors.length);
     if (jsErrors.length === 0) {

@@ -12,40 +12,40 @@ test.describe('Fiche Creation', () => {
     await waitForDashboardReady(page);
 
     // Wait for create button to be ready
-    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 5000 });
 
     // Create first fiche with deterministic wait for API response
     await Promise.all([
       page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+        (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
       ),
-      page.click('[data-testid="create-fiche-btn"]'),
+      page.click('[data-testid="create-automation-btn"]'),
     ]);
 
     // Create second fiche with deterministic wait
     await Promise.all([
       page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+        (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
       ),
-      page.click('[data-testid="create-fiche-btn"]'),
+      page.click('[data-testid="create-automation-btn"]'),
     ]);
 
     // Create third fiche with deterministic wait
     await Promise.all([
       page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+        (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
       ),
-      page.click('[data-testid="create-fiche-btn"]'),
+      page.click('[data-testid="create-automation-btn"]'),
     ]);
 
     // Wait for all 3 fiche rows to appear
-    await expect(page.locator('#fiches-table-body tr[data-fiche-id]')).toHaveCount(3, { timeout: 10000 });
+    await expect(page.locator('#automations-table-body tr[data-automation-id]')).toHaveCount(3, { timeout: 10000 });
 
     // Get all fiche rows
-    const ficheRows = page.locator('#fiches-table-body tr[data-fiche-id]');
+    const ficheRows = page.locator('#automations-table-body tr[data-automation-id]');
 
     // Check fiche names are all "New Fiche"
     const firstFicheName = await ficheRows.nth(0).locator('td[data-label="Name"]').textContent();
@@ -60,7 +60,7 @@ test.describe('Fiche Creation', () => {
 
   test('backend auto-generates "New Fiche" placeholder name', async ({ request }) => {
     // Create fiche (no name field sent)
-    const response = await request.post('/api/fiches', {
+    const response = await request.post('/api/automations', {
       data: {
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
@@ -79,7 +79,7 @@ test.describe('Fiche Creation', () => {
     const idempotencyKey = `test-${Date.now()}-${Math.random()}`;
 
     // Create fiche with idempotency key
-    const response1 = await request.post('/api/fiches', {
+    const response1 = await request.post('/api/automations', {
       headers: { 'Idempotency-Key': idempotencyKey },
       data: {
         system_instructions: 'Test instructions',
@@ -91,7 +91,7 @@ test.describe('Fiche Creation', () => {
     const fiche1 = await response1.json();
 
     // Retry with same idempotency key (simulates double-click)
-    const response2 = await request.post('/api/fiches', {
+    const response2 = await request.post('/api/automations', {
       headers: { 'Idempotency-Key': idempotencyKey },
       data: {
         system_instructions: 'Different instructions',

@@ -18,14 +18,14 @@ import { expect, type Page, type APIRequestContext } from '@playwright/test';
 export async function createAgentViaUI(page: Page): Promise<string> {
   await page.goto('/dashboard');
 
-  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
   // Capture API response to get the ACTUAL created agent ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
@@ -40,7 +40,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
   }
 
   // Wait for THIS SPECIFIC fiche's row to appear in DOM (not just any row)
-  const row = page.locator(`tr[data-fiche-id="${agentId}"]`);
+  const row = page.locator(`tr[data-automation-id="${agentId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
   return agentId;
@@ -50,7 +50,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
  * Create an agent via API (faster, for tests that don't need UI verification)
  */
 export async function createAgentViaAPI(request: APIRequestContext): Promise<string> {
-  const response = await request.post('/api/fiches', {
+  const response = await request.post('/api/automations', {
     data: {
       system_instructions: 'You are a helpful assistant.',
       task_instructions: 'Answer user questions clearly and briefly.',
@@ -71,7 +71,7 @@ export async function createAgentViaAPI(request: APIRequestContext): Promise<str
  * Waits for URL change and chat UI to be fully ready.
  */
 export async function navigateToChat(page: Page, agentId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-fiche-${agentId}"]`);
+  const chatBtn = page.locator(`[data-testid="chat-automation-${agentId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
@@ -90,7 +90,7 @@ export async function navigateToDashboard(page: Page): Promise<void> {
   await page.goto('/dashboard');
 
   // Wait for dashboard to be fully loaded - the create button is a reliable signal
-  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 }

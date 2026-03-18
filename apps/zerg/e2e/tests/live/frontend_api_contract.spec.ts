@@ -28,7 +28,7 @@ async function waitForRouteReady(page: Page, path: string) {
       await expect(page.getByRole('heading', { name: 'LLM Providers' })).toBeVisible({ timeout: 10_000 });
       return;
     case '/dashboard':
-      await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 15_000 });
+      await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 15_000 });
       return;
     case '/chat':
       await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 15_000 });

@@ -28,14 +28,14 @@ test.beforeEach(async ({ request }) => {
 async function createFicheAndGetId(page: Page): Promise<string> {
   await waitForDashboardReady(page);
 
-  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
   // Capture API response to get the ACTUAL created fiche ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
@@ -50,7 +50,7 @@ async function createFicheAndGetId(page: Page): Promise<string> {
   }
 
   // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
-  const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+  const row = page.locator(`tr[data-automation-id="${ficheId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
   return ficheId;
@@ -89,7 +89,7 @@ test.describe('Automation History Section', () => {
     console.log(`📊 Created scheduled thread ID: ${thread.id}`);
 
     // Navigate to chat to see automation history
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await waitForChatReady(page);
 
     // Verify automation history section is visible
@@ -144,7 +144,7 @@ test.describe('Automation History Section', () => {
     const thread = await response.json();
     console.log(`📊 Created scheduled thread ID: ${thread.id}`);
 
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await waitForChatReady(page);
 
     // Expand automation history
@@ -193,7 +193,7 @@ test.describe('Automation History Section', () => {
     const thread = await response.json();
     console.log(`📊 Created manual thread ID: ${thread.id}`);
 
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await waitForChatReady(page);
 
     // Expand automation history
@@ -243,7 +243,7 @@ test.describe('Automation History Section', () => {
     const scheduledThread = await scheduledResponse.json();
     console.log(`📊 Created scheduled thread ID: ${scheduledThread.id}`);
 
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await waitForChatReady(page);
 
     // Verify chat thread appears in main thread list (not automation section)
@@ -298,7 +298,7 @@ test.describe('Automation History Section', () => {
     }
     console.log('📊 Created 3 automation threads');
 
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await waitForChatReady(page);
 
     // Verify count badge shows 3
@@ -341,7 +341,7 @@ test.describe('Automation History Section', () => {
     expect(response.status()).toBe(201);
     const thread = await response.json();
 
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await waitForChatReady(page);
 
     // Expand automation history
@@ -376,7 +376,7 @@ test.describe('Automation History Section', () => {
       }
     });
 
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await waitForChatReady(page);
 
     // Verify chat thread still works

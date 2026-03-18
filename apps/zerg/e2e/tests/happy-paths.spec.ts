@@ -40,14 +40,14 @@ test.beforeEach(async ({ request }) => {
 async function createFicheViaUI(page: Page): Promise<string> {
   await waitForDashboardReady(page);
 
-  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
   // Capture API response to get the ACTUAL created fiche ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
@@ -62,7 +62,7 @@ async function createFicheViaUI(page: Page): Promise<string> {
   }
 
   // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
-  const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+  const row = page.locator(`tr[data-automation-id="${ficheId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
   return ficheId;
@@ -73,7 +73,7 @@ async function createFicheViaUI(page: Page): Promise<string> {
  * Waits for URL change and chat input to be ready.
  */
 async function navigateToChat(page: Page, ficheId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-fiche-${ficheId}"]`);
+  const chatBtn = page.locator(`[data-testid="chat-automation-${ficheId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 5000 });
   await chatBtn.click();
 
@@ -155,17 +155,17 @@ async function createNewThread(page: Page): Promise<number> {
 // ============================================================================
 
 test.describe('Smoke Tests - Core Functionality', () => {
-  test('SMOKE 1: Create Fiche - fiche appears in dashboard', async ({ page }) => {
+  test('SMOKE 1: Create Automation - fiche appears in dashboard', async ({ page }) => {
     await waitForDashboardReady(page);
 
-    const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+    const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
     await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
     // Capture API response to get the ACTUAL created fiche ID (deterministic, no race)
     const [response] = await Promise.all([
       page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+        (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
       ),
       createBtn.click(),
@@ -179,14 +179,14 @@ test.describe('Smoke Tests - Core Functionality', () => {
     expect(ficheId).toMatch(/^\d+$/);
 
     // Wait for THIS SPECIFIC fiche's row to appear (not just any row via .first())
-    const newRow = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+    const newRow = page.locator(`tr[data-automation-id="${ficheId}"]`);
     await expect(newRow).toBeVisible({ timeout: 10000 });
   });
 
   test('SMOKE 2: Navigate to Chat - URL and UI are correct', async ({ page }) => {
     const ficheId = await createFicheViaUI(page);
 
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
@@ -314,16 +314,25 @@ test.describe('Thread Management', () => {
 
     await titleInput.fill('Renamed Thread');
 
-    // Wait for PUT response after pressing Enter
-    await Promise.all([
+    const [renameResponse] = await Promise.all([
       page.waitForResponse(
-        (resp) => resp.url().includes('/api/threads/') && resp.request().method() === 'PUT',
+        (resp) =>
+          resp.url().includes('/api/threads/') &&
+          resp.request().method() === 'PUT' &&
+          resp.status() === 200,
         { timeout: 10000 }
       ),
       titleInput.press('Enter'),
     ]);
+    const renamedThread = await renameResponse.json();
+    expect(renamedThread.title).toContain('Renamed');
 
-    await expect(threadRow).toContainText('Renamed', { timeout: 5000 });
+    await expect
+      .poll(async () => {
+        const rows = await page.locator('.thread-list [data-testid^="thread-row-"]').allTextContents();
+        return rows.join(' ');
+      }, { timeout: 10000 })
+      .toContain('Renamed');
   });
 });
 
@@ -384,7 +393,7 @@ test.describe('URL Contract', () => {
   test('URL 1: No trailing slash bug - thread path always valid', async ({ page }) => {
     const ficheId = await createFicheViaUI(page);
 
-    await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
@@ -427,10 +436,10 @@ test.describe('Navigation', () => {
 
     // Go back to dashboard
     await page.goBack();
-    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 10000 });
 
     // Fiche should still be visible
-    await expect(page.locator(`tr[data-fiche-id="${ficheId}"]`)).toBeVisible({ timeout: 5000 });
+    await expect(page.locator(`tr[data-automation-id="${ficheId}"]`)).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -449,9 +458,8 @@ test.describe('Chat UI', () => {
     await sendMessage(page, firstMessage);
     await expect(page.getByTestId('messages-container')).toContainText(firstMessage, { timeout: 10000 });
 
-    // Wait for send button to be usable again (mutation settled)
-    const sendBtn = page.locator('[data-testid="send-message-btn"]');
-    await expect(sendBtn).toBeEnabled({ timeout: 10000 });
+    // Wait for the composer to be interactive again before sending a follow-up.
+    await expect(page.getByTestId('chat-input')).toBeEnabled({ timeout: 10000 });
 
     await sendMessage(page, followupMessage);
     await expect(page.getByTestId('messages-container')).toContainText(followupMessage, { timeout: 10000 });

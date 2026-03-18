@@ -28,7 +28,7 @@ test.describe('Fiche Creation Full Workflow', () => {
     expect(resetResponse.ok(), `Reset failed: ${await resetResponse.text()}`).toBeTruthy();
 
     // Step 1: Verify empty state
-    const initialFiches = await request.get('/api/fiches');
+    const initialFiches = await request.get('/api/automations');
     expect(initialFiches.status()).toBe(200);
     const initialFichesList = await initialFiches.json();
     expect(initialFichesList.length, 'Expected empty database after reset').toBe(0);
@@ -37,7 +37,7 @@ test.describe('Fiche Creation Full Workflow', () => {
     // NOTE: `name` field is NOT in FicheCreate schema - backend auto-generates "New Fiche"
     // We use system_instructions as the unique identifier for this test
     const firstMarker = `first_fiche_${uniqueMarker}`;
-    const createResponse = await request.post('/api/fiches', {
+    const createResponse = await request.post('/api/automations', {
       data: {
         system_instructions: firstMarker,
         task_instructions: 'Perform test tasks as requested',
@@ -52,7 +52,7 @@ test.describe('Fiche Creation Full Workflow', () => {
     expect(createdFiche.name).toBe('New Fiche');
 
     // Step 3: Verify fiche appears in list
-    const updatedFiches = await request.get('/api/fiches');
+    const updatedFiches = await request.get('/api/automations');
     expect(updatedFiches.status()).toBe(200);
     const updatedFichesList = await updatedFiches.json();
     expect(updatedFichesList.length).toBe(1);
@@ -69,7 +69,7 @@ test.describe('Fiche Creation Full Workflow', () => {
 
     // Step 6: Create a second fiche to test isolation
     const secondMarker = `second_fiche_${uniqueMarker}`;
-    const secondFicheResponse = await request.post('/api/fiches', {
+    const secondFicheResponse = await request.post('/api/automations', {
       data: {
         system_instructions: secondMarker,
         task_instructions: 'Perform secondary test tasks',
@@ -82,7 +82,7 @@ test.describe('Fiche Creation Full Workflow', () => {
     expect(secondFiche.system_instructions).toBe(secondMarker);
 
     // Step 7: Verify both fiches exist and are isolated to this commis
-    const finalFiches = await request.get('/api/fiches');
+    const finalFiches = await request.get('/api/automations');
     const finalFichesList = await finalFiches.json();
     expect(finalFichesList.length).toBe(2);
 

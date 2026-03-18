@@ -29,8 +29,8 @@ test('WebSocket connection establishes successfully', async ({ page }) => {
 
   const wsPromise = page.waitForEvent('websocket', { timeout: 10000 });
 
-  // Navigate to app
-  await page.goto('/');
+  // Navigate to dashboard so the dashboard readiness contract applies.
+  await page.goto('/dashboard');
   await waitForPageReady(page);
 
   await wsPromise;
@@ -69,7 +69,7 @@ test('Message streaming via WebSocket', async ({ page }) => {
   });
 
   // Navigate to chat
-  await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+  await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 10000 });
 
   // Send message that will trigger streaming
@@ -129,8 +129,8 @@ test('WebSocket connection recovery after disconnect', async ({ page }) => {
     });
   });
 
-  // Navigate to app (first load)
-  await page.goto('/');
+  // Navigate to dashboard so the dashboard readiness contract applies.
+  await page.goto('/dashboard');
   await waitForPageReady(page);
 
   // CRITICAL: Capture initial connection count
