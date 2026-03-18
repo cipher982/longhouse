@@ -33,7 +33,7 @@ automation_router = APIRouter(
 )
 
 
-@router.get("/fiches/{fiche_id}/runs", response_model=List[RunOut])
+@router.get("/fiches/{fiche_id}/runs", response_model=List[RunOut], include_in_schema=False)
 def list_runs(
     fiche_id: int,
     limit: int = 20,

@@ -2,9 +2,9 @@ import type { components } from "../../generated/openapi-types";
 
 type Schemas = components["schemas"];
 
-type AutomationSchema = Schemas["Fiche"];
-type AutomationCreateSchema = Schemas["FicheCreate"];
-type AutomationUpdateSchema = Schemas["FicheUpdate"];
+type AutomationSchema = Schemas["Automation"];
+type AutomationCreateSchema = Schemas["AutomationCreate"];
+type AutomationUpdateSchema = Schemas["AutomationUpdate"];
 
 export type Automation = AutomationSchema;
 export type AutomationSummary = Automation;

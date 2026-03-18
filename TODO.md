@@ -2288,6 +2288,54 @@ Notes:
 
 ---
 
+## [Refactor][Product] Rename Public Automation Schemas Off Fiche
+
+**Status (2026-03-17):** Done. The canonical public automation schema layer is automation-first in generated OpenAPI and first-party frontend types.
+
+**Goal:** Make the public automation schema layer automation-first without renaming ORM/table/storage models in this tranche.
+
+**Done when:**
+- Canonical `/api/automations/*` routes publish `Automation`, `AutomationCreate`, `AutomationUpdate`, `AutomationDetails`, and `AutomationMessage` schema names in generated OpenAPI
+- First-party frontend API types stop wrapping `Schemas["Fiche*"]` for the canonical automation surface
+- Public automation payloads stop emitting `display_type: "fiche"` and `fiche_id` in the schema-backed message/detail shapes
+- SDK generation, frontend units, `make test`, and focused automation browser coverage are green
+
+- [x] Rename public automation schema classes and route response models off `Fiche*`
+- [x] Update first-party frontend type aliases/tests to the new generated schema names
+- [x] Verify with SDK generation, frontend units, `make test`, and focused automation coverage
+
+Notes:
+- 2026-03-17: Keep this tranche at the public schema/OpenAPI/browser contract layer. Do not rename ORM classes, DB columns, or deep runtime storage models here.
+- 2026-03-17: Canonical schema names are now `Automation`, `AutomationCreate`, `AutomationUpdate`, `AutomationDetails`, `AutomationMessage`, and `AutomationStatus`, while the untouched internal imports keep working through compatibility aliases in `schemas.py`.
+- 2026-03-17: The public automation details envelope now emits `automation`, messages emit `automation_id`, and automation payloads now default `display_type` to `automation`.
+- 2026-03-17: Verification passed via `make generate-sdk`, `make test-frontend-unit`, `make test`, and `E2E_BACKEND_PORT=48110 E2E_FRONTEND_PORT=48111 make test-e2e-single TEST='--project=chromium tests/dashboard.basic.spec.ts tests/dashboard.scope-toggle.spec.ts'`.
+
+---
+
+## [Refactor][Product] Hide Fiche Compatibility Routes From Public OpenAPI
+
+**Status (2026-03-17):** Done. The runtime still keeps `/api/fiches*` compatibility routes alive, but the generated public OpenAPI/SDK surface no longer advertises them.
+
+**Goal:** Keep the fiche compatibility routes working while removing them from the canonical public OpenAPI/SDK contract.
+
+**Done when:**
+- Generated OpenAPI no longer publishes `/api/fiches*` automation CRUD paths
+- Generated OpenAPI no longer publishes nested fiche compatibility paths for automation runs, connectors, and MCP servers
+- Canonical `/api/automations*` and `/api/runs/{id}` routes remain documented
+- SDK generation, frontend units, `make test`, and focused automation browser coverage are green
+
+- [x] Hide fiche compatibility routes from the generated OpenAPI surface
+- [x] Regenerate SDK and update focused tests for the slimmer public contract
+- [x] Verify with SDK generation, frontend units, `make test`, and focused automation coverage
+
+Notes:
+- 2026-03-17: Keep the runtime compatibility handlers alive in this tranche. This is about contract hygiene, not deleting fallback routes yet.
+- 2026-03-17: The old `/api/fiches*` CRUD surface plus nested fiche compatibility routes for runs, connectors, and MCP servers are now mounted with `include_in_schema=False`, so canonical SDK generation only sees `/api/automations*` and `/api/runs/{id}`.
+- 2026-03-17: Added a focused OpenAPI regression in `tests_lite/test_automations_public_surface.py` that asserts the canonical automation paths are documented and the fiche compatibility paths are absent from the schema.
+- 2026-03-17: Verification passed via `make generate-sdk`, `make test-frontend-unit`, `make test`, and `E2E_BACKEND_PORT=48130 E2E_FRONTEND_PORT=48131 make test-e2e-single TEST='--project=chromium tests/dashboard.basic.spec.ts tests/dashboard.scope-toggle.spec.ts'`.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

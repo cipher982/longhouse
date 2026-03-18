@@ -128,214 +128,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/fiches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Automations */
-        get: operations["list_automations_fiches_get"];
-        put?: never;
-        /** Create Automation */
-        post: operations["create_automation_fiches_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Automations */
-        get: operations["list_automations_fiches__get"];
-        put?: never;
-        /** Create Automation */
-        post: operations["create_automation_fiches__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/dashboard": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Automation Overview */
-        get: operations["read_automation_overview_fiches_dashboard_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{automation_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Automation */
-        get: operations["read_automation_fiches__automation_id__get"];
-        /** Update Automation */
-        put: operations["update_automation_fiches__automation_id__put"];
-        post?: never;
-        /** Delete Automation */
-        delete: operations["delete_automation_fiches__automation_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{automation_id}/details": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Automation Details */
-        get: operations["read_automation_details_fiches__automation_id__details_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{automation_id}/messages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Automation Messages */
-        get: operations["read_automation_messages_fiches__automation_id__messages_get"];
-        put?: never;
-        /** Create Automation Message */
-        post: operations["create_automation_message_fiches__automation_id__messages_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{automation_id}/task": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Run Automation Task */
-        post: operations["run_automation_task_fiches__automation_id__task_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/mcp-servers/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Mcp Servers
-         * @description List all MCP servers configured for a fiche.
-         */
-        get: operations["list_mcp_servers_fiches__fiche_id__mcp_servers__get"];
-        put?: never;
-        /**
-         * Add Mcp Server
-         * @description Add an MCP server to a fiche.
-         */
-        post: operations["add_mcp_server_fiches__fiche_id__mcp_servers__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/mcp-servers/{server_name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Remove Mcp Server
-         * @description Remove an MCP server from a fiche.
-         */
-        delete: operations["remove_mcp_server_fiches__fiche_id__mcp_servers__server_name__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/mcp-servers/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Test Mcp Connection
-         * @description Test connection to an MCP server without saving it.
-         */
-        post: operations["test_mcp_connection_fiches__fiche_id__mcp_servers_test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/mcp-servers/available-tools": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Available Tools
-         * @description Get all available tools for a fiche (built-in + MCP).
-         */
-        get: operations["get_available_tools_fiches__fiche_id__mcp_servers_available_tools_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/automations/{automation_id}/mcp-servers/": {
         parameters: {
             query?: never;
@@ -1308,26 +1100,6 @@ export interface paths {
          * @description List branches for a GitHub repository.
          */
         get: operations["list_repo_branches_knowledge_github_repos__owner___repo__branches_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Runs
-         * @description Return latest *limit* runs for the given fiche (descending).
-         */
-        get: operations["list_runs_fiches__fiche_id__runs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3137,107 +2909,6 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/connectors/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Fiche Connectors
-         * @description List all connector types and their configuration status for a fiche.
-         *
-         *     Returns all available connector types with:
-         *     - Metadata (name, description, required fields)
-         *     - Whether credentials are configured for this fiche
-         *     - Test status and metadata from last test
-         */
-        get: operations["list_fiche_connectors_fiches__fiche_id__connectors__get"];
-        put?: never;
-        /**
-         * Configure Connector
-         * @description Configure (create or update) connector credentials for a fiche.
-         *
-         *     If credentials already exist for this connector type, they are updated.
-         *     Otherwise, new credentials are created.
-         *
-         *     Test status is reset to 'untested' when credentials are updated.
-         */
-        post: operations["configure_connector_fiches__fiche_id__connectors__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/connectors/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Test Credentials Before Save
-         * @description Test credentials before saving them.
-         *
-         *     This endpoint allows testing credentials without persisting them.
-         *     Useful for validating credentials in the UI before committing.
-         */
-        post: operations["test_credentials_before_save_fiches__fiche_id__connectors_test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/connectors/{connector_type}/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Test Configured Connector
-         * @description Test already-configured connector credentials.
-         *
-         *     Tests the stored credentials and updates the test_status and metadata.
-         */
-        post: operations["test_configured_connector_fiches__fiche_id__connectors__connector_type__test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fiches/{fiche_id}/connectors/{connector_type}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Connector
-         * @description Remove connector credentials from a fiche.
-         *
-         *     This deletes the stored credentials permanently.
-         */
-        delete: operations["delete_connector_fiches__fiche_id__connectors__connector_type__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5541,6 +5212,140 @@ export interface components {
             /** Offset */
             offset: number;
         };
+        /** Automation */
+        Automation: {
+            /** Name */
+            name: string;
+            /** System Instructions */
+            system_instructions: string;
+            /** Task Instructions */
+            task_instructions: string;
+            /** Model */
+            model: string;
+            /** Schedule */
+            schedule?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Allowed Tools */
+            allowed_tools?: string[] | null;
+            /** Id */
+            id: number;
+            /** Owner Id */
+            owner_id: number;
+            owner?: components["schemas"]["UserOut"] | null;
+            status: components["schemas"]["AutomationStatus"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Messages
+             * @default []
+             */
+            messages: components["schemas"]["AutomationMessage"][];
+            /** Next Run At */
+            next_run_at?: string | null;
+            /** Last Run At */
+            last_run_at?: string | null;
+            /**
+             * Display Type
+             * @default automation
+             */
+            display_type: string;
+        };
+        /**
+         * AutomationCreate
+         * @description Schema for automation creation. Name is auto-generated by backend.
+         */
+        AutomationCreate: {
+            /** System Instructions */
+            system_instructions: string;
+            /** Task Instructions */
+            task_instructions: string;
+            /** Model */
+            model: string;
+            /** Schedule */
+            schedule?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Allowed Tools */
+            allowed_tools?: string[] | null;
+        };
+        /**
+         * AutomationDetails
+         * @description Envelope object returned by the automation *details* REST endpoint.
+         *
+         *     In Phase 1 we only populate the mandatory ``automation`` field.  The optional
+         *     ``threads``, ``runs`` and ``stats`` keys are included so that the response
+         *     shape is forwards-compatible with the richer payloads planned for future
+         *     phases (see *fiche_debug_modal_design.md*).
+         */
+        AutomationDetails: {
+            automation: components["schemas"]["Automation"];
+            /** Threads */
+            threads?: components["schemas"]["Thread"][] | null;
+            /** Runs */
+            runs?: unknown[] | null;
+            /** Stats */
+            stats?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** AutomationMessage */
+        AutomationMessage: {
+            /** Id */
+            id: number;
+            /** Automation Id */
+            automation_id: number;
+            /** Role */
+            role: string;
+            /** Content */
+            content: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+        };
+        /**
+         * AutomationStatus
+         * @enum {string}
+         */
+        AutomationStatus: "idle" | "running" | "error" | "processing";
+        /** AutomationUpdate */
+        AutomationUpdate: {
+            /** Name */
+            name?: string | null;
+            /** System Instructions */
+            system_instructions?: string | null;
+            /** Task Instructions */
+            task_instructions?: string | null;
+            /** Model */
+            model?: string | null;
+            status?: components["schemas"]["AutomationStatus"] | null;
+            /** Schedule */
+            schedule?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Allowed Tools */
+            allowed_tools?: string[] | null;
+        };
         /**
          * BackfillEmbeddingsProgressResponse
          * @description Response for embedding backfill progress check.
@@ -6614,7 +6419,7 @@ export interface components {
             /** Runs Limit */
             runs_limit: number;
             /** Automations */
-            automations: components["schemas"]["Fiche"][];
+            automations: components["schemas"]["Automation"][];
             /** Runs */
             runs: components["schemas"]["RunBundle"][];
         };
@@ -6882,141 +6687,6 @@ export interface components {
              * @default 0
              */
             abandoned_events: number;
-        };
-        /** Fiche */
-        Fiche: {
-            /** Name */
-            name: string;
-            /** System Instructions */
-            system_instructions: string;
-            /** Task Instructions */
-            task_instructions: string;
-            /** Model */
-            model: string;
-            /** Schedule */
-            schedule?: string | null;
-            /** Config */
-            config?: {
-                [key: string]: unknown;
-            } | null;
-            /** Last Error */
-            last_error?: string | null;
-            /** Allowed Tools */
-            allowed_tools?: string[] | null;
-            /** Id */
-            id: number;
-            /** Owner Id */
-            owner_id: number;
-            owner?: components["schemas"]["UserOut"] | null;
-            /** Status */
-            status: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /**
-             * Messages
-             * @default []
-             */
-            messages: components["schemas"]["FicheMessage"][];
-            /** Next Run At */
-            next_run_at?: string | null;
-            /** Last Run At */
-            last_run_at?: string | null;
-            /**
-             * Display Type
-             * @default fiche
-             */
-            display_type: string;
-        };
-        /**
-         * FicheCreate
-         * @description Schema for fiche creation. Name is auto-generated by backend.
-         */
-        FicheCreate: {
-            /** System Instructions */
-            system_instructions: string;
-            /** Task Instructions */
-            task_instructions: string;
-            /** Model */
-            model: string;
-            /** Schedule */
-            schedule?: string | null;
-            /** Config */
-            config?: {
-                [key: string]: unknown;
-            } | null;
-            /** Allowed Tools */
-            allowed_tools?: string[] | null;
-        };
-        /**
-         * FicheDetails
-         * @description Envelope object returned by the Fiche *details* REST endpoint.
-         *
-         *     In Phase 1 we only populate the mandatory ``fiche`` field.  The optional
-         *     ``threads``, ``runs`` and ``stats`` keys are included so that the response
-         *     shape is forwards-compatible with the richer payloads planned for future
-         *     phases (see *fiche_debug_modal_design.md*).
-         */
-        FicheDetails: {
-            fiche: components["schemas"]["Fiche"];
-            /** Threads */
-            threads?: components["schemas"]["Thread"][] | null;
-            /** Runs */
-            runs?: unknown[] | null;
-            /** Stats */
-            stats?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /** FicheMessage */
-        FicheMessage: {
-            /** Id */
-            id: number;
-            /** Fiche Id */
-            fiche_id: number;
-            /** Role */
-            role: string;
-            /** Content */
-            content: string;
-            /**
-             * Timestamp
-             * Format: date-time
-             */
-            timestamp: string;
-        };
-        /**
-         * FicheStatus
-         * @enum {string}
-         */
-        FicheStatus: "idle" | "running" | "error" | "processing";
-        /** FicheUpdate */
-        FicheUpdate: {
-            /** Name */
-            name?: string | null;
-            /** System Instructions */
-            system_instructions?: string | null;
-            /** Task Instructions */
-            task_instructions?: string | null;
-            /** Model */
-            model?: string | null;
-            status?: components["schemas"]["FicheStatus"] | null;
-            /** Schedule */
-            schedule?: string | null;
-            /** Config */
-            config?: {
-                [key: string]: unknown;
-            } | null;
-            /** Last Error */
-            last_error?: string | null;
-            /** Allowed Tools */
-            allowed_tools?: string[] | null;
         };
         /**
          * FiltersResponse
@@ -10408,7 +10078,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Fiche"][];
+                    "application/json": components["schemas"]["Automation"][];
                 };
             };
             /** @description Validation Error */
@@ -10435,7 +10105,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FicheCreate"];
+                "application/json": components["schemas"]["AutomationCreate"];
             };
         };
         responses: {
@@ -10445,7 +10115,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Fiche"];
+                    "application/json": components["schemas"]["Automation"];
                 };
             };
             /** @description Validation Error */
@@ -10479,7 +10149,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Fiche"][];
+                    "application/json": components["schemas"]["Automation"][];
                 };
             };
             /** @description Validation Error */
@@ -10506,7 +10176,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FicheCreate"];
+                "application/json": components["schemas"]["AutomationCreate"];
             };
         };
         responses: {
@@ -10516,7 +10186,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Fiche"];
+                    "application/json": components["schemas"]["Automation"];
                 };
             };
             /** @description Validation Error */
@@ -10584,7 +10254,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Fiche"];
+                    "application/json": components["schemas"]["Automation"];
                 };
             };
             /** @description Validation Error */
@@ -10611,7 +10281,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FicheUpdate"];
+                "application/json": components["schemas"]["AutomationUpdate"];
             };
         };
         responses: {
@@ -10621,7 +10291,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Fiche"];
+                    "application/json": components["schemas"]["Automation"];
                 };
             };
             /** @description Validation Error */
@@ -10686,7 +10356,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FicheDetails"];
+                    "application/json": components["schemas"]["AutomationDetails"];
                 };
             };
             /** @description Validation Error */
@@ -10805,597 +10475,6 @@ export interface operations {
             };
         };
     };
-    list_automations_fiches_get: {
-        parameters: {
-            query?: {
-                scope?: string;
-                skip?: number;
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Fiche"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_automation_fiches_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: {
-                "Idempotency-Key"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FicheCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Fiche"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_automations_fiches__get: {
-        parameters: {
-            query?: {
-                scope?: string;
-                skip?: number;
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Fiche"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_automation_fiches__post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: {
-                "Idempotency-Key"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FicheCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Fiche"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_automation_overview_fiches_dashboard_get: {
-        parameters: {
-            query?: {
-                scope?: string;
-                runs_limit?: number;
-                skip?: number;
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DashboardSnapshot"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_automation_fiches__automation_id__get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                automation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Fiche"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_automation_fiches__automation_id__put: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                automation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FicheUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Fiche"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_automation_fiches__automation_id__delete: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                automation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_automation_details_fiches__automation_id__details_get: {
-        parameters: {
-            query?: {
-                include?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                automation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FicheDetails"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_automation_messages_fiches__automation_id__messages_get: {
-        parameters: {
-            query?: {
-                skip?: number;
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                automation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MessageResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_automation_message_fiches__automation_id__messages_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                automation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MessageCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MessageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_automation_task_fiches__automation_id__task_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                automation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_mcp_servers_fiches__fiche_id__mcp_servers__get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPServerResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    add_mcp_server_fiches__fiche_id__mcp_servers__post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MCPServerAddRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Fiche"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    remove_mcp_server_fiches__fiche_id__mcp_servers__server_name__delete: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-                server_name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    test_mcp_connection_fiches__fiche_id__mcp_servers_test_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MCPServerAddRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPTestConnectionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_available_tools_fiches__fiche_id__mcp_servers_available_tools_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_automation_mcp_servers_automations__automation_id__mcp_servers__get: {
         parameters: {
             query?: {
@@ -11452,7 +10531,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Fiche"];
+                    "application/json": components["schemas"]["Automation"];
                 };
             };
             /** @description Validation Error */
@@ -13235,40 +12314,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_runs_fiches__fiche_id__runs_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunOut"][];
                 };
             };
             /** @description Validation Error */
@@ -16387,179 +15432,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ContainerPolicyResponse"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_fiche_connectors_fiches__fiche_id__connectors__get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConnectorStatusResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    configure_connector_fiches__fiche_id__connectors__post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConnectorConfigureRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConnectorSuccessResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    test_credentials_before_save_fiches__fiche_id__connectors_test_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConnectorTestRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConnectorTestResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    test_configured_connector_fiches__fiche_id__connectors__connector_type__test_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                connector_type: string;
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConnectorTestResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_connector_fiches__fiche_id__connectors__connector_type__delete: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                connector_type: string;
-                fiche_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {

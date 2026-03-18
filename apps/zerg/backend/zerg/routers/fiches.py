@@ -38,11 +38,11 @@ from zerg.metrics import dashboard_snapshot_fiches_returned
 from zerg.metrics import dashboard_snapshot_latency_seconds
 from zerg.metrics import dashboard_snapshot_requests_total
 from zerg.metrics import dashboard_snapshot_runs_returned
+from zerg.schemas.schemas import Automation
+from zerg.schemas.schemas import AutomationCreate
+from zerg.schemas.schemas import AutomationDetails
+from zerg.schemas.schemas import AutomationUpdate
 from zerg.schemas.schemas import DashboardSnapshot
-from zerg.schemas.schemas import Fiche
-from zerg.schemas.schemas import FicheCreate
-from zerg.schemas.schemas import FicheDetails
-from zerg.schemas.schemas import FicheUpdate
 from zerg.schemas.schemas import MessageCreate
 from zerg.schemas.schemas import MessageResponse
 from zerg.schemas.schemas import RunBundle
@@ -167,7 +167,7 @@ def _get_fiches_for_scope(
     return get_fiches(db, skip=skip, limit=limit)
 
 
-def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Fiche]:
+def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Automation]:
     """Check if this request was already processed."""
     cache_key = (key, user_id)
     entry = IDEMPOTENCY_CACHE.get(cache_key)
@@ -195,8 +195,8 @@ def _store_idempotency_cache(key: str, user_id: int, fiche_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/", response_model=List[Fiche])
-@router.get("", response_model=List[Fiche])
+@router.get("/", response_model=List[Automation])
+@router.get("", response_model=List[Automation])
 def list_automations(
     *,
     scope: str = Query("my", pattern="^(my|all)$"),
@@ -220,7 +220,7 @@ def read_automation_overview(
 ):
     start = perf_counter()
     status_label = "success"
-    automations: List[Fiche] = []
+    automations: List[Automation] = []
     bundles: List[RunBundle] = []
     total_runs = 0
 
@@ -262,11 +262,11 @@ def read_automation_overview(
         dashboard_snapshot_runs_returned.observe(float(total_runs))
 
 
-@router.post("/", response_model=Fiche, status_code=status.HTTP_201_CREATED)
-@router.post("", response_model=Fiche, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=Automation, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=Automation, status_code=status.HTTP_201_CREATED)
 @publish_event(EventType.AUTOMATION_CREATED)
 async def create_automation(
-    automation: FicheCreate = Body(...),
+    automation: AutomationCreate = Body(...),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
@@ -310,7 +310,7 @@ async def create_automation(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
-@router.get("/{automation_id}", response_model=Fiche)
+@router.get("/{automation_id}", response_model=Automation)
 def read_automation(automation_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = get_fiche(db, automation_id)
     if row is None:
@@ -321,11 +321,11 @@ def read_automation(automation_id: int, db: Session = Depends(get_db), current_u
     return row
 
 
-@router.put("/{automation_id}", response_model=Fiche)
+@router.put("/{automation_id}", response_model=Automation)
 @publish_event(EventType.AUTOMATION_UPDATED)
 async def update_automation(
     automation_id: int,
-    automation: FicheUpdate,
+    automation: AutomationUpdate,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -371,7 +371,7 @@ async def update_automation(
 
 
 # Optional import for type hints
-@router.get("/{automation_id}/details", response_model=FicheDetails, response_model_exclude_none=True)
+@router.get("/{automation_id}/details", response_model=AutomationDetails, response_model_exclude_none=True)
 def read_automation_details(
     automation_id: int,
     include: Optional[str] = None,
@@ -386,7 +386,7 @@ def read_automation_details(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
 
     include_set: set[str] = set(p.strip().lower() for p in include.split(",")) if include else set()
-    payload: dict[str, Any] = {"fiche": row}
+    payload: dict[str, Any] = {"automation": row}
     if "threads" in include_set:
         payload["threads"] = []
     if "runs" in include_set:
