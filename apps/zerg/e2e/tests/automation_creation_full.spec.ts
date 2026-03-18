@@ -9,8 +9,8 @@ import { test, expect } from './fixtures';
  * 3. Automation appears in the UI after creation
  * 4. Multiple test runs are isolated from each other
  *
- * NOTE: The create API does not accept a `name` field - names are auto-generated
- * as "New Fiche". We use `system_instructions` as the unique marker for isolation testing.
+ * NOTE: The create API does not accept a `name` field. Names are auto-generated
+ * as "New Automation". We use `system_instructions` as the unique marker for isolation testing.
  *
  * IMPORTANT: Always use the `request` fixture for API calls - it has the correct
  * X-Test-Commis header. Never pass commisId separately as that can cause mismatches.
@@ -34,7 +34,7 @@ test.describe('Automation Creation Full Workflow', () => {
     expect(initialAutomationsList.length, 'Expected empty database after reset').toBe(0);
 
     // Step 2: Create an automation via API.
-    // NOTE: `name` is not accepted here; the backend auto-generates "New Fiche".
+    // NOTE: `name` is not accepted here; the backend auto-generates "New Automation".
     // We use system_instructions as the unique identifier for this test
     const firstMarker = `first_automation_${uniqueMarker}`;
     const createResponse = await request.post('/api/automations', {
@@ -49,7 +49,7 @@ test.describe('Automation Creation Full Workflow', () => {
     const createdAutomation = await createResponse.json();
     expect(createdAutomation.system_instructions).toBe(firstMarker);
     // Name is auto-generated, not user-provided
-    expect(createdAutomation.name).toBe('New Fiche');
+    expect(createdAutomation.name).toBe('New Automation');
 
     // Step 3: Verify the automation appears in the list.
     const updatedAutomations = await request.get('/api/automations');

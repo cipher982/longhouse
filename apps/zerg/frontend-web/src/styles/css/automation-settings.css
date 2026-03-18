@@ -1,9 +1,9 @@
 /* ------------------------------------------------------------------
-   Fiche Settings Drawer – unified with design tokens
+   Automation Settings Drawer – unified with design tokens
    ------------------------------------------------------------------ */
 
 @layer pages {
-  .fiche-settings-backdrop {
+  .automation-settings-backdrop {
     position: fixed;
     inset: 0;
     background: rgb(9 9 11 / 60%);
@@ -13,11 +13,11 @@
     z-index: var(--z-modal);
   }
 
-  .fiche-settings-backdrop.open {
+  .automation-settings-backdrop.open {
     display: flex;
   }
 
-  .fiche-settings-drawer {
+  .automation-settings-drawer {
     width: min(520px, 100%);
     background: var(--color-surface-section);
     color: var(--color-text-primary);
@@ -31,11 +31,11 @@
     overflow: hidden auto;
   }
 
-  .fiche-settings-drawer.open {
+  .automation-settings-drawer.open {
     transform: translateX(0);
   }
 
-  .fiche-settings-header {
+  .automation-settings-header {
     padding: var(--space-6);
     border-bottom: 1px solid var(--color-border-muted);
     display: flex;
@@ -43,7 +43,7 @@
     justify-content: space-between;
   }
 
-  .fiche-settings-footer {
+  .automation-settings-footer {
     padding: var(--space-6);
     border-top: 1px solid var(--color-border-muted);
     gap: var(--space-4);
@@ -56,14 +56,14 @@
     justify-content: flex-end;
   }
 
-  .fiche-settings-header h2 {
+  .automation-settings-header h2 {
     margin: 0;
     font-family: var(--font-family-display);
     font-size: var(--font-size-xl);
     font-weight: 600;
   }
 
-  .fiche-settings-header p {
+  .automation-settings-header p {
     margin: var(--space-1) 0 0;
     color: var(--color-text-muted);
     font-size: var(--font-size-sm);
@@ -85,12 +85,12 @@
     background: var(--color-surface-overlay);
   }
 
-  .fiche-settings-section {
+  .automation-settings-section {
     padding: var(--space-6);
     border-bottom: 1px solid var(--color-border-muted);
   }
 
-  .fiche-settings-section h3 {
+  .automation-settings-section h3 {
     margin: 0 0 var(--space-2);
     font-family: var(--font-family-display);
     font-size: var(--font-size-lg);
@@ -209,8 +209,8 @@
   }
 
   /* Button styles now inherit from ui.css (new system) */
-  /* Scoped overrides for fiche-settings context */
-  .fiche-settings-drawer .ui-button {
+  /* Scoped overrides for automation-settings context */
+  .automation-settings-drawer .ui-button {
     font-family: var(--font-family-base);
     font-weight: 600;
   }
@@ -353,13 +353,13 @@
   }
 
   @media (width <= 640px) {
-    .fiche-settings-drawer {
+    .automation-settings-drawer {
       width: 100%;
     }
 
-    .fiche-settings-header,
-    .fiche-settings-footer,
-    .fiche-settings-section {
+    .automation-settings-header,
+    .automation-settings-footer,
+    .automation-settings-section {
       padding: var(--space-4);
     }
   }
@@ -605,7 +605,7 @@
     background: transparent;
   }
 
-  /* Reuse connector-groups and connector-cards from fiche-settings */
+  /* Reuse connector-groups and connector-cards from automation-settings */
   .integrations-content .connector-groups {
     display: flex;
     flex-direction: column;
@@ -786,7 +786,7 @@
     color: var(--color-intent-success);
   }
 
-  .status-badge.fiche-override {
+  .status-badge.automation-override {
     background: var(
       --color-accent-muted,
       color-mix(in srgb, var(--color-brand-primary) 15%, transparent)

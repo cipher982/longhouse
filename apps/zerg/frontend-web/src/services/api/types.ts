@@ -4,8 +4,6 @@ type Schemas = components["schemas"];
 
 export type Automation = Schemas["Fiche"];
 export type AutomationSummary = Automation;
-export type Fiche = Automation;
-export type FicheSummary = AutomationSummary;
 export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
 export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
@@ -130,8 +128,6 @@ export type AutomationCreatePayload = Pick<AutomationCreate, "system_instruction
   Partial<Omit<AutomationCreate, "system_instructions" | "task_instructions" | "model">>;
 
 export type AutomationUpdatePayload = AutomationUpdate;
-export type FicheCreatePayload = AutomationCreatePayload;
-export type FicheUpdatePayload = AutomationUpdatePayload;
 
 export interface AutomationRunsBundle {
   automationId: number;

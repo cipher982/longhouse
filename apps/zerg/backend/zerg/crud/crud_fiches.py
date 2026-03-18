@@ -89,7 +89,7 @@ def create_fiche(
     """Create a new fiche.
 
     ``owner_id`` is **required** – every fiche belongs to exactly one user.
-    ``name`` defaults to "New Fiche" if not provided.
+    ``name`` defaults to "New Automation" if not provided.
     """
 
     # Validate cron expression if provided
@@ -98,7 +98,7 @@ def create_fiche(
     # Create fiche
     db_fiche = Fiche(
         owner_id=owner_id,
-        name=name or "New Fiche",
+        name=name or "New Automation",
         system_instructions=system_instructions,
         task_instructions=task_instructions,
         model=model,
