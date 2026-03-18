@@ -22,9 +22,9 @@ from zerg.dependencies.auth import DEV_EMAIL  # noqa: F401  # may be used in fut
 # ---------------------------------------------------------------------------
 # Generated message types - single source of truth
 # ---------------------------------------------------------------------------
+from zerg.generated.ws_messages import AutomationEventData
 from zerg.generated.ws_messages import Envelope
 from zerg.generated.ws_messages import ErrorData
-from zerg.generated.ws_messages import FicheEventData
 from zerg.generated.ws_messages import MessageType
 from zerg.generated.ws_messages import PingData
 from zerg.generated.ws_messages import PongData
@@ -51,42 +51,39 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def handle_fiche_subscription(
+async def handle_automation_subscription(
     client_id: str,
-    fiche_id: int,
+    automation_id: int,
     message_id: str,
     db: Session,
-    *,
-    topic_prefix: str = "fiche",
-    state_message_type: str = "fiche_state",
 ) -> None:
-    """Subscribe to automation events via either the automation or fiche topic."""
-    fiche = get_fiche(db, fiche_id)
-    if not fiche:
+    """Subscribe to automation events."""
+    automation = get_fiche(db, automation_id)
+    if not automation:
         return await send_subscribe_error(
             client_id,
             message_id,
-            f"Fiche {fiche_id} not found",
-            [f"{topic_prefix}:{fiche_id}"],
+            f"Automation {automation_id} not found",
+            [f"automation:{automation_id}"],
             send_to_client,
             "NOT_FOUND",
         )
 
-    topic = f"{topic_prefix}:{fiche_id}"
-    last_run_at = getattr(fiche, "last_run_at", None)
-    next_run_at = getattr(fiche, "next_run_at", None)
+    topic = f"automation:{automation_id}"
+    last_run_at = getattr(automation, "last_run_at", None)
+    next_run_at = getattr(automation, "next_run_at", None)
 
-    fiche_data = FicheEventData(
-        id=fiche.id,
-        status=getattr(fiche, "status", None),
-        name=getattr(fiche, "name", None),
-        description=getattr(fiche, "system_instructions", None),
+    automation_data = AutomationEventData(
+        id=automation.id,
+        status=getattr(automation, "status", None),
+        name=getattr(automation, "name", None),
+        description=getattr(automation, "system_instructions", None),
         last_run_at=last_run_at.isoformat() if last_run_at else None,
         next_run_at=next_run_at.isoformat() if next_run_at else None,
-        last_error=getattr(fiche, "last_error", None),
+        last_error=getattr(automation, "last_error", None),
     )
 
-    await subscribe_and_send_state(client_id, topic, message_id, fiche_data, state_message_type, send_to_client)
+    await subscribe_and_send_state(client_id, topic, message_id, automation_data, "automation_state", send_to_client)
 
 
 async def handle_user_subscription(client_id: str, user_id: int, message_id: str, db: Session) -> None:
@@ -299,17 +296,8 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
                 prefix, topic_id = topic.split(":", 1)
 
                 # Simple routing - no fancy abstraction needed
-                if prefix == "fiche":
-                    await handle_fiche_subscription(client_id, int(topic_id), message_id, db)
-                elif prefix == "automation":
-                    await handle_fiche_subscription(
-                        client_id,
-                        int(topic_id),
-                        message_id,
-                        db,
-                        topic_prefix="automation",
-                        state_message_type="automation_state",
-                    )
+                if prefix == "automation":
+                    await handle_automation_subscription(client_id, int(topic_id), message_id, db)
                 elif prefix == "user":
                     await handle_user_subscription(client_id, int(topic_id), message_id, db)
                 elif prefix == "ops" and topic_id == "events":

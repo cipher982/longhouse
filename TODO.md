@@ -590,7 +590,8 @@ Notes:
 - 2026-03-17: Verification for the Oikos task-surface rename passed via `make generate-sdk`, `make test-frontend-unit`, and `make test`.
 - 2026-03-17: Shipped the first browser/test compatibility purge. First-party frontend API modules dropped `fetchFiche*`/`createFiche` aliases, the automation settings surface no longer uses `fiche-settings` naming, the default placeholder is now `New Automation`, and dashboard/automation creation tests were updated to the automation-first contract.
 - 2026-03-17: Verification for the first browser/test compatibility purge passed via `git diff --check`, `make test-frontend-unit`, `make test`, and `make test-e2e-single TEST='--project=chromium tests/automation_creation.spec.ts tests/automation_creation_full.spec.ts tests/core/automation-crud.spec.ts tests/core/dashboard-load.spec.ts'`.
-- 2026-03-17: Current slice: delete the remaining first-party live transport aliases (`fiche:*`, `fiche_updated`, `fiche_state`) from dashboard/Oikos/browser contracts and the WebSocket/SSE backend paths, then regenerate the WS contract.
+- 2026-03-17: Shipped the live transport alias purge. Dashboard, Oikos SSE, and the WebSocket backend now use only `automation:{id}` topics plus `automation_updated` / `automation_state`, and the WS contract was regenerated after deleting the last first-party `fiche:*` / `fiche_updated` / `fiche_state` browser aliases.
+- 2026-03-17: Verification for the live transport alias purge passed via `make regen-ws`, `make test-frontend-unit`, `make test`, and `E2E_BACKEND_PORT=48010 E2E_FRONTEND_PORT=48011 make test-e2e-single TEST='--project=chromium tests/dashboard.basic.spec.ts tests/dashboard.scope-toggle.spec.ts tests/realtime_updates.spec.ts tests/realtime_websocket_monitoring.spec.ts'`.
 - 2026-03-16: Restored the missing spec at `docs/specs/launch-runtime-simplification.md` so the bounded launch cleanup has an explicit vocabulary contract, provider matrix, and acceptance criteria again.
 - 2026-03-16: Current implementation scope for this pass is:
   1. restore the missing spec and lock the bounded cleanup plan,
@@ -2168,7 +2169,7 @@ Notes:
 
 ## [Refactor][Product] Rename Nested Automation Routes + Event Surface
 
-**Status (2026-03-17):** Done. Browser-facing automation routes, websocket topics, and live event names are now automation-first, with bounded fiche compatibility retained only in the transport layer and Oikos SSE listeners.
+**Status (2026-03-17):** Done. Browser-facing automation routes, websocket topics, and live event names are now automation-first end to end.
 
 **Goal:** Finish the public automation rename where users and browser clients still see `fiches`: nested REST paths, websocket topics, and event names.
 
@@ -2186,7 +2187,7 @@ Notes:
 Notes:
 - 2026-03-17: Inventory confirmed the remaining hot spots are `routers/runs.py`, `routers/fiche_connectors.py`, `routers/mcp_servers.py`, `services/api/connectors.ts`, `services/api/automations.ts`, `hooks/useFicheConfig.ts`, `hooks/useFicheConnectors.ts`, `pages/DashboardPage.tsx`, `websocket/manager.py`, `websocket/handlers.py`, `events/event_bus.py`, and the generated WS/OpenAPI contracts.
 - 2026-03-17: Landed the nested REST alias tranche. Canonical browser helpers now hit `/api/automations/{id}/runs`, `/connectors`, and `/mcp-servers`, while the old fiche helpers stay as compatibility aliases. Added focused frontend API-path tests plus backend HTTP coverage for the new nested aliases. Verification is green via `make generate-sdk`, `make test-frontend-unit`, and `make test`; only the websocket/event rename remains in this task.
-- 2026-03-17: Finished the live transport rename. Dashboard subscriptions now use `automation:{id}` topics and `automation_updated` / `automation_state` as the canonical live event names, while the WebSocket manager still dual-fans out to legacy `fiche:{id}` subscribers for bounded compatibility. Oikos SSE now listens for both `automation_updated` and `fiche_updated`, and the Oikos client exposes `onAutomationUpdated` while still invoking `onFicheUpdated` for older consumers.
+- 2026-03-17: Finished the live transport rename. Dashboard subscriptions now use `automation:{id}` topics and `automation_updated` / `automation_state` end to end, the WebSocket manager no longer dual-fans out to `fiche:{id}`, and Oikos SSE/browser clients no longer carry `fiche_updated` compatibility listeners.
 - 2026-03-17: Added focused regression coverage for the transport rename in `tests_lite/test_automation_websocket_transport.py`, `src/pages/__tests__/DashboardPage.test.tsx`, and `src/oikos/core/__tests__/oikos-api-client.test.ts`. Verification passed via `make regen-ws`, `make test-frontend-unit`, and `make test`.
 
 ---

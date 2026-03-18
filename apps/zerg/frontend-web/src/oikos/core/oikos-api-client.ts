@@ -210,14 +210,6 @@ export class OikosAPIClient {
       }
     });
 
-    // Keep the legacy transport event wired until the remaining browser surfaces stop emitting/listening for it.
-    this.eventSource.addEventListener('fiche_updated', (e: MessageEvent) => {
-      const event = parseEventData<OikosEventData>(e, 'fiche_updated');
-      if (event) {
-        handleAutomationUpdate(event);
-      }
-    });
-
     this.eventSource.addEventListener('run_created', (e: MessageEvent) => {
       const event = parseEventData<OikosEventData>(e, 'run_created');
       if (event) {

@@ -23,7 +23,7 @@ export interface Envelope<T = unknown> {
 
 // Message payload types
 
-export interface FicheRef {
+export interface AutomationRef {
   id: number;
 }
 
@@ -121,7 +121,7 @@ export interface AssistantIdData {
   message_id: number;
 }
 
-export interface FicheEventData {
+export interface AutomationEventData {
   id: number;
   status?: string;
   last_run_at?: string;
@@ -153,7 +153,7 @@ export interface UserUpdateData {
 }
 
 export interface OpsEventData {
-  type: "run_started" | "run_success" | "run_failed" | "automation_created" | "automation_updated" | "fiche_created" | "fiche_updated" | "thread_message_created" | "budget_denied";
+  type: "run_started" | "run_success" | "run_failed" | "automation_created" | "automation_updated" | "thread_message_created" | "budget_denied";
   fiche_id?: number;
   run_id?: number;
   thread_id?: number;
@@ -241,7 +241,7 @@ export interface AssistantId extends Envelope<AssistantIdData> {
 }
 
 /** Automation lifecycle or status event */
-export interface FicheEvent extends Envelope<FicheEventData> {
+export interface AutomationEvent extends Envelope<AutomationEventData> {
   type: 'automation_event';
 }
 
@@ -276,7 +276,7 @@ export type WebSocketMessage =
   | StreamChunk
   | StreamEnd
   | AssistantId
-  | FicheEvent
+  | AutomationEvent
   | RunUpdate
   | UserUpdate
   | OpsEvent

@@ -39,10 +39,9 @@ type Scope = "my" | "all";
 
 const RUNS_LIMIT = 50;
 const AUTOMATION_TOPIC_PREFIX = "automation:";
-const LEGACY_FICHE_TOPIC_PREFIX = "fiche:";
 
 function parseDashboardTopic(topic: string): number | null {
-  if (!(topic.startsWith(AUTOMATION_TOPIC_PREFIX) || topic.startsWith(LEGACY_FICHE_TOPIC_PREFIX))) {
+  if (!topic.startsWith(AUTOMATION_TOPIC_PREFIX)) {
     return null;
   }
 
@@ -52,12 +51,7 @@ function parseDashboardTopic(topic: string): number | null {
 }
 
 function isAutomationLifecycleEvent(eventType: string): boolean {
-  return (
-    eventType === "automation_state" ||
-    eventType === "automation_updated" ||
-    eventType === "fiche_state" ||
-    eventType === "fiche_updated"
-  );
+  return eventType === "automation_state" || eventType === "automation_updated";
 }
 
 export default function DashboardPage() {
