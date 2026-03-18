@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 from datetime import datetime
@@ -21,6 +22,45 @@ from zerg.models.enums import ThreadType
 from zerg.services.tenant_db_guid_repair import find_db_paths
 from zerg.services.tenant_db_guid_repair import repair_db
 from zerg.services.tenant_db_guid_repair import scan_db
+
+
+_CLI_RUNTIME_ENV_KEYS = {
+    "DYLD_LIBRARY_PATH",
+    "HOME",
+    "LANG",
+    "LD_LIBRARY_PATH",
+    "PATH",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "VIRTUAL_ENV",
+}
+_CLI_APP_ENV_KEYS = {
+    "AUTH_DISABLED",
+    "DATABASE_URL",
+    "ENVIRONMENT",
+    "FERNET_SECRET",
+    "SINGLE_TENANT",
+    "TESTING",
+}
+_CLI_APP_ENV_PREFIXES = ("LONGHOUSE_",)
+
+
+def _cli_runtime_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if not value:
+            continue
+        if key in _CLI_APP_ENV_KEYS or key.startswith(_CLI_APP_ENV_PREFIXES):
+            continue
+        if key in _CLI_RUNTIME_ENV_KEYS or key.startswith("LC_"):
+            env[key] = value
+    return env
 
 
 def _make_db(tmp_path, name: str = "tenant.db"):
@@ -156,10 +196,10 @@ def test_cli_runs_without_app_env(tmp_path):
 
     script_path = Path(__file__).resolve().parents[4] / "scripts" / "repair-tenant-db-guids.py"
     result = subprocess.run(
-        ["python3", str(script_path), "--db-path", str(db_path)],
+        [sys.executable, str(script_path), "--db-path", str(db_path)],
         capture_output=True,
         text=True,
-        env={"PATH": os.environ.get("PATH", "")},
+        env=_cli_runtime_env(),
         check=False,
     )
 
