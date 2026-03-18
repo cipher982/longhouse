@@ -55,7 +55,7 @@ describe("automation API paths", () => {
     expect(fetchMock.mock.calls[3]?.[0]).toBe("/api/automations/7/connectors");
   });
 
-  it("fiche compatibility aliases ride the automation paths", async () => {
+  it("legacy compatibility aliases ride the automation paths", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(jsonResponse([]));
     fetchMock.mockResolvedValueOnce(jsonResponse([]));

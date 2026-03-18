@@ -204,7 +204,7 @@ export default function SettingsPage() {
     <PageShell size="narrow" className="settings-page-container">
       <SectionHeader
         title="User Context Settings"
-        description="Configure your personal context that AI fiches will use to better understand and assist you."
+        description="Configure your personal context so automations and assistants can better understand and help you."
       />
 
       <form onSubmit={handleSubmit} className="profile-form">
@@ -265,7 +265,7 @@ export default function SettingsPage() {
                     className="ui-input settings-textarea"
                     rows={3}
                   />
-                  <small>What you do and how AI fiches can help you</small>
+                  <small>What you do and how automations can help you</small>
                 </div>
               </div>
             </Card.Body>
@@ -281,7 +281,7 @@ export default function SettingsPage() {
             </Card.Header>
             <Card.Body>
               <p className="section-description">
-                Configure servers that AI fiches can reference or SSH into
+                Configure servers that automations can reference or SSH into
               </p>
 
               {servers.length === 0 ? (
@@ -463,7 +463,7 @@ export default function SettingsPage() {
             </Card.Header>
             <Card.Body>
               <p className="section-description">
-                Specific preferences for how AI fiches should respond to you
+                Specific preferences for how automations should respond to you
               </p>
 
               <div className="form-group">

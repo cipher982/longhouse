@@ -1,5 +1,5 @@
 /**
- * TypeScript types for fiche connector credentials.
+ * TypeScript types for automation connector credentials.
  */
 
 export interface CredentialField {
@@ -47,7 +47,7 @@ export interface ConnectorSuccessResponse {
 }
 
 /**
- * Account-level connector status (same structure as fiche-level).
+ * Account-level connector status (same structure as automation-level).
  * Used for account settings integrations page.
  */
 export type AccountConnectorStatus = ConnectorStatus;

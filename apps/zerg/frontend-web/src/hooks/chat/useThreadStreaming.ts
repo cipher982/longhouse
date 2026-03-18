@@ -12,11 +12,11 @@ interface StreamingState {
 }
 
 interface UseThreadStreamingParams {
-  ficheId: number | null;
+  automationId: number | null;
   effectiveThreadId: number | null;
 }
 
-export function useThreadStreaming({ ficheId, effectiveThreadId }: UseThreadStreamingParams) {
+export function useThreadStreaming({ automationId, effectiveThreadId }: UseThreadStreamingParams) {
   const queryClient = useQueryClient();
 
   // Map of streaming state by thread ID - stores ALL concurrent streams
@@ -28,15 +28,15 @@ export function useThreadStreaming({ ficheId, effectiveThreadId }: UseThreadStre
 
   const wsQueries = useMemo(() => {
     const queries = [];
-    if (ficheId != null) {
-      queries.push(["threads", ficheId, "chat"]);
-      queries.push(["threads", ficheId, "automation"]);
+    if (automationId != null) {
+      queries.push(["threads", automationId, "chat"]);
+      queries.push(["threads", automationId, "automation"]);
     }
     if (effectiveThreadId != null) {
       queries.push(["thread-messages", effectiveThreadId]);
     }
     return queries;
-  }, [ficheId, effectiveThreadId]);
+  }, [automationId, effectiveThreadId]);
 
   const handleStreamingMessage = useCallback((envelope: any) => {
     const { type, data } = envelope;
@@ -120,9 +120,9 @@ export function useThreadStreaming({ ficheId, effectiveThreadId }: UseThreadStre
       });
 
       // Also refresh thread list to update previews
-      if (ficheId != null) {
+      if (automationId != null) {
         queryClient.invalidateQueries({
-          queryKey: ["threads", ficheId, "chat"]
+          queryKey: ["threads", automationId, "chat"]
         });
       }
 
@@ -132,9 +132,9 @@ export function useThreadStreaming({ ficheId, effectiveThreadId }: UseThreadStre
       // Force re-render to update UI (clear active stream + remove badge)
       forceUpdate();
     }
-  }, [ficheId, queryClient, forceUpdate]);
+  }, [automationId, queryClient, forceUpdate]);
 
-  useWebSocket(ficheId != null, {
+  useWebSocket(automationId != null, {
     includeAuth: true,
     invalidateQueries: wsQueries,
     onStreamingMessage: handleStreamingMessage,

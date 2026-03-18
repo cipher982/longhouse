@@ -256,8 +256,8 @@ export default function RunnersPage() {
     <PageShell size="wide" className="runners-page-container">
       <div className="runners-page">
         <SectionHeader
-          title="Runners"
-          description="Infrastructure nodes that execute commands for your fiches."
+        title="Runners"
+          description="Infrastructure nodes that execute commands for your automations."
           actions={
             <Button variant="primary" data-testid="runners-add-button" onClick={() => setShowAddModal(true)}>
               <PlusIcon />

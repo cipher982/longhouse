@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Fiche,
-  fetchFiche,
+  Automation,
+  fetchAutomation,
   fetchThreadMessages,
   fetchThreads,
   Thread,
@@ -10,48 +10,48 @@ import {
 } from "../../services/api";
 
 interface UseChatDataParams {
-  ficheId: number | null;
+  automationId: number | null;
   effectiveThreadId: number | null;
 }
 
-export function useChatData({ ficheId, effectiveThreadId }: UseChatDataParams) {
-  const ficheQuery = useQuery<Fiche>({
-    queryKey: ["fiche", ficheId],
+export function useChatData({ automationId, effectiveThreadId }: UseChatDataParams) {
+  const automationQuery = useQuery<Automation>({
+    queryKey: ["automation", automationId],
     queryFn: () => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return fetchFiche(ficheId);
+      return fetchAutomation(automationId);
     },
-    enabled: ficheId != null,
+    enabled: automationId != null,
   });
 
   // Fetch chat threads only
   const chatThreadsQuery = useQuery<Thread[]>({
-    queryKey: ["threads", ficheId, "chat"],
+    queryKey: ["threads", automationId, "chat"],
     queryFn: () => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return fetchThreads(ficheId, "chat");
+      return fetchThreads(automationId, "chat");
     },
-    enabled: ficheId != null,
+    enabled: automationId != null,
   });
 
   // Fetch automation threads (scheduled and manual)
   const automationThreadsQuery = useQuery<Thread[]>({
-    queryKey: ["threads", ficheId, "automation"],
+    queryKey: ["threads", automationId, "automation"],
     queryFn: () => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
       // Fetch both scheduled and manual threads
       return Promise.all([
-        fetchThreads(ficheId, "scheduled"),
-        fetchThreads(ficheId, "manual"),
+        fetchThreads(automationId, "scheduled"),
+        fetchThreads(automationId, "manual"),
       ]).then(([scheduled, manual]) => [...scheduled, ...manual]);
     },
-    enabled: ficheId != null,
+    enabled: automationId != null,
   });
 
   const messagesQuery = useQuery<ThreadMessage[]>({
@@ -85,18 +85,18 @@ export function useChatData({ ficheId, effectiveThreadId }: UseChatDataParams) {
     });
   }, [automationThreadsQuery.data]);
 
-  const isLoading = ficheQuery.isLoading || chatThreadsQuery.isLoading || messagesQuery.isLoading;
-  const hasError = ficheQuery.isError || chatThreadsQuery.isError || messagesQuery.isError;
+  const isLoading = automationQuery.isLoading || chatThreadsQuery.isLoading || messagesQuery.isLoading;
+  const hasError = automationQuery.isError || chatThreadsQuery.isError || messagesQuery.isError;
 
   return {
     // Queries
-    ficheQuery,
+    automationQuery,
     chatThreadsQuery,
     automationThreadsQuery,
     messagesQuery,
 
     // Derived data
-    fiche: ficheQuery.data,
+    automation: automationQuery.data,
     chatThreads,
     automationThreads,
     messages: messagesQuery.data ?? [],

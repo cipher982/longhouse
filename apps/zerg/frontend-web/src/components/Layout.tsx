@@ -218,7 +218,7 @@ function WelcomeHeader() {
           <button
             id="shelf-toggle-btn"
             className="header-button shelf-toggle"
-            aria-label="Toggle fiche panel"
+            aria-label="Toggle automation panel"
             aria-controls="fiche-shelf"
             aria-expanded={isShelfOpen}
             onClick={toggleShelf}

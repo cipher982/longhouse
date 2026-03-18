@@ -2,7 +2,7 @@
  * Account-level Integrations Settings Page.
  *
  * Allows users to configure connector credentials at the account level.
- * These credentials are shared across all fiches owned by the user.
+ * These credentials are shared across all automations owned by the user.
  */
 
 import { useState, useEffect, type FormEvent } from "react";
@@ -96,7 +96,7 @@ export default function IntegrationsPage() {
   const handleDelete = async (connector: AccountConnectorStatus) => {
     const confirmed = await confirm({
       title: `Remove ${connector.name}?`,
-      message: 'This will remove this integration from your account. Any fiches using these credentials will lose access.',
+      message: 'This will remove this integration from your account. Any automations using these credentials will lose access.',
       confirmLabel: 'Remove',
       cancelLabel: 'Keep',
       variant: 'danger',
@@ -142,7 +142,7 @@ export default function IntegrationsPage() {
     <PageShell size="narrow" className="integrations-page-container">
       <SectionHeader
         title="Integrations"
-        description="Configure credentials for external services. These integrations are shared across all your fiches."
+        description="Configure credentials for external services. These integrations are shared across all your automations."
       />
 
       <div className="integrations-content">
