@@ -88,6 +88,7 @@ function makeTurnReview(overrides: Partial<SessionTurnReview> = {}): SessionTurn
     modeSummary: "Suggest or escalate from completed turns, but wait for approval before continuing.",
     executionState: "awaiting_user_approval",
     recommendedAction: "continue_session",
+    followUpPrompt: "Run the pending targeted tests.",
     blockedReasons: ["Autonomous continue cap reached."],
     status: "recorded",
     reason: null,
@@ -134,6 +135,7 @@ describe("SessionContextPane", () => {
     expect(within(turnReview).getByText(/^Ask You$/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Latest assistant turn #7/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Recommended action: Continue Session/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Suggested next prompt: Run the pending targeted tests\./i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Live outcome: Ignore/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Only targeted verification remains\. Run the pending targeted tests\./i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Autonomous continue cap reached/i)).toBeInTheDocument();

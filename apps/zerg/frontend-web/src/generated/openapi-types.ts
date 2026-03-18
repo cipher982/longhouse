@@ -9311,6 +9311,8 @@ export interface components {
             execution_state?: string | null;
             /** Recommended Action */
             recommended_action?: string | null;
+            /** Follow Up Prompt */
+            follow_up_prompt?: string | null;
             /**
              * Blocked Reasons
              * @default []

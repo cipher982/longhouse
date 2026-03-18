@@ -89,6 +89,7 @@ class SessionTurnReviewSummary(UTCBaseModel):
     mode_summary: Optional[str] = None
     execution_state: Optional[str] = None
     recommended_action: Optional[str] = None
+    follow_up_prompt: Optional[str] = None
     blocked_reasons: List[str] = []
     status: str
     reason: Optional[str] = None
@@ -256,6 +257,7 @@ def list_session_turn_reviews(
             mode_summary=row.mode_summary,
             execution_state=row.execution_state,
             recommended_action=row.recommended_action,
+            follow_up_prompt=row.follow_up_prompt,
             blocked_reasons=[str(reason).strip() for reason in (row.blocked_reasons or []) if str(reason).strip()],
             status=row.status,
             reason=row.reason,

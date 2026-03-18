@@ -54,6 +54,7 @@ interface SessionTurnReviewSummary {
   mode_summary: string | null;
   execution_state: string | null;
   recommended_action: string | null;
+  follow_up_prompt: string | null;
   blocked_reasons: string[] | null;
   status: string;
   reason: string | null;
@@ -78,6 +79,7 @@ export interface SessionTurnReview {
   modeSummary: string;
   executionState: SessionTurnExecutionState;
   recommendedAction: string | null;
+  followUpPrompt: string | null;
   blockedReasons: string[];
   status: string;
   reason: string | null;
@@ -122,6 +124,7 @@ function parseTurnReview(row: SessionTurnReviewSummary): SessionTurnReview {
     modeSummary: asString(row.mode_summary) ?? "",
     executionState: (asString(row.execution_state) ?? "no_action") as SessionTurnExecutionState,
     recommendedAction: asString(row.recommended_action),
+    followUpPrompt: asString(row.follow_up_prompt),
     blockedReasons: asStringArray(row.blocked_reasons),
     status: asString(row.status) ?? "recorded",
     reason: asString(row.reason),

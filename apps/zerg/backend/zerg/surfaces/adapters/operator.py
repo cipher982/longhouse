@@ -154,6 +154,10 @@ def _format_loop_review_guidance(payload: dict[str, Any]) -> str:
     if decision_summary:
         lines.append(f"- Decision summary: {decision_summary}")
 
+    follow_up_prompt = str(decision.get("follow_up_prompt") or "").strip()
+    if follow_up_prompt:
+        lines.append(f"- Suggested follow-up prompt: {follow_up_prompt}")
+
     recommended_action = str(loop_review.get("recommended_action") or "").strip()
     if recommended_action:
         lines.append(f"- Recommended action: {recommended_action}")

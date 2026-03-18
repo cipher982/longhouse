@@ -37,6 +37,7 @@ from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
+from zerg.models.work import OikosWakeup
 from zerg.services.ingest_task_queue import _claim_pending
 from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 from zerg.services.ingest_task_queue import reset_stale_running_tasks
@@ -354,16 +355,23 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
                 "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
                 new=AsyncMock(return_value=_continue_decision()),
             ):
-                await _execute_task(task_id, session_id, "summary")
+                with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=321)) as invoke_oikos:
+                    await _execute_task(task_id, session_id, "summary")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
+    db = factory()
+    try:
+        wakeups = db.query(OikosWakeup).order_by(OikosWakeup.id.asc()).all()
+    finally:
+        db.close()
     assert len(tasks) == 1
     assert len(reviews) == 1
     assert owner_id > 0
     assert assistant_event_id > 0
-    assert reviews[0].status == "recorded"
-    assert reviews[0].run_id is None
+    assert reviews[0].status == "enqueued"
+    assert reviews[0].reason == "notify_user"
+    assert reviews[0].run_id == 321
     assert reviews[0].trigger_type == "turn.completed"
     assert reviews[0].decision == "continue"
     assert reviews[0].execution_state == "awaiting_user_approval"
@@ -371,6 +379,11 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     assert reviews[0].mode_capability == "notify_only"
     assert reviews[0].recommended_action == "continue_session"
     assert reviews[0].follow_up_prompt == "Run the pending targeted tests."
+    assert len(wakeups) == 1
+    assert wakeups[0].status == "enqueued"
+    assert wakeups[0].source == "turn_loop"
+    assert wakeups[0].payload["turn_review"]["decision"]["follow_up_prompt"] == "Run the pending targeted tests."
+    invoke_oikos.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -435,16 +448,18 @@ async def test_summary_task_reviews_completed_turn_even_when_session_is_paused(t
                 "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
                 new=AsyncMock(return_value=_continue_decision()),
             ):
-                await _execute_task(task_id, session_id, "summary")
+                with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=654)) as invoke_oikos:
+                    await _execute_task(task_id, session_id, "summary")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
     assert len(reviews) == 1
-    assert reviews[0].status == "recorded"
-    assert reviews[0].run_id is None
+    assert reviews[0].status == "enqueued"
+    assert reviews[0].run_id == 654
     assert reviews[0].execution_state == "awaiting_user_approval"
     assert reviews[0].decision == "continue"
+    invoke_oikos.assert_awaited_once()
 
 
 @pytest.mark.asyncio
