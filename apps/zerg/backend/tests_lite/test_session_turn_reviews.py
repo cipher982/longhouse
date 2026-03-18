@@ -13,6 +13,7 @@ os.environ.setdefault("TESTING", "1")
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.models import CommisJob
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
@@ -20,6 +21,7 @@ from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import UserRole
 from zerg.models.user import User
 from zerg.services.session_loop_controller import LoopControllerDecision
+from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
 
 
@@ -96,8 +98,8 @@ def _seed_session(
 
 
 @pytest.mark.asyncio
-async def test_turn_review_records_bounded_continue_from_loop_controller(monkeypatch, tmp_path):
-    SessionLocal = _make_db(tmp_path, "turn_review_continue.db")
+async def test_turn_review_autopilot_enqueues_same_session_continue_job(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_enqueue.db")
 
     async def _fake_evaluate(**_kwargs):
         return LoopControllerDecision(
@@ -105,6 +107,7 @@ async def test_turn_review_records_bounded_continue_from_loop_controller(monkeyp
             summary="The next step is a bounded same-session continue.",
             rationale="The assistant left exactly one obvious follow-up.",
             recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
             blocked_reasons=(),
             model_id="gpt-test",
             raw_response='{"decision":"continue"}',
@@ -122,13 +125,26 @@ async def test_turn_review_records_bounded_continue_from_loop_controller(monkeyp
             assistant_text="Only targeted verification remains. Run the pending targeted tests.",
         )
 
-        review = await maybe_record_session_turn_review(db=db, session_id=str(session_id))
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
         assert review is not None
         assert review.decision == "continue"
         assert review.execution_state == "would_auto_continue"
         assert review.recommended_action == "continue_session"
-        assert review.status == "recorded"
+        assert review.follow_up_prompt == "Run the pending targeted tests."
+        assert review.status == "acted"
+        assert review.reason == "continue_session"
+        assert review.actual_outcome == "continue_session"
+        assert review.shadow_alignment == "matched"
         assert review.run_id is None
+
+        jobs = db.query(CommisJob).order_by(CommisJob.id.asc()).all()
+        assert len(jobs) == 1
+        assert jobs[0].task == "Run the pending targeted tests."
+        assert jobs[0].config["execution_mode"] == "workspace"
+        assert jobs[0].config["resume_session_id"] == str(session_id)
+        assert jobs[0].config["backend"] == "zai"
+        assert jobs[0].config["trigger"] == "turn_loop"
+        assert jobs[0].config["assistant_event_id"] == review.assistant_event_id
 
 
 @pytest.mark.asyncio

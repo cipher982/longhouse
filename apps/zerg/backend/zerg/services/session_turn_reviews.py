@@ -59,6 +59,7 @@ class TurnOutcome:
     summary: str
     rationale: str
     recommended_action: str | None = None
+    follow_up_prompt: str | None = None
     blocked_reasons: tuple[str, ...] = ()
 
 
@@ -93,6 +94,14 @@ def _coerce_loop_mode(value: str | None) -> SessionLoopMode:
 
 def _supports_resume(session: AgentSession) -> bool:
     return (session.provider or "").strip().lower() == "claude"
+
+
+def _resume_backend_for_session(session: AgentSession) -> str | None:
+    if not _supports_resume(session):
+        return None
+    # Claude resume on the hosted commis path uses hatch's Claude-compatible
+    # runtime via the z.ai-backed wrapper.
+    return "zai"
 
 
 def _load_recent_dialog_messages(
@@ -324,6 +333,7 @@ def _serialize_turn_review_payload(
             "summary": outcome.summary,
             "rationale": outcome.rationale,
             "recommended_action": outcome.recommended_action,
+            "follow_up_prompt": outcome.follow_up_prompt,
             "blocked_reasons": list(outcome.blocked_reasons),
         },
         "loop_review": dict(mode_application),
@@ -491,6 +501,7 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
                 summary=controller_decision.summary,
                 rationale=controller_decision.rationale,
                 recommended_action=controller_decision.recommended_action,
+                follow_up_prompt=controller_decision.follow_up_prompt,
                 blocked_reasons=controller_decision.blocked_reasons,
             )
         except Exception:
@@ -524,6 +535,7 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
         mode_summary=str(mode_application["mode_summary"]),
         execution_state=str(mode_application["execution_state"]),
         recommended_action=str(recommended_action_value) if recommended_action_value else None,
+        follow_up_prompt=outcome.follow_up_prompt,
         blocked_reasons=list(outcome.blocked_reasons),
         status=review_status,
         reason=review_reason,
@@ -531,6 +543,123 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
     db.add(review)
     db.commit()
     db.refresh(review)
+    return review
+
+
+def _mark_review_outcome(
+    db: Session,
+    *,
+    review: SessionTurnReview,
+    status: str,
+    reason: str,
+    actual_outcome: str,
+) -> None:
+    review.status = status
+    review.reason = reason
+    review.actual_outcome = actual_outcome
+    review.shadow_alignment = _classify_alignment(_expected_outcome(review), actual_outcome)
+    db.commit()
+    db.refresh(review)
+
+
+def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurnReview) -> CommisJob | None:
+    if review.status != "recorded":
+        return None
+    if review.execution_state != "would_auto_continue":
+        return None
+    if review.recommended_action != "continue_session":
+        return None
+    if review.owner_id is None:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="missing_owner",
+            actual_outcome="failed",
+        )
+        return None
+
+    session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
+    if session is None:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="missing_session",
+            actual_outcome="failed",
+        )
+        return None
+
+    follow_up_prompt = str(review.follow_up_prompt or "").strip()
+    if not follow_up_prompt:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="missing_follow_up_prompt",
+            actual_outcome="failed",
+        )
+        return None
+
+    backend = _resume_backend_for_session(session)
+    if not backend:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="resume_not_supported",
+            actual_outcome="failed",
+        )
+        return None
+
+    try:
+        job = CommisJob(
+            owner_id=review.owner_id,
+            task=follow_up_prompt,
+            reasoning_effort="none",
+            status="queued",
+            config={
+                "execution_mode": "workspace",
+                "resume_session_id": str(session.id),
+                "backend": backend,
+                "trigger": "turn_loop",
+                "assistant_event_id": review.assistant_event_id,
+            },
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    except Exception:
+        logger.exception(
+            "Failed to enqueue same-session auto-continue for review %s session %s",
+            review.id,
+            review.session_id,
+        )
+        db.rollback()
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="enqueue_failed",
+            actual_outcome="failed",
+        )
+        return None
+
+    _mark_review_outcome(
+        db,
+        review=review,
+        status="acted",
+        reason="continue_session",
+        actual_outcome=_EXPECTED_CONTINUE_OUTCOME,
+    )
+    return job
+
+
+async def maybe_process_session_turn_loop(*, db: Session, session_id: str) -> SessionTurnReview | None:
+    review = await maybe_record_session_turn_review(db=db, session_id=session_id)
+    if review is None:
+        return None
+    maybe_execute_recorded_turn_review(db=db, review=review)
     return review
 
 

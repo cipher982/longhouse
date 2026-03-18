@@ -397,6 +397,7 @@ class SessionTurnReview(AgentsBase):
     mode_summary = Column(Text, nullable=True)
     execution_state = Column(String(32), nullable=True)
     recommended_action = Column(String(64), nullable=True)
+    follow_up_prompt = Column(Text, nullable=True)
     blocked_reasons = Column(JSON(), nullable=True)
     status = Column(String(32), nullable=False, server_default=text("'recorded'"), index=True)
     reason = Column(String(100), nullable=True)

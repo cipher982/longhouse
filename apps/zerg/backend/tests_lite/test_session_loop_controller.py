@@ -105,7 +105,9 @@ async def test_loop_controller_creates_per_session_thread_and_persists_messages(
     fake_response = (
         '{"decision":"continue","summary":"Continue the same session.",'
         '"rationale":"One bounded next step remains.",'
-        '"recommended_action":"continue_session","blocked_reasons":[]}'
+        '"recommended_action":"continue_session",'
+        '"follow_up_prompt":"Run the pending targeted tests.",'
+        '"blocked_reasons":[]}'
     )
     fake_client = _FakeClient(fake_response)
     monkeypatch.setattr(
@@ -120,6 +122,7 @@ async def test_loop_controller_creates_per_session_thread_and_persists_messages(
         first = await _run_controller(db, owner_id=user.id, session=session)
         db.refresh(session)
         assert first.decision == "continue"
+        assert first.follow_up_prompt == "Run the pending targeted tests."
         assert first.loop_thread_id == session.loop_thread_id
         assert session.loop_thread_id is not None
 

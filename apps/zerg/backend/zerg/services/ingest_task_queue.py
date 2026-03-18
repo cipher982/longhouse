@@ -29,7 +29,7 @@ from datetime import timezone
 
 from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
-from zerg.services.session_turn_reviews import maybe_record_session_turn_review
+from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ async def _maybe_process_completed_turn_loop(task_id: str, session_id: str) -> N
     db = factory()
     try:
         del task_id
-        await maybe_record_session_turn_review(db=db, session_id=session_id)
+        await maybe_process_session_turn_loop(db=db, session_id=session_id)
     finally:
         db.close()
 

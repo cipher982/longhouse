@@ -49,6 +49,7 @@ You must return exactly one JSON object with this shape:
   "summary": "short user-facing summary",
   "rationale": "why this decision is correct",
   "recommended_action": "continue_session|ask_user|wait|done|escalate",
+  "follow_up_prompt": "exact bounded same-session prompt or null",
   "blocked_reasons": ["optional", "short", "reasons"]
 }
 
@@ -66,6 +67,9 @@ Hard rules:
 - If the next step is risky, ambiguous, destructive, or product-defining, use escalate.
 - If the assistant is clearly asking for the routine "ok, continue" on the same task, prefer continue.
 - Use the transcript tail, session summary, and recent loop decisions together.
+- If you choose continue, include a concrete follow_up_prompt that can be sent
+  directly back into the same coding session. Keep it narrow and action-oriented.
+- If you do not choose continue, set follow_up_prompt to null.
 
 Return JSON only. No markdown, no prose outside the JSON object."""
 
@@ -76,6 +80,7 @@ class LoopControllerDecision:
     summary: str
     rationale: str
     recommended_action: str | None = None
+    follow_up_prompt: str | None = None
     blocked_reasons: tuple[str, ...] = ()
     model_id: str | None = None
     raw_response: str | None = None
@@ -105,6 +110,7 @@ def _parse_decision(raw: str, *, model_id: str, loop_thread_id: int) -> LoopCont
     summary = str(parsed.get("summary") or "").strip()
     rationale = str(parsed.get("rationale") or "").strip()
     recommended_action = str(parsed.get("recommended_action") or "").strip() or None
+    follow_up_prompt = str(parsed.get("follow_up_prompt") or "").strip() or None
     blocked_reasons_raw = parsed.get("blocked_reasons")
     blocked_reasons = (
         tuple(str(item).strip() for item in blocked_reasons_raw if str(item).strip()) if isinstance(blocked_reasons_raw, list) else ()
@@ -114,12 +120,15 @@ def _parse_decision(raw: str, *, model_id: str, loop_thread_id: int) -> LoopCont
         raise ValueError("loop controller response missing summary")
     if not rationale:
         raise ValueError("loop controller response missing rationale")
+    if decision == "continue" and not follow_up_prompt:
+        raise ValueError("loop controller continue response missing follow_up_prompt")
 
     return LoopControllerDecision(
         decision=decision,
         summary=summary,
         rationale=rationale,
         recommended_action=recommended_action,
+        follow_up_prompt=follow_up_prompt,
         blocked_reasons=blocked_reasons,
         model_id=model_id,
         raw_response=raw,
