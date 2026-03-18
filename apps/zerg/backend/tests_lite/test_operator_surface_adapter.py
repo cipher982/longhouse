@@ -30,6 +30,43 @@ async def test_operator_adapter_normalize_inbound_builds_event():
 
 
 @pytest.mark.asyncio
+async def test_operator_adapter_appends_shadow_loop_review_guidance():
+    adapter = OperatorSurfaceAdapter(owner_id=7)
+
+    event = await adapter.normalize_inbound(
+        {
+            "owner_id": 7,
+            "message": "operator wakeup",
+            "message_id": "msg-2",
+            "conversation_id": "operator:main",
+            "run_id": 100,
+            "shadow_review": {
+                "decision": {
+                    "summary": "The next step is explicit and bounded.",
+                },
+                "loop_review": {
+                    "loop_mode": "autopilot",
+                    "mode_capability": "bounded_autonomy",
+                    "mode_summary": "May continue only explicit bounded follow-ups.",
+                    "execution_state": "would_auto_continue",
+                    "recommended_action": "continue_session",
+                    "blocked_reasons": ["Waiting on targeted verification only."],
+                },
+            },
+        }
+    )
+
+    assert event is not None
+    assert "operator wakeup" in event.text
+    assert "Deterministic loop review (shadow-only hard bound):" in event.text
+    assert "- Loop mode: autopilot" in event.text
+    assert "- Capability ceiling: bounded_autonomy" in event.text
+    assert "- Shadow execution state: would_auto_continue" in event.text
+    assert "- Recommended action: continue_session" in event.text
+    assert "Stay within this ceiling." in event.text
+
+
+@pytest.mark.asyncio
 async def test_operator_adapter_normalize_requires_message_id():
     adapter = OperatorSurfaceAdapter(owner_id=7)
 

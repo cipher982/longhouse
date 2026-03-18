@@ -330,7 +330,9 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     assert kwargs["source"] == "operator"
     assert kwargs["surface_payload"]["trigger_type"] == "session_completed"
     assert kwargs["surface_payload"]["session_id"] == session_id
-    assert "shadow_review" not in kwargs["surface_payload"]
+    assert kwargs["surface_payload"]["shadow_review"]["decision"]["decision"] == "suggest_continue"
+    assert kwargs["surface_payload"]["shadow_review"]["loop_review"]["loop_mode"] == "assist"
+    assert kwargs["surface_payload"]["shadow_review"]["loop_review"]["mode_capability"] == "notify_only"
 
     tasks = _get_tasks(factory, status="done")
     wakeups = _get_wakeups(factory)

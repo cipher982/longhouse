@@ -245,7 +245,7 @@ async def _maybe_invoke_operator_wakeup(
             message_id,
             source="operator",
             surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
-            surface_payload=surface_payload,
+            surface_payload=ledger_payload,
         )
         append_wakeup(
             db,

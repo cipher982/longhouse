@@ -21,7 +21,7 @@ class OperatorSurfaceAdapter:
 
     async def normalize_inbound(self, raw_input: Any) -> SurfaceInboundEvent | None:
         payload = raw_input if isinstance(raw_input, dict) else {}
-        text = str(payload.get("message", "") or "").strip()
+        text = _augment_operator_message(str(payload.get("message", "") or "").strip(), payload)
         if not text:
             return None
 
@@ -95,3 +95,60 @@ class OperatorSurfaceAdapter:
         del owner_id
         del text
         del event
+
+
+def _augment_operator_message(base_text: str, payload: dict[str, Any]) -> str:
+    text = base_text.strip()
+    guidance = _format_loop_review_guidance(payload)
+    if guidance:
+        text = f"{text}\n\n{guidance}" if text else guidance
+    return text
+
+
+def _format_loop_review_guidance(payload: dict[str, Any]) -> str:
+    shadow_review = payload.get("shadow_review")
+    if not isinstance(shadow_review, dict):
+        return ""
+
+    loop_review = shadow_review.get("loop_review")
+    if not isinstance(loop_review, dict):
+        return ""
+
+    decision = shadow_review.get("decision")
+    if not isinstance(decision, dict):
+        decision = {}
+
+    lines = ["Deterministic loop review (shadow-only hard bound):"]
+
+    loop_mode = str(loop_review.get("loop_mode") or "").strip()
+    if loop_mode:
+        lines.append(f"- Loop mode: {loop_mode}")
+
+    mode_capability = str(loop_review.get("mode_capability") or "").strip()
+    if mode_capability:
+        lines.append(f"- Capability ceiling: {mode_capability}")
+
+    execution_state = str(loop_review.get("execution_state") or "").strip()
+    if execution_state:
+        lines.append(f"- Shadow execution state: {execution_state}")
+
+    mode_summary = str(loop_review.get("mode_summary") or "").strip()
+    if mode_summary:
+        lines.append(f"- Mode summary: {mode_summary}")
+
+    decision_summary = str(decision.get("summary") or "").strip()
+    if decision_summary:
+        lines.append(f"- Shadow decision summary: {decision_summary}")
+
+    recommended_action = str(loop_review.get("recommended_action") or "").strip()
+    if recommended_action:
+        lines.append(f"- Recommended action: {recommended_action}")
+
+    blocked_reasons = loop_review.get("blocked_reasons")
+    if isinstance(blocked_reasons, list):
+        clean_reasons = [str(reason).strip() for reason in blocked_reasons if str(reason).strip()]
+        if clean_reasons:
+            lines.append(f"- Blocked reasons: {'; '.join(clean_reasons)}")
+
+    lines.append("- Stay within this ceiling. Do not take actions more aggressive than this review allows.")
+    return "\n".join(lines)
