@@ -89,11 +89,11 @@ export interface RunnerUpdateRuntime {
   platform?: NodeJS.Platform;
   arch?: string;
   publicKeyPem?: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
   now?: () => Date;
 }
 
-type FetchLike = typeof fetch;
+export type FetchLike = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 
 const DEFAULT_UPDATE_CHECK_INTERVAL_SEC = 4 * 60 * 60;
 const DEFAULT_UPDATE_JITTER_SEC = 5 * 60;
