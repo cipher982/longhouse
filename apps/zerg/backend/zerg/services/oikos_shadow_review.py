@@ -88,6 +88,29 @@ def _serialize_action(action: AutonomyProposedAction) -> dict[str, Any]:
     }
 
 
+def _build_loop_review(
+    packet: AutonomyContextPacket,
+    decision,
+) -> dict[str, Any]:
+    proposed_actions = list(decision.proposed_actions or [])
+    recommended_action = None
+    if proposed_actions:
+        primary_action = proposed_actions[0]
+        payload_recommendation = primary_action.payload.get("recommended_action") if primary_action.payload else None
+        recommended_action = str(payload_recommendation or primary_action.kind)
+
+    return {
+        "loop_mode": packet.primary_session.loop_mode.value,
+        "mode_capability": decision.mode_capability,
+        "mode_summary": decision.mode_summary,
+        "execution_state": decision.execution_state,
+        "would_notify_user": any(action.kind == "notify_user" for action in proposed_actions),
+        "would_continue_session": any(action.kind == "continue_session" for action in proposed_actions),
+        "blocked_reasons": list(decision.blocked_reasons or []),
+        "recommended_action": recommended_action,
+    }
+
+
 def _build_session_snapshot(
     db: Session,
     session: AgentSession,
@@ -196,8 +219,13 @@ async def build_session_shadow_review(
             "summary": decision.summary,
             "rationale": decision.rationale,
             "needs_human": decision.needs_human,
+            "mode_capability": decision.mode_capability,
+            "mode_summary": decision.mode_summary,
+            "execution_state": decision.execution_state,
+            "blocked_reasons": list(decision.blocked_reasons or []),
             "proposed_actions": [_serialize_action(action) for action in decision.proposed_actions],
         },
+        "loop_review": _build_loop_review(packet, decision),
         "context": {
             "trigger": {
                 "type": packet.trigger.type,

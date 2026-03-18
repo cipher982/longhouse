@@ -181,6 +181,10 @@ class AutonomyDecision:
     summary: str
     proposed_actions: list[AutonomyProposedAction] = field(default_factory=list)
     needs_human: bool = False
+    mode_capability: str = "observe_only"
+    mode_summary: str = ""
+    execution_state: str = "no_action"
+    blocked_reasons: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -288,6 +292,61 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
     risk_level = str(trigger_payload.get("risk_level") or "").strip().lower()
     explicit_refusal = bool(trigger_payload.get("explicit_refusal", False))
 
+    def _loop_mode_profile(session: AutonomySessionSnapshot) -> tuple[str, str]:
+        if session.loop_mode == SessionLoopMode.MANUAL:
+            return (
+                "observe_only",
+                "Observe only. Oikos records context but does not proactively ping or continue this session.",
+            )
+        if session.loop_mode == SessionLoopMode.ASSIST:
+            if packet.policy.allow_notify:
+                return (
+                    "notify_only",
+                    "Suggest bounded next steps or escalations, but wait for user approval before continuing.",
+                )
+            return (
+                "observe_only",
+                "Assist mode is set, but proactive user notifications are disabled right now.",
+            )
+        if packet.policy.allow_continue and session.resumable:
+            return (
+                "bounded_autonomy",
+                "Continue one bounded next step automatically when the session is resumable and policy allows it.",
+            )
+        if packet.policy.allow_notify:
+            return (
+                "notify_only",
+                "Autopilot is set, but this session cannot auto-continue right now, so Oikos can only notify the user.",
+            )
+        return (
+            "observe_only",
+            ("Autopilot is set, but both continuation and proactive " "notifications are disabled, so Oikos will observe only."),
+        )
+
+    primary_mode_capability, primary_mode_summary = _loop_mode_profile(packet.primary_session)
+
+    def _make_decision(
+        *,
+        decision: str,
+        rationale: str,
+        summary: str,
+        proposed_actions: list[AutonomyProposedAction] | None = None,
+        needs_human: bool = False,
+        execution_state: str = "no_action",
+        blocked_reasons: list[str] | None = None,
+    ) -> AutonomyDecision:
+        return AutonomyDecision(
+            decision=decision,
+            rationale=rationale,
+            summary=summary,
+            proposed_actions=list(proposed_actions or []),
+            needs_human=needs_human,
+            mode_capability=primary_mode_capability,
+            mode_summary=primary_mode_summary,
+            execution_state=execution_state,
+            blocked_reasons=list(blocked_reasons or []),
+        )
+
     def _supports_operator_prompt(session: AutonomySessionSnapshot) -> bool:
         return packet.policy.allow_notify and session.loop_mode != SessionLoopMode.MANUAL
 
@@ -376,26 +435,24 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
         )
 
     if packet.trigger.type == "session_needs_user":
-        return AutonomyDecision(
+        return _make_decision(
             decision="ignore",
             rationale="The session is paused for user input, with no reason for Oikos to re-prompt yet.",
             summary="Leave the session parked until the user comes back.",
-            proposed_actions=[],
-            needs_human=False,
+            execution_state="no_action",
         )
 
     if packet.trigger.type == "duplicate_wakeup" or "duplicate wakeup" in trigger_summary:
-        return AutonomyDecision(
+        return _make_decision(
             decision="ignore",
             rationale="The wakeup repeats an existing blocked or needs_user state and would only create churn.",
             summary="Ignore the duplicate wakeup and avoid busywork.",
-            proposed_actions=[],
-            needs_human=False,
+            execution_state="no_action",
         )
 
     if _needs_risk_escalation():
         if not _supports_operator_prompt(packet.primary_session):
-            return AutonomyDecision(
+            return _make_decision(
                 decision="ignore",
                 rationale=" ".join(
                     [
@@ -404,10 +461,10 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                     ]
                 ),
                 summary="Leave the risky branch untouched until the user returns.",
-                proposed_actions=[],
-                needs_human=False,
+                execution_state="observe_only",
+                blocked_reasons=["Risky or explicitly declined next step requires direct approval."],
             )
-        return AutonomyDecision(
+        return _make_decision(
             decision="escalate",
             rationale=" ".join(
                 [
@@ -425,18 +482,20 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                 )
             ],
             needs_human=True,
+            execution_state="needs_human",
+            blocked_reasons=["Risky or explicitly declined next step requires direct approval."],
         )
 
     if _auto_continue_cap_hit():
         if not _supports_operator_prompt(packet.primary_session):
-            return AutonomyDecision(
+            return _make_decision(
                 decision="ignore",
                 rationale="Manual mode disables another proactive nudge even after multiple autonomous loops.",
                 summary="Stop here and wait for the user.",
-                proposed_actions=[],
-                needs_human=False,
+                execution_state="observe_only",
+                blocked_reasons=["Autonomous continue cap reached."],
             )
-        return AutonomyDecision(
+        return _make_decision(
             decision="escalate",
             rationale=" ".join(
                 [
@@ -454,11 +513,13 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                 )
             ],
             needs_human=True,
+            execution_state="needs_human",
+            blocked_reasons=["Autonomous continue cap reached."],
         )
 
     if _needs_on_demand_runner():
         if not _supports_operator_prompt(packet.primary_session):
-            return AutonomyDecision(
+            return _make_decision(
                 decision="ignore",
                 rationale=" ".join(
                     [
@@ -467,10 +528,10 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                     ]
                 ),
                 summary="Wait for the user to wake the required runner.",
-                proposed_actions=[],
-                needs_human=False,
+                execution_state="observe_only",
+                blocked_reasons=["Required on-demand runner appears asleep."],
             )
-        return AutonomyDecision(
+        return _make_decision(
             decision="escalate",
             rationale=(
                 "The next step depends on an on-demand runner that appears "
@@ -487,11 +548,14 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                 )
             ],
             needs_human=True,
+            execution_state="needs_human",
+            blocked_reasons=["Required on-demand runner appears asleep."],
         )
 
     human_fork_session = _find_human_fork_session()
     if human_fork_session is not None:
-        return AutonomyDecision(
+        blocked_reason = human_fork_session.blocked_reason or "Human product decision required."
+        return _make_decision(
             decision="escalate",
             rationale="A real human decision fork should take priority over routine autonomous follow-up.",
             summary="Escalate the product decision blocker to the user.",
@@ -503,10 +567,12 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                 )
             ],
             needs_human=True,
+            execution_state="needs_human",
+            blocked_reasons=[blocked_reason],
         )
 
     if _has_bounded_follow_up() and _supports_autonomous_continue(packet.primary_session):
-        return AutonomyDecision(
+        return _make_decision(
             decision="continue_session",
             rationale="The session explicitly left one bounded follow-up step undone.",
             summary="Continue the session to execute the remaining bounded follow-up.",
@@ -517,11 +583,11 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                     summary="Ask the same session to execute the remaining bounded follow-up.",
                 )
             ],
-            needs_human=False,
+            execution_state="would_auto_continue",
         )
 
     if _has_bounded_follow_up() and _supports_operator_prompt(packet.primary_session):
-        return AutonomyDecision(
+        return _make_decision(
             decision="suggest_continue",
             rationale=" ".join(
                 [
@@ -539,14 +605,14 @@ async def baseline_shadow_decider(packet: AutonomyContextPacket) -> AutonomyDeci
                 )
             ],
             needs_human=True,
+            execution_state="awaiting_user_approval",
         )
 
-    return AutonomyDecision(
+    return _make_decision(
         decision="ignore",
         rationale="Nothing in the wakeup suggests a meaningful next action.",
         summary="No follow-up action needed.",
-        proposed_actions=[],
-        needs_human=False,
+        execution_state="no_action",
     )
 
 

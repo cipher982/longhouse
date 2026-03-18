@@ -62,6 +62,7 @@ async def test_runner_persists_artifacts_and_matches_expected_outcomes(tmp_path)
         artifact_root=tmp_path,
         decider=baseline_shadow_decider,
     )
+    decisions_by_case: dict[str, dict] = {}
 
     for case in _load_cases():
         result: AutonomyJourneyResult = await runner.run_case(case)
@@ -96,8 +97,21 @@ async def test_runner_persists_artifacts_and_matches_expected_outcomes(tmp_path)
         assert decision["decision"] == case.expected.decision
         assert decision["needs_human"] == case.expected.needs_human
         assert decision["summary"]
+        assert decision["mode_capability"]
+        assert decision["mode_summary"]
+        assert decision["execution_state"]
+        assert isinstance(decision["blocked_reasons"], list)
         assert assertions
         assert all(assertion["passed"] for assertion in assertions)
+        decisions_by_case[case.id] = decision
+
+    assert decisions_by_case["assist_bounded_follow_up_suggest"]["mode_capability"] == "notify_only"
+    assert decisions_by_case["assist_bounded_follow_up_suggest"]["execution_state"] == "awaiting_user_approval"
+    assert decisions_by_case["completed_obvious_follow_up"]["mode_capability"] == "bounded_autonomy"
+    assert decisions_by_case["completed_obvious_follow_up"]["execution_state"] == "would_auto_continue"
+    assert decisions_by_case["risky_follow_up_requires_escalation"]["blocked_reasons"] == [
+        "Risky or explicitly declined next step requires direct approval."
+    ]
 
 
 @pytest.mark.asyncio

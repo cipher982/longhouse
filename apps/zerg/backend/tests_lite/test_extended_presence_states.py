@@ -542,7 +542,10 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
     assert wakeups[0].session_id == sid
     assert wakeups[0].payload["tool_name"] == "Bash"
     assert wakeups[0].payload["shadow_review"]["decision"]["decision"] == "continue_session"
+    assert wakeups[0].payload["shadow_review"]["decision"]["execution_state"] == "would_auto_continue"
     assert wakeups[0].payload["shadow_review"]["context"]["primary_session"]["loop_mode"] == "autopilot"
+    assert wakeups[0].payload["shadow_review"]["loop_review"]["mode_capability"] == "bounded_autonomy"
+    assert wakeups[0].payload["shadow_review"]["loop_review"]["would_continue_session"] is True
 
 
 def test_repeated_blocked_state_does_not_rewake_operator(monkeypatch, tmp_path):
