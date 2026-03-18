@@ -533,7 +533,9 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
     assert calls[0]["surface_adapter"].surface_id == "operator"
     assert calls[0]["surface_payload"]["session_id"] == sid
     assert calls[0]["surface_payload"]["trigger_type"] == "presence.blocked"
-    assert "shadow_review" not in calls[0]["surface_payload"]
+    assert calls[0]["surface_payload"]["shadow_review"]["decision"]["decision"] == "continue_session"
+    assert calls[0]["surface_payload"]["shadow_review"]["loop_review"]["loop_mode"] == "autopilot"
+    assert calls[0]["surface_payload"]["shadow_review"]["loop_review"]["mode_capability"] == "bounded_autonomy"
     assert len(wakeups) == 1
     assert wakeups[0].status == "enqueued"
     assert wakeups[0].run_id == 123

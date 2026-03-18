@@ -409,7 +409,7 @@ async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str
             message_id,
             source="operator",
             surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
-            surface_payload=surface_payload,
+            surface_payload=ledger_payload,
         )
         log_db = factory()
         try:
