@@ -1074,7 +1074,7 @@ test.describe("Session Detail Page", () => {
 
 test.describe("Sessions Navigation", () => {
   test("Sessions tab in nav links to /sessions", async ({ page }) => {
-    await page.goto("/dashboard");
+    await page.goto("/automations");
     await page.waitForSelector(".header-nav", { timeout: 10000 });
 
     // Click Timeline tab

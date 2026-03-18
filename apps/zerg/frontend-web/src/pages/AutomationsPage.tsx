@@ -28,9 +28,9 @@ import {
   Spinner
 } from "../components/ui";
 import { useConfirm } from "../components/confirm";
-import { AutomationTableRow } from "./dashboard/AutomationTableRow";
-import { sortAutomations, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type AutomationRunsState } from "./dashboard/sorting";
-import { applyRunUpdate, applyAutomationStateUpdate } from "./dashboard/websocketHandlers";
+import { AutomationTableRow } from "./automations/AutomationTableRow";
+import { sortAutomations, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type AutomationRunsState } from "./automations/sorting";
+import { applyRunUpdate, applyAutomationStateUpdate } from "./automations/websocketHandlers";
 
 // App logo (served from public folder)
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
@@ -40,7 +40,7 @@ type Scope = "my" | "all";
 const RUNS_LIMIT = 50;
 const AUTOMATION_TOPIC_PREFIX = "automation:";
 
-function parseDashboardTopic(topic: string): number | null {
+function parseAutomationTopic(topic: string): number | null {
   if (!topic.startsWith(AUTOMATION_TOPIC_PREFIX)) {
     return null;
   }
@@ -54,7 +54,7 @@ function isAutomationLifecycleEvent(eventType: string): boolean {
   return eventType === "automation_state" || eventType === "automation_updated";
 }
 
-export default function DashboardPage() {
+export default function AutomationsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
@@ -62,7 +62,7 @@ export default function DashboardPage() {
   const [scope, setScope] = useState<Scope>("my");
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => loadSortConfig());
   const [expandedAutomationId, setExpandedAutomationId] = useState<number | null>(null);
-  const dashboardQueryKey = useMemo(() => ["dashboard", scope, RUNS_LIMIT] as const, [scope]);
+  const automationOverviewQueryKey = useMemo(() => ["automations-overview", scope, RUNS_LIMIT] as const, [scope]);
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
   const [settingsAutomationId, setSettingsAutomationId] = useState<number | null>(null);
   const [editingAutomationId, setEditingAutomationId] = useState<number | null>(null);
@@ -81,19 +81,19 @@ export default function DashboardPage() {
   // Generate unique message IDs to prevent collision
   const generateMessageId = useCallback(() => {
     messageIdCounterRef.current += 1;
-    return `dashboard-${Date.now()}-${messageIdCounterRef.current}`;
+    return `automations-${Date.now()}-${messageIdCounterRef.current}`;
   }, []);
 
-  const applyDashboardUpdate = useCallback(
+  const applyAutomationOverviewUpdate = useCallback(
     (updater: (current: AutomationOverviewSnapshot) => AutomationOverviewSnapshot) => {
-      queryClient.setQueryData<AutomationOverviewSnapshot>(dashboardQueryKey, (current) => {
+      queryClient.setQueryData<AutomationOverviewSnapshot>(automationOverviewQueryKey, (current) => {
         if (!current) {
           return current;
         }
         return updater(current);
       });
     },
-    [dashboardQueryKey, queryClient]
+    [automationOverviewQueryKey, queryClient]
   );
 
   // WebSocket message handler must be defined before useWebSocket hook
@@ -126,7 +126,7 @@ export default function DashboardPage() {
       }
 
       const topic = typeof message.topic === "string" ? message.topic : "";
-      const automationId = parseDashboardTopic(topic);
+      const automationId = parseAutomationTopic(topic);
       if (automationId == null) {
         return;
       }
@@ -136,16 +136,16 @@ export default function DashboardPage() {
       const eventType = message.type;
 
       if (isAutomationLifecycleEvent(eventType)) {
-        applyDashboardUpdate((current) => applyAutomationStateUpdate(current, automationId, dataPayload));
+        applyAutomationOverviewUpdate((current) => applyAutomationStateUpdate(current, automationId, dataPayload));
         return;
       }
 
       if (eventType === "run_update") {
-        applyDashboardUpdate((current) => applyRunUpdate(current, automationId, dataPayload));
+        applyAutomationOverviewUpdate((current) => applyRunUpdate(current, automationId, dataPayload));
         return;
       }
     },
-    [applyDashboardUpdate]
+    [applyAutomationOverviewUpdate]
   );
 
   const { connectionStatus, sendMessage } = useWebSocket(isAuthenticated, {
@@ -174,37 +174,37 @@ export default function DashboardPage() {
   }, [modelsData]);
 
   const {
-    data: dashboardData,
+    data: automationOverviewData,
     isLoading,
     error,
   } = useQuery<AutomationOverviewSnapshot>({
-    queryKey: dashboardQueryKey,
+    queryKey: automationOverviewQueryKey,
     queryFn: () => fetchAutomationOverview({ scope, runsLimit: RUNS_LIMIT }),
     refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
-  const automations: AutomationSummary[] = useMemo(() => dashboardData?.automations ?? [], [dashboardData]);
+  const automations: AutomationSummary[] = useMemo(() => automationOverviewData?.automations ?? [], [automationOverviewData]);
 
   const runsByAutomation: AutomationRunsState = useMemo(() => {
-    if (!dashboardData) {
+    if (!automationOverviewData) {
       return {};
     }
 
     const lookup: AutomationRunsState = {};
-    for (const bundle of dashboardData.runs) {
+    for (const bundle of automationOverviewData.runs) {
       lookup[bundle.automationId] = bundle.runs;
     }
 
-    for (const automation of dashboardData.automations) {
+    for (const automation of automationOverviewData.automations) {
       if (!lookup[automation.id]) {
         lookup[automation.id] = [];
       }
     }
 
     return lookup;
-  }, [dashboardData]);
+  }, [automationOverviewData]);
 
-  const runsDataLoading = isLoading && !dashboardData;
+  const runsDataLoading = isLoading && !automationOverviewData;
 
   // Readiness Contract (see src/lib/readiness-contract.ts):
   // - data-ready="true": Page is INTERACTIVE (can click, type)
@@ -212,7 +212,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!isLoading) {
       document.body.setAttribute('data-ready', 'true');
-      // Dashboard is screenshot-ready as soon as it's interactive.
+      // Automations overview is screenshot-ready as soon as it's interactive.
       // The automations table is visible even if empty.
       document.body.setAttribute('data-screenshot-ready', 'true');
     }
@@ -231,11 +231,11 @@ export default function DashboardPage() {
   const startRunMutation = useMutation({
     mutationFn: runAutomationTask,
     onMutate: async (automationId: number) => {
-      await queryClient.cancelQueries({ queryKey: dashboardQueryKey });
+      await queryClient.cancelQueries({ queryKey: automationOverviewQueryKey });
 
-      const previousSnapshot = queryClient.getQueryData<AutomationOverviewSnapshot>(dashboardQueryKey);
+      const previousSnapshot = queryClient.getQueryData<AutomationOverviewSnapshot>(automationOverviewQueryKey);
 
-      queryClient.setQueryData<AutomationOverviewSnapshot>(dashboardQueryKey, (current) => {
+      queryClient.setQueryData<AutomationOverviewSnapshot>(automationOverviewQueryKey, (current) => {
         if (!current) {
           return current;
         }
@@ -252,12 +252,12 @@ export default function DashboardPage() {
     },
     onError: (err: Error, automationId: number, context) => {
       if (context?.previousSnapshot) {
-        queryClient.setQueryData(dashboardQueryKey, context.previousSnapshot);
+        queryClient.setQueryData(automationOverviewQueryKey, context.previousSnapshot);
       }
       console.error("Failed to start run:", err);
     },
     onSettled: (_, __, automationId) => {
-      dispatchDashboardEvent("run", automationId);
+      dispatchAutomationEvent("run", automationId);
     },
   });
 
@@ -424,7 +424,7 @@ export default function DashboardPage() {
     },
     onSuccess: () => {
       // WebSocket will deliver the automation with its final name.
-      queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
+      queryClient.invalidateQueries({ queryKey: automationOverviewQueryKey });
       idempotencyKeyRef.current = null; // Reset for next creation
     },
   });
@@ -433,7 +433,7 @@ export default function DashboardPage() {
   const deleteAutomationMutation = useMutation({
     mutationFn: deleteAutomationRecord,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
+      queryClient.invalidateQueries({ queryKey: automationOverviewQueryKey });
     },
   });
 
@@ -451,7 +451,7 @@ export default function DashboardPage() {
 
     try {
       await updateAutomationRecord(automationId, { name: editingName });
-      queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
+      queryClient.invalidateQueries({ queryKey: automationOverviewQueryKey });
     } catch (error) {
       console.error("Failed to rename:", error);
     }
@@ -471,7 +471,7 @@ export default function DashboardPage() {
 
   if (isLoading) {
     return (
-      <div id="dashboard-container" className="dashboard-page">
+      <div id="automations-container" className="automations-page">
         <EmptyState
           icon={<Spinner size="lg" />}
           title="Loading automations..."
@@ -484,13 +484,13 @@ export default function DashboardPage() {
   if (error) {
     const message = error instanceof Error ? error.message : "Failed to load automations";
     return (
-      <div id="dashboard-container" className="dashboard-page">
+      <div id="automations-container" className="automations-page">
         <EmptyState
           variant="error"
-          title="Error loading dashboard"
+          title="Error loading automations"
           description={message}
           action={
-            <Button onClick={() => queryClient.invalidateQueries({ queryKey: dashboardQueryKey })}>
+            <Button onClick={() => queryClient.invalidateQueries({ queryKey: automationOverviewQueryKey })}>
               Retry
             </Button>
           }
@@ -503,23 +503,23 @@ export default function DashboardPage() {
   const emptyColspan = includeOwner ? 8 : 7;
 
   return (
-    <div id="dashboard-container" className="dashboard-page">
+    <div id="automations-container" className="automations-page">
       <SectionHeader
-        className="dashboard-hero"
+        className="automations-hero"
         title={scope === "all" ? "All automations" : "My automations"}
         description="Monitor and manage your automations."
         actions={
-          <div className="dashboard-actions">
-            <div className="dashboard-actions__stats">
+          <div className="automations-actions">
+            <div className="automations-actions__stats">
               <UsageWidget />
             </div>
-            <div className="dashboard-actions__controls">
+            <div className="automations-actions__controls">
               <div className="scope-wrapper">
                 <label className="scope-toggle">
                   <input
                     type="checkbox"
-                    id="dashboard-scope-toggle"
-                    data-testid="dashboard-scope-toggle"
+                    id="automations-scope-toggle"
+                    data-testid="automations-scope-toggle"
                     aria-label="Toggle between my automations and all automations"
                     checked={scope === "all"}
                     onChange={(e) => {
@@ -550,7 +550,7 @@ export default function DashboardPage() {
         }
       />
 
-      <div className="dashboard-content">
+      <div className="automations-content">
         <Table className="automations-table">
           <Table.Header>
             {renderHeaderCell("Name", "name", sortConfig, handleSort)}
@@ -587,14 +587,14 @@ export default function DashboardPage() {
                 onSaveNameAndExit={saveNameAndExit}
                 onCancelEditing={cancelEditing}
                 onEditingNameChange={setEditingName}
-                onRunActionsClick={dispatchDashboardEvent.bind(null, "run-actions")}
+                onRunActionsClick={dispatchAutomationEvent.bind(null, "run-actions")}
               />
             ))}
             {sortedAutomations.length === 0 && (
               <Table.Row className="automations-empty-row">
                 <Table.Cell colSpan={emptyColspan} className="automations-empty-cell">
                   <EmptyState
-                    icon={<img src={appLogo} alt="Longhouse Logo" className="dashboard-empty-logo" />}
+                    icon={<img src={appLogo} alt="Longhouse Logo" className="automations-empty-logo" />}
                     title="No automations found"
                     description="Click 'Create Automation' to get started."
                   />
@@ -708,13 +708,13 @@ const renderHeaderCell: HeaderRenderer = (label, sortKey, sortConfig, onSort, so
   );
 };
 
-type DashboardEventType = "run" | "edit" | "debug" | "delete" | "run-actions";
+type AutomationEventType = "run" | "edit" | "debug" | "delete" | "run-actions";
 
-function dispatchDashboardEvent(type: DashboardEventType, automationId: number, runId?: number) {
+function dispatchAutomationEvent(type: AutomationEventType, automationId: number, runId?: number) {
   if (typeof window === "undefined") {
     return;
   }
-  const event = new CustomEvent("dashboard:event", {
+  const event = new CustomEvent("automations:event", {
     detail: {
       type,
       automationId,

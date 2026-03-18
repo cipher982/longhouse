@@ -16,7 +16,7 @@ import { expect, type Page, type APIRequestContext } from '@playwright/test';
  * This prevents race conditions where .first() returns a stale row.
  */
 export async function createAgentViaUI(page: Page): Promise<string> {
-  await page.goto('/dashboard');
+  await page.goto('/automations');
 
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
@@ -84,12 +84,12 @@ export async function navigateToChat(page: Page, agentId: string): Promise<void>
 }
 
 /**
- * Navigate to dashboard and wait for it to be ready
+ * Navigate to automations and wait for it to be ready
  */
 export async function navigateToDashboard(page: Page): Promise<void> {
-  await page.goto('/dashboard');
+  await page.goto('/automations');
 
-  // Wait for dashboard to be fully loaded - the create button is a reliable signal
+  // Wait for automations to be fully loaded - the create button is a reliable signal
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });

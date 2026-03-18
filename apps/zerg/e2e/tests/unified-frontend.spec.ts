@@ -14,8 +14,8 @@
  * OR perform manual smoke tests (recommended for now):
  * - http://localhost:30080/ → Landing page
  * - http://localhost:30080/chat → Oikos chat UI
- * - http://localhost:30080/dashboard → Zerg dashboard
- * - Cross-navigation between /chat and /dashboard
+ * - http://localhost:30080/automations → Zerg automations
+ * - Cross-navigation between /chat and /automations
  *
  * Skipped when UNIFIED_BASE_URL is not set or the unified proxy is unavailable.
  */
@@ -44,7 +44,6 @@ test.describe('Unified Frontend Navigation', () => {
 
     // Wait for page title - use toHaveTitle() which correctly reads document.title
     await expect(page).toHaveTitle(/Longhouse/, { timeout: 10000 });
-    await expect(page).toHaveURL(/\/(dashboard)?$/);
   });
 
   test('chat page loads at /chat', async ({ page }) => {
@@ -56,64 +55,40 @@ test.describe('Unified Frontend Navigation', () => {
     await expect(page.locator('.oikos-container')).toBeVisible();
   });
 
-  test('dashboard page loads at /dashboard', async ({ page }) => {
-    await page.goto(`${UNIFIED_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
+  test('automations page loads at /automations', async ({ page }) => {
+    await page.goto(`${UNIFIED_URL}/automations`, { waitUntil: 'domcontentloaded' });
 
-    // Wait for header nav to load - indicates Zerg loaded
-    // Note: If auth redirect happens, this may fail - ensure AUTH_DISABLED=1 in .env
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
-    // Dashboard tab should be active
-    await expect(page.locator('.nav-tab--active:has-text("Dashboard")')).toBeVisible();
+    await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible();
   });
 
-  test('chat tab visible in Zerg dashboard', async ({ page }) => {
-    await page.goto(`${UNIFIED_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
+  test('Oikos tab is visible from automations', async ({ page }) => {
+    await page.goto(`${UNIFIED_URL}/automations`, { waitUntil: 'domcontentloaded' });
 
-    // Wait for dashboard to load
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
 
-    // Chat tab should be visible in the nav
-    const chatTab = page.locator('.nav-tab:has-text("Chat")');
-    await expect(chatTab).toBeVisible();
+    const oikosTab = page.locator('.nav-tab:has-text("Oikos")');
+    await expect(oikosTab).toBeVisible();
   });
 
-  test('dashboard link visible in Oikos chat', async ({ page }) => {
-    await page.goto(`${UNIFIED_URL}/chat`);
+  test('Oikos tab navigates from automations to chat', async ({ page }) => {
+    await page.goto(`${UNIFIED_URL}/automations`, { waitUntil: 'domcontentloaded' });
 
-    // Wait for chat to load
-    await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 10000 });
-
-    // Dashboard tab should be visible in header nav
-    const dashboardTab = page.locator('.nav-tab:has-text("Dashboard")');
-    await expect(dashboardTab).toBeVisible();
-  });
-
-  test('chat tab navigates from dashboard to chat', async ({ page }) => {
-    await page.goto(`${UNIFIED_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
-
-    // Wait for dashboard to load
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
 
-    // Click the chat tab
-    await page.click('.nav-tab:has-text("Chat")');
+    await page.click('.nav-tab:has-text("Oikos")');
 
-    // Wait for chat page to load
     await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 15000 });
     await expect(page).toHaveURL(/\/chat/);
   });
 
-  test('dashboard link navigates from chat to dashboard', async ({ page }) => {
+  test('automations route stays directly reachable after visiting chat', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/chat`);
 
-    // Wait for chat to load
     await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 15000 });
-
-    // Click the dashboard tab
-    await page.click('.nav-tab:has-text("Dashboard")');
-
-    // Wait for dashboard to load
-    await expect(page.locator('.nav-tab--active:has-text("Dashboard")')).toBeVisible({ timeout: 15000 });
-    await expect(page).toHaveURL(/\/dashboard/);
+    await page.goto(`${UNIFIED_URL}/automations`, { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 15000 });
+    await expect(page).toHaveURL(/\/automations/);
   });
 
   test('API health check via unified proxy', async ({ page }) => {

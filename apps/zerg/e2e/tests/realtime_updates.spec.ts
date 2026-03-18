@@ -29,8 +29,8 @@ test('WebSocket connection establishes successfully', async ({ page }) => {
 
   const wsPromise = page.waitForEvent('websocket', { timeout: 10000 });
 
-  // Navigate to dashboard so the dashboard readiness contract applies.
-  await page.goto('/dashboard');
+  // Navigate to automations so the automations readiness contract applies.
+  await page.goto('/automations');
   await waitForPageReady(page);
 
   await wsPromise;
@@ -129,8 +129,8 @@ test('WebSocket connection recovery after disconnect', async ({ page }) => {
     });
   });
 
-  // Navigate to dashboard so the dashboard readiness contract applies.
-  await page.goto('/dashboard');
+  // Navigate to automations so the automations readiness contract applies.
+  await page.goto('/automations');
   await waitForPageReady(page);
 
   // CRITICAL: Capture initial connection count

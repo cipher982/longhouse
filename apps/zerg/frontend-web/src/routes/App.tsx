@@ -7,7 +7,7 @@ import DocsPage from "../pages/DocsPage";
 import ChangelogPage from "../pages/ChangelogPage";
 import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
-import DashboardPage from "../pages/DashboardPage";
+import AutomationsPage from "../pages/AutomationsPage";
 import JobsPage from "../pages/JobsPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
@@ -294,12 +294,16 @@ export default function App() {
                 ),
               },
               {
-                path: "/dashboard",
+                path: "/automations",
                 element: (
                   <ErrorBoundary>
-                    <DashboardPage />
+                    <AutomationsPage />
                   </ErrorBoundary>
                 ),
+              },
+              {
+                path: "/dashboard",
+                element: <Navigate to="/automations" replace />,
               },
               {
                 path: "/jobs",

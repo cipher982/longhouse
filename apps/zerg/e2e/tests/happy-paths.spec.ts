@@ -12,7 +12,7 @@
  * - Tests are isolated (reset DB per test)
  *
  * Coverage:
- * - AGENT: Create, verify in dashboard
+ * - AGENT: Create, verify in automations
  * - CHAT: Navigate, send message, verify display
  * - THREAD: Create, switch, rename, verify isolation
  * - NAVIGATION: Browser back/forward, state persistence
@@ -21,7 +21,7 @@
 
 import { test, expect, type Page } from './fixtures';
 import { resetDatabase } from './test-utils';
-import { waitForDashboardReady } from './helpers/test-helpers';
+import { waitForAutomationsReady } from './helpers/test-helpers';
 
 // Reset DB before each test for clean, isolated state
 // Uses strict reset that throws on failure to fail fast
@@ -38,7 +38,7 @@ test.beforeEach(async ({ request }) => {
  * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
 async function createAutomationViaUI(page: Page): Promise<string> {
-  await waitForDashboardReady(page);
+  await waitForAutomationsReady(page);
 
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
@@ -154,8 +154,8 @@ async function createNewThread(page: Page): Promise<number> {
 // ============================================================================
 
 test.describe('Smoke Tests - Core Functionality', () => {
-  test('SMOKE 1: Create Automation - automation appears in dashboard', async ({ page }) => {
-    await waitForDashboardReady(page);
+  test('SMOKE 1: Create Automation - automation appears in automations', async ({ page }) => {
+    await waitForAutomationsReady(page);
 
     const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
@@ -350,7 +350,7 @@ test.describe('Data Persistence', () => {
     await expect(messagesContainer).toContainText(testMessage, { timeout: 15000 });
 
     // Navigate away and back
-    await waitForDashboardReady(page);
+    await waitForAutomationsReady(page);
 
     await navigateToChat(page, ficheId);
 
@@ -371,8 +371,8 @@ test.describe('Data Persistence', () => {
     // Capture thread URL
     const threadUrl = page.url();
 
-    // Navigate to dashboard then back (reload redirects to dashboard in this app)
-    await waitForDashboardReady(page);
+    // Navigate to automations then back (reload redirects to automations in this app)
+    await waitForAutomationsReady(page);
 
     // Navigate back to the exact thread URL
     await page.goto(threadUrl);
@@ -428,11 +428,11 @@ test.describe('URL Contract', () => {
 // ============================================================================
 
 test.describe('Navigation', () => {
-  test('NAV 1: Back to dashboard shows automation list', async ({ page }) => {
+  test('NAV 1: Back to automations shows automation list', async ({ page }) => {
     const automationId = await createAutomationViaUI(page);
     await navigateToChat(page, automationId);
 
-    // Go back to dashboard
+    // Go back to automations
     await page.goBack();
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 10000 });
 

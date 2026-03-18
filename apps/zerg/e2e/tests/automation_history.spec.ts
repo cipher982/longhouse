@@ -1,6 +1,6 @@
 import { test, expect, type Page } from './fixtures';
 import { resetDatabase } from './test-utils';
-import { waitForDashboardReady } from './helpers/test-helpers';
+import { waitForAutomationsReady } from './helpers/test-helpers';
 
 /**
  * AUTOMATION HISTORY E2E TESTS
@@ -26,7 +26,7 @@ test.beforeEach(async ({ request }) => {
  * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
 async function createAutomationAndGetId(page: Page): Promise<string> {
-  await waitForDashboardReady(page);
+  await waitForAutomationsReady(page);
 
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });

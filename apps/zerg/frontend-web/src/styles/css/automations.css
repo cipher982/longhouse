@@ -4,7 +4,7 @@
    ------------------------------------------------------------------ */
 
 @layer pages {
-  .dashboard-page {
+  .automations-page {
     flex: 1;
     padding: var(--space-6);
     width: 100%;
@@ -14,7 +14,7 @@
     overflow-y: auto;
     min-height: 0;
 
-    .dashboard-hero {
+    .automations-hero {
       border-radius: var(--radius-xl);
       padding: var(--space-4) var(--space-5);
       border: 1px solid var(--color-border-subtle);
@@ -24,24 +24,24 @@
       margin-bottom: var(--space-4);
     }
 
-    .dashboard-hero .ui-section-header {
+    .automations-hero .ui-section-header {
       margin-bottom: 0;
       padding-bottom: 0;
       border-bottom: none;
     }
 
-    .dashboard-hero .ui-section-header__title {
+    .automations-hero .ui-section-header__title {
       font-size: var(--font-size-lg);
       letter-spacing: -0.02em;
     }
 
-    .dashboard-hero .ui-section-header__description {
+    .automations-hero .ui-section-header__description {
       font-size: var(--font-size-sm);
       color: var(--color-text-secondary);
       max-width: 520px;
     }
 
-    .dashboard-content {
+    .automations-content {
       display: grid;
       gap: var(--space-6);
       margin-top: var(--space-6);
@@ -137,31 +137,22 @@
   }
 
   /* -------------------------------------------------------------
-   Dashboard layout, header & search
+   Automations layout, header & search
    ------------------------------------------------------------- */
 
-  .dashboard {
-    background: var(--color-surface-section);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-xl);
-    padding: var(--space-6);
-    box-shadow: var(--shadow-sm);
-    overflow-x: auto; /* allow table to scroll horizontally within card */
-  }
-
-  .dashboard-actions {
+  .automations-actions {
     display: flex;
     align-items: center;
     gap: var(--space-3);
     flex-wrap: wrap;
   }
 
-  .dashboard-actions__stats {
+  .automations-actions__stats {
     display: flex;
     justify-content: flex-end;
   }
 
-  .dashboard-actions__controls {
+  .automations-actions__controls {
     display: flex;
     align-items: center;
     gap: var(--spacing-sm);
@@ -169,11 +160,11 @@
     justify-content: flex-end;
   }
 
-  .dashboard-hero .ui-section-header__actions {
+  .automations-hero .ui-section-header__actions {
     align-items: center;
   }
 
-  .dashboard-actions__stats .usage-widget {
+  .automations-actions__stats .usage-widget {
     max-width: 200px;
     padding: var(--space-2) var(--space-3);
     background: transparent;
@@ -181,58 +172,58 @@
     box-shadow: none;
   }
 
-  .dashboard-actions__stats .usage-widget-header {
+  .automations-actions__stats .usage-widget-header {
     gap: var(--space-2);
     margin-bottom: var(--space-2);
   }
 
-  .dashboard-actions__stats .usage-widget-icon-wrapper {
+  .automations-actions__stats .usage-widget-icon-wrapper {
     width: 24px;
     height: 24px;
   }
 
-  .dashboard-actions__stats .usage-widget-icon {
+  .automations-actions__stats .usage-widget-icon {
     width: 12px;
     height: 12px;
   }
 
-  .dashboard-actions__stats .usage-widget-progress-container {
+  .automations-actions__stats .usage-widget-progress-container {
     display: none;
   }
 
-  .dashboard-actions__stats .usage-widget-summary {
+  .automations-actions__stats .usage-widget-summary {
     margin-bottom: var(--space-1);
   }
 
-  .dashboard-actions__stats .usage-widget-cost-value {
+  .automations-actions__stats .usage-widget-cost-value {
     font-size: 18px;
   }
 
-  .dashboard-actions__stats .usage-widget-details {
+  .automations-actions__stats .usage-widget-details {
     font-size: 11px;
   }
 
-  .dashboard-actions__stats .usage-widget-warning,
-  .dashboard-actions__stats .usage-widget-exceeded {
+  .automations-actions__stats .usage-widget-warning,
+  .automations-actions__stats .usage-widget-exceeded {
     display: none;
   }
 
-  .dashboard-hero .scope-toggle {
+  .automations-hero .scope-toggle {
     width: 64px;
     height: 26px;
   }
 
-  .dashboard-hero .slider::before {
+  .automations-hero .slider::before {
     width: 18px;
     height: 18px;
     left: 4px;
   }
 
-  .dashboard-hero .scope-toggle input:checked + .slider::before {
+  .automations-hero .scope-toggle input:checked + .slider::before {
     transform: translate(38px, -50%);
   }
 
-  .dashboard-empty-logo {
+  .automations-empty-logo {
     width: 160px;
     height: 160px;
     opacity: 0.8;
@@ -476,17 +467,17 @@
   @media (width <= 768px) {
     /* Stack header elements vertically on mobile */
 
-    .dashboard-actions {
+    .automations-actions {
       flex-direction: column;
       width: 100%;
     }
 
-    .dashboard-actions__stats {
+    .automations-actions__stats {
       justify-content: flex-start;
       width: 100%;
     }
 
-    .dashboard-actions__controls {
+    .automations-actions__controls {
       width: 100%;
       justify-content: flex-start;
     }

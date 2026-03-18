@@ -256,8 +256,8 @@ test.describe('Error Handling and Edge Cases', () => {
 
     const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Navigate to the live dashboard surface.
-    await page.goto('/dashboard');
+    // Navigate to the live automations surface.
+    await page.goto('/automations');
     const createAutomationButton = page.locator('[data-testid="create-automation-btn"]');
     await expect(createAutomationButton).toBeVisible({ timeout: 10000 });
 
@@ -267,7 +267,7 @@ test.describe('Error Handling and Edge Cases', () => {
       // Simulate offline state
       await page.context().setOffline(true);
 
-      // Try to interact with the live dashboard CTA while offline.
+      // Try to interact with the live automations CTA while offline.
       if (await createAutomationButton.count() > 0) {
         await createAutomationButton.click({ timeout: 2000 }).catch(() => {
           console.log('📊 Create automation click failed (expected while offline)');
@@ -319,8 +319,8 @@ test.describe('Error Handling and Edge Cases', () => {
       console.log('📊 JavaScript error caught:', error.message);
     });
 
-    // Navigate back to the live dashboard surface.
-    await page.goto('/dashboard');
+    // Navigate back to the live automations surface.
+    await page.goto('/automations');
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 10000 });
 
     // Try various UI interactions that might cause errors - wait for stable nav items

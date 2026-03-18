@@ -42,7 +42,7 @@ test.describe('Run Button Real-time Update', () => {
   }
 
   test('should transition to running via optimistic update and websocket', async ({ page }) => {
-    await page.goto('/dashboard');
+    await page.goto('/automations');
 
     // Slow down run requests so optimistic UI has time to render Running
     await page.route('**/api/automations/*/task', async (route) => {
@@ -71,7 +71,7 @@ test.describe('Run Button Real-time Update', () => {
   });
 
   test('should handle run button clicks with multiple automations', async ({ page }) => {
-    await page.goto('/dashboard');
+    await page.goto('/automations');
 
     // Slow down run requests so optimistic UI has time to render Running
     await page.route('**/api/automations/*/task', async (route) => {
@@ -110,7 +110,7 @@ test.describe('Run Button Real-time Update', () => {
   });
 
   test('should rollback optimistic update when API call fails', async ({ page }) => {
-    await page.goto('/dashboard');
+    await page.goto('/automations');
 
     const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });

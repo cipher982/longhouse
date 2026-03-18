@@ -5,7 +5,7 @@ import { resetDatabase } from '../test-utils';
 
 const MOBILE_PAGES: Array<PageDef & { navOpen?: boolean }> = APP_PAGES.map((pageDef) => ({
   ...pageDef,
-  navOpen: pageDef.name === 'dashboard',
+  navOpen: pageDef.name === 'automations',
 }));
 
 test.beforeEach(async ({ request }) => {

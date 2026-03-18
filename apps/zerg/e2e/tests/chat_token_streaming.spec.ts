@@ -8,7 +8,7 @@ test.beforeEach(async ({ request }) => {
 });
 
 async function createAutomationAndGetId(page: Page): Promise<string> {
-  await page.goto('/dashboard');
+  await page.goto('/automations');
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
 

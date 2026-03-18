@@ -94,8 +94,8 @@ export async function createMultipleAutomations(
  * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
 export async function createAutomationViaUI(page: Page): Promise<string> {
-  // Navigate to dashboard (root redirects to timeline in auth-disabled mode)
-  await page.goto('/dashboard');
+  // Navigate to automations (root redirects to timeline in auth-disabled mode)
+  await page.goto('/automations');
 
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });

@@ -11,7 +11,7 @@ import AxeBuilder from '@axe-core/playwright';
 
 const PAGES_TO_TEST = [
   { name: 'landing', path: '/', needsAuth: false },
-  { name: 'dashboard', path: '/dashboard', needsAuth: true },
+  { name: 'automations', path: '/automations', needsAuth: true },
   { name: 'timeline', path: '/timeline', needsAuth: true },
   { name: 'settings', path: '/settings', needsAuth: true },
 ];

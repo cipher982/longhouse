@@ -27,7 +27,7 @@ async function waitForRouteReady(page: Page, path: string) {
     case '/settings':
       await expect(page.getByRole('heading', { name: 'LLM Providers' })).toBeVisible({ timeout: 10_000 });
       return;
-    case '/dashboard':
+    case '/automations':
       await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 15_000 });
       return;
     case '/chat':
@@ -39,7 +39,7 @@ async function waitForRouteReady(page: Page, path: string) {
 }
 
 test.describe('Frontend API Contract', () => {
-  for (const path of ['/settings', '/dashboard', '/chat'] as const) {
+  for (const path of ['/settings', '/automations', '/chat'] as const) {
     test(`${path} loads without API errors`, async ({ context }) => {
       const page = await context.newPage();
       const apiErrors = trackApiErrors(page);
@@ -62,7 +62,7 @@ test.describe('Frontend API Contract', () => {
       }
     });
 
-    for (const path of ['/dashboard', '/settings', '/chat'] as const) {
+    for (const path of ['/automations', '/settings', '/chat'] as const) {
       await page.goto(path);
       await waitForRouteReady(page, path);
     }

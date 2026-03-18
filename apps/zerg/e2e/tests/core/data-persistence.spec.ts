@@ -21,7 +21,7 @@ test.beforeEach(async ({ request }) => {
  * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
 async function createAutomationViaUI(page: Page): Promise<string> {
-  await page.goto('/dashboard');
+  await page.goto('/automations');
   await waitForPageReady(page, { timeout: 20000 });
 
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
@@ -101,7 +101,7 @@ test.describe('Data Persistence - Core', () => {
     await expect(messagesContainer).toContainText(testMessage, { timeout: 15000 });
 
     // Navigate away
-    await page.goto('/dashboard');
+    await page.goto('/automations');
     await waitForPageReady(page, { timeout: 20000 });
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 20000 });
 
@@ -125,8 +125,8 @@ test.describe('Data Persistence - Core', () => {
     // Capture thread URL
     const threadUrl = page.url();
 
-    // Navigate to dashboard
-    await page.goto('/dashboard');
+    // Navigate to automations
+    await page.goto('/automations');
     await waitForPageReady(page, { timeout: 20000 });
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 20000 });
 

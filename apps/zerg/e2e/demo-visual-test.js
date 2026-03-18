@@ -132,7 +132,7 @@ function generateSummaryReport(mainResult, responsiveResults) {
 
 **Generated**: ${new Date().toISOString()}
 **Test Type**: AI-Powered UI Comparison
-**Variants Tested**: Rust/WASM vs React Dashboard
+**Variants Tested**: Rust/WASM vs React Automations
 
 ## Results Overview
 

@@ -17,8 +17,8 @@ const STATUS_ORDER: Record<string, number> = {
   error: 3,
 };
 
-const STORAGE_KEY_SORT = "dashboard_sort_key";
-const STORAGE_KEY_ASC = "dashboard_sort_asc";
+const STORAGE_KEY_SORT = "automations_sort_key";
+const STORAGE_KEY_ASC = "automations_sort_asc";
 
 export function loadSortConfig(): SortConfig {
   if (typeof window === "undefined") {
