@@ -11,11 +11,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Fiches */
-        get: operations["read_fiches_automations_get"];
+        /** List Automations */
+        get: operations["list_automations_automations_get"];
         put?: never;
-        /** Create Fiche */
-        post: operations["create_fiche_automations_post"];
+        /** Create Automation */
+        post: operations["create_automation_automations_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -29,11 +29,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Fiches */
-        get: operations["read_fiches_automations__get"];
+        /** List Automations */
+        get: operations["list_automations_automations__get"];
         put?: never;
-        /** Create Fiche */
-        post: operations["create_fiche_automations__post"];
+        /** Create Automation */
+        post: operations["create_automation_automations__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -47,8 +47,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Dashboard Snapshot */
-        get: operations["read_dashboard_snapshot_automations_dashboard_get"];
+        /** Read Automation Overview */
+        get: operations["read_automation_overview_automations_dashboard_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -57,34 +57,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/automations/{fiche_id}": {
+    "/api/automations/{automation_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Fiche */
-        get: operations["read_fiche_automations__fiche_id__get"];
-        /** Update Fiche */
-        put: operations["update_fiche_automations__fiche_id__put"];
+        /** Read Automation */
+        get: operations["read_automation_automations__automation_id__get"];
+        /** Update Automation */
+        put: operations["update_automation_automations__automation_id__put"];
         post?: never;
-        /** Delete Fiche */
-        delete: operations["delete_fiche_automations__fiche_id__delete"];
+        /** Delete Automation */
+        delete: operations["delete_automation_automations__automation_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/automations/{fiche_id}/details": {
+    "/api/automations/{automation_id}/details": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Fiche Details */
-        get: operations["read_fiche_details_automations__fiche_id__details_get"];
+        /** Read Automation Details */
+        get: operations["read_automation_details_automations__automation_id__details_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -93,25 +93,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/automations/{fiche_id}/messages": {
+    "/api/automations/{automation_id}/messages": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Fiche Messages */
-        get: operations["read_fiche_messages_automations__fiche_id__messages_get"];
+        /** Read Automation Messages */
+        get: operations["read_automation_messages_automations__automation_id__messages_get"];
         put?: never;
-        /** Create Fiche Message */
-        post: operations["create_fiche_message_automations__fiche_id__messages_post"];
+        /** Create Automation Message */
+        post: operations["create_automation_message_automations__automation_id__messages_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/automations/{fiche_id}/task": {
+    "/api/automations/{automation_id}/task": {
         parameters: {
             query?: never;
             header?: never;
@@ -120,8 +120,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run Fiche Task */
-        post: operations["run_fiche_task_automations__fiche_id__task_post"];
+        /** Run Automation Task */
+        post: operations["run_automation_task_automations__automation_id__task_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -135,11 +135,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Fiches */
-        get: operations["read_fiches_fiches_get"];
+        /** List Automations */
+        get: operations["list_automations_fiches_get"];
         put?: never;
-        /** Create Fiche */
-        post: operations["create_fiche_fiches_post"];
+        /** Create Automation */
+        post: operations["create_automation_fiches_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -153,11 +153,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Fiches */
-        get: operations["read_fiches_fiches__get"];
+        /** List Automations */
+        get: operations["list_automations_fiches__get"];
         put?: never;
-        /** Create Fiche */
-        post: operations["create_fiche_fiches__post"];
+        /** Create Automation */
+        post: operations["create_automation_fiches__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -171,8 +171,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Dashboard Snapshot */
-        get: operations["read_dashboard_snapshot_fiches_dashboard_get"];
+        /** Read Automation Overview */
+        get: operations["read_automation_overview_fiches_dashboard_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -181,34 +181,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/fiches/{fiche_id}": {
+    "/api/fiches/{automation_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Fiche */
-        get: operations["read_fiche_fiches__fiche_id__get"];
-        /** Update Fiche */
-        put: operations["update_fiche_fiches__fiche_id__put"];
+        /** Read Automation */
+        get: operations["read_automation_fiches__automation_id__get"];
+        /** Update Automation */
+        put: operations["update_automation_fiches__automation_id__put"];
         post?: never;
-        /** Delete Fiche */
-        delete: operations["delete_fiche_fiches__fiche_id__delete"];
+        /** Delete Automation */
+        delete: operations["delete_automation_fiches__automation_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/fiches/{fiche_id}/details": {
+    "/api/fiches/{automation_id}/details": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Fiche Details */
-        get: operations["read_fiche_details_fiches__fiche_id__details_get"];
+        /** Read Automation Details */
+        get: operations["read_automation_details_fiches__automation_id__details_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -217,25 +217,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/fiches/{fiche_id}/messages": {
+    "/api/fiches/{automation_id}/messages": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Read Fiche Messages */
-        get: operations["read_fiche_messages_fiches__fiche_id__messages_get"];
+        /** Read Automation Messages */
+        get: operations["read_automation_messages_fiches__automation_id__messages_get"];
         put?: never;
-        /** Create Fiche Message */
-        post: operations["create_fiche_message_fiches__fiche_id__messages_post"];
+        /** Create Automation Message */
+        post: operations["create_automation_message_fiches__automation_id__messages_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/fiches/{fiche_id}/task": {
+    "/api/fiches/{automation_id}/task": {
         parameters: {
             query?: never;
             header?: never;
@@ -244,8 +244,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run Fiche Task */
-        post: operations["run_fiche_task_fiches__fiche_id__task_post"];
+        /** Run Automation Task */
+        post: operations["run_automation_task_fiches__automation_id__task_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1078,13 +1078,13 @@ export interface paths {
         };
         /**
          * List Triggers
-         * @description List all triggers, optionally filtered by fiche_id.
+         * @description List all triggers, optionally filtered by automation_id.
          */
         get: operations["list_triggers_triggers__get"];
         put?: never;
         /**
          * Create Trigger
-         * @description Create a new trigger for a fiche.
+         * @description Create a new trigger for an automation.
          *
          *     If the trigger is of type *email* and the provider is **gmail** we kick off
          *     an asynchronous helper that ensures a Gmail *watch* is registered.  The
@@ -7786,8 +7786,8 @@ export interface components {
         MessageResponse: {
             /** Id */
             id: number;
-            /** Fiche Id */
-            fiche_id: number;
+            /** Automation Id */
+            automation_id: number;
             /** Role */
             role: string;
             /** Content */
@@ -10070,8 +10070,8 @@ export interface components {
         };
         /** Trigger */
         Trigger: {
-            /** Fiche Id */
-            fiche_id: number;
+            /** Automation Id */
+            automation_id: number;
             /**
              * Type
              * @default webhook
@@ -10093,8 +10093,8 @@ export interface components {
         };
         /** TriggerCreate */
         TriggerCreate: {
-            /** Fiche Id */
-            fiche_id: number;
+            /** Automation Id */
+            automation_id: number;
             /**
              * Type
              * @default webhook
@@ -10388,7 +10388,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    read_fiches_automations_get: {
+    list_automations_automations_get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -10422,7 +10422,7 @@ export interface operations {
             };
         };
     };
-    create_fiche_automations_post: {
+    create_automation_automations_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10459,7 +10459,7 @@ export interface operations {
             };
         };
     };
-    read_fiches_automations__get: {
+    list_automations_automations__get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -10493,7 +10493,7 @@ export interface operations {
             };
         };
     };
-    create_fiche_automations__post: {
+    create_automation_automations__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10530,7 +10530,7 @@ export interface operations {
             };
         };
     };
-    read_dashboard_snapshot_automations_dashboard_get: {
+    read_automation_overview_automations_dashboard_get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -10565,14 +10565,14 @@ export interface operations {
             };
         };
     };
-    read_fiche_automations__fiche_id__get: {
+    read_automation_automations__automation_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -10598,14 +10598,14 @@ export interface operations {
             };
         };
     };
-    update_fiche_automations__fiche_id__put: {
+    update_automation_automations__automation_id__put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -10635,14 +10635,14 @@ export interface operations {
             };
         };
     };
-    delete_fiche_automations__fiche_id__delete: {
+    delete_automation_automations__automation_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -10666,7 +10666,7 @@ export interface operations {
             };
         };
     };
-    read_fiche_details_automations__fiche_id__details_get: {
+    read_automation_details_automations__automation_id__details_get: {
         parameters: {
             query?: {
                 include?: string | null;
@@ -10674,7 +10674,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -10700,7 +10700,7 @@ export interface operations {
             };
         };
     };
-    read_fiche_messages_automations__fiche_id__messages_get: {
+    read_automation_messages_automations__automation_id__messages_get: {
         parameters: {
             query?: {
                 skip?: number;
@@ -10709,7 +10709,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -10735,14 +10735,14 @@ export interface operations {
             };
         };
     };
-    create_fiche_message_automations__fiche_id__messages_post: {
+    create_automation_message_automations__automation_id__messages_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -10772,14 +10772,14 @@ export interface operations {
             };
         };
     };
-    run_fiche_task_automations__fiche_id__task_post: {
+    run_automation_task_automations__automation_id__task_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -10805,7 +10805,7 @@ export interface operations {
             };
         };
     };
-    read_fiches_fiches_get: {
+    list_automations_fiches_get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -10839,7 +10839,7 @@ export interface operations {
             };
         };
     };
-    create_fiche_fiches_post: {
+    create_automation_fiches_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10876,7 +10876,7 @@ export interface operations {
             };
         };
     };
-    read_fiches_fiches__get: {
+    list_automations_fiches__get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -10910,7 +10910,7 @@ export interface operations {
             };
         };
     };
-    create_fiche_fiches__post: {
+    create_automation_fiches__post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -10947,7 +10947,7 @@ export interface operations {
             };
         };
     };
-    read_dashboard_snapshot_fiches_dashboard_get: {
+    read_automation_overview_fiches_dashboard_get: {
         parameters: {
             query?: {
                 scope?: string;
@@ -10982,14 +10982,14 @@ export interface operations {
             };
         };
     };
-    read_fiche_fiches__fiche_id__get: {
+    read_automation_fiches__automation_id__get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -11015,14 +11015,14 @@ export interface operations {
             };
         };
     };
-    update_fiche_fiches__fiche_id__put: {
+    update_automation_fiches__automation_id__put: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -11052,14 +11052,14 @@ export interface operations {
             };
         };
     };
-    delete_fiche_fiches__fiche_id__delete: {
+    delete_automation_fiches__automation_id__delete: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -11083,7 +11083,7 @@ export interface operations {
             };
         };
     };
-    read_fiche_details_fiches__fiche_id__details_get: {
+    read_automation_details_fiches__automation_id__details_get: {
         parameters: {
             query?: {
                 include?: string | null;
@@ -11091,7 +11091,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -11117,7 +11117,7 @@ export interface operations {
             };
         };
     };
-    read_fiche_messages_fiches__fiche_id__messages_get: {
+    read_automation_messages_fiches__automation_id__messages_get: {
         parameters: {
             query?: {
                 skip?: number;
@@ -11126,7 +11126,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -11152,14 +11152,14 @@ export interface operations {
             };
         };
     };
-    create_fiche_message_fiches__fiche_id__messages_post: {
+    create_automation_message_fiches__automation_id__messages_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -11189,14 +11189,14 @@ export interface operations {
             };
         };
     };
-    run_fiche_task_fiches__fiche_id__task_post: {
+    run_automation_task_fiches__automation_id__task_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
             };
             header?: never;
             path: {
-                fiche_id: number;
+                automation_id: number;
             };
             cookie?: never;
         };
@@ -12773,8 +12773,8 @@ export interface operations {
     list_triggers_triggers__get: {
         parameters: {
             query?: {
-                /** @description Filter triggers by fiche ID */
-                fiche_id?: number | null;
+                /** @description Filter triggers by automation ID */
+                automation_id?: number | null;
                 session_factory?: unknown;
             };
             header?: never;

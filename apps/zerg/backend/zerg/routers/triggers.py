@@ -1,8 +1,8 @@
 """API router for Triggers (milestone M1).
 
 Currently only supports simple *webhook* triggers that, when invoked, publish
-an EventType.TRIGGER_FIRED event.  The SchedulerService listens for that event
-and executes the associated fiche immediately.
+an EventType.TRIGGER_FIRED event. The SchedulerService listens for that event
+and executes the associated automation immediately.
 """
 
 # typing and forward-ref convenience
@@ -83,7 +83,7 @@ async def delete_trigger(
 
 @router.post("/", response_model=TriggerSchema, status_code=status.HTTP_201_CREATED)
 async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db)):
-    """Create a new trigger for a fiche.
+    """Create a new trigger for an automation.
 
     If the trigger is of type *email* and the provider is **gmail** we kick off
     an asynchronous helper that ensures a Gmail *watch* is registered.  The
@@ -91,10 +91,10 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
     the side-effects synchronously without sprinkling ``asyncio.sleep`` hacks.
     """
 
-    # Ensure fiche exists -------------------------------------------------
-    fiche = get_fiche(db, trigger_in.fiche_id)
-    if not fiche:
-        raise HTTPException(status_code=404, detail="Fiche not found")
+    # Ensure automation exists -------------------------------------------------
+    automation = get_fiche(db, trigger_in.automation_id)
+    if not automation:
+        raise HTTPException(status_code=404, detail="Automation not found")
 
     # Validate trigger type against allowlist
     if trigger_in.type not in {"webhook", "email"}:
@@ -111,8 +111,8 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
         conn = get_connector_record(db, int(connector_id))
         if conn is None:
             raise HTTPException(status_code=404, detail="Connector not found")
-        # Security: ensure connector belongs to same user as fiche
-        if conn.owner_id != fiche.owner_id:
+        # Security: ensure connector belongs to same user as the automation
+        if conn.owner_id != automation.owner_id:
             raise HTTPException(status_code=403, detail="Connector belongs to different user")
         # Normalise provider field to connector provider
         cfg["provider"] = conn.provider
@@ -121,7 +121,7 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
     # Persist trigger -----------------------------------------------------
     trg = create_trigger_record(
         db,
-        fiche_id=trigger_in.fiche_id,
+        fiche_id=trigger_in.automation_id,
         trigger_type=trigger_in.type,
         config=new_config,
     )
@@ -205,12 +205,17 @@ async def fire_trigger_event(
         raise HTTPException(status_code=404, detail="Not found")
 
     # 4) Publish event on internal bus (non-blocking)
-    # The SchedulerService subscribes to TRIGGER_FIRED and executes the fiche.
-    # We use create_task to avoid blocking the HTTP response on fiche execution.
+    # The SchedulerService subscribes to TRIGGER_FIRED and executes the automation.
+    # We use create_task to avoid blocking the HTTP response on automation execution.
     task = asyncio.create_task(
         event_bus.publish(
             EventType.TRIGGER_FIRED,
-            {"trigger_id": trg.id, "fiche_id": trg.fiche_id, "payload": payload, "trigger_type": "webhook"},
+            {
+                "trigger_id": trg.id,
+                "automation_id": trg.fiche_id,
+                "payload": payload,
+                "trigger_type": "webhook",
+            },
         )
     )
 
@@ -234,10 +239,12 @@ async def fire_trigger_event(
 @router.get("/", response_model=List[TriggerSchema])
 def list_triggers(
     db: Session = Depends(get_db),
-    fiche_id: Optional[int] = Query(None, description="Filter triggers by fiche ID"),
+    automation_id: Optional[int] = Query(None, description="Filter triggers by automation ID"),
+    fiche_id: Optional[int] = Query(None, include_in_schema=False),
 ):
     """
-    List all triggers, optionally filtered by fiche_id.
+    List all triggers, optionally filtered by automation_id.
     """
-    triggers = get_triggers(db, fiche_id=fiche_id)
+    resolved_automation_id = automation_id if automation_id is not None else fiche_id
+    triggers = get_triggers(db, fiche_id=resolved_automation_id)
     return triggers

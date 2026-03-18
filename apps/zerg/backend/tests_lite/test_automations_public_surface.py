@@ -90,6 +90,38 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert update_response.status_code == 200, update_response.text
         assert update_response.json()["name"] == "Renamed automation"
 
+        create_message_response = client.post(
+            f"/automations/{automation_id}/messages",
+            json={"role": "user", "content": "hello"},
+        )
+        assert create_message_response.status_code == 201, create_message_response.text
+        create_message_payload = create_message_response.json()
+        assert create_message_payload["automation_id"] == automation_id
+        assert "fiche_id" not in create_message_payload
+
+        list_messages_response = client.get(f"/automations/{automation_id}/messages")
+        assert list_messages_response.status_code == 200, list_messages_response.text
+        list_messages_payload = list_messages_response.json()
+        assert len(list_messages_payload) == 1
+        assert list_messages_payload[0]["automation_id"] == automation_id
+        assert "fiche_id" not in list_messages_payload[0]
+
+        create_trigger_response = client.post(
+            "/triggers",
+            json={"automation_id": automation_id, "type": "webhook"},
+        )
+        assert create_trigger_response.status_code == 201, create_trigger_response.text
+        create_trigger_payload = create_trigger_response.json()
+        assert create_trigger_payload["automation_id"] == automation_id
+        assert "fiche_id" not in create_trigger_payload
+
+        list_triggers_response = client.get(f"/triggers?automation_id={automation_id}")
+        assert list_triggers_response.status_code == 200, list_triggers_response.text
+        list_triggers_payload = list_triggers_response.json()
+        assert len(list_triggers_payload) == 1
+        assert list_triggers_payload[0]["automation_id"] == automation_id
+        assert "fiche_id" not in list_triggers_payload[0]
+
         overview_response = client.get("/automations/dashboard")
         assert overview_response.status_code == 200, overview_response.text
         overview_payload = overview_response.json()

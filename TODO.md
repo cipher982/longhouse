@@ -2264,6 +2264,30 @@ Notes:
 
 ---
 
+## [Refactor][Product] Canonicalize Automation REST Surface Off Fiche Route IDs
+
+**Status (2026-03-17):** Done. The canonical `/api/automations/*` REST surface now publishes `automation_id` path params and automation-first operation IDs in the generated SDK, while storage models remain unchanged underneath.
+
+**Goal:** Make the canonical automation REST surface automation-first in generated SDKs and public payloads without renaming internal ORM/storage models in this tranche.
+
+**Done when:**
+- Canonical `/api/automations/*` paths use `automation_id` path params in generated OpenAPI
+- Canonical automation operation IDs stop using `read_fiche_*` / `run_fiche_task_*` naming
+- Public automation message/run/connector payloads use `automation_id`
+- SDK generation, units, `make test`, and focused automation browser coverage are green
+
+- [x] Rename canonical automation route handler names and path params off `fiche_*`
+- [x] Rename public automation message/run/connector payload fields off `fiche_id`
+- [x] Regenerate SDK and update first-party typed callers if needed
+- [x] Verify with SDK generation, frontend units, `make test`, and focused automation coverage
+
+Notes:
+- 2026-03-17: Keep this tranche at the public REST/router/schema layer. Do not rename ORM class names, table names, or internal CRUD/storage helpers here.
+- 2026-03-17: Shipped automation-first handler names and `automation_id` path params for the canonical `/api/automations/*` routes, plus public `automation_id` payload fields for automation messages and triggers.
+- 2026-03-17: Verification passed via `make generate-sdk`, `make test-frontend-unit`, `make test`, and `E2E_BACKEND_PORT=48090 E2E_FRONTEND_PORT=48091 make test-e2e-single TEST='--project=chromium tests/dashboard.basic.spec.ts tests/dashboard.scope-toggle.spec.ts'`.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.
