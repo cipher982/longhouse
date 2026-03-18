@@ -34,14 +34,33 @@ step() { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 resolve_release_wheel_url() {
     python3 - <<'PY'
 import json
+import os
+import urllib.error
 import urllib.request
+
+headers = {
+    "Accept": "application/vnd.github+json",
+    "User-Agent": "longhouse-installer",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+if token:
+    headers["Authorization"] = f"Bearer {token}"
 
 request = urllib.request.Request(
     "https://api.github.com/repos/cipher982/longhouse/releases/latest",
-    headers={"User-Agent": "longhouse-installer"},
+    headers=headers,
 )
-with urllib.request.urlopen(request, timeout=15) as response:
-    payload = json.load(response)
+try:
+    with urllib.request.urlopen(request, timeout=15) as response:
+        payload = json.load(response)
+except urllib.error.HTTPError as exc:
+    if exc.code == 403:
+        raise SystemExit(
+            "GitHub API rate limit exceeded while resolving the latest Longhouse release. "
+            "Set GITHUB_TOKEN or LONGHOUSE_PKG_SOURCE and retry."
+        ) from exc
+    raise
 
 tag = payload.get("tag_name")
 if not tag:
