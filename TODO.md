@@ -2382,6 +2382,28 @@ Notes:
 
 ---
 
+## [Refactor][Product] Rename Automation Event Payloads Off Fiche Fields
+
+**Status (2026-03-17):** Done. The public WS/SSE contract now emits `automation_id` / `automation_name`, and central browser-facing emitters normalize away `fiche_*` fields.
+
+**Goal:** Make the public realtime contract automation-first without changing the internal storage model.
+
+**Done when:**
+- WebSocket AsyncAPI and generated types expose `automation_id` / `automation_name` for automation-scoped payloads
+- Oikos SSE AsyncAPI and encoded payloads expose `automation_id` instead of `fiche_id`
+- Central WS/SSE emitters normalize any internal `fiche_*` fields before they reach the browser
+- Regenerated contracts, frontend units, `make test`, and focused automation/Oikos coverage are green
+
+- [x] Rename the public WS/SSE schemas and payload types to automation-first fields
+- [x] Normalize central WS/SSE emitters and update affected tests/fixtures
+- [x] Verify with contract regen, frontend units, `make test`, and focused browser coverage
+
+Notes:
+- 2026-03-17: Keep internal DB/event-bus producers free to source from `run.fiche_id`; the cleanup target is the external browser contract.
+- 2026-03-17: `make regen-ws` and `make regen-sse` now generate automation-first browser types; dashboard WebSocket payloads and Oikos SSE payloads drop `fiche_id` / `fiche_name` before they reach the client.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

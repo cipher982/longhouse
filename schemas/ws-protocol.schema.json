@@ -288,7 +288,7 @@
           "type": "integer",
           "minimum": 1
         },
-        "fiche_id": {
+        "automation_id": {
           "type": "integer",
           "minimum": 1
         },
@@ -416,7 +416,7 @@
       "type": "object",
       "required": [
         "id",
-        "fiche_id",
+        "automation_id",
         "status"
       ],
       "properties": {
@@ -424,7 +424,7 @@
           "type": "integer",
           "minimum": 1
         },
-        "fiche_id": {
+        "automation_id": {
           "type": "integer",
           "minimum": 1
         },
@@ -521,7 +521,7 @@
             "budget_denied"
           ]
         },
-        "fiche_id": {
+        "automation_id": {
           "type": "integer",
           "minimum": 1
         },
@@ -540,7 +540,7 @@
         "error": {
           "type": "string"
         },
-        "fiche_name": {
+        "automation_name": {
           "type": "string"
         },
         "status": {

@@ -40,6 +40,19 @@ def _parse_iso8601(value: str) -> datetime | None:
         return None
 
 
+def _normalize_browser_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(payload)
+    automation_id = normalized.pop("fiche_id", None)
+    if automation_id is not None and "automation_id" not in normalized:
+        normalized["automation_id"] = automation_id
+
+    automation_name = normalized.pop("fiche_name", None)
+    if automation_name is not None and "automation_name" not in normalized:
+        normalized["automation_name"] = automation_name
+
+    return normalized
+
+
 class TopicConnectionManager:
     """Manages WebSocket connections with topic-based subscriptions."""
 
@@ -510,7 +523,7 @@ class TopicConnectionManager:
         automation_event_type = data["event_type"]
 
         # Create clean data payload without event_type (since it's in message type)
-        clean_data = {k: v for k, v in data.items() if k != "event_type"}
+        clean_data = _normalize_browser_payload({k: v for k, v in data.items() if k != "event_type"})
         serialized_data = jsonable_encoder(clean_data)
 
         automation_envelope = Envelope.create(message_type=automation_event_type, topic=automation_topic, data=serialized_data)
@@ -528,7 +541,7 @@ class TopicConnectionManager:
         event_type = data["event_type"]
 
         # Create clean data payload without event_type (since it's in message type)
-        clean_data = {k: v for k, v in data.items() if k != "event_type"}
+        clean_data = _normalize_browser_payload({k: v for k, v in data.items() if k != "event_type"})
         serialized_data = jsonable_encoder(clean_data)
 
         # Use envelope format
@@ -537,16 +550,17 @@ class TopicConnectionManager:
 
     async def _handle_run_event(self, data: Dict[str, Any]) -> None:
         """Forward run events to automation topics."""
-        if "fiche_id" not in data:
+        automation_id = data.get("automation_id", data.get("fiche_id"))
+        if automation_id is None:
             return
 
-        automation_id = data["fiche_id"]
         automation_topic = f"automation:{automation_id}"
 
         # Map run_id to id to match schema expectations
-        clean_data = {k: v for k, v in data.items() if k != "event_type"}
+        clean_data = _normalize_browser_payload({k: v for k, v in data.items() if k != "event_type"})
         if "run_id" in clean_data:
             clean_data["id"] = clean_data.pop("run_id")
+        clean_data["automation_id"] = automation_id
 
         run_id = clean_data.get("id")
         source_event = str(data.get("event_type") or "unknown")

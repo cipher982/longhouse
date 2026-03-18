@@ -483,7 +483,7 @@ components:
         thread_id:
           type: integer
           minimum: 1
-        fiche_id:
+        automation_id:
           type: integer
           minimum: 1
         title:
@@ -567,12 +567,12 @@ components:
 
     RunUpdateData:
       type: object
-      required: [id, fiche_id, status]
+      required: [id, automation_id, status]
       properties:
         id:
           type: integer
           minimum: 1
-        fiche_id:
+        automation_id:
           type: integer
           minimum: 1
         thread_id:
@@ -636,7 +636,7 @@ components:
             - thread_message_created
             - budget_denied
         # Common optional fields used by various event kinds
-        fiche_id:
+        automation_id:
           type: integer
           minimum: 1
         run_id:
@@ -650,7 +650,7 @@ components:
           minimum: 0
         error:
           type: string
-        fiche_name:
+        automation_name:
           type: string
         status:
           type: string

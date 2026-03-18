@@ -475,6 +475,41 @@ def test_load_historical_run_events_returns_serializable_records_after_session_c
     datetime.fromisoformat(serialized[0]["timestamp"].replace("Z", "+00:00"))
 
 
+def test_encode_replay_sse_normalizes_automation_fields():
+    event = run_stream_service.HistoricalRunEvent(
+        event_id=9,
+        event_type="oikos_complete",
+        payload={"fiche_id": 42, "fiche_name": "Nightly sync", "thread_id": 7},
+        timestamp="2026-03-17T23:00:00Z",
+    )
+
+    encoded = run_stream_service.encode_replay_sse(event)
+    payload = json.loads(encoded["data"])["payload"]
+
+    assert payload["automation_id"] == 42
+    assert payload["automation_name"] == "Nightly sync"
+    assert "fiche_id" not in payload
+    assert "fiche_name" not in payload
+
+
+def test_encode_live_sse_normalizes_automation_fields():
+    encoded = run_stream_service.encode_live_sse(
+        {
+            "event_type": "oikos_waiting",
+            "fiche_id": 11,
+            "fiche_name": "Inbox triage",
+            "thread_id": 3,
+            "owner_id": 99,
+        }
+    )
+    payload = json.loads(encoded["data"])["payload"]
+
+    assert payload["automation_id"] == 11
+    assert payload["automation_name"] == "Inbox triage"
+    assert "fiche_id" not in payload
+    assert "fiche_name" not in payload
+
+
 @pytest.mark.asyncio
 async def test_stream_run_events_live_defaults_to_context_test_commis_id(monkeypatch):
     captured_kwargs = {}
