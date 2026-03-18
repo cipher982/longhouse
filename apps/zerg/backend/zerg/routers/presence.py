@@ -121,7 +121,7 @@ def _build_operator_message(
     tool_name: str | None,
 ) -> str:
     lines = [
-        "System/operator wakeup: a coding session may need attention.",
+        "System/operator interrupt: a coding session paused and may need attention.",
         "",
         f"Trigger: presence.{payload.state}",
         f"Session ID: {payload.session_id}",
@@ -226,7 +226,7 @@ async def _maybe_invoke_operator_wakeup(
                 db,
                 trigger_type=trigger_type,
                 session_id=payload.session_id,
-                trigger_summary=f"Operator wakeup from {trigger_type}.",
+                trigger_summary=f"Operator interrupt from {trigger_type}.",
                 trigger_payload=surface_payload,
                 policy=policy,
             )

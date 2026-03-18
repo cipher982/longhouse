@@ -10,7 +10,7 @@ from zerg.surfaces.base import SurfaceInboundEvent
 
 
 class OperatorSurfaceAdapter:
-    """Adapter for proactive operator-mode wakeups."""
+    """Adapter for turn-loop decisions and live operator interrupts."""
 
     surface_id = "operator"
     mode = "inline"
@@ -144,7 +144,7 @@ def _format_loop_review_guidance(payload: dict[str, Any]) -> str:
 
     execution_state = str(loop_review.get("execution_state") or "").strip()
     if execution_state:
-        lines.append(f"- Shadow execution state: {execution_state}")
+        lines.append(f"- Execution state: {execution_state}")
 
     mode_summary = str(loop_review.get("mode_summary") or "").strip()
     if mode_summary:
@@ -152,7 +152,7 @@ def _format_loop_review_guidance(payload: dict[str, Any]) -> str:
 
     decision_summary = str(decision.get("summary") or "").strip()
     if decision_summary:
-        lines.append(f"- Shadow decision summary: {decision_summary}")
+        lines.append(f"- Decision summary: {decision_summary}")
 
     recommended_action = str(loop_review.get("recommended_action") or "").strip()
     if recommended_action:

@@ -527,6 +527,7 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
     assert len(calls) == 1
     assert calls[0]["owner_id"] == 42
     assert calls[0]["source"] == "operator"
+    assert "System/operator interrupt" in calls[0]["message"]
     assert f"Session ID: {sid}" in calls[0]["message"]
     assert "Trigger: presence.blocked" in calls[0]["message"]
     assert "Tool: Bash" in calls[0]["message"]
