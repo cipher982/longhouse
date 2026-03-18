@@ -17,10 +17,10 @@ test.beforeEach(async ({ request }) => {
 });
 
 /**
- * Create an fiche via UI and return its ID.
- * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
+ * Create an automation via UI and return its ID.
+ * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
-async function createFicheViaUI(page: Page): Promise<string> {
+async function createAutomationViaUI(page: Page): Promise<string> {
   await page.goto('/dashboard');
   await waitForPageReady(page, { timeout: 20000 });
 
@@ -37,27 +37,27 @@ async function createFicheViaUI(page: Page): Promise<string> {
   ]);
 
   const body = await response.json();
-  const ficheId = String(body.id);
+  const automationId = String(body.id);
 
-  if (!ficheId || ficheId === 'undefined') {
-    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
+  if (!automationId || automationId === 'undefined') {
+    throw new Error(`Failed to get automation ID from API response: ${JSON.stringify(body)}`);
   }
 
-  const row = page.locator(`tr[data-automation-id="${ficheId}"]`);
+  const row = page.locator(`tr[data-automation-id="${automationId}"]`);
   await expect(row).toBeVisible({ timeout: 20000 });
 
-  return ficheId;
+  return automationId;
 }
 
 /**
- * Navigate to chat for an fiche.
+ * Navigate to chat for an automation.
  */
-async function navigateToChat(page: Page, ficheId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-automation-${ficheId}"]`);
+async function navigateToChat(page: Page, automationId: string): Promise<void> {
+  const chatBtn = page.locator(`[data-testid="chat-automation-${automationId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
-  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 20000 });
+  await page.waitForURL((url) => url.pathname.includes(`/fiche/${automationId}/thread`), { timeout: 20000 });
   await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 20000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 20000 });
@@ -89,8 +89,8 @@ async function sendMessage(page: Page, message: string): Promise<void> {
 
 test.describe('Chat Send - Core', () => {
   test('send message - message appears in chat', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const testMessage = 'Hello, this is a core test message';
     await sendMessage(page, testMessage);
@@ -100,8 +100,8 @@ test.describe('Chat Send - Core', () => {
   });
 
   test('assistant stream appears and completes', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     // Wait for WebSocket to be connected before sending — streaming requires an active WS.
     // The backend /config.js can inject a stale WS_BASE_URL from APP_PUBLIC_URL; the E2E
@@ -128,8 +128,8 @@ test.describe('Chat Send - Core', () => {
   });
 
   test('input clears after sending message', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const testMessage = 'Message to test input clearing';
     await sendMessage(page, testMessage);
@@ -139,10 +139,10 @@ test.describe('Chat Send - Core', () => {
   });
 
   test('navigate to chat - URL is valid', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const automationId = await createAutomationViaUI(page);
 
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
-    await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 20000 });
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
+    await page.waitForURL((url) => url.pathname.includes(`/fiche/${automationId}/thread`), { timeout: 20000 });
     await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 20000 });
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20000 });
 

@@ -17,10 +17,10 @@ test.beforeEach(async ({ request }) => {
 });
 
 /**
- * Create an fiche via UI and return its ID.
- * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
+ * Create an automation via UI and return its ID.
+ * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
-async function createFicheViaUI(page: Page): Promise<string> {
+async function createAutomationViaUI(page: Page): Promise<string> {
   await page.goto('/dashboard');
   await waitForPageReady(page, { timeout: 20000 });
 
@@ -28,7 +28,7 @@ async function createFicheViaUI(page: Page): Promise<string> {
   await expect(createBtn).toBeVisible({ timeout: 20000 });
   await expect(createBtn).toBeEnabled({ timeout: 20000 });
 
-  // Capture API response to get the ACTUAL created fiche ID
+  // Capture the API response to get the actual created automation ID.
   const [response] = await Promise.all([
     page.waitForResponse(
       (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
@@ -37,30 +37,29 @@ async function createFicheViaUI(page: Page): Promise<string> {
     createBtn.click(),
   ]);
 
-  // Parse the fiche ID from the response body - this is deterministic
+  // Parse the automation ID from the response body. This is deterministic.
   const body = await response.json();
-  const ficheId = String(body.id);
+  const automationId = String(body.id);
 
-  if (!ficheId || ficheId === 'undefined') {
-    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
+  if (!automationId || automationId === 'undefined') {
+    throw new Error(`Failed to get automation ID from API response: ${JSON.stringify(body)}`);
   }
 
-  // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
-  const row = page.locator(`tr[data-automation-id="${ficheId}"]`);
+  const row = page.locator(`tr[data-automation-id="${automationId}"]`);
   await expect(row).toBeVisible({ timeout: 20000 });
 
-  return ficheId;
+  return automationId;
 }
 
 /**
- * Navigate to chat for an fiche.
+ * Navigate to chat for an automation.
  */
-async function navigateToChat(page: Page, ficheId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-automation-${ficheId}"]`);
+async function navigateToChat(page: Page, automationId: string): Promise<void> {
+  const chatBtn = page.locator(`[data-testid="chat-automation-${automationId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
-  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 20000 });
+  await page.waitForURL((url) => url.pathname.includes(`/fiche/${automationId}/thread`), { timeout: 20000 });
   await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 20000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 20000 });
@@ -92,8 +91,8 @@ async function sendMessage(page: Page, message: string): Promise<void> {
 
 test.describe('Data Persistence - Core', () => {
   test('message persists after navigation', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const testMessage = 'Persistence test message';
     await sendMessage(page, testMessage);
@@ -107,15 +106,15 @@ test.describe('Data Persistence - Core', () => {
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 20000 });
 
     // Navigate back
-    await navigateToChat(page, ficheId);
+    await navigateToChat(page, automationId);
 
     // Message should still be there
     await expect(messagesContainer).toContainText(testMessage, { timeout: 15000 });
   });
 
   test('message persists after direct URL navigation', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const persistentMessage = 'This should persist';
     await sendMessage(page, persistentMessage);

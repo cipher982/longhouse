@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { resetDatabase } from './test-utils';
-import { createFicheViaUI } from './helpers/fiche-helpers';
+import { createAutomationViaUI } from './helpers/automation-helpers';
 import { waitForPageReady } from './helpers/ready-signals';
 
 // Ensure every test in this file starts with an empty DB so row counts are
@@ -46,8 +46,8 @@ test('WebSocket connection establishes successfully', async ({ page }) => {
 test('Message streaming via WebSocket', async ({ page }) => {
   console.log('🎯 Testing: Message streaming through WebSocket');
 
-  const ficheId = await createFicheViaUI(page);
-  console.log(`✅ Created fiche ID: ${ficheId}`);
+  const automationId = await createAutomationViaUI(page);
+  console.log(`✅ Created automation ID: ${automationId}`);
 
   // Track WebSocket messages
   const wsMessages: any[] = [];
@@ -69,7 +69,7 @@ test('Message streaming via WebSocket', async ({ page }) => {
   });
 
   // Navigate to chat
-  await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
+  await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 10000 });
 
   // Send message that will trigger streaming

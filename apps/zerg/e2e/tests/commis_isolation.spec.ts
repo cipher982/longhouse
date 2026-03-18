@@ -35,39 +35,38 @@ test.describe('Commis Database Isolation', () => {
     // This test leverages natural parallel execution
     // Each commis gets this test's own database automatically via fixtures
 
-    // Create an fiche in this commis's database
+    // Create an automation in this commis's database.
     const response = await request.post('/api/automations', {
       data: {
-        name: 'Test Fiche for Isolation',
-        system_instructions: 'Test fiche',
+        name: 'Test Automation for Isolation',
+        system_instructions: 'Test automation',
         task_instructions: 'Test task',
         model: 'gpt-5-nano',
       }
     });
 
     expect(response.status()).toBe(201);
-    const fiche = await response.json();
-    console.log(`✅ Created fiche ID: ${fiche.id} in current commis's database`);
+    const automation = await response.json();
+    console.log(`✅ Created automation ID: ${automation.id} in current commis's database`);
 
     // Verify we can see our own data
     const listResponse = await request.get('/api/automations');
     expect(listResponse.status()).toBe(200);
-    const fiches = await listResponse.json();
-    const foundFiche = fiches.find((a: any) => a.id === fiche.id);
-    expect(foundFiche).toBeDefined();
-    console.log(`✅ Can see own fiche (total fiches in this commis: ${fiches.length})`);
+    const automations = await listResponse.json();
+    const foundAutomation = automations.find((a: any) => a.id === automation.id);
+    expect(foundAutomation).toBeDefined();
+    console.log(`✅ Can see own automation (total automations in this commis: ${automations.length})`);
 
-    // Navigate to dashboard and verify fiche appears in UI
+    // Navigate to dashboard and verify the automation appears in the UI.
     await waitForDashboardReady(page);
 
-    // Wait for fiche row to be visible (deterministic)
-    const ficheRow = page.locator(`tr[data-automation-id="${fiche.id}"]`);
-    await expect(ficheRow).toBeVisible({ timeout: 10000 });
-    console.log('✅ Fiche visible in UI');
+    const automationRow = page.locator(`tr[data-automation-id="${automation.id}"]`);
+    await expect(automationRow).toBeVisible({ timeout: 10000 });
+    console.log('✅ Automation visible in UI');
 
     // The actual cross-commis isolation is tested by running this test
     // in parallel across multiple commis. If isolation works, each commis
-    // will only see its own fiches, never fiches from other commis.
+    // will only see its own automations, never automations from other commis.
     console.log('');
     console.log('✅ ============================================');
     console.log('✅ COMMIS ISOLATION VERIFIED');
@@ -79,24 +78,23 @@ test.describe('Commis Database Isolation', () => {
   test('Commis isolation for threads', async ({ request }) => {
     console.log('🎯 Testing: Commis isolation for threads');
 
-    // Create fiche in this commis's database
-    const ficheResponse = await request.post('/api/automations', {
+    const automationResponse = await request.post('/api/automations', {
       data: {
-        name: 'Fiche for Thread Isolation Test',
-        system_instructions: 'Test fiche',
+        name: 'Automation for Thread Isolation Test',
+        system_instructions: 'Test automation',
         task_instructions: 'Test task',
         model: 'gpt-5-nano',
       }
     });
 
-    expect(ficheResponse.status()).toBe(201);
-    const fiche = await ficheResponse.json();
-    console.log(`✅ Created fiche ID: ${fiche.id}`);
+    expect(automationResponse.status()).toBe(201);
+    const automation = await automationResponse.json();
+    console.log(`✅ Created automation ID: ${automation.id}`);
 
-    // Create thread for this fiche
+    // Create a thread for this automation.
     const threadResponse = await request.post('/api/threads', {
       data: {
-        fiche_id: fiche.id,
+        fiche_id: automation.id,
         title: 'Test Thread',
         thread_type: 'chat',
       }
@@ -107,7 +105,7 @@ test.describe('Commis Database Isolation', () => {
     console.log(`✅ Created thread ID: ${thread.id}`);
 
     // Verify we can see our thread
-    const threadsResponse = await request.get(`/api/threads?fiche_id=${fiche.id}`);
+    const threadsResponse = await request.get(`/api/threads?fiche_id=${automation.id}`);
     expect(threadsResponse.status()).toBe(200);
     const threads = await threadsResponse.json();
     const foundThread = threads.find((t: any) => t.id === thread.id);
@@ -122,19 +120,18 @@ test.describe('Commis Database Isolation', () => {
   test('WebSocket URLs include commis parameter', async ({ page, request }) => {
     console.log('🎯 Testing: WebSocket commis parameter injection');
 
-    // Create an fiche
-    const ficheResponse = await request.post('/api/automations', {
+    const automationResponse = await request.post('/api/automations', {
       data: {
-        name: 'WebSocket Test Fiche',
-        system_instructions: 'Test fiche',
+        name: 'WebSocket Test Automation',
+        system_instructions: 'Test automation',
         task_instructions: 'Test task',
         model: 'gpt-5-nano',
       }
     });
 
-    expect(ficheResponse.status()).toBe(201);
-    const fiche = await ficheResponse.json();
-    console.log(`✅ Created fiche ID: ${fiche.id}`);
+    expect(automationResponse.status()).toBe(201);
+    const automation = await automationResponse.json();
+    console.log(`✅ Created automation ID: ${automation.id}`);
 
     // Navigate to page and track WebSocket connections
     const wsUrls: string[] = [];

@@ -21,8 +21,8 @@ test.describe('Error Handling and Edge Cases', () => {
     const commisId = process.env.TEST_PARALLEL_INDEX || '0';
     console.log('📊 Commis ID:', commisId);
 
-    // Test 1: Invalid fiche creation - missing required fields
-    console.log('📊 Test 1: Invalid fiche creation - missing fields');
+    // Test 1: Invalid automation creation - missing required fields.
+    console.log('📊 Test 1: Invalid automation creation - missing fields');
     try {
       const response = await request.post('/api/automations', {
         headers: {
@@ -35,7 +35,7 @@ test.describe('Error Handling and Edge Cases', () => {
         }
       });
 
-      console.log('📊 Invalid fiche creation status:', response.status());
+      console.log('📊 Invalid automation creation status:', response.status());
       expect(response.status()).toBe(422); // Validation error expected
 
       const errorResponse = await response.json();
@@ -128,27 +128,27 @@ test.describe('Error Handling and Edge Cases', () => {
 
     const commisId = process.env.TEST_PARALLEL_INDEX || '0';
 
-    // Test 1: Create fiche with duplicate name (if uniqueness enforced)
+    // Test 1: Create an automation with a duplicate name.
     console.log('📊 Test 1: Duplicate name handling');
-    const ficheName = `Duplicate Test Fiche ${Date.now()}`;
+    const automationName = `Duplicate Test Automation ${Date.now()}`;
 
-    // Create first fiche
+    // Create the first automation.
     const firstResponse = await request.post('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        name: ficheName,
-        system_instructions: 'First fiche',
+        name: automationName,
+        system_instructions: 'First automation',
         task_instructions: 'Test duplicate handling',
         model: 'gpt-mock',
       }
     });
 
     expect(firstResponse.status()).toBe(201);
-    const firstFiche = await firstResponse.json();
-    console.log('📊 First fiche created:', firstFiche.id);
+    const firstAutomation = await firstResponse.json();
+    console.log('📊 First automation created:', firstAutomation.id);
 
     // Attempt to create duplicate
     const duplicateResponse = await request.post('/api/automations', {
@@ -157,8 +157,8 @@ test.describe('Error Handling and Edge Cases', () => {
         'Content-Type': 'application/json',
       },
       data: {
-        name: ficheName,
-        system_instructions: 'Second fiche with same name',
+        name: automationName,
+        system_instructions: 'Second automation with same name',
         task_instructions: 'Test duplicate handling',
         model: 'gpt-mock',
       }
@@ -204,8 +204,8 @@ test.describe('Error Handling and Edge Cases', () => {
     const commisId = process.env.TEST_PARALLEL_INDEX || '0';
     const timestamp = Date.now();
 
-    // Test 1: Concurrent fiche creation
-    console.log('📊 Test 1: Concurrent fiche creation');
+    // Test 1: Concurrent automation creation.
+    console.log('📊 Test 1: Concurrent automation creation');
     const concurrentRequests = Array.from({ length: 5 }, (_, i) =>
       request.post('/api/automations', {
         headers: {
@@ -213,8 +213,8 @@ test.describe('Error Handling and Edge Cases', () => {
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Concurrent Fiche ${i} ${timestamp}`,
-          system_instructions: `Concurrent test fiche ${i}`,
+          name: `Concurrent Automation ${i} ${timestamp}`,
+          system_instructions: `Concurrent test automation ${i}`,
           task_instructions: 'Test concurrent creation',
           model: 'gpt-mock',
         }

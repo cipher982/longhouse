@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { resetDatabase } from './test-utils';
-import { createFicheViaUI } from './helpers/fiche-helpers';
+import { createAutomationViaUI } from './helpers/automation-helpers';
 
 // Reset DB before each test to keep IDs predictable
 // Uses strict reset that throws on failure to fail fast
@@ -24,10 +24,10 @@ test('WebSocket envelopes include required fields for streaming events', async (
 
   const wsPromise = page.waitForEvent('websocket', { timeout: 10000 });
 
-  const ficheId = await createFicheViaUI(page);
+  const automationId = await createAutomationViaUI(page);
   await wsPromise;
 
-  const chatBtn = page.locator(`[data-testid="chat-automation-${ficheId}"]`);
+  const chatBtn = page.locator(`[data-testid="chat-automation-${automationId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 

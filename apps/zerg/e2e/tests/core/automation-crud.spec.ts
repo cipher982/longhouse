@@ -1,7 +1,7 @@
 /**
- * Fiche CRUD Tests - Core Suite
+ * Automation CRUD Tests - Core Suite
  *
- * Tests basic fiche create/read operations.
+ * Tests basic automation create/read operations.
  *
  * CORE SUITE: 0 skipped, 0 flaky, retries: 0
  */
@@ -15,16 +15,16 @@ test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
 });
 
-test.describe('Fiche CRUD - Core', () => {
-  test('create fiche - fiche appears in dashboard', async ({ page }) => {
+test.describe('Automation CRUD - Core', () => {
+  test('create automation - automation appears in dashboard', async ({ page }) => {
     await page.goto('/dashboard');
 
     const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
     await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-    const ficheRows = page.locator('tr[data-automation-id]');
-    const initialCount = await ficheRows.count();
+    const automationRows = page.locator('tr[data-automation-id]');
+    const initialCount = await automationRows.count();
 
     // Wait for API response
     await Promise.all([
@@ -36,18 +36,18 @@ test.describe('Fiche CRUD - Core', () => {
     ]);
 
     // Use polling to wait for new row
-    await expect.poll(async () => await ficheRows.count(), { timeout: 10000 }).toBe(initialCount + 1);
+    await expect.poll(async () => await automationRows.count(), { timeout: 10000 }).toBe(initialCount + 1);
 
-    const newRow = ficheRows.first();
+    const newRow = automationRows.first();
     await expect(newRow).toBeVisible();
 
-    const ficheId = await newRow.getAttribute('data-automation-id');
-    expect(ficheId).toBeTruthy();
-    expect(ficheId).toMatch(/^\d+$/);
+    const automationId = await newRow.getAttribute('data-automation-id');
+    expect(automationId).toBeTruthy();
+    expect(automationId).toMatch(/^\d+$/);
   });
 
   test('backend auto-generates placeholder name', async ({ request }) => {
-    // Create fiche via API (no name field sent)
+    // Create an automation via API with no name field.
     const response = await request.post('/api/automations', {
       data: {
         system_instructions: 'Test instructions',
@@ -57,16 +57,15 @@ test.describe('Fiche CRUD - Core', () => {
     });
 
     expect(response.ok()).toBeTruthy();
-    const fiche = await response.json();
+    const automation = await response.json();
 
-    // Should have auto-generated name "New Fiche"
-    expect(fiche.name).toBe('New Fiche');
+    expect(automation.name).toBe('New Fiche');
   });
 
   test('idempotency key prevents duplicate creation', async ({ request }) => {
     const idempotencyKey = `test-${Date.now()}-${Math.random()}`;
 
-    // Create fiche with idempotency key
+    // Create an automation with an idempotency key.
     const response1 = await request.post('/api/automations', {
       headers: { 'Idempotency-Key': idempotencyKey },
       data: {
@@ -76,7 +75,7 @@ test.describe('Fiche CRUD - Core', () => {
       },
     });
     expect(response1.ok()).toBeTruthy();
-    const fiche1 = await response1.json();
+    const automation1 = await response1.json();
 
     // Retry with same idempotency key (simulates double-click)
     const response2 = await request.post('/api/automations', {
@@ -88,10 +87,9 @@ test.describe('Fiche CRUD - Core', () => {
       },
     });
     expect(response2.ok()).toBeTruthy();
-    const fiche2 = await response2.json();
+    const automation2 = await response2.json();
 
-    // Should return the SAME fiche (not create a new one)
-    expect(fiche2.id).toBe(fiche1.id);
-    expect(fiche2.name).toBe(fiche1.name);
+    expect(automation2.id).toBe(automation1.id);
+    expect(automation2.name).toBe(automation1.name);
   });
 });

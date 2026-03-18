@@ -1,13 +1,13 @@
 import { test, expect, type Page } from './fixtures';
 import { resetDatabase } from './test-utils';
 
-// Reset DB before each test to keep fiche/thread ids predictable
+// Reset DB before each test to keep automation/thread ids predictable.
 // Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
 });
 
-async function createFicheAndGetId(page: Page): Promise<string> {
+async function createAutomationAndGetId(page: Page): Promise<string> {
   await page.goto('/dashboard');
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
@@ -21,18 +21,17 @@ async function createFicheAndGetId(page: Page): Promise<string> {
   ]);
 
   const body = await response.json();
-  const ficheId = String(body.id);
+  const automationId = String(body.id);
 
-  const row = page.locator(`tr[data-automation-id="${ficheId}"]`);
+  const row = page.locator(`tr[data-automation-id="${automationId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
-  return ficheId;
+  return automationId;
 }
 
 test.describe('Chat Token Streaming Tests', () => {
   test('Verify token streaming shows up in UI', async ({ page }) => {
-    // Create fiche and navigate to chat
-    const ficheId = await createFicheAndGetId(page);
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
+    const automationId = await createAutomationAndGetId(page);
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
 
     // Verify chat UI loads
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
@@ -75,8 +74,8 @@ test.describe('Chat Token Streaming Tests', () => {
   });
 
   test('Verify tokens accumulate during streaming', async ({ page }) => {
-    const ficheId = await createFicheAndGetId(page);
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
+    const automationId = await createAutomationAndGetId(page);
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
 
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
@@ -117,8 +116,8 @@ test.describe('Chat Token Streaming Tests', () => {
   });
 
   test('Verify multiple token chunks appear incrementally', async ({ page }) => {
-    const ficheId = await createFicheAndGetId(page);
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
+    const automationId = await createAutomationAndGetId(page);
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
 
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
@@ -148,8 +147,8 @@ test.describe('Chat Token Streaming Tests', () => {
   });
 
   test('Verify streaming cursor animation', async ({ page }) => {
-    const ficheId = await createFicheAndGetId(page);
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
+    const automationId = await createAutomationAndGetId(page);
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
 
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
@@ -197,8 +196,8 @@ test.describe('Chat Token Streaming Tests', () => {
   test('CRITICAL: Switching threads mid-stream prevents token leakage', async ({ page }) => {
     console.log('🎯 Testing: Thread-switching token leakage prevention');
 
-    const ficheId = await createFicheAndGetId(page);
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
+    const automationId = await createAutomationAndGetId(page);
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
     // Send message in Thread A to trigger streaming
@@ -274,8 +273,8 @@ test.describe('Chat Token Streaming Tests', () => {
   test('Writing indicator badge appears on background streaming threads', async ({ page }) => {
     console.log('🎯 Testing: ✍️ badge visibility for background threads');
 
-    const ficheId = await createFicheAndGetId(page);
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
+    const automationId = await createAutomationAndGetId(page);
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
     // Send message to trigger streaming

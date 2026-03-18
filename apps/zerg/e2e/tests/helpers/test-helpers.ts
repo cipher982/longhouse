@@ -1,13 +1,13 @@
 import { testLog } from './test-logger';
 
 import { Page, expect } from '@playwright/test';
-import { createApiClient, Fiche, Thread, CreateFicheRequest, CreateThreadRequest } from './api-client';
+import { createApiClient, Automation, Thread, CreateAutomationRequest } from './api-client';
 import { resetDatabaseForCommis } from './database-helpers';
-import { createFicheViaAPI, createMultipleFiches, cleanupFiches } from './fiche-helpers';
-import { retryWithBackoff, waitForStableElement, logTestStep } from './test-utils';
+import { createAutomationViaAPI, cleanupAutomations } from './automation-helpers';
+import { logTestStep } from './test-utils';
 
 export interface TestContext {
-  fiches: Fiche[];
+  automations: Automation[];
   threads: Thread[];
 }
 
@@ -15,35 +15,33 @@ export interface TestContext {
  * Setup helper that creates test data and returns a context object
  */
 export async function setupTestData(commisId: string, options: {
-  fiches?: CreateFicheRequest[];
-  threadsPerFiche?: number;
+  automations?: CreateAutomationRequest[];
+  threadsPerAutomation?: number;
 } = {}): Promise<TestContext> {
   logTestStep('Setting up test data', { commisId, options });
 
   const apiClient = createApiClient(commisId);
   const context: TestContext = {
-    fiches: [],
+    automations: [],
     threads: []
   };
 
-  // Create fiches using the consolidated helper
-  const ficheConfigs = options.fiches || [{}]; // Default to one fiche
-  for (const ficheConfig of ficheConfigs) {
-    const fiche = await createFicheViaAPI(commisId, ficheConfig);
-    context.fiches.push(fiche);
+  const automationConfigs = options.automations || [{}];
+  for (const automationConfig of automationConfigs) {
+    const automation = await createAutomationViaAPI(commisId, automationConfig);
+    context.automations.push(automation);
 
-    // Create threads for this fiche
-    const threadCount = options.threadsPerFiche || 0;
+    const threadCount = options.threadsPerAutomation || 0;
     for (let i = 0; i < threadCount; i++) {
       const thread = await apiClient.createThread({
-        fiche_id: fiche.id,
-        title: `Test Thread ${i + 1} for ${fiche.name}`
+        fiche_id: automation.id,
+        title: `Test Thread ${i + 1} for ${automation.name}`
       });
       context.threads.push(thread);
     }
   }
 
-  logTestStep('Test data setup complete', { ficheCount: context.fiches.length, threadCount: context.threads.length });
+  logTestStep('Test data setup complete', { automationCount: context.automations.length, threadCount: context.threads.length });
   return context;
 }
 
@@ -55,11 +53,10 @@ export async function cleanupTestData(commisId: string, context: TestContext): P
     return;
   }
 
-  logTestStep('Cleaning up test data', { commisId, ficheCount: context.fiches?.length, threadCount: context.threads?.length });
+  logTestStep('Cleaning up test data', { commisId, automationCount: context.automations?.length, threadCount: context.threads?.length });
 
   const apiClient = createApiClient(commisId);
 
-  // Delete threads first (they reference fiches)
   if (context.threads) {
     for (const thread of context.threads) {
       try {
@@ -70,9 +67,8 @@ export async function cleanupTestData(commisId: string, context: TestContext): P
     }
   }
 
-  // Delete fiches using the consolidated helper
-  if (context.fiches) {
-    await cleanupFiches(commisId, context.fiches);
+  if (context.automations) {
+    await cleanupAutomations(commisId, context.automations);
   }
 
   logTestStep('Test data cleanup complete');
@@ -128,24 +124,24 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
 }
 
 /**
- * Get the count of fiche rows in the dashboard
+ * Get the count of automation rows in the dashboard.
  */
-export async function getFicheRowCount(page: Page): Promise<number> {
+export async function getAutomationRowCount(page: Page): Promise<number> {
   await page.waitForLoadState('networkidle');
   return await page.locator('tr[data-automation-id]:visible').count();
 }
 
 /**
- * Create an fiche via the UI and return its ID
- * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
+ * Create an automation via the UI and return its ID.
+ * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
-export async function createFicheViaUI(page: Page): Promise<string> {
+export async function createAutomationViaUI(page: Page): Promise<string> {
   await waitForDashboardReady(page);
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-  // Capture API response to get the ACTUAL created fiche ID
+  // Capture the API response to get the actual created automation ID.
   const [response] = await Promise.all([
     page.waitForResponse(
       (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
@@ -154,25 +150,24 @@ export async function createFicheViaUI(page: Page): Promise<string> {
     createBtn.click(),
   ]);
 
-  // Parse the fiche ID from the response body - this is deterministic
+  // Parse the automation ID from the response body. This is deterministic.
   const body = await response.json();
-  const ficheId = String(body.id);
+  const automationId = String(body.id);
 
-  if (!ficheId || ficheId === 'undefined') {
-    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
+  if (!automationId || automationId === 'undefined') {
+    throw new Error(`Failed to get automation ID from API response: ${JSON.stringify(body)}`);
   }
 
-  // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
-  const newRow = page.locator(`tr[data-automation-id="${ficheId}"]`);
+  const newRow = page.locator(`tr[data-automation-id="${automationId}"]`);
   await expect(newRow).toBeVisible({ timeout: 10000 });
 
-  return ficheId;
+  return automationId;
 }
 
 /**
- * Edit an fiche via the UI modal
+ * Edit an automation via the UI modal.
  */
-export async function editFicheViaUI(page: Page, ficheId: string, data: {
+export async function editAutomationViaUI(page: Page, automationId: string, data: {
   name?: string;
   systemInstructions?: string;
   taskInstructions?: string;
@@ -180,7 +175,7 @@ export async function editFicheViaUI(page: Page, ficheId: string, data: {
   model?: string;
 }): Promise<void> {
   // Open edit modal
-  await page.locator(`[data-testid="edit-automation-${ficheId}"]`).click();
+  await page.locator(`[data-testid="edit-automation-${automationId}"]`).click();
   await expect(page.locator('#fiche-modal')).toBeVisible({ timeout: 2000 });
   await page.waitForSelector('#fiche-name:not([disabled])', { timeout: 2000 });
 
@@ -219,9 +214,9 @@ export async function editFicheViaUI(page: Page, ficheId: string, data: {
 }
 
 /**
- * Delete an fiche via the UI and handle confirmation dialog
+ * Delete an automation via the UI and handle the confirmation dialog.
  */
-export async function deleteFicheViaUI(page: Page, ficheId: string, confirm: boolean = true): Promise<void> {
+export async function deleteAutomationViaUI(page: Page, automationId: string, confirm: boolean = true): Promise<void> {
   // Set up dialog handler
   page.once('dialog', (dialog) => {
     if (confirm) {
@@ -232,22 +227,20 @@ export async function deleteFicheViaUI(page: Page, ficheId: string, confirm: boo
   });
 
   // Click delete button
-  await page.locator(`[data-testid="delete-automation-${ficheId}"]`).click();
+  await page.locator(`[data-testid="delete-automation-${automationId}"]`).click();
 
   if (confirm) {
-    // Wait for row to disappear
-    await expect(page.locator(`tr[data-automation-id="${ficheId}"]`)).toHaveCount(0, { timeout: 5000 });
+    await expect(page.locator(`tr[data-automation-id="${automationId}"]`)).toHaveCount(0, { timeout: 5000 });
   } else {
-    // Row should still be present
-    await expect(page.locator(`tr[data-automation-id="${ficheId}"]`)).toHaveCount(1);
+    await expect(page.locator(`tr[data-automation-id="${automationId}"]`)).toHaveCount(1);
   }
 }
 
 /**
- * Navigate to chat for a specific fiche
+ * Navigate to chat for a specific automation.
  */
-export async function navigateToChat(page: Page, ficheId: string): Promise<void> {
-  await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
+export async function navigateToChat(page: Page, automationId: string): Promise<void> {
+  await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
 
   // Wait for chat interface to load (if implemented)
   try {
@@ -309,7 +302,7 @@ export function skipIfNotImplemented(page: Page, selector: string, reason: strin
  * await waitForToast(page, 'Settings saved');
  *
  * // Wait for success toast
- * const toast = getToastLocator(page, { type: 'success', text: 'Fiche created' });
+ * const toast = getToastLocator(page, { type: 'success', text: 'Automation created' });
  * await expect(toast).toBeVisible();
  */
 
@@ -364,12 +357,12 @@ export async function waitForToast(
  * Create a test thread using the API client
  * This is a convenience wrapper for tests that have a Page but need to create threads
  */
-export async function createTestThread(page: Page, ficheId: string, title: string): Promise<Thread> {
+export async function createTestThread(page: Page, automationId: string, title: string): Promise<Thread> {
   const commisId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
   const apiClient = createApiClient(commisId);
 
   const thread = await apiClient.createThread({
-    fiche_id: ficheId,
+    fiche_id: automationId,
     title: title || `Test Thread ${Date.now()}`,
   });
 
