@@ -2404,6 +2404,28 @@ Notes:
 
 ---
 
+## [Refactor][Runtime] Rename Fiche Runner Substrate To Runtime Runner
+
+**Status (2026-03-17):** Done. The live execution path now runs through `runtime_runner`, `RuntimeRunner`, and `RunnerInterrupted`, and the high-signal runtime docs/tests were updated to match.
+
+**Goal:** Rename the core execution runner surface to neutral runtime naming without changing behavior or storage.
+
+**Done when:**
+- The runner module/file is no longer `fiche_runner.py`
+- Runtime callers import `RuntimeRunner` / `RunnerInterrupted` instead of `FicheRunner` / `FicheInterrupted`
+- High-signal runner/react/continuation docs and comments stop teaching the fiche-first mental model
+- Frontend units, `make test`, and focused automation/dashboard coverage are green
+
+- [x] Rename the runner module/class/interrupt type and update runtime imports
+- [x] Clean high-signal runtime comments/docs off `FicheRunner` wording
+- [x] Verify with frontend units, `make test`, and focused browser coverage
+
+Notes:
+- 2026-03-17: This tranche is code-surface only. Do not rename DB tables/columns or low-value storage internals here.
+- 2026-03-17: Verification passed with `make test-frontend-unit`, `make test`, and `E2E_BACKEND_PORT=48190 E2E_FRONTEND_PORT=48191 make test-e2e-single TEST='--project=chromium tests/dashboard.basic.spec.ts tests/dashboard.scope-toggle.spec.ts'`.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

@@ -40,7 +40,7 @@ async def continue_oikos(
     from zerg.events import OikosEmitter
     from zerg.events import reset_emitter
     from zerg.events import set_emitter
-    from zerg.managers.fiche_runner import FicheInterrupted
+    from zerg.managers.runtime_runner import RunnerInterrupted
     from zerg.models.models import ThreadMessage
     from zerg.services.event_store import emit_run_event
     from zerg.services.memory_summarizer import schedule_run_summary
@@ -286,7 +286,7 @@ async def continue_oikos(
         logger.info("Successfully resumed oikos run %s", run_id)
         return {"status": "success", "result": final_response}
 
-    except FicheInterrupted as e:
+    except RunnerInterrupted as e:
         # Oikos spawned another commis - set back to WAITING
         interrupt_value = e.interrupt_value
         job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None

@@ -1,7 +1,7 @@
-"""Runner -- asynchronous one-turn execution helper.
+"""Runtime runner -- asynchronous one-turn execution helper.
 
-Bridges Fiche ORM row, ThreadService for DB persistence, and the
-ReAct execution loop.
+Bridges the automation/runtime profile row, ThreadService for DB persistence,
+and the ReAct execution loop.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.crud import get_fiche
 from zerg.crud import get_unprocessed_messages
-from zerg.models.models import Fiche as FicheModel
+from zerg.models.models import Fiche as AutomationProfile
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
 from zerg.services.thread_service import ThreadService
@@ -27,19 +27,19 @@ from zerg.services.thread_service import ThreadService
 logger = logging.getLogger(__name__)
 
 
-class FicheInterrupted(Exception):
+class RunnerInterrupted(Exception):
     """Raised when agent execution is interrupted (waiting for external input)."""
 
     def __init__(self, interrupt_value: dict):
         self.interrupt_value = interrupt_value
-        super().__init__(f"Fiche interrupted: {interrupt_value}")
+        super().__init__(f"Runner interrupted: {interrupt_value}")
 
 
 @dataclass(frozen=True)
 class RuntimeView:
-    """Read-only runtime view of a Fiche row.
+    """Read-only runtime view of an automation/runtime profile row.
 
-    Avoids mutating the SQLAlchemy-managed Fiche ORM object.
+    Avoids mutating the SQLAlchemy-managed ORM object.
     Per-request overrides (model, reasoning_effort) must not be persisted.
     """
 
@@ -51,12 +51,12 @@ class RuntimeView:
     allowed_tools: Any
 
 
-class Runner:  # noqa: D401
+class RuntimeRunner:  # noqa: D401
     """Run one agent turn (async)."""
 
     def __init__(
         self,
-        agent_row: FicheModel,
+        agent_row: AutomationProfile,
         *,
         thread_service: ThreadService | None = None,
         model_override: str | None = None,
@@ -90,13 +90,13 @@ class Runner:  # noqa: D401
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def _load_agent_row(self, db: Session) -> FicheModel:
+    def _load_agent_row(self, db: Session) -> AutomationProfile:
         agent_row = get_fiche(db, self.agent.id)
         if not agent_row or not agent_row.system_instructions:
-            raise RuntimeError(f"Fiche {self.agent.id} has no system_instructions")
+            raise RuntimeError(f"Automation {self.agent.id} has no system_instructions")
         return agent_row
 
-    def _resolve_tools(self, db: Session, agent_row: FicheModel, skill_integration: Any) -> list:
+    def _resolve_tools(self, db: Session, agent_row: AutomationProfile, skill_integration: Any) -> list:
         from zerg.tools import get_registry
 
         resolver = get_registry()
@@ -116,7 +116,7 @@ class Runner:  # noqa: D401
         db: Session,
         thread: ThreadModel,
         messages: list,
-        agent_row: FicheModel,
+        agent_row: AutomationProfile,
         skill_integration: Any,
         *,
         run_id: int | None = None,
@@ -226,7 +226,7 @@ class Runner:  # noqa: D401
         result: Any,
         messages_with_context: int,
     ) -> None:
-        """Persist partial messages and raise FicheInterrupted."""
+        """Persist partial messages and raise RunnerInterrupted."""
         if len(result.messages) > messages_with_context:
             new_messages = result.messages[messages_with_context:]
             new_messages = [m for m in new_messages if not (hasattr(m, "type") and m.type == "system")]
@@ -238,7 +238,7 @@ class Runner:  # noqa: D401
                     processed=True,
                 )
                 self._persist_usage(db, created_rows)
-        raise FicheInterrupted(result.interrupt_value or {})
+        raise RunnerInterrupted(result.interrupt_value or {})
 
     # ------------------------------------------------------------------
     # Public API
@@ -278,7 +278,7 @@ class Runner:  # noqa: D401
         self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
 
         if unprocessed_rows and not created_rows:
-            raise RuntimeError("Fiche produced no messages despite pending user input.")
+            raise RuntimeError("Automation produced no messages despite pending user input.")
 
         return created_rows
 
@@ -459,6 +459,3 @@ class Runner:  # noqa: D401
                     if tc.get("id") == tool_call_id:
                         return msg.id
         return None
-
-
-FicheRunner = Runner

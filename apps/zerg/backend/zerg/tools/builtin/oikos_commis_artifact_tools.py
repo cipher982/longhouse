@@ -162,7 +162,7 @@ async def wait_for_commis_async(
     _tool_call_id: str | None = None,
 ) -> str:
     """Wait for a specific commis to complete (blocking)."""
-    from zerg.managers.fiche_runner import FicheInterrupted
+    from zerg.managers.runtime_runner import RunnerInterrupted
 
     resolver = get_credential_resolver()
     if not resolver:
@@ -218,7 +218,7 @@ async def wait_for_commis_async(
             return f"Commis job {job_id} completed."
 
         logger.info(f"[WAIT-FOR-COMMIS] Blocking for job {job_id} (status: {job.status})")
-        raise FicheInterrupted(
+        raise RunnerInterrupted(
             {
                 "type": "wait_for_commis",
                 "job_id": job_id_int,
@@ -228,7 +228,7 @@ async def wait_for_commis_async(
             }
         )
 
-    except FicheInterrupted:
+    except RunnerInterrupted:
         raise
     except ValueError:
         return tool_error(ErrorType.VALIDATION_ERROR, f"Invalid job ID format: {job_id}")

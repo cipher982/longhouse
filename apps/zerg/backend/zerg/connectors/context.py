@@ -1,12 +1,12 @@
 """Context variables for connector credential resolution.
 
 This module provides a thread-safe way to pass the credential resolver
-to connector tools during fiche execution using Python's contextvars.
+to connector tools during runtime execution using Python's contextvars.
 
 The pattern mirrors the token streaming context (token_stream.py) where
-the FicheRunner sets the context before invocation and tools read from it.
+the RuntimeRunner sets the context before invocation and tools read from it.
 
-Usage in FicheRunner:
+Usage in RuntimeRunner:
     from zerg.connectors.context import set_credential_resolver
     resolver = CredentialResolver(fiche_id=fiche.id, db=db)
     set_credential_resolver(resolver)
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from zerg.connectors.resolver import CredentialResolver
 
 # Context variable holding the current credential resolver
-# Set by FicheRunner before invoking the fiche, read by connector tools
+# Set by RuntimeRunner before invoking the runtime, read by connector tools
 _credential_resolver_var: contextvars.ContextVar[Optional["CredentialResolver"]] = contextvars.ContextVar(
     "_credential_resolver_var",
     default=None,
@@ -51,7 +51,7 @@ def get_credential_resolver() -> Optional["CredentialResolver"]:
 def set_credential_resolver(resolver: Optional["CredentialResolver"]) -> contextvars.Token:
     """Set the credential resolver for the current context.
 
-    Should be called by FicheRunner before invoking the fiche.
+    Should be called by RuntimeRunner before invoking the runtime.
     Returns a token that can be used to reset the context.
 
     Args:

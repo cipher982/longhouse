@@ -1,9 +1,9 @@
 """Oikos internal endpoints for run resume.
 
 Called internally when a commis completes while an oikos run is WAITING:
-1. spawn_workspace_commis() raises FicheInterrupted → run becomes WAITING
-2. Commis completes → calls POST /internal/runs/{id}/resume
-3. FicheRunner.run_continuation() continues execution
+1. spawn_workspace_commis() raises RunnerInterrupted -> run becomes WAITING
+2. Commis completes -> calls POST /internal/runs/{id}/resume
+3. RuntimeRunner.run_continuation() continues execution
 """
 
 import logging
@@ -74,7 +74,7 @@ async def resume_run(
 
         # Use resume_oikos_with_commis_result which:
         # 1. Locates the tool_call_id for the commis job
-        # 2. Injects the tool result via FicheRunner.run_continuation()
+        # 2. Injects the tool result via RuntimeRunner.run_continuation()
         # 3. Emits completion events
         from zerg.services.commis_runner import default_runner_factory
         from zerg.services.commis_single_resume import resume_oikos_with_commis_result

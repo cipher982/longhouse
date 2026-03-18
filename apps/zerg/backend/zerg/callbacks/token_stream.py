@@ -5,7 +5,7 @@ individual **assistant tokens** over the existing topic-based WebSocket layer.
 
 The handler is *stateless* apart from a reference to the global
 ``topic_manager`` instance.  The thread context is passed via a
-``contextvars.ContextVar`` so callers (namely ``FicheRunner``) can set/reset
+``contextvars.ContextVar`` so callers (namely ``RuntimeRunner``) can set/reset
 the value immediately before invoking the LLM without having to
 re-instantiate the LLM for each thread.
 """
@@ -63,7 +63,7 @@ class WsTokenCallback(AsyncCallbackHandler):
 
         if thread_id is None or user_id is None:
             # If no context is set we skip – this can happen if the LLM is
-            # called outside an ``FicheRunner`` (unit-tests, commis, etc.).
+            # called outside a ``RuntimeRunner`` (unit-tests, commis, etc.).
             # Only warn once per callback instance to prevent log spam.
             if not self._warned_no_context:
                 logger.debug("WsTokenCallback: thread_id or user_id context not set – skipping token dispatch")
@@ -127,7 +127,7 @@ class WsTokenCallback(AsyncCallbackHandler):
 
 
 # ---------------------------------------------------------------------------
-# Convenience helpers used by FicheRunner
+# Convenience helpers used by RuntimeRunner
 # ---------------------------------------------------------------------------
 
 

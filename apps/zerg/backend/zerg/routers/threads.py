@@ -37,7 +37,7 @@ from zerg.generated.ws_messages import Envelope
 from zerg.generated.ws_messages import StreamChunkData
 from zerg.generated.ws_messages import StreamEndData
 from zerg.generated.ws_messages import StreamStartData
-from zerg.managers.fiche_runner import FicheRunner
+from zerg.managers.runtime_runner import RuntimeRunner
 from zerg.schemas.schemas import Thread
 from zerg.schemas.schemas import ThreadCreate
 from zerg.schemas.schemas import ThreadMessageCreate
@@ -326,7 +326,7 @@ async def start_thread_run(thread_id: int, db: Session = Depends(get_db), curren
     if fiche is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
 
-    runner = FicheRunner(fiche)
+    runner = RuntimeRunner(fiche)
 
     # User-scoped topic for ALL streaming events
     user_id = current_user.id

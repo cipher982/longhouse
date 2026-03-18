@@ -1,4 +1,4 @@
-"""Run runner helper – execute a fiche's *task_instructions* once.
+"""Run runner helper – execute an automation's *task_instructions* once.
 
 This module provides :pyfunc:`execute_fiche_task` which is the single source
 of truth for running a **non-interactive** task run ("▶ Play" button,
@@ -8,7 +8,7 @@ The helper:
 
 1. Creates a fresh thread seeded with the fiche's *system* prompt.
 2. Inserts one *user* message containing ``fiche.task_instructions``.
-3. Delegates to :class:`zerg.managers.fiche_runner.FicheRunner` to produce the
+3. Delegates to :class:`zerg.managers.runtime_runner.RuntimeRunner` to produce the
    assistant/tool messages (token streaming disabled).
 4. Updates the fiche's status / timestamps and broadcasts
    :pydata:`zerg.events.EventType.FICHE_UPDATED` so dashboards refresh in
@@ -38,7 +38,7 @@ from zerg.crud import mark_run_running
 from zerg.crud import update_fiche
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.managers.fiche_runner import FicheRunner
+from zerg.managers.runtime_runner import RuntimeRunner
 from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.services.quota import assert_can_start_run
@@ -174,9 +174,9 @@ async def execute_fiche_task(db: Session, fiche: FicheModel, *, thread_type: str
         )
 
         # ------------------------------------------------------------------
-        # Delegate to FicheRunner (no token stream) and capture duration.
+        # Delegate to RuntimeRunner (no token stream) and capture duration.
         # ------------------------------------------------------------------
-        runner = FicheRunner(fiche)
+        runner = RuntimeRunner(fiche)
 
         # Set user context for token streaming
         set_current_user_id(fiche.owner_id)

@@ -173,7 +173,7 @@ async def test_run_oikos_persists_surface_metadata_on_user_and_assistant(monkeyp
                 )
                 return [assistant]
 
-        monkeypatch.setattr("zerg.services.oikos_service.Runner", FakeRunner)
+        monkeypatch.setattr("zerg.services.oikos_service.RuntimeRunner", FakeRunner)
         monkeypatch.setattr("zerg.services.event_store.emit_run_event", _noop_async)
         monkeypatch.setattr("zerg.services.oikos_service.emit_oikos_complete_success", _noop_async)
         monkeypatch.setattr("zerg.services.oikos_service.emit_stream_control_for_pending_commiss", _noop_async)
@@ -268,7 +268,7 @@ async def test_run_oikos_serializes_concurrent_runs_per_owner(monkeypatch, tmp_p
                 finally:
                     type(self).active_count -= 1
 
-        monkeypatch.setattr("zerg.services.oikos_service.Runner", FakeRunner)
+        monkeypatch.setattr("zerg.services.oikos_service.RuntimeRunner", FakeRunner)
         monkeypatch.setattr("zerg.services.event_store.emit_run_event", _noop_async)
         monkeypatch.setattr("zerg.services.oikos_service.emit_oikos_complete_success", _noop_async)
         monkeypatch.setattr("zerg.services.oikos_service.emit_stream_control_for_pending_commiss", _noop_async)
