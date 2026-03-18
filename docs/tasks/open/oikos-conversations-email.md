@@ -1,4 +1,20 @@
-# Oikos Conversations and Email Surface Tasks
+# Oikos Conversations and Email Surface
+
+Status: In progress
+Spec: `docs/specs/oikos-conversations-email.md`
+Last updated: 2026-03-17
+
+## Goal
+
+Make conversations the canonical human-visible communication surface for Oikos across web, email, and future channels, while finishing real Gmail launch proof for hosted and OSS paths.
+
+## Current focus
+
+- Finish the real hosted + OSS Gmail canaries.
+- Expand live thread-correctness coverage.
+- Remove the temporary `david010` Gmail scaffolding once the real hosted flow is proven.
+
+## Checklist
 
 - [x] Phase 0: Create persistent spec and tracking doc
 - [x] Phase 1: Add `Conversation`, `ConversationBinding`, and `ConversationMessage` models
