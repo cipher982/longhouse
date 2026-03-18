@@ -19,7 +19,7 @@ function useDebounce<T>(value: T, delay: number): T {
  * KnowledgeSearchPanel - V1.1 search UI for verifying synced content
  *
  * Users can search their knowledge base to verify documents are
- * properly synced and searchable before using fiches.
+ * properly synced and searchable before using automations.
  */
 export function KnowledgeSearchPanel() {
   const [query, setQuery] = useState("");

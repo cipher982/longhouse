@@ -2,10 +2,10 @@ import type { components } from "../../generated/openapi-types";
 
 type Schemas = components["schemas"];
 
-export type Fiche = Schemas["Fiche"];
-export type FicheSummary = Fiche;
-export type Automation = Fiche;
+export type Automation = Schemas["Fiche"];
 export type AutomationSummary = Automation;
+export type Fiche = Automation;
+export type FicheSummary = AutomationSummary;
 export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
 export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
@@ -123,15 +123,15 @@ export type McpServerAddRequest = components["schemas"]["MCPServerAddRequest"];
 export type McpServerResponse = components["schemas"]["MCPServerResponse"];
 export type McpTestConnectionResponse = components["schemas"]["MCPTestConnectionResponse"];
 
-type FicheCreate = Schemas["FicheCreate"];
-type FicheUpdate = Schemas["FicheUpdate"];
+type AutomationCreate = Schemas["FicheCreate"];
+type AutomationUpdate = Schemas["FicheUpdate"];
 
-export type FicheCreatePayload = Pick<FicheCreate, "system_instructions" | "task_instructions" | "model"> &
-  Partial<Omit<FicheCreate, "system_instructions" | "task_instructions" | "model">>;
+export type AutomationCreatePayload = Pick<AutomationCreate, "system_instructions" | "task_instructions" | "model"> &
+  Partial<Omit<AutomationCreate, "system_instructions" | "task_instructions" | "model">>;
 
-export type FicheUpdatePayload = FicheUpdate;
-export type AutomationCreatePayload = FicheCreatePayload;
-export type AutomationUpdatePayload = FicheUpdatePayload;
+export type AutomationUpdatePayload = AutomationUpdate;
+export type FicheCreatePayload = AutomationCreatePayload;
+export type FicheUpdatePayload = AutomationUpdatePayload;
 
 export interface DashboardRunsBundle {
   ficheId: number;

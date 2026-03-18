@@ -2,7 +2,7 @@ import { useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import type {
-  Fiche,
+  Automation,
   McpServerAddRequest,
   McpServerResponse,
   McpTestConnectionResponse,
@@ -11,13 +11,13 @@ import type {
 } from "../services/api";
 import {
   addMcpServer,
-  fetchAvailableTools,
+  fetchAutomation,
+  fetchAutomationAvailableTools,
   fetchContainerPolicy,
-  fetchFiche,
-  fetchMcpServers,
+  fetchAutomationMcpServers,
   removeMcpServer,
   testMcpServer,
-  updateFiche,
+  updateAutomation,
 } from "../services/api";
 
 export function useContainerPolicy() {
@@ -28,57 +28,57 @@ export function useContainerPolicy() {
 }
 
 export function useAutomationDetails(automationId: number | null) {
-  return useQuery<Fiche>({
-    queryKey: ["fiche", automationId],
+  return useQuery<Automation>({
+    queryKey: ["automation", automationId],
     queryFn: () => {
       if (automationId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return fetchFiche(automationId);
+      return fetchAutomation(automationId);
     },
     enabled: automationId != null,
   });
 }
 
-export function useAvailableTools(ficheId: number | null) {
+export function useAvailableTools(automationId: number | null) {
   return useQuery<AvailableToolsResponse>({
-    queryKey: ["fiche", ficheId, "available-tools"],
+    queryKey: ["automation", automationId, "available-tools"],
     queryFn: () => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return fetchAvailableTools(ficheId);
+      return fetchAutomationAvailableTools(automationId);
     },
-    enabled: ficheId != null,
+    enabled: automationId != null,
   });
 }
 
-export function useMcpServers(ficheId: number | null) {
+export function useMcpServers(automationId: number | null) {
   return useQuery<McpServerResponse[]>({
-    queryKey: ["fiche", ficheId, "mcp-servers"],
+    queryKey: ["automation", automationId, "mcp-servers"],
     queryFn: () => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return fetchMcpServers(ficheId);
+      return fetchAutomationMcpServers(automationId);
     },
-    enabled: ficheId != null,
+    enabled: automationId != null,
   });
 }
-export function useAddMcpServer(ficheId: number | null) {
+export function useAddMcpServer(automationId: number | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (payload: McpServerAddRequest) => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return addMcpServer(ficheId, payload);
+      return addMcpServer(automationId, payload);
     },
-    onSuccess: (_fiche) => {
+    onSuccess: () => {
       toast.success("MCP server added");
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId, "mcp-servers"] });
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId, "available-tools"] });
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId] });
+      queryClient.invalidateQueries({ queryKey: ["automation", automationId, "mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["automation", automationId, "available-tools"] });
+      queryClient.invalidateQueries({ queryKey: ["automation", automationId] });
     },
     onError: (error: Error) => {
       toast.error(`Failed to add MCP server: ${error.message}`);
@@ -86,19 +86,19 @@ export function useAddMcpServer(ficheId: number | null) {
   });
 }
 
-export function useRemoveMcpServer(ficheId: number | null) {
+export function useRemoveMcpServer(automationId: number | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (serverName: string) => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return removeMcpServer(ficheId, serverName);
+      return removeMcpServer(automationId, serverName);
     },
     onSuccess: () => {
       toast.success("MCP server removed");
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId, "mcp-servers"] });
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId, "available-tools"] });
+      queryClient.invalidateQueries({ queryKey: ["automation", automationId, "mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["automation", automationId, "available-tools"] });
     },
     onError: (error: Error) => {
       toast.error(`Failed to remove MCP server: ${error.message}`);
@@ -106,13 +106,13 @@ export function useRemoveMcpServer(ficheId: number | null) {
   });
 }
 
-export function useTestMcpServer(ficheId: number | null) {
+export function useTestMcpServer(automationId: number | null) {
   return useMutation({
     mutationFn: (payload: McpServerAddRequest) => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return testMcpServer(ficheId, payload);
+      return testMcpServer(automationId, payload);
     },
     onSuccess: (result: McpTestConnectionResponse) => {
       const status = result.success ? "success" : "warn";
@@ -128,8 +128,8 @@ export function useTestMcpServer(ficheId: number | null) {
   });
 }
 
-export function useToolOptions(ficheId: number | null) {
-  const { data } = useAvailableTools(ficheId);
+export function useToolOptions(automationId: number | null) {
+  const { data } = useAvailableTools(automationId);
   return useMemo(() => {
     if (!data) {
       return [];
@@ -157,7 +157,7 @@ export function useToolOptions(ficheId: number | null) {
  * - Collapses rapid consecutive calls within debounce window (500ms)
  * - Tracks last synced value for rollback on error
  */
-export function useDebouncedUpdateAllowedTools(ficheId: number | null, debounceMs = 500) {
+export function useDebouncedUpdateAllowedTools(automationId: number | null, debounceMs = 500) {
   const queryClient = useQueryClient();
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pendingValueRef = useRef<string[] | null>(null);
@@ -165,15 +165,15 @@ export function useDebouncedUpdateAllowedTools(ficheId: number | null, debounceM
 
   const mutation = useMutation({
     mutationFn: (allowedTools: string[] | null) => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return updateFiche(ficheId, { allowed_tools: allowedTools ?? [] });
+      return updateAutomation(automationId, { allowed_tools: allowedTools ?? [] });
     },
     onSuccess: (response) => {
       // Track last successful sync as source of truth
       lastSyncedRef.current = response.allowed_tools ?? null;
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId] });
+      queryClient.invalidateQueries({ queryKey: ["automation", automationId] });
 
       // Fire queued change if one exists
       if (pendingValueRef.current !== null) {
@@ -186,7 +186,7 @@ export function useDebouncedUpdateAllowedTools(ficheId: number | null, debounceM
     onError: (error: Error) => {
       toast.error(`Failed to update tools: ${error.message}. Changes reverted.`);
       // Force refresh from server to restore correct state
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId] });
+      queryClient.invalidateQueries({ queryKey: ["automation", automationId] });
       // Clear pending value on error to avoid retrying bad data
       pendingValueRef.current = null;
     },

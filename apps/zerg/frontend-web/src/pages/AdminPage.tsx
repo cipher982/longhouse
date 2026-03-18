@@ -55,7 +55,7 @@ interface DailyBreakdown {
   runs: number;
 }
 
-interface TopFicheUsage {
+interface TopAutomationUsage {
   fiche_id: number;
   name: string;
   tokens: number;
@@ -68,7 +68,7 @@ interface AdminUserDetailResponse {
   period: string;
   summary: UserPeriodUsage;
   daily_breakdown: DailyBreakdown[];
-  top_fiches: TopFicheUsage[];
+  top_fiches: TopAutomationUsage[];
 }
 
 // Types for ops data - matching actual backend contract
@@ -95,10 +95,10 @@ interface OpsSummary {
     p95: number;
   };
   errors_last_hour: number;
-  top_fiches: OpsTopFiche[];
+  top_fiches: OpsTopAutomation[];
 }
 
-interface OpsTopFiche {
+interface OpsTopAutomation {
   fiche_id: number;
   name: string;
   owner_email: string;
@@ -410,19 +410,19 @@ function ConfirmationModal({
   return createPortal(modalContent, document.body);
 }
 
-// Top fiches table component - using real backend contract
-function TopFichesTable({
-  fiches = [],
+// Top automations table component - using real backend contract
+function TopAutomationsTable({
+  automations = [],
   windowLabel,
 }: {
-  fiches?: OpsTopFiche[];
+  automations?: OpsTopAutomation[];
   windowLabel: string;
 }) {
-  if (fiches.length === 0) {
+  if (automations.length === 0) {
     return (
       <EmptyState
-        title="No fiche data available"
-        description={`No fiche runs recorded in ${windowLabel.toLowerCase()}.`}
+        title="No automation data available"
+        description={`No automation runs recorded in ${windowLabel.toLowerCase()}.`}
       />
     );
   }
@@ -430,23 +430,23 @@ function TopFichesTable({
   return (
     <Table>
       <Table.Header>
-        <Table.Cell isHeader>Fiche Name</Table.Cell>
+        <Table.Cell isHeader>Automation Name</Table.Cell>
         <Table.Cell isHeader>Owner</Table.Cell>
         <Table.Cell isHeader>Runs</Table.Cell>
         <Table.Cell isHeader>Cost (USD)</Table.Cell>
         <Table.Cell isHeader>P95 Latency</Table.Cell>
       </Table.Header>
       <Table.Body>
-        {fiches.map((fiche) => (
-          <Table.Row key={fiche.fiche_id}>
-            <Table.Cell className="agent-name">{fiche.name}</Table.Cell>
-            <Table.Cell className="owner-email">{fiche.owner_email}</Table.Cell>
-            <Table.Cell className="runs-count">{fiche.runs}</Table.Cell>
+        {automations.map((automation) => (
+          <Table.Row key={automation.fiche_id}>
+            <Table.Cell className="agent-name">{automation.name}</Table.Cell>
+            <Table.Cell className="owner-email">{automation.owner_email}</Table.Cell>
+            <Table.Cell className="runs-count">{automation.runs}</Table.Cell>
             <Table.Cell className="cost">
-              {fiche.cost_usd !== null ? `$${fiche.cost_usd.toFixed(4)}` : 'N/A'}
+              {automation.cost_usd !== null ? `$${automation.cost_usd.toFixed(4)}` : 'N/A'}
             </Table.Cell>
             <Table.Cell className="latency">
-              {fiche.p95_ms}ms
+              {automation.p95_ms}ms
             </Table.Cell>
           </Table.Row>
         ))}
@@ -646,26 +646,26 @@ function UserDetailModal({
               </div>
             )}
 
-            {/* Top Fiches */}
+            {/* Top Automations */}
             {detail.top_fiches.length > 0 && (
               <div className="detail-section">
-                <h5>Top Fiches by Cost</h5>
+                <h5>Top Automations by Cost</h5>
                 <table className="breakdown-table">
                   <thead>
                     <tr>
-                      <th>Fiche</th>
+                      <th>Automation</th>
                       <th className="numeric">Tokens</th>
                       <th className="numeric">Cost</th>
                       <th className="numeric">Runs</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.top_fiches.map((fiche) => (
-                      <tr key={fiche.fiche_id}>
-                        <td>{fiche.name}</td>
-                        <td className="numeric">{fiche.tokens.toLocaleString()}</td>
-                        <td className="numeric">{formatCost(fiche.cost_usd)}</td>
-                        <td className="numeric">{fiche.runs}</td>
+                    {detail.top_fiches.map((automation) => (
+                      <tr key={automation.fiche_id}>
+                        <td>{automation.name}</td>
+                        <td className="numeric">{automation.tokens.toLocaleString()}</td>
+                        <td className="numeric">{formatCost(automation.cost_usd)}</td>
+                        <td className="numeric">{automation.runs}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1001,7 +1001,7 @@ function AdminPage() {
         <div className="admin-stack ops-admin-stack">
           <div className="ops-metrics-note" role="note">
             <span>
-              Window-scoped metrics: runs, cost, latency, and top fiches in{" "}
+              Window-scoped metrics: runs, cost, latency, and top automations in{" "}
               <strong>{summary.window_label}</strong>.
             </span>
             <span>
@@ -1073,16 +1073,16 @@ function AdminPage() {
             />
           </div>
 
-          {/* Top Fiches Section - using data from summary */}
+          {/* Top Automations Section - using data from summary */}
           <Card>
             <Card.Header>
               <h3 className="admin-section-title ui-section-title">
-                Top Performing Fiches ({summary.window_label})
+                Top Performing Automations ({summary.window_label})
               </h3>
             </Card.Header>
             <Card.Body>
-              <TopFichesTable
-                fiches={summary.top_fiches}
+              <TopAutomationsTable
+                automations={summary.top_fiches}
                 windowLabel={summary.window_label}
               />
             </Card.Body>
@@ -1190,11 +1190,11 @@ function AdminPage() {
               <div className="system-info">
                 <div className="info-grid">
                   <div className="info-item">
-                    <span className="info-label">Total Fiches:</span>
+                    <span className="info-label">Total Automations:</span>
                     <span className="info-value">{summary.fiches_total}</span>
                   </div>
                   <div className="info-item">
-                    <span className="info-label">Scheduled Fiches:</span>
+                    <span className="info-label">Scheduled Automations:</span>
                     <span className="info-value">{summary.fiches_scheduled}</span>
                   </div>
                   <div className="info-item">

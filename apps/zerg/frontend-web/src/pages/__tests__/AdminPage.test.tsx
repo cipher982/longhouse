@@ -47,7 +47,7 @@ function buildOpsSummary(window: "today" | "7d" | "30d") {
     top_fiches: [
       {
         fiche_id: 1,
-        name: "Test Fiche",
+        name: "Test Automation",
         owner_email: "test@example.com",
         runs: 50,
         cost_usd: 0.125,
@@ -55,7 +55,7 @@ function buildOpsSummary(window: "today" | "7d" | "30d") {
       },
       {
         fiche_id: 2,
-        name: "Helper Fiche",
+        name: "Helper Automation",
         owner_email: "helper@example.com",
         runs: 30,
         cost_usd: 0.089,
@@ -134,7 +134,7 @@ describe("AdminPage", () => {
           json: () => Promise.resolve({ message: "Reset triggered" }),
         });
       }
-      // No separate /api/ops/top call - top fiches included in summary
+      // No separate /api/ops/top call - top automations are included in summary.
       return Promise.resolve({
         ok: false,
         text: () => Promise.resolve("Not found"),
@@ -174,14 +174,14 @@ describe("AdminPage", () => {
       .toBeInTheDocument();
   });
 
-  it("displays top fiches table", async () => {
+  it("displays top automations table", async () => {
     renderAdminPage();
 
     await waitFor(() => {
-      expect(screen.getAllByText("Test Fiche").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Test Automation").length).toBeGreaterThan(0);
     });
 
-    expect(screen.getAllByText("Helper Fiche").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Helper Automation").length).toBeGreaterThan(0);
     expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0); // owner_email
     expect(screen.getAllByText("$0.1250").length).toBeGreaterThan(0); // cost_usd
     expect(screen.getAllByText("300ms").length).toBeGreaterThan(0); // p95_ms
@@ -202,7 +202,7 @@ describe("AdminPage", () => {
     await waitFor(() => {
       expect(select.value).toBe("7d");
       expect(screen.getByText("78")).toBeInTheDocument();
-      expect(screen.getByText("Top Performing Fiches (Last 7 Days)")).toBeInTheDocument();
+      expect(screen.getByText("Top Performing Automations (Last 7 Days)")).toBeInTheDocument();
     });
 
     expect(

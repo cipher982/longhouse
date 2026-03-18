@@ -11,11 +11,9 @@ import type {
   ConnectorTestResponse,
 } from "../types/connectors";
 import {
-  fetchFicheConnectors,
-  configureFicheConnector,
-  testFicheConnectorBeforeSave,
-  testFicheConnector,
-  deleteFicheConnector,
+  fetchAutomationConnectors,
+  configureAutomationConnector,
+  testAutomationConnectorBeforeSave,
 } from "../services/api";
 
 /**
@@ -23,12 +21,12 @@ import {
  */
 export function useAutomationConnectors(automationId: number | null) {
   return useQuery<ConnectorStatus[]>({
-    queryKey: ["fiche", automationId, "connectors"],
+    queryKey: ["automation", automationId, "connectors"],
     queryFn: () => {
       if (automationId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return fetchFicheConnectors(automationId);
+      return fetchAutomationConnectors(automationId);
     },
     enabled: automationId != null,
   });
@@ -37,19 +35,19 @@ export function useAutomationConnectors(automationId: number | null) {
 /**
  * Configure (create or update) connector credentials.
  */
-export function useConfigureConnector(ficheId: number | null) {
+export function useConfigureConnector(automationId: number | null) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (payload: ConnectorConfigureRequest) => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return configureFicheConnector(ficheId, payload);
+      return configureAutomationConnector(automationId, payload);
     },
     onSuccess: () => {
       toast.success("Connector configured successfully");
-      queryClient.invalidateQueries({ queryKey: ["fiche", ficheId, "connectors"] });
+      queryClient.invalidateQueries({ queryKey: ["automation", automationId, "connectors"] });
     },
     onError: (error: Error) => {
       toast.error(`Failed to configure connector: ${error.message}`);
@@ -60,13 +58,13 @@ export function useConfigureConnector(ficheId: number | null) {
 /**
  * Test credentials before saving.
  */
-export function useTestConnectorBeforeSave(ficheId: number | null) {
+export function useTestConnectorBeforeSave(automationId: number | null) {
   return useMutation({
     mutationFn: (payload: ConnectorTestRequest) => {
-      if (ficheId == null) {
-        return Promise.reject(new Error("Missing fiche id"));
+      if (automationId == null) {
+        return Promise.reject(new Error("Missing automation id"));
       }
-      return testFicheConnectorBeforeSave(ficheId, payload);
+      return testAutomationConnectorBeforeSave(automationId, payload);
     },
     onSuccess: (result: ConnectorTestResponse) => {
       if (result.success) {
@@ -82,8 +80,6 @@ export function useTestConnectorBeforeSave(ficheId: number | null) {
 }
 
 /**
- * Test already-configured credentials.
- */
-/**
- * Delete connector credentials.
+ * Test already-configured credentials and deletion are handled by the
+ * automation connector API helpers directly when needed.
  */

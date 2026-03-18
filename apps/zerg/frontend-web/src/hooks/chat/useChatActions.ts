@@ -10,11 +10,11 @@ import {
 } from "../../services/api";
 
 interface UseChatActionsParams {
-  ficheId: number | null;
+  automationId: number | null;
   effectiveThreadId: number | null;
 }
 
-export function useChatActions({ ficheId, effectiveThreadId }: UseChatActionsParams) {
+export function useChatActions({ automationId, effectiveThreadId }: UseChatActionsParams) {
   const queryClient = useQueryClient();
 
   const sendMutation = useMutation<
@@ -69,8 +69,8 @@ export function useChatActions({ ficheId, effectiveThreadId }: UseChatActionsPar
     onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: ["thread-messages", variables.threadId] });
       // Also refresh threads to sync with server state
-      if (ficheId != null) {
-        queryClient.invalidateQueries({ queryKey: ["threads", ficheId, "chat"] });
+      if (automationId != null) {
+        queryClient.invalidateQueries({ queryKey: ["threads", automationId, "chat"] });
       }
     },
   });
@@ -83,10 +83,10 @@ export function useChatActions({ ficheId, effectiveThreadId }: UseChatActionsPar
   >({
     mutationFn: ({ threadId, title }) => updateThread(threadId, { title }),
     onMutate: async ({ threadId, title }) => {
-      if (ficheId == null) {
+      if (automationId == null) {
         return {};
       }
-      const queryKey = ["threads", ficheId, "chat"] as const;
+      const queryKey = ["threads", automationId, "chat"] as const;
       await queryClient.cancelQueries({ queryKey });
       const previousThreads = queryClient.getQueryData<Thread[]>(queryKey);
       queryClient.setQueryData<Thread[]>(queryKey, (old) =>
@@ -95,26 +95,26 @@ export function useChatActions({ ficheId, effectiveThreadId }: UseChatActionsPar
       return { previousThreads };
     },
     onError: (error, _variables, context) => {
-      if (ficheId == null) {
+      if (automationId == null) {
         return;
       }
       if (context?.previousThreads) {
-        queryClient.setQueryData(["threads", ficheId, "chat"], context.previousThreads);
+        queryClient.setQueryData(["threads", automationId, "chat"], context.previousThreads);
       }
       toast.error("Failed to rename thread", {
         duration: 6000,
       });
     },
     onSuccess: (updatedThread) => {
-      if (ficheId != null) {
-        queryClient.setQueryData<Thread[]>(["threads", ficheId, "chat"], (old) =>
+      if (automationId != null) {
+        queryClient.setQueryData<Thread[]>(["threads", automationId, "chat"], (old) =>
           old ? old.map((thread) => (thread.id === updatedThread.id ? updatedThread : thread)) : old
         );
       }
     },
     onSettled: (_data, _error, variables) => {
-      if (ficheId != null) {
-        queryClient.invalidateQueries({ queryKey: ["threads", ficheId, "chat"] });
+      if (automationId != null) {
+        queryClient.invalidateQueries({ queryKey: ["threads", automationId, "chat"] });
       }
       if (variables) {
         queryClient.invalidateQueries({ queryKey: ["thread-messages", variables.threadId] });

@@ -41,7 +41,7 @@ type AllowedToolOption = {
 export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: AutomationSettingsDrawerProps) {
   const { user } = useAuth();
   const confirm = useConfirm();
-  const { data: fiche } = useAutomationDetails(isOpen ? automationId : null);
+  const { data: automation } = useAutomationDetails(isOpen ? automationId : null);
   const { data: policy } = useContainerPolicy();
   const { data: servers, isLoading: loadingServers } = useMcpServers(isOpen ? automationId : null);
   const toolOptions = useToolOptions(isOpen ? automationId : null) as AllowedToolOption[];
@@ -57,7 +57,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
   const testBeforeSave = useTestConnectorBeforeSave(automationId);
 
   // Helper to check ownership
-  const isOwner = user?.id === fiche?.owner_id;
+  const isOwner = user?.id === automation?.owner_id;
 
   // Helper to check if a connector is configured at account level
   // Only valid if current user is the owner (since accountConnectors fetches MY connectors)
@@ -129,17 +129,17 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
     if (!isOpen) {
       return;
     }
-    const tools = fiche?.allowed_tools ?? [];
+    const tools = automation?.allowed_tools ?? [];
     setSelectedTools(new Set(tools));
-  }, [fiche?.allowed_tools, isOpen]);
+  }, [automation?.allowed_tools, isOpen]);
 
   // Rollback optimistic updates on error
   useEffect(() => {
-    if (debouncedUpdateAllowedTools.isError && fiche?.allowed_tools) {
+    if (debouncedUpdateAllowedTools.isError && automation?.allowed_tools) {
       // Restore last known good state from server
-      setSelectedTools(new Set(fiche.allowed_tools));
+      setSelectedTools(new Set(automation.allowed_tools));
     }
-  }, [debouncedUpdateAllowedTools.isError, fiche?.allowed_tools]);
+  }, [debouncedUpdateAllowedTools.isError, automation?.allowed_tools]);
 
   // ESC key handler
   useEffect(() => {
@@ -337,7 +337,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
   const handleRemoveServer = async (server: McpServerResponse) => {
     const confirmed = await confirm({
       title: `Remove MCP server "${server.name}"?`,
-      message: 'This fiche will no longer have access to tools provided by this MCP server.',
+      message: 'This automation will no longer have access to tools provided by this MCP server.',
       confirmLabel: 'Remove',
       cancelLabel: 'Keep',
       variant: 'danger',
@@ -363,8 +363,8 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
       <aside className={clsx("fiche-settings-drawer", { open: isOpen })} data-testid="fiche-debug-modal">
         <header className="fiche-settings-header">
           <div>
-            <h2>Fiche Config</h2>
-            <p>{fiche?.name}</p>
+            <h2>Automation Config</h2>
+            <p>{automation?.name}</p>
           </div>
           <button type="button" className="close-btn" onClick={handleClose} aria-label="Close settings">
             ×
@@ -374,7 +374,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
         <section className="fiche-settings-section">
           <h3>Container Execution</h3>
           <p className="section-description">
-            Fiches execute shell commands within ephemeral containers. Configure tool access via the allowlist below.
+            Automations execute shell commands within ephemeral containers. Configure tool access via the allowlist below.
           </p>
           {policy ? (
             <dl className="policy-grid">
@@ -438,8 +438,8 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
             {connectors?.map((connector) => {
               const isEnabled = isIntegrationEnabled(connector.type);
               const hasAccountCreds = isConfiguredAtAccountLevel(connector.type);
-              const hasFicheOverride = connector.configured;
-              const isConfigured = hasFicheOverride || hasAccountCreds;
+              const hasAutomationOverride = connector.configured;
+              const isConfigured = hasAutomationOverride || hasAccountCreds;
 
               return (
                 <div key={connector.type} className="integration-card">
@@ -455,14 +455,14 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
                       {isEnabled && (
                         <div className="integration-status-badges">
                           {/* Account-level badge (only show for owner) */}
-                          {isOwner && hasAccountCreds && !hasFicheOverride && (
+                          {isOwner && hasAccountCreds && !hasAutomationOverride && (
                             <span className="status-badge account-level" title="Using account-level credentials">
                               Account
                             </span>
                           )}
                           {/* Override badge (always valid if configured) */}
-                          {hasFicheOverride && (
-                            <span className="status-badge fiche-override" title="Using fiche-specific credentials">
+                          {hasAutomationOverride && (
+                            <span className="status-badge fiche-override" title="Using automation-specific credentials">
                               Override
                             </span>
                           )}
@@ -473,7 +473,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
                             </span>
                           )}
                           {/* Unknown status for non-owners */}
-                          {!isOwner && !hasFicheOverride && (
+                          {!isOwner && !hasAutomationOverride && (
                             <span className="status-badge unknown-status" title="Account-level status hidden">
                               Owner managed
                             </span>
@@ -483,7 +483,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
                     </div>
                   </div>
                   <div className="integration-actions">
-                    {isEnabled && isOwner && !hasAccountCreds && !hasFicheOverride && (
+                    {isEnabled && isOwner && !hasAccountCreds && !hasAutomationOverride && (
                       <Link
                         to="/settings/integrations"
                         className={clsx("ui-button", "ui-button--secondary", "ui-button--sm")}
@@ -491,7 +491,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
                         Configure
                       </Link>
                     )}
-                    {isEnabled && !isOwner && !hasFicheOverride && (
+                    {isEnabled && !isOwner && !hasAutomationOverride && (
                       <Button
                         type="button"
                         variant="secondary"
@@ -501,7 +501,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
                         Setup Override
                       </Button>
                     )}
-                    {isEnabled && hasFicheOverride && (
+                    {isEnabled && hasAutomationOverride && (
                       <Button
                         type="button"
                         variant="secondary"
@@ -590,7 +590,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
             <div>
               <h3>MCP Servers</h3>
               <p className="section-description">
-                Connect Model Context Protocol servers to expose additional tools to this fiche.
+                Connect Model Context Protocol servers to expose additional tools to this automation.
               </p>
             </div>
             <Button

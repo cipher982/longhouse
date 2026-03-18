@@ -11,7 +11,7 @@ import { ConfirmProvider } from "../../components/confirm";
 import type { Thread, ThreadMessage } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
-  fetchFiche: vi.fn(),
+  fetchAutomation: vi.fn(),
   fetchThreads: vi.fn(),
   fetchThreadMessages: vi.fn(),
   postThreadMessage: vi.fn(),
@@ -31,7 +31,7 @@ vi.mock("../../services/api", async (importOriginal) => {
 });
 
 const {
-  fetchFiche: mockFetchFiche,
+  fetchAutomation: mockFetchAutomation,
   fetchThreads: mockFetchThreads,
   fetchThreadMessages: mockFetchThreadMessages,
   postThreadMessage: mockPostThreadMessage,
@@ -92,11 +92,11 @@ describe("ChatPage", () => {
       processed: true,
     };
 
-    mockFetchFiche.mockResolvedValue({
+    mockFetchAutomation.mockResolvedValue({
       id: 1,
       owner_id: 10,
       owner: null,
-      name: "Demo Fiche",
+      name: "Demo Automation",
       status: "running",
       created_at: now,
       updated_at: now,
@@ -111,7 +111,7 @@ describe("ChatPage", () => {
       next_run_at: null,
       last_run_at: null,
     });
-    mockFetchThreads.mockImplementation((_ficheId: number, threadType?: string) => {
+    mockFetchThreads.mockImplementation((_automationId: number, threadType?: string) => {
       // Only return the thread for matching thread_type to avoid duplicate keys
       if (threadType === "chat" || threadType === undefined) {
         return Promise.resolve([threadState]);
@@ -164,10 +164,10 @@ describe("ChatPage", () => {
     });
   });
 
-  it("shows timeline-focused recovery copy when fiche context is missing", async () => {
+  it("shows timeline-focused recovery copy when automation context is missing", async () => {
     renderChatPage("/fiche/not-a-number/thread/42");
 
-    expect(await screen.findByText("Missing fiche context")).toBeInTheDocument();
+    expect(await screen.findByText("Missing automation context")).toBeInTheDocument();
     expect(screen.getByText("Open the timeline to pick a session or return to the main app.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Go to Timeline" })).toBeInTheDocument();
   });
