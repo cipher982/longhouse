@@ -67,9 +67,9 @@ on:
         default: false
         type: boolean
       linux_x64_runner_label:
-        description: 'Label for the Linux x64 self-hosted runner'
+        description: 'Optional label for a Linux x64 self-hosted runner'
         required: false
-        default: 'clifford'
+        default: ''
         type: string
       run_macos_self_hosted:
         description: 'Run macOS arm64 self-hosted smoke'
@@ -332,7 +332,7 @@ jobs:
             qa-oss-server.log
 
   self-hosted-linux-x64:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_linux_x64 }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_linux_x64 && inputs.linux_x64_runner_label != '' }}
     runs-on: ${{ inputs.linux_x64_runner_label }}
     timeout-minutes: 30
     name: "self-hosted-onboarding--linux-x64--${{ inputs.linux_x64_runner_label }}"
