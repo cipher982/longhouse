@@ -12,7 +12,6 @@ from typing import Any
 from typing import Optional
 
 from fastapi import Response
-
 from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.config import get_settings
 
@@ -21,6 +20,13 @@ _settings = get_settings()
 JWT_SECRET = _settings.jwt_secret
 SESSION_COOKIE_PATH = "/"
 SESSION_COOKIE_SECURE = not _settings.auth_disabled and not _settings.testing
+
+# Refresh token cookie — scoped to auth endpoints only (minimises exposure).
+REFRESH_COOKIE_NAME = "longhouse_refresh"
+REFRESH_COOKIE_PATH = "/api/auth"
+
+# Access token lifetime — kept short; refresh tokens handle longevity.
+ACCESS_TOKEN_LIFETIME = timedelta(minutes=10)
 
 
 def _set_session_cookie(response: Response, token: str, max_age: int) -> None:
@@ -47,13 +53,37 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
+def _set_refresh_cookie(response: Response, token: str, max_age: int) -> None:
+    """Set the refresh token cookie (scoped to /api/auth only)."""
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=token,
+        max_age=max_age,
+        path=REFRESH_COOKIE_PATH,
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    """Clear the refresh token cookie."""
+    response.delete_cookie(
+        key=REFRESH_COOKIE_NAME,
+        path=REFRESH_COOKIE_PATH,
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
+
+
 def _issue_access_token(
     user_id: int,
     email: str,
     *,
     display_name: Optional[str] = None,
     avatar_url: Optional[str] = None,
-    expires_delta: timedelta = timedelta(minutes=30),
+    expires_delta: timedelta = ACCESS_TOKEN_LIFETIME,
 ) -> str:
     """Return signed HS256 access token including optional profile fields."""
     expiry = datetime.now(timezone.utc) + expires_delta
@@ -103,10 +133,15 @@ def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
 
 
 __all__ = [
+    "ACCESS_TOKEN_LIFETIME",
     "JWT_SECRET",
+    "REFRESH_COOKIE_NAME",
+    "REFRESH_COOKIE_PATH",
     "SESSION_COOKIE_NAME",
+    "_clear_refresh_cookie",
     "_clear_session_cookie",
     "_encode_jwt",
     "_issue_access_token",
+    "_set_refresh_cookie",
     "_set_session_cookie",
 ]

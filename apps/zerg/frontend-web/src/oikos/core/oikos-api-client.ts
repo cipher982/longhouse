@@ -9,6 +9,8 @@
  * - SSE event streaming
  */
 
+import { fetchWithRefresh } from '../../lib/auth-refresh';
+
 export interface OikosTaskSummary {
   id: number;
   name: string;
@@ -106,7 +108,7 @@ export class OikosAPIClient {
 
   private async authenticatedFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
     const options = withCookieAuth(init);
-    const response = await fetch(input, options);
+    const response = await fetchWithRefresh(input, options);
     if (response.status === 401) {
       throw new Error('Not authenticated');
     }

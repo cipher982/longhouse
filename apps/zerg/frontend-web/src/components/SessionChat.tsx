@@ -10,6 +10,7 @@
 
 import { useCallback, useRef, useState, type FormEvent, useEffect } from "react";
 import { buildUrl } from "../services/api/base";
+import { fetchWithRefresh } from "../lib/auth-refresh";
 import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
 import { Badge, Button, Spinner } from "./ui";
 import type { ActiveSession } from "../hooks/useActiveSessions";
@@ -135,7 +136,7 @@ export function SessionChat({
   useEffect(() => {
     const checkLock = async () => {
       try {
-        const response = await fetch(buildUrl(`/sessions/${session.id}/lock`), {
+        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/lock`), {
           credentials: "include",
         });
         if (response.ok) {
@@ -193,7 +194,7 @@ export function SessionChat({
       abortControllerRef.current = new AbortController();
 
       try {
-        const response = await fetch(buildUrl(`/sessions/${session.id}/chat`), {
+        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -338,10 +339,6 @@ export function SessionChat({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (requireClickForFirstSend && messages.length === 0) {
-        setBlockedKeyboardSubmit(true);
-        return;
-      }
       handleSend(e as unknown as FormEvent);
     }
   };

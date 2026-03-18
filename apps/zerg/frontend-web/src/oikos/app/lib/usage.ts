@@ -1,4 +1,5 @@
 import { toAbsoluteUrl } from "../../lib/config";
+import { fetchWithRefresh } from "../../../lib/auth-refresh";
 
 export interface TokenBreakdown {
   prompt: number | null;
@@ -22,7 +23,7 @@ export interface UserUsageResponse {
 }
 
 export async function fetchUserUsage(period: "today" | "7d" | "30d" = "today"): Promise<UserUsageResponse> {
-  const response = await fetch(toAbsoluteUrl(`/api/users/me/usage?period=${period}`), {
+  const response = await fetchWithRefresh(toAbsoluteUrl(`/api/users/me/usage?period=${period}`), {
     credentials: "include",
   });
 
