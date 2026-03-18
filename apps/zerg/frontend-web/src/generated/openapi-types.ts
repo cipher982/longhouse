@@ -2227,6 +2227,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/oikos/turn-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Session Turn Reviews
+         * @description List recent completed-turn reviews for the authenticated owner.
+         */
+        get: operations["list_session_turn_reviews_oikos_turn_reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/oikos/runs/active": {
         parameters: {
             query?: never;
@@ -9259,6 +9279,60 @@ export interface components {
             sessions: components["schemas"]["SessionResponse"][];
         };
         /**
+         * SessionTurnReviewSummary
+         * @description Deterministic review of one completed assistant turn.
+         */
+        SessionTurnReviewSummary: {
+            /** Id */
+            id: number;
+            /** Session Id */
+            session_id: string;
+            /** Assistant Event Id */
+            assistant_event_id: number;
+            /** Turn Index */
+            turn_index: number;
+            /** Trigger Type */
+            trigger_type: string;
+            /** Loop Mode */
+            loop_mode: string;
+            /** Decision */
+            decision: string;
+            /** Summary */
+            summary: string;
+            /** Rationale */
+            rationale?: string | null;
+            /** Turn Excerpt */
+            turn_excerpt?: string | null;
+            /** Mode Capability */
+            mode_capability?: string | null;
+            /** Mode Summary */
+            mode_summary?: string | null;
+            /** Execution State */
+            execution_state?: string | null;
+            /** Recommended Action */
+            recommended_action?: string | null;
+            /**
+             * Blocked Reasons
+             * @default []
+             */
+            blocked_reasons: string[];
+            /** Status */
+            status: string;
+            /** Reason */
+            reason?: string | null;
+            /** Run Id */
+            run_id?: number | null;
+            /** Actual Outcome */
+            actual_outcome?: string | null;
+            /** Shadow Alignment */
+            shadow_alignment?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
          * SessionsListResponse
          * @description Response for session list.
          */
@@ -14448,6 +14522,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OikosWakeupSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_session_turn_reviews_oikos_turn_reviews_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                session_id?: string | null;
+                status?: string | null;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTurnReviewSummary"][];
                 };
             };
             /** @description Validation Error */
