@@ -76,9 +76,7 @@ def _get_session_chat_backend() -> str:
     if not backend:
         return SESSION_CHAT_BACKEND_AMBIENT
     if backend not in SUPPORTED_SESSION_CHAT_BACKENDS:
-        raise RuntimeError(
-            f"{SESSION_CHAT_BACKEND_ENV} must be one of {sorted(SUPPORTED_SESSION_CHAT_BACKENDS)} (got {backend!r})"
-        )
+        raise RuntimeError(f"{SESSION_CHAT_BACKEND_ENV} must be one of {sorted(SUPPORTED_SESSION_CHAT_BACKENDS)} (got {backend!r})")
     return backend
 
 
@@ -88,6 +86,13 @@ class ClaudeResumeRuntime:
     cmd: list[str]
     env_updates: dict[str, str]
     env_unset: tuple[str, ...] = ()
+
+
+def _check_claude_binary() -> bool:
+    """Check if the claude CLI binary is available on PATH."""
+    import shutil
+
+    return shutil.which("claude") is not None
 
 
 def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> ClaudeResumeRuntime:
@@ -104,6 +109,12 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
     ]
     backend = _get_session_chat_backend()
     if backend == SESSION_CHAT_BACKEND_AMBIENT:
+        if not _check_claude_binary():
+            raise RuntimeError(
+                "Session chat backend is 'ambient' but 'claude' CLI is not installed. "
+                "Set SESSION_CHAT_BACKEND to 'zai', 'anthropic', or 'bedrock' with the required API key, "
+                "or install the Claude CLI."
+            )
         return ClaudeResumeRuntime(backend=backend, cmd=cmd, env_updates={})
 
     model = os.getenv(SESSION_CHAT_MODEL_ENV, "").strip()
@@ -577,9 +588,7 @@ async def chat_with_session(
                     target_session_id=str(target_session.id),
                     thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
                     continued_from_session_id=(
-                        str(target_session.continued_from_session_id)
-                        if target_session.continued_from_session_id
-                        else None
+                        str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
                     ),
                     created_continuation=created_continuation,
                     branched_from_event_id=target_session.branched_from_event_id,
@@ -665,4 +674,35 @@ async def force_release_lock(
         "released": released,
         "session_id": session_id,
         "lock_session_id": lock_scope_id,
+    }
+
+
+@router.get("/continuation-readiness")
+async def continuation_readiness(
+    _current_user=Depends(get_current_oikos_user),
+) -> dict:
+    """Pre-flight check: can this instance run session continuations?
+
+    Returns backend config and whether the required binary/keys are present.
+    Used by QA and the frontend to show actionable errors.
+    """
+    backend = _get_session_chat_backend()
+    issues: list[str] = []
+
+    if backend == SESSION_CHAT_BACKEND_AMBIENT:
+        if not _check_claude_binary():
+            issues.append("'claude' CLI not found on PATH")
+    elif backend == SESSION_CHAT_BACKEND_ZAI:
+        if not os.getenv("ZAI_API_KEY", "").strip():
+            issues.append("ZAI_API_KEY not set")
+    elif backend == SESSION_CHAT_BACKEND_ANTHROPIC:
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            issues.append("ANTHROPIC_API_KEY not set")
+    elif backend == SESSION_CHAT_BACKEND_BEDROCK:
+        pass  # Uses IAM roles, hard to pre-check
+
+    return {
+        "ready": len(issues) == 0,
+        "backend": backend,
+        "issues": issues,
     }

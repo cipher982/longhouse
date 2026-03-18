@@ -452,3 +452,50 @@ test("briefings page loads with project selector", async ({ context }) => {
 
   await page.close();
 });
+
+// ---------------------------------------------------------------------------
+// Test 9: Session continuation backend is configured and ready
+// ---------------------------------------------------------------------------
+
+test("session continuation backend is ready", async ({ context }) => {
+  test.setTimeout(10_000);
+
+  const page = await context.newPage();
+
+  // Use the browser context (already authenticated via cookie) to hit the API
+  const res = await page.request.get("/api/sessions/continuation-readiness");
+  expect(
+    res.ok(),
+    `GET /api/sessions/continuation-readiness returned ${res.status()}`,
+  ).toBe(true);
+
+  const body = await res.json();
+  expect(
+    body.ready,
+    `Continuation not ready: backend=${body.backend}, issues=${JSON.stringify(body.issues)}`,
+  ).toBe(true);
+
+  await page.close();
+});
+
+// ---------------------------------------------------------------------------
+// Test 10: Auth refresh endpoint works (token rotation)
+// ---------------------------------------------------------------------------
+
+test("auth refresh endpoint rotates tokens", async ({ context }) => {
+  test.setTimeout(10_000);
+
+  const page = await context.newPage();
+
+  // The browser context already has session cookies from login
+  const res = await page.request.post("/api/auth/refresh");
+  expect(
+    res.ok(),
+    `POST /api/auth/refresh returned ${res.status()} — refresh token rotation may be broken`,
+  ).toBe(true);
+
+  const body = await res.json();
+  expect(body.expires_in, "Expected expires_in in refresh response").toBe(600);
+
+  await page.close();
+});
