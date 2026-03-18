@@ -2,7 +2,17 @@ name: Web Quality
 
 on:
   push:
+    paths:
+      - 'apps/zerg/frontend-web/**'
+      - 'bun.lock'
+      - 'package.json'
+      - '.github/workflows/quality.yml'
   pull_request:
+    paths:
+      - 'apps/zerg/frontend-web/**'
+      - 'bun.lock'
+      - 'package.json'
+      - '.github/workflows/quality.yml'
   workflow_dispatch: {}
 
 # Never cancel runs
