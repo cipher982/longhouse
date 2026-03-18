@@ -29,6 +29,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models import CommisJob
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
@@ -143,6 +144,7 @@ def _continue_decision() -> LoopControllerDecision:
         summary="The same session has one obvious bounded next step.",
         rationale="This is the routine continue case after a completed assistant turn.",
         recommended_action="continue_session",
+        follow_up_prompt="Run the pending targeted tests.",
         blocked_reasons=(),
         model_id="glm-test",
         raw_response='{"decision":"continue"}',
@@ -368,6 +370,7 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     assert reviews[0].loop_mode == "assist"
     assert reviews[0].mode_capability == "notify_only"
     assert reviews[0].recommended_action == "continue_session"
+    assert reviews[0].follow_up_prompt == "Run the pending targeted tests."
 
 
 @pytest.mark.asyncio
@@ -442,6 +445,67 @@ async def test_summary_task_reviews_completed_turn_even_when_session_is_paused(t
     assert reviews[0].run_id is None
     assert reviews[0].execution_state == "awaiting_user_approval"
     assert reviews[0].decision == "continue"
+
+
+@pytest.mark.asyncio
+async def test_summary_task_autopilot_enqueues_same_session_resume_job(tmp_path, monkeypatch):
+    """Autopilot sessions enqueue a bounded same-session continue job after summary."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    factory = _make_db(tmp_path, "worker_operator_autopilot.db")
+    ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    session_id, task_id, owner_id, assistant_event_id = _seed_completion_summary_task(
+        factory,
+        ended_at=ended_at,
+        presence_state="idle",
+        presence_updated_at=ended_at,
+        loop_mode=SessionLoopMode.AUTOPILOT,
+        user_context={
+            "preferences": {
+                "operator_mode": {
+                    "enabled": True,
+                    "shadow_mode": True,
+                    "allow_continue": True,
+                    "allow_notify": True,
+                }
+            }
+        },
+    )
+
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                await _execute_task(task_id, session_id, "summary")
+
+    tasks = _get_tasks(factory, status="done")
+    reviews = _get_turn_reviews(factory)
+    db = factory()
+    try:
+        jobs = db.query(CommisJob).order_by(CommisJob.id.asc()).all()
+    finally:
+        db.close()
+
+    assert len(tasks) == 1
+    assert len(reviews) == 1
+    assert owner_id > 0
+    assert assistant_event_id > 0
+    assert reviews[0].status == "acted"
+    assert reviews[0].reason == "continue_session"
+    assert reviews[0].actual_outcome == "continue_session"
+    assert reviews[0].shadow_alignment == "matched"
+    assert reviews[0].follow_up_prompt == "Run the pending targeted tests."
+    assert len(jobs) == 1
+    assert jobs[0].owner_id == owner_id
+    assert jobs[0].task == "Run the pending targeted tests."
+    assert jobs[0].config["execution_mode"] == "workspace"
+    assert jobs[0].config["resume_session_id"] == session_id
+    assert jobs[0].config["backend"] == "zai"
+    assert jobs[0].config["trigger"] == "turn_loop"
+    assert jobs[0].config["assistant_event_id"] == assistant_event_id
 
 
 @pytest.mark.asyncio
