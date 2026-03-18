@@ -341,6 +341,10 @@ if grep -q "\[WARN\] Test event failed" "$ONBOARD_LOG"; then
 fi
 rm -f "$ONBOARD_LOG"
 
+log "🧪 Starting local server from onboarded config..."
+longhouse serve --stop >/dev/null 2>&1 || true
+longhouse serve --host 127.0.0.1 --port "$PORT" --daemon
+
 if ! wait_for_health "http://127.0.0.1:${PORT}/api/health" "Onboarded local server"; then
   fail "Onboarding server did not become healthy"
 fi
