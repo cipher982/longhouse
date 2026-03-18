@@ -4,6 +4,19 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '.dockerignore'
+      - 'bun.lock'
+      - 'apps/control-plane/**'
+      - 'apps/zerg/backend/**'
+      - 'apps/zerg/frontend-web/**'
+      - 'config/**'
+      - 'docker/entrypoint.sh'
+      - 'docker/runtime.dockerfile'
+      - 'scripts/ci/provision-e2e.sh'
+      - 'scripts/lib/hosted-instance.sh'
+      - '.github/workflows/provision-e2e.yml'
+      - '.github/workflows/runtime-image.yml'
   workflow_dispatch: {}
 
 permissions:
