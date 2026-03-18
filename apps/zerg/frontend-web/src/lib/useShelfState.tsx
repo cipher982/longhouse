@@ -48,7 +48,7 @@ export function ShelfProvider({ children }: { children: ReactNode }) {
     if (!isShelfOpen) return;
 
     const handleClickOutside = (event: MouseEvent | TouchEvent) => {
-      const shelfElement = document.getElementById('fiche-shelf');
+      const shelfElement = document.getElementById('thread-sidebar');
       const target = event.target as Node;
 
       // Close shelf if click is outside the shelf element

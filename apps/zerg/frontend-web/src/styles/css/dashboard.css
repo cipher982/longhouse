@@ -288,20 +288,6 @@
     box-shadow: -1px 0 0 var(--color-border-subtle);
   }
 
-  #fiche-search {
-    background: transparent;
-    border: none;
-    color: var(--color-text-primary);
-    outline: none;
-    width: 100%;
-    font-family: var(--font-family-base);
-    font-size: var(--font-size-sm);
-  }
-
-  #fiche-search::placeholder {
-    color: var(--color-text-muted);
-  }
-
   /* Scope selector */
 
   /* Legacy select is gone – new fancy toggle below */
