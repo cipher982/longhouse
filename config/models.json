@@ -201,13 +201,7 @@
       }
     },
     "david": {
-      "$comment": "David's instance: OpenRouter for summarization",
-      "text": {
-        "useCases": {
-          "summarization": "x-ai/grok-4.1-fast",
-          "summary_update": "x-ai/grok-4.1-fast"
-        }
-      }
+      "$comment": "David's instance: keep personal usage on direct provider defaults (OpenAI for text, OpenAI embeddings)"
     }
   },
 

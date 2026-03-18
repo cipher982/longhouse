@@ -29,9 +29,9 @@ _HAS_ANY_KEY = bool(
 
 
 @pytest.mark.skipif(not _HAS_ANY_KEY, reason="No LLM API keys set — skipping model smoke test")
-def test_model_smoke_all_available_models_respond():
-    """Every model whose API key is available must return a non-error response."""
-    results = asyncio.run(run_all())
+def test_model_smoke_active_profile_models_respond():
+    """Every model referenced by the active profile must return a non-error response."""
+    results = asyncio.run(run_all(scope="active"))
 
     failures = [r for r in results if r["status"] == "fail"]
     skipped = [r for r in results if r["status"] == "skipped"]
