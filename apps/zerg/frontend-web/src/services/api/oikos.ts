@@ -29,6 +29,22 @@ export type SessionLoopExecutionState =
   | "no_action"
   | (string & {});
 
+export type SessionShadowOutcome =
+  | "ignore"
+  | "notify_user"
+  | "continue_session"
+  | "delegated_follow_up"
+  | "failed"
+  | (string & {});
+
+export type SessionShadowAlignment =
+  | "matched"
+  | "more_conservative"
+  | "more_aggressive"
+  | "different"
+  | "failed"
+  | (string & {});
+
 export interface SessionShadowReview {
   generatedAt: string;
   triggerType: string;
@@ -44,6 +60,11 @@ export interface SessionShadowReview {
   wouldContinueSession: boolean;
   blockedReasons: string[];
   recommendedAction: string | null;
+  wakeupStatus: string;
+  wakeupReason: string | null;
+  actualOutcome: SessionShadowOutcome | null;
+  expectedOutcome: SessionShadowOutcome | null;
+  alignment: SessionShadowAlignment | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -95,6 +116,11 @@ function parseShadowReview(wakeup: OikosWakeupSummary): SessionShadowReview | nu
     wouldContinueSession: asBoolean(loopReview.would_continue_session),
     blockedReasons: asStringArray(loopReview.blocked_reasons),
     recommendedAction: asString(loopReview.recommended_action),
+    wakeupStatus: wakeup.status,
+    wakeupReason: wakeup.reason,
+    actualOutcome: (asString(wakeup.payload.outcome) ?? null) as SessionShadowOutcome | null,
+    expectedOutcome: (asString(wakeup.payload.shadow_expected_outcome) ?? null) as SessionShadowOutcome | null,
+    alignment: (asString(wakeup.payload.shadow_alignment) ?? null) as SessionShadowAlignment | null,
   };
 }
 
