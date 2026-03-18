@@ -92,6 +92,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
+# Install Node.js 22 LTS (required by Claude Code CLI for session continuation)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @anthropic-ai/claude-code@latest \
+    && claude --version
+
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash --uid 1000 longhouse
 
