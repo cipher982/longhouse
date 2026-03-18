@@ -16,6 +16,7 @@ import {
   resolveInstallLayout,
   rollbackRunnerUpdate,
   type RunnerUpdateManifest,
+  type RunnerUpdateRuntime,
 } from '../update';
 
 const originalHome = process.env.HOME;
@@ -142,7 +143,7 @@ describe('runner update flows', () => {
         },
       });
 
-      const fetchImpl: typeof fetch = async (url) => {
+      const fetchImpl: NonNullable<RunnerUpdateRuntime['fetchImpl']> = async (url) => {
         const requestUrl = String(url);
         if (requestUrl === 'https://updates.example.com/manifest.json') {
           return response(signed.manifestBytes);
