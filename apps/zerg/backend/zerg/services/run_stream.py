@@ -325,6 +325,19 @@ def _json_default(value: Any) -> str:
     return str(value)
 
 
+def _normalize_browser_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    automation_id = normalized.pop("fiche_id", None)
+    if automation_id is not None and "automation_id" not in normalized:
+        normalized["automation_id"] = automation_id
+
+    automation_name = normalized.pop("fiche_name", None)
+    if automation_name is not None and "automation_name" not in normalized:
+        normalized["automation_name"] = automation_name
+
+    return normalized
+
+
 def encode_connected_sse(run_id: int) -> dict[str, str]:
     return {
         "event": "connected",
@@ -346,7 +359,7 @@ def encode_replay_sse(event: HistoricalRunEvent) -> dict[str, str]:
         "data": json.dumps(
             {
                 "type": event.event_type,
-                "payload": event.payload,
+                "payload": _normalize_browser_payload(event.payload),
                 "timestamp": event.timestamp,
             },
             default=_json_default,
@@ -357,7 +370,7 @@ def encode_replay_sse(event: HistoricalRunEvent) -> dict[str, str]:
 def encode_live_sse(event: dict[str, Any]) -> dict[str, str]:
     event_type = event.get("event_type") or event.get("type") or "event"
     event_id = event.get("event_id")
-    payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id", "event_id"}}
+    payload = _normalize_browser_payload({k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id", "event_id"}})
     sse_event = {
         "event": event_type,
         "data": json.dumps(

@@ -93,7 +93,7 @@ export interface ThreadMessageData {
 
 export interface ThreadEventData {
   thread_id: number;
-  fiche_id?: number;
+  automation_id?: number;
   title?: string;
   created_at?: string;
   updated_at?: string;
@@ -133,7 +133,7 @@ export interface AutomationEventData {
 
 export interface RunUpdateData {
   id: number;
-  fiche_id: number;
+  automation_id: number;
   thread_id?: number;
   status: "queued" | "running" | "waiting" | "deferred" | "success" | "failed" | "cancelled";
   trigger?: "manual" | "schedule" | "chat" | "webhook" | "api" | "continuation";
@@ -154,12 +154,12 @@ export interface UserUpdateData {
 
 export interface OpsEventData {
   type: "run_started" | "run_success" | "run_failed" | "automation_created" | "automation_updated" | "thread_message_created" | "budget_denied";
-  fiche_id?: number;
+  automation_id?: number;
   run_id?: number;
   thread_id?: number;
   duration_ms?: number;
   error?: string;
-  fiche_name?: string;
+  automation_name?: string;
   status?: string;
   scope?: "user" | "global";
   percent?: number;

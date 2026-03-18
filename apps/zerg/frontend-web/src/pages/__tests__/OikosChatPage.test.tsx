@@ -70,7 +70,7 @@ describe('OikosChatPage', () => {
       // Mock thread lookup
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        fiche_id: 1,
+        automation_id: 1,
         title: 'test-thread',
         active: true,
         created_at: now,
@@ -157,7 +157,7 @@ describe('OikosChatPage', () => {
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        fiche_id: 1,
+        automation_id: 1,
         title: 'multi-tool-thread',
         active: true,
         created_at: now,
@@ -211,7 +211,7 @@ describe('OikosChatPage', () => {
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        fiche_id: 1,
+        automation_id: 1,
         title: 'no-tools-thread',
         active: true,
         created_at: now,
@@ -272,7 +272,7 @@ describe('OikosChatPage', () => {
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 2,
-        fiche_id: 1,
+        automation_id: 1,
         title: 'new-thread',
         active: true,
         created_at: now,
@@ -308,7 +308,7 @@ describe('OikosChatPage', () => {
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        fiche_id: 1,
+        automation_id: 1,
         title: 'display-test',
         active: true,
         created_at: now,
@@ -376,7 +376,7 @@ describe('OikosChatPage', () => {
 
       mockFetchThreadByTitle.mockResolvedValue({
         id: 1,
-        fiche_id: 1,
+        automation_id: 1,
         title: 'refresh-test',
         active: true,
         created_at: now,

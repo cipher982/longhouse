@@ -34,9 +34,9 @@ class OpsEventsBridge:
     async def _handle_run_event(self, data: Dict[str, Any]) -> None:
         # Normalize RUN_* events into run_started/run_success/run_failed
         status = data.get("status")
-        fiche_id = data.get("fiche_id")
+        automation_id = data.get("automation_id", data.get("fiche_id"))
         run_id = data.get("run_id") or data.get("id")
-        if not fiche_id or not run_id:
+        if not automation_id or not run_id:
             return
 
         if status == "running":
@@ -51,7 +51,7 @@ class OpsEventsBridge:
 
         payload = OpsEventData(
             type=msg_type,
-            fiche_id=fiche_id,
+            automation_id=automation_id,
             run_id=run_id,
             thread_id=data.get("thread_id"),
             duration_ms=data.get("duration_ms"),
@@ -60,16 +60,16 @@ class OpsEventsBridge:
         await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
 
     async def _handle_automation_event(self, data: Dict[str, Any]) -> None:
-        fiche_id = data.get("id")
-        if not fiche_id:
+        automation_id = data.get("automation_id", data.get("id"))
+        if not automation_id:
             return
         event_type = "automation_updated"
         if data.get("event_type") == "automation_created":
             event_type = "automation_created"
         payload = OpsEventData(
             type=event_type,
-            fiche_id=fiche_id,
-            fiche_name=data.get("name"),
+            automation_id=automation_id,
+            automation_name=data.get("automation_name", data.get("name")),
             status=data.get("status"),
         )
         await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)

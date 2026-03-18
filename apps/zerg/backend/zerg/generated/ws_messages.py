@@ -129,7 +129,7 @@ class ThreadEventData(BaseModel):
     """Payload for ThreadEventData messages"""
 
     thread_id: int = Field(ge=1, description='')
-    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
+    automation_id: Optional[int] = Field(default=None, ge=1, description='')
     title: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -175,7 +175,7 @@ class RunUpdateData(BaseModel):
     """Payload for RunUpdateData messages"""
 
     id: int = Field(ge=1, description='')
-    fiche_id: int = Field(ge=1, description='')
+    automation_id: int = Field(ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     status: Literal['queued', 'running', 'waiting', 'deferred', 'success', 'failed', 'cancelled']
     trigger: Optional[Literal['manual', 'schedule', 'chat', 'webhook', 'api', 'continuation']] = None
@@ -198,12 +198,12 @@ class OpsEventData(BaseModel):
     """Payload for OpsEventData messages"""
 
     type: Literal['run_started', 'run_success', 'run_failed', 'automation_created', 'automation_updated', 'thread_message_created', 'budget_denied']
-    fiche_id: Optional[int] = Field(default=None, ge=1, description='')
+    automation_id: Optional[int] = Field(default=None, ge=1, description='')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     duration_ms: Optional[int] = Field(default=None, ge=0, description='')
     error: Optional[str] = None
-    fiche_name: Optional[str] = None
+    automation_name: Optional[str] = None
     status: Optional[str] = None
     scope: Optional[Literal['user', 'global']] = None
     percent: Optional[float] = None

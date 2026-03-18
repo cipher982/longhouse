@@ -62,5 +62,7 @@ async def test_run_updates_broadcast_to_automation_topics():
     assert automation_message["type"] == "run_update"
     assert automation_message["topic"] == "automation:42"
     assert automation_message["data"]["id"] == 7
+    assert automation_message["data"]["automation_id"] == 42
     assert automation_message["data"]["thread_id"] == 123
+    assert "fiche_id" not in automation_message["data"]
     assert "run_id" not in automation_message["data"]
