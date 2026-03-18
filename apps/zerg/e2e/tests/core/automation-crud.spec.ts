@@ -16,8 +16,8 @@ test.beforeEach(async ({ request }) => {
 });
 
 test.describe('Automation CRUD - Core', () => {
-  test('create automation - automation appears in dashboard', async ({ page }) => {
-    await page.goto('/dashboard');
+  test('create automation - automation appears in automations', async ({ page }) => {
+    await page.goto('/automations');
 
     const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });

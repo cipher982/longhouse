@@ -2426,6 +2426,31 @@ Notes:
 
 ---
 
+## [Refactor][Product] Rename Automation Browser Shell Off Dashboard
+
+**Status (2026-03-17):** Done. The tenant automation browser home is now `/automations`, the overview page/component/tests use automation naming, and `/dashboard` is only a thin redirect.
+
+**Goal:** Make `/automations` the canonical browser home for the automation module, with automation-first page/component/test naming throughout the first-party surface.
+
+**Done when:**
+- The canonical tenant automation home route is `/automations`, not `/dashboard`
+- The overview page/component/tests/selectors stop using `Dashboard*` naming
+- First-party E2E helpers, visual smoke, and route assertions use `/automations`
+- `/dashboard` is either removed or reduced to a thin compatibility redirect
+- Frontend units and focused E2E coverage are green
+
+- [x] Add the canonical `/automations` route and move the overview page/component naming off `Dashboard*`
+- [x] Rename first-party selectors/helpers/tests/scripts off `/dashboard` and `dashboard-*`
+- [x] Decide the fate of `/dashboard` and keep only the minimum compatibility surface needed
+- [x] Verify with frontend units and focused browser coverage
+
+Notes:
+- 2026-03-17: This tranche is browser/product surface only. Do not mix it with control-plane `/dashboard/open-instance` auth work.
+- 2026-03-17: `/dashboard` now redirects to `/automations` in the tenant app; the control-plane `/dashboard/open-instance` handoff remains untouched.
+- 2026-03-17: Verification passed with `make test-frontend-unit`, `E2E_BACKEND_PORT=48210 E2E_FRONTEND_PORT=48211 make test-e2e-single TEST='--project=chromium tests/automations.basic.spec.ts tests/automations.scope-toggle.spec.ts tests/core/automations-load.spec.ts tests/core/automation-crud.spec.ts tests/automation_creation.spec.ts tests/core/chat-send.spec.ts tests/core/data-persistence.spec.ts'`, and `E2E_BACKEND_PORT=48230 E2E_FRONTEND_PORT=48231 make test-e2e-single TEST='--project=chromium tests/automation_history.spec.ts tests/commis_isolation.spec.ts tests/happy-paths.spec.ts'`.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

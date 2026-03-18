@@ -86,33 +86,31 @@ export async function waitForElement(page: Page, selector: string, timeout: numb
 }
 
 /**
- * Wait for the dashboard to be ready (app loaded and dashboard rendered)
+ * Wait for the automations overview to be ready.
  */
-export async function waitForDashboardReady(page: Page): Promise<void> {
+export async function waitForAutomationsReady(page: Page): Promise<void> {
   try {
-    await page.goto('/dashboard', { waitUntil: 'networkidle' });
+    await page.goto('/automations', { waitUntil: 'networkidle' });
 
     // Wait for critical UI elements to be interactive
     await Promise.all([
-      page.waitForSelector('#dashboard-container:visible', { timeout: 2000 }),
+      page.waitForSelector('#automations-container:visible', { timeout: 2000 }),
       page.waitForSelector('[data-testid="create-automation-btn"]:not([disabled])', { timeout: 2000 })
     ]);
   } catch (error) {
     // Log detailed error information
-    testLog.error('Dashboard failed to load properly:', error);
+    testLog.error('Automations failed to load properly:', error);
 
     // Try to get current DOM state for debugging
     const domState = await page.evaluate(() => ({
-      dashboardRoot: !!document.querySelector('#dashboard-root'),
-      dashboardContainer: !!document.querySelector('#dashboard-container'),
-      dashboard: !!document.querySelector('#dashboard'),
+      automationsContainer: !!document.querySelector('#automations-container'),
       table: !!document.querySelector('table'),
       createBtn: !!document.querySelector('[data-testid="create-automation-btn"]'),
       bodyHTML: document.body.innerHTML.substring(0, 200)
     }));
 
     testLog.error('Current DOM state:', domState);
-    throw new Error(`Dashboard did not load properly. DOM state: ${JSON.stringify(domState)}`);
+    throw new Error(`Automations did not load properly. DOM state: ${JSON.stringify(domState)}`);
   }
 
   // Wait for data-ready signal instead of arbitrary timeout
@@ -124,7 +122,7 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
 }
 
 /**
- * Get the count of automation rows in the dashboard.
+ * Get the count of automation rows in the overview table.
  */
 export async function getAutomationRowCount(page: Page): Promise<number> {
   await page.waitForLoadState('networkidle');
@@ -136,7 +134,7 @@ export async function getAutomationRowCount(page: Page): Promise<number> {
  * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
 export async function createAutomationViaUI(page: Page): Promise<string> {
-  await waitForDashboardReady(page);
+  await waitForAutomationsReady(page);
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });

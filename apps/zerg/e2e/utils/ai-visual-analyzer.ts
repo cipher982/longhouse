@@ -441,16 +441,16 @@ ${Object.keys(data.screenshots).map(name => `- **${name}**: ${data.screenshots[n
 // Default UI variants for the Zerg platform
 export const LONGHOUSE_UI_VARIANTS: UIVariant[] = [
   {
-    name: 'rust-dashboard',
+    name: 'rust-automations',
     url: '/',
     description: 'Legacy Rust/WASM UI (target design to match)',
-    waitFor: '[data-testid="fiche-dashboard"], .dashboard, main'
+    waitFor: '#automations-container, [data-testid="create-automation-btn"], main'
   },
   {
-    name: 'react-dashboard',
+    name: 'react-automations',
     url: '/react/index.html',
     description: 'New React Prototype UI (requires alignment with legacy)',
-    waitFor: '[data-testid="react-dashboard"], .app, main'
+    waitFor: '#automations-container, .app, main'
   }
 ];
 

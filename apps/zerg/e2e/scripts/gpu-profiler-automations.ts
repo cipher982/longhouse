@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 /**
- * GPU Utilization Profiler for Dashboard Effects (macOS)
+ * GPU Utilization Profiler for Automations Effects (macOS)
  *
- * Measures actual GPU utilization % (via macOS ioreg) while the dashboard idles
+ * Measures actual GPU utilization % (via macOS ioreg) while the automations idles
  * with UI effects ON vs OFF.
  *
  * Usage:
- *   bun run scripts/gpu-profiler-dashboard.ts [options]
+ *   bun run scripts/gpu-profiler-automations.ts [options]
  *
  * Options:
  *   --url=<base>       Base URL (default: http://localhost:30080)
@@ -123,8 +123,8 @@ async function measureVariant(
   intervalMs: number,
   warmupSec: number
 ): Promise<VariantResult> {
-  const url = `${baseUrl}/dashboard?uieffects=${variant}`;
-  console.log(`\n  Measuring: dashboard ui-effects=${variant}`);
+  const url = `${baseUrl}/automations?uieffects=${variant}`;
+  console.log(`\n  Measuring: automations ui-effects=${variant}`);
   console.log(`  URL: ${url}`);
 
   const context = await browser.newContext({
@@ -143,9 +143,9 @@ async function measureVariant(
 
   await page.goto(url, { waitUntil: "networkidle" });
 
-  const isDashboard = await page.evaluate(() => !!document.querySelector("#dashboard-container"));
-  if (!isDashboard) {
-    console.log(`  ⚠️  WARNING: Not on dashboard. Final URL: ${page.url()}`);
+  const isAutomationsPage = await page.evaluate(() => !!document.querySelector("#automations-container"));
+  if (!isAutomationsPage) {
+    console.log(`  ⚠️  WARNING: Not on automations. Final URL: ${page.url()}`);
   }
 
   console.log(`  Warmup: ${warmupSec}s...`);
@@ -176,7 +176,7 @@ async function main() {
   const { baseUrl, duration, interval, outputDir, warmup } = parseArgs();
 
   console.log("\n========================================");
-  console.log("GPU Utilization Profiler (Dashboard)");
+  console.log("GPU Utilization Profiler (Automations)");
   console.log("========================================");
   console.log(`Base URL:   ${baseUrl}`);
   console.log(`Duration:   ${duration}s per variant`);
@@ -228,7 +228,7 @@ async function main() {
     await context.close();
   }
 
-  console.log("\n--- Dashboard Variants ---");
+  console.log("\n--- Automations Variants ---");
   const variants: Variant[] = ["off", "on"];
   const results: VariantResult[] = [];
   for (const v of variants) {
@@ -263,7 +263,7 @@ async function main() {
   };
 
   const reportLines: string[] = [];
-  reportLines.push("# GPU Dashboard Report");
+  reportLines.push("# GPU Automations Report");
   reportLines.push("");
   reportLines.push(`- Date: ${summary.meta.date}`);
   reportLines.push(`- Base URL: ${baseUrl}`);
@@ -277,7 +277,7 @@ async function main() {
   reportLines.push(formatStats("Device Util %", baselineStats));
   reportLines.push("```");
   reportLines.push("");
-  reportLines.push("## Dashboard");
+  reportLines.push("## Automations");
   reportLines.push("");
   for (const r of results) {
     reportLines.push(`### ui-effects=${r.variant}`);
@@ -291,16 +291,16 @@ async function main() {
     reportLines.push("");
   }
 
-  fs.writeFileSync(path.join(outputDir, "gpu-dashboard-summary.json"), JSON.stringify(summary, null, 2));
-  fs.writeFileSync(path.join(outputDir, "gpu-dashboard-samples.json"), JSON.stringify(samplesOut, null, 2));
-  fs.writeFileSync(path.join(outputDir, "gpu-dashboard-report.md"), reportLines.join("\n"));
+  fs.writeFileSync(path.join(outputDir, "gpu-automations-summary.json"), JSON.stringify(summary, null, 2));
+  fs.writeFileSync(path.join(outputDir, "gpu-automations-samples.json"), JSON.stringify(samplesOut, null, 2));
+  fs.writeFileSync(path.join(outputDir, "gpu-automations-report.md"), reportLines.join("\n"));
 
   console.log("\n========================================");
   console.log("DONE");
   console.log("========================================");
-  console.log(`\nWrote: ${path.join(outputDir, "gpu-dashboard-report.md")}`);
-  console.log(`Wrote: ${path.join(outputDir, "gpu-dashboard-summary.json")}`);
-  console.log(`Wrote: ${path.join(outputDir, "gpu-dashboard-samples.json")}`);
+  console.log(`\nWrote: ${path.join(outputDir, "gpu-automations-report.md")}`);
+  console.log(`Wrote: ${path.join(outputDir, "gpu-automations-summary.json")}`);
+  console.log(`Wrote: ${path.join(outputDir, "gpu-automations-samples.json")}`);
 }
 
 main().catch((err) => {

@@ -13,7 +13,7 @@ export interface PageDef {
 }
 
 export const APP_PAGES: PageDef[] = [
-  { name: "dashboard", path: `/dashboard?${BASE_QUERY}`, ready: "page" },
+  { name: "automations", path: `/automations?${BASE_QUERY}`, ready: "page" },
   { name: "chat", path: `/chat?${BASE_QUERY}`, ready: "page" },
   { name: "settings", path: `/settings?${BASE_QUERY}`, ready: "settings" },
   { name: "profile", path: `/profile?${BASE_QUERY}`, ready: "page" },

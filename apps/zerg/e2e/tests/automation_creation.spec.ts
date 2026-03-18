@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { resetDatabase } from './test-utils';
-import { waitForDashboardReady } from './helpers/test-helpers';
+import { waitForAutomationsReady } from './helpers/test-helpers';
 
 test.describe('Automation Creation', () => {
   // Uses strict reset that throws on failure to fail fast
@@ -9,7 +9,7 @@ test.describe('Automation Creation', () => {
   });
 
   test('creates automations with "New Automation" placeholder name', async ({ page }) => {
-    await waitForDashboardReady(page);
+    await waitForAutomationsReady(page);
 
     // Wait for create button to be ready
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 5000 });

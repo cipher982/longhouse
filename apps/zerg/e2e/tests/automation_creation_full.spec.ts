@@ -62,8 +62,8 @@ test.describe('Automation Creation Full Workflow', () => {
     );
     expect(foundAutomation, 'Automation should be found by system_instructions').toBeDefined();
 
-    // Step 5: Test UI integration - navigate to dashboard
-    await page.goto('/dashboard');
+    // Step 5: Test UI integration - navigate to automations
+    await page.goto('/automations');
     await page.waitForLoadState('domcontentloaded');
 
     // Step 6: Create a second automation to test isolation.

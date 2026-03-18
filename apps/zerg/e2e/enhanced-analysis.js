@@ -14,11 +14,11 @@ const openai = new OpenAI({
 async function enhancedAnalysis() {
   console.log('🔍 Running Enhanced AI Analysis with Focus on Functional Elements...');
 
-  const rustScreenshot = fs.readFileSync('visual-reports/rust-dashboard-1758991999662.png');
-  const reactScreenshot = fs.readFileSync('visual-reports/react-dashboard-1758992002283.png');
+  const rustScreenshot = fs.readFileSync('visual-reports/rust-automations-1758991999662.png');
+  const reactScreenshot = fs.readFileSync('visual-reports/react-automations-1758992002283.png');
 
   const enhancedPrompt = `
-CRITICAL ANALYSIS REQUIRED: Compare these dashboard screenshots with EXTREME attention to functional elements.
+CRITICAL ANALYSIS REQUIRED: Compare these automations overview screenshots with EXTREME attention to functional elements.
 
 **FOCUS AREAS (High Priority):**
 
@@ -48,7 +48,7 @@ CRITICAL ANALYSIS REQUIRED: Compare these dashboard screenshots with EXTREME att
 - Focus on FUNCTIONALITY gaps, not just styling
 
 **CRITICAL QUESTION:**
-If a user needs to manage fiches, what actions can they take in Rust UI vs React UI?
+If a user needs to manage automations, what actions can they take in Rust UI vs React UI?
 
 Be extremely specific about missing interactive elements and their impact on user workflows.
 `;

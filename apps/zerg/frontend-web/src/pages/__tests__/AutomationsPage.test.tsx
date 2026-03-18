@@ -3,7 +3,7 @@ import { describe, beforeAll, afterAll, beforeEach, afterEach, test, expect, vi 
 import { render, screen, within, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import DashboardPage from "../DashboardPage";
+import AutomationsPage from "../AutomationsPage";
 import { TestRouter } from "../../test/test-utils";
 import { ConfirmProvider } from "../../components/confirm";
 import {
@@ -55,7 +55,7 @@ function buildAutomation(
   };
 }
 
-describe("DashboardPage", () => {
+describe("AutomationsPage", () => {
   const fetchAutomationOverviewMock = fetchAutomationOverview as unknown as vi.MockedFunction<typeof fetchAutomationOverview>;
   const runAutomationMock = runAutomation as unknown as vi.MockedFunction<typeof runAutomation>;
   const updateAutomationMock = updateAutomation as unknown as vi.MockedFunction<typeof updateAutomation>;
@@ -100,7 +100,7 @@ describe("DashboardPage", () => {
     window.localStorage.clear();
   });
 
-  function renderDashboard(initialAutomations: AutomationSummary[], runsByAutomation?: Record<number, Run[]>) {
+  function renderAutomationsPage(initialAutomations: AutomationSummary[], runsByAutomation?: Record<number, Run[]>) {
     const runsLookup = runsByAutomation ?? {};
     const snapshot: AutomationOverviewSnapshot = {
       scope: "my",
@@ -125,14 +125,14 @@ describe("DashboardPage", () => {
       <QueryClientProvider client={queryClient}>
         <ConfirmProvider>
           <TestRouter>
-            <DashboardPage />
+            <AutomationsPage />
           </TestRouter>
         </ConfirmProvider>
       </QueryClientProvider>
     );
   }
 
-  test("renders dashboard header and automations table", async () => {
+  test("renders automations header and automations table", async () => {
     const automations: AutomationSummary[] = [
       buildAutomation({
         id: 1,
@@ -163,7 +163,7 @@ describe("DashboardPage", () => {
       }),
     ];
 
-    renderDashboard(automations);
+    renderAutomationsPage(automations);
 
     await screen.findByText("Alpha");
 
@@ -269,7 +269,7 @@ describe("DashboardPage", () => {
       },
     ];
 
-    renderDashboard([automation], { 1: runs });
+    renderAutomationsPage([automation], { 1: runs });
 
     const row = await screen.findByRole("row", { name: /Runner/ });
     await userEvent.click(row);
@@ -296,7 +296,7 @@ describe("DashboardPage", () => {
       buildAutomation({ id: 2, name: "Beta", status: "running", owner_id: 1 }),
     ];
 
-    renderDashboard(automations);
+    renderAutomationsPage(automations);
 
     const rows = await screen.findAllByRole("row");
     expect(rows[1]).toHaveTextContent("Alpha");
@@ -308,7 +308,7 @@ describe("DashboardPage", () => {
     }
     fireEvent.click(statusHeader);
     await waitFor(() => {
-      expect(window.localStorage.getItem("dashboard_sort_key")).toBe("status");
+      expect(window.localStorage.getItem("automations_sort_key")).toBe("status");
     });
 
     await waitFor(() => {
@@ -336,7 +336,7 @@ describe("DashboardPage", () => {
       owner_id: 9,
     });
 
-    renderDashboard([automation]);
+    renderAutomationsPage([automation]);
 
     // Ensure automation row rendered
     await screen.findByText("Speedy");

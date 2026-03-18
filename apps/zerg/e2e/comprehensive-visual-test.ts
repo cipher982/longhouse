@@ -21,11 +21,11 @@ interface PageTestConfig {
 // Comprehensive page configurations for testing
 const PAGE_CONFIGS: PageTestConfig[] = [
   {
-    name: 'dashboard',
+    name: 'automations',
     rustUrl: '/',
     reactUrl: '/react/index.html',
-    description: 'Main dashboard with fiche list and controls',
-    waitForSelector: '#fiches-table, [data-testid="dashboard-container"]',
+    description: 'Main automations overview and controls',
+    waitForSelector: '#automations-table-body, #automations-container, [data-testid="create-automation-btn"]',
     excludeElements: ['.timestamp', '.last-updated']  // Exclude dynamic timestamps
   },
   {

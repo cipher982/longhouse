@@ -75,9 +75,8 @@
    * DASHBOARD VIVID STYLES
    * ============================================================================ */
 
-  /* Enhance fiche cards */
-  body.marketing-mode .fiche-card,
-  body.marketing-mode .dashboard-card {
+  /* Enhance featured cards */
+  body.marketing-mode .fiche-card {
     background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%) !important;
     border: 2px solid #9e7c5a !important;
     box-shadow: 0 8px 24px rgba(139, 92, 246, 0.4) !important;
@@ -97,9 +96,8 @@
     background: #6b7280 !important;
   }
 
-  /* Boost dashboard background */
-  body.marketing-mode .dashboard-container,
-  body.marketing-mode .dashboard-page {
+  /* Boost automation overview background */
+  body.marketing-mode .automations-page {
     background: linear-gradient(
       145deg,
       #070b14 0%,
@@ -110,8 +108,7 @@
 
   /* Card titles pop */
   body.marketing-mode .card-title,
-  body.marketing-mode .automation-name,
-  body.marketing-mode .dashboard-automation-name {
+  body.marketing-mode .automation-name {
     color: #f3f4f6 !important;
     text-shadow: 0 0 8px #342d20 !important;
   }

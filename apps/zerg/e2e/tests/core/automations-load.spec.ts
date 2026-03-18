@@ -1,16 +1,16 @@
 /**
- * Dashboard Load Tests - Core Suite
+ * Automations Load Tests - Core Suite
  *
- * Tests that the dashboard renders correctly.
+ * Tests that the automations renders correctly.
  *
  * CORE SUITE: 0 skipped, 0 flaky, retries: 0
  */
 
 import { test, expect } from '../fixtures';
 
-test.describe('Dashboard - Core', () => {
-  test('dashboard renders with navigation', async ({ page }) => {
-    await page.goto('/dashboard');
+test.describe('Automations - Core', () => {
+  test('automations renders with navigation', async ({ page }) => {
+    await page.goto('/automations');
 
     // Header nav should be visible
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
@@ -21,7 +21,7 @@ test.describe('Dashboard - Core', () => {
   });
 
   test('create automation button is present', async ({ page }) => {
-    await page.goto('/dashboard');
+    await page.goto('/automations');
 
     // Wait for the create automation button to be visible and ready
     const createBtn = page.locator('[data-testid="create-automation-btn"]');

@@ -17,7 +17,7 @@ test.describe('Comprehensive Database Isolation', () => {
     const otherCommisId = commisId === '0' ? '1' : '0';
 
     // Navigate to the app - this should trigger database initialization
-    await page.goto('/dashboard');
+    await page.goto('/automations');
     await waitForPageReady(page);
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 10000 });

@@ -62,7 +62,7 @@ export async function waitForWasmInit(page: Page, timeout: number = 30000): Prom
         // Look for window.__wasm_initialized or similar flags
         return (window as any).__wasm_initialized ||
                (document.querySelector('#app-container')?.children.length ?? 0) > 0 ||
-               (document.querySelector('#dashboard-root')?.children.length ?? 0) > 0;
+               !!document.querySelector('#automations-container');
       },
       { timeout }
     );
@@ -83,8 +83,7 @@ export async function debugDomState(page: Page) {
       title: document.title,
       bodyHTML: document.body.innerHTML.substring(0, 500),
       appContainer: document.querySelector('#app-container')?.innerHTML.substring(0, 200) || 'Not found',
-      dashboardRoot: document.querySelector('#dashboard-root')?.innerHTML.substring(0, 200) || 'Not found',
-      dashboardContainer: document.querySelector('#dashboard-container')?.innerHTML.substring(0, 200) || 'Not found',
+      automationsContainer: document.querySelector('#automations-container')?.innerHTML.substring(0, 200) || 'Not found',
       visibleElements: []
     };
 

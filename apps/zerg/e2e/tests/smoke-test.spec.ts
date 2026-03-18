@@ -21,7 +21,7 @@ test.describe('Infrastructure Smoke Test', () => {
   });
 
   test('React frontend loads successfully', async ({ page }) => {
-    await page.goto('/dashboard');
+    await page.goto('/automations');
 
     // Wait for app to render - use a single unique element
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 15000 });
@@ -47,7 +47,7 @@ test.describe('Infrastructure Smoke Test', () => {
   });
 
   test('visual testing dependencies available', async ({ page }) => {
-    await page.goto('/dashboard');
+    await page.goto('/automations');
 
     // Wait for app to be ready
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 15000 });

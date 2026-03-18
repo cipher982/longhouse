@@ -19,7 +19,6 @@
   /* Apply to main content areas that change on route navigation */
   .info-page,
   .landing-page,
-  .dashboard-container,
   .chat-page {
     animation: page-fade-in 0.2s ease-out;
   }

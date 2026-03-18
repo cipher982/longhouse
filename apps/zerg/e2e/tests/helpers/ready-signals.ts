@@ -19,7 +19,7 @@
  *    Use: waitForScreenshotReady() for marketing automation
  *
  * Page-specific behavior:
- * - Dashboard: Both set when !isLoading
+ * - Automations: Both set when !isLoading
  * - Canvas: Both set when isWorkflowFetched
  * - Chat: data-ready on mount, data-screenshot-ready when messages.length > 0
  *

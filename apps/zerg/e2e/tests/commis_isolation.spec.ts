@@ -20,7 +20,7 @@ import { test, expect } from './fixtures';
  */
 
 import { resetDatabase } from './test-utils';
-import { waitForDashboardReady } from './helpers/test-helpers';
+import { waitForAutomationsReady } from './helpers/test-helpers';
 
 // Reset DB before each test for clean state
 // Uses strict reset that throws on failure to fail fast
@@ -57,8 +57,8 @@ test.describe('Commis Database Isolation', () => {
     expect(foundAutomation).toBeDefined();
     console.log(`✅ Can see own automation (total automations in this commis: ${automations.length})`);
 
-    // Navigate to dashboard and verify the automation appears in the UI.
-    await waitForDashboardReady(page);
+    // Navigate to automations and verify the automation appears in the UI.
+    await waitForAutomationsReady(page);
 
     const automationRow = page.locator(`tr[data-automation-id="${automation.id}"]`);
     await expect(automationRow).toBeVisible({ timeout: 10000 });
@@ -141,7 +141,7 @@ test.describe('Commis Database Isolation', () => {
       console.log('🔌 WebSocket connected:', url);
     });
 
-    await waitForDashboardReady(page);
+    await waitForAutomationsReady(page);
 
     // Wait for at least one WebSocket connection (deterministic polling)
     // fixtures.ts:113-136 injects commis=<id> into all WebSocket URLs

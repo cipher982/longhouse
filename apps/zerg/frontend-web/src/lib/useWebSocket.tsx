@@ -299,7 +299,7 @@ export function useWebSocket(
         wsRef.current.addEventListener('error', handleError);
       } else {
         // LEGACY FALLBACK: Required for test mocks that don't implement addEventListener
-        // See: frontend-web/src/pages/__tests__/DashboardPage.test.tsx:67
+        // See: frontend-web/src/pages/__tests__/AutomationsPage.test.tsx:67
         // Our test suite stubs WebSocket with only onmessage/onopen/etc properties
         // DO NOT REMOVE without updating test infrastructure
         wsRef.current.onmessage = handleMessage as EventListener;

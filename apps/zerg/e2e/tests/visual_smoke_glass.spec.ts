@@ -6,7 +6,7 @@ const BASE_QUERY = 'clock=frozen&effects=on&seed=glass-smoke';
 
 const APP_PAGES = [
   { name: 'chat', path: `/chat?${BASE_QUERY}`, ready: 'page' },
-  { name: 'dashboard', path: `/dashboard?${BASE_QUERY}`, ready: 'page' },
+  { name: 'automations', path: `/automations?${BASE_QUERY}`, ready: 'page' },
   { name: 'settings', path: `/settings?${BASE_QUERY}`, ready: 'settings' },
 ];
 
