@@ -253,11 +253,15 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y make
 
-      - name: Install Playwright browsers
+      - name: Install frontend test deps
+        run: cd apps/zerg/e2e && bun install --silent
+
+      - name: Install Playwright Chromium shell
         run: |
           cd apps/zerg/e2e
-          bun install --silent
-          bunx playwright install --with-deps chromium firefox webkit
+          # The README onboarding contract runs the onboarding-chromium project only.
+          bunx playwright install-deps chromium
+          bunx playwright install --only-shell chromium
 
       - name: Run fresh-clone onboarding funnel
         run: make onboarding-funnel
