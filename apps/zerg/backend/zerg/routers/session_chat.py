@@ -108,13 +108,13 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
         "--print",
     ]
     backend = _get_session_chat_backend()
+    if not _check_claude_binary():
+        raise RuntimeError(
+            "Session continuation requires the 'claude' CLI but it is not installed. "
+            "Install @anthropic-ai/claude-code (npm install -g @anthropic-ai/claude-code)."
+        )
+
     if backend == SESSION_CHAT_BACKEND_AMBIENT:
-        if not _check_claude_binary():
-            raise RuntimeError(
-                "Session chat backend is 'ambient' but 'claude' CLI is not installed. "
-                "Set SESSION_CHAT_BACKEND to 'zai', 'anthropic', or 'bedrock' with the required API key, "
-                "or install the Claude CLI."
-            )
         return ClaudeResumeRuntime(backend=backend, cmd=cmd, env_updates={})
 
     model = os.getenv(SESSION_CHAT_MODEL_ENV, "").strip()
@@ -689,10 +689,10 @@ async def continuation_readiness(
     backend = _get_session_chat_backend()
     issues: list[str] = []
 
-    if backend == SESSION_CHAT_BACKEND_AMBIENT:
-        if not _check_claude_binary():
-            issues.append("'claude' CLI not found on PATH")
-    elif backend == SESSION_CHAT_BACKEND_ZAI:
+    if not _check_claude_binary():
+        issues.append("'claude' CLI not found on PATH (required for all backends)")
+
+    if backend == SESSION_CHAT_BACKEND_ZAI:
         if not os.getenv("ZAI_API_KEY", "").strip():
             issues.append("ZAI_API_KEY not set")
     elif backend == SESSION_CHAT_BACKEND_ANTHROPIC:
