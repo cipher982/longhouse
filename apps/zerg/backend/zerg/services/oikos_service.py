@@ -56,6 +56,8 @@ from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import classify_wakeup_outcome_for_run
 from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
+from zerg.services.session_turn_reviews import classify_turn_review_outcome_for_run
+from zerg.services.session_turn_reviews import finalize_turn_reviews_for_run
 from zerg.services.thread_service import ThreadService
 from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
 
@@ -1150,6 +1152,8 @@ class OikosService:
 
                 if classify_wakeup_outcome_for_run(self.db, run_id=run.id):
                     self.db.commit()
+                if classify_turn_review_outcome_for_run(self.db, run_id=run.id):
+                    self.db.commit()
 
                 await emit_oikos_waiting_and_run_updated(
                     db=self.db,
@@ -1207,6 +1211,8 @@ class OikosService:
             self.db.commit()
 
             if classify_wakeup_outcome_for_run(self.db, run_id=run.id):
+                self.db.commit()
+            if classify_turn_review_outcome_for_run(self.db, run_id=run.id):
                 self.db.commit()
 
             # Emit completion event with OikosResult-aligned schema
@@ -1328,6 +1334,14 @@ class OikosService:
                 payload_updates={"outcome": "failed"},
             ):
                 self.db.commit()
+            if finalize_turn_reviews_for_run(
+                self.db,
+                run_id=run.id,
+                status="failed",
+                reason="run_cancelled",
+                actual_outcome="failed",
+            ):
+                self.db.commit()
 
         except Exception as e:
             # Calculate duration
@@ -1355,6 +1369,14 @@ class OikosService:
                 status=WAKEUP_STATUS_FAILED,
                 reason="run_failed",
                 payload_updates={"outcome": "failed", "error": str(e)},
+            ):
+                self.db.commit()
+            if finalize_turn_reviews_for_run(
+                self.db,
+                run_id=run.id,
+                status="failed",
+                reason="run_failed",
+                actual_outcome="failed",
             ):
                 self.db.commit()
 
