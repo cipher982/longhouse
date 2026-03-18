@@ -239,7 +239,7 @@ class MessageResponse(UTCBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    fiche_id: int
+    automation_id: int = Field(validation_alias=AliasChoices("automation_id", "fiche_id"))
     role: str
     content: str
     timestamp: datetime
@@ -251,7 +251,7 @@ class MessageResponse(UTCBaseModel):
 
 
 class TriggerBase(BaseModel):
-    fiche_id: int
+    automation_id: int = Field(validation_alias=AliasChoices("automation_id", "fiche_id"))
     type: str = "webhook"
     # Arbitrary configuration for non-webhook triggers (e.g. email server
     # settings).  For webhook triggers this is usually ``null``.

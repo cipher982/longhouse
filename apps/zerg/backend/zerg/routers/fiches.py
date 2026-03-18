@@ -116,10 +116,10 @@ def _enforce_model_allowlist_or_422(model_id: str, current_user) -> str:
 
 from zerg.dependencies.auth import get_current_user  # noqa: E402
 
-router = APIRouter(tags=["fiches"], dependencies=[Depends(get_current_user)])
+router = APIRouter(tags=["automations"], dependencies=[Depends(get_current_user)])
 
 # Simple in-memory idempotency cache
-# Maps (idempotency_key, user_id) -> (fiche_id, created_at)
+# Maps (idempotency_key, user_id) -> (automation_id, created_at)
 # For production, use Redis or database table
 IDEMPOTENCY_TTL_SECS = 600
 IDEMPOTENCY_MAX_SIZE = 1000
@@ -197,7 +197,7 @@ def _store_idempotency_cache(key: str, user_id: int, fiche_id: int) -> None:
 
 @router.get("/", response_model=List[Fiche])
 @router.get("", response_model=List[Fiche])
-def read_fiches(
+def list_automations(
     *,
     scope: str = Query("my", pattern="^(my|all)$"),
     skip: int = 0,
@@ -209,7 +209,7 @@ def read_fiches(
 
 
 @router.get("/dashboard", response_model=DashboardSnapshot)
-def read_dashboard_snapshot(
+def read_automation_overview(
     *,
     scope: str = Query("my", pattern="^(my|all)$"),
     runs_limit: int = Query(50, ge=0, le=500),
@@ -265,8 +265,8 @@ def read_dashboard_snapshot(
 @router.post("/", response_model=Fiche, status_code=status.HTTP_201_CREATED)
 @router.post("", response_model=Fiche, status_code=status.HTTP_201_CREATED)
 @publish_event(EventType.AUTOMATION_CREATED)
-async def create_fiche(
-    fiche: FicheCreate = Body(...),
+async def create_automation(
+    automation: FicheCreate = Body(...),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
@@ -278,90 +278,90 @@ async def create_fiche(
         if override:
             model_override = override
 
-    model_id = model_override or fiche.model
+    model_id = model_override or automation.model
     _validate_model_or_400(model_id)
     # Enforce role-based allowlist for non-admin users
     model_to_use = _enforce_model_allowlist_or_422(model_id, current_user)
 
     # Check idempotency cache to prevent double-creation
     if idempotency_key:
-        cached_fiche = _check_idempotency_cache(idempotency_key, current_user.id, db)
-        if cached_fiche:
-            return cached_fiche
+        cached_automation = _check_idempotency_cache(idempotency_key, current_user.id, db)
+        if cached_automation:
+            return cached_automation
 
     try:
-        created_fiche = create_fiche_record(
+        created_automation = create_fiche_record(
             db=db,
             owner_id=current_user.id,
             # name removed - backend auto-generates
-            system_instructions=fiche.system_instructions,
-            task_instructions=fiche.task_instructions,
+            system_instructions=automation.system_instructions,
+            task_instructions=automation.task_instructions,
             model=model_to_use,
-            schedule=fiche.schedule,
-            config=fiche.config,
+            schedule=automation.schedule,
+            config=automation.config,
         )
 
         # Store in idempotency cache
         if idempotency_key:
-            _store_idempotency_cache(idempotency_key, current_user.id, created_fiche.id)
+            _store_idempotency_cache(idempotency_key, current_user.id, created_automation.id)
 
-        return created_fiche
+        return created_automation
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
-@router.get("/{fiche_id}", response_model=Fiche)
-def read_fiche(fiche_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    row = get_fiche(db, fiche_id)
+@router.get("/{automation_id}", response_model=Fiche)
+def read_automation(automation_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    row = get_fiche(db, automation_id)
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and row.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
     return row
 
 
-@router.put("/{fiche_id}", response_model=Fiche)
+@router.put("/{automation_id}", response_model=Fiche)
 @publish_event(EventType.AUTOMATION_UPDATED)
-async def update_fiche(
-    fiche_id: int,
-    fiche: FicheUpdate,
+async def update_automation(
+    automation_id: int,
+    automation: FicheUpdate,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if fiche.model is not None:
-        _validate_model_or_400(fiche.model)
+    if automation.model is not None:
+        _validate_model_or_400(automation.model)
         # Enforce role-based allowlist for non-admin users when updating model
-        fiche_model_validated = _enforce_model_allowlist_or_422(fiche.model, current_user)
+        fiche_model_validated = _enforce_model_allowlist_or_422(automation.model, current_user)
     else:
         fiche_model_validated = None
 
-    # Authorization: only owner or admin may update a fiche
-    existing = get_fiche(db, fiche_id)
+    # Authorization: only owner or admin may update an automation
+    existing = get_fiche(db, automation_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and existing.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
 
     try:
         row = update_fiche_record(
             db=db,
-            fiche_id=fiche_id,
-            name=fiche.name,
-            system_instructions=fiche.system_instructions,
-            task_instructions=fiche.task_instructions,
+            fiche_id=automation_id,
+            name=automation.name,
+            system_instructions=automation.system_instructions,
+            task_instructions=automation.task_instructions,
             model=fiche_model_validated,
-            status=fiche.status.value if fiche.status else None,
-            schedule=fiche.schedule,
-            config=fiche.config,
-            allowed_tools=fiche.allowed_tools,
+            status=automation.status.value if automation.status else None,
+            schedule=automation.schedule,
+            config=automation.config,
+            allowed_tools=automation.allowed_tools,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
     return row
 
 
@@ -371,26 +371,26 @@ async def update_fiche(
 
 
 # Optional import for type hints
-@router.get("/{fiche_id}/details", response_model=FicheDetails, response_model_exclude_none=True)
-def read_fiche_details(
-    fiche_id: int,
+@router.get("/{automation_id}/details", response_model=FicheDetails, response_model_exclude_none=True)
+def read_automation_details(
+    automation_id: int,
     include: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    row = get_fiche(db, fiche_id)
+    row = get_fiche(db, automation_id)
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and row.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
 
     include_set: set[str] = set(p.strip().lower() for p in include.split(",")) if include else set()
     payload: dict[str, Any] = {"fiche": row}
     if "threads" in include_set:
         payload["threads"] = []
     if "runs" in include_set:
-        payload["runs"] = list_fiche_runs(db, fiche_id)  # type: ignore[assignment]
+        payload["runs"] = list_fiche_runs(db, automation_id)  # type: ignore[assignment]
     if "stats" in include_set:
         payload["stats"] = {}
     return payload
@@ -401,17 +401,17 @@ def read_fiche_details(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/{fiche_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_fiche(fiche_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    row = get_fiche(db, fiche_id)
+@router.delete("/{automation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_automation(automation_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    row = get_fiche(db, automation_id)
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and row.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
 
-    if not delete_fiche_record(db, fiche_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+    if not delete_fiche_record(db, automation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
 
     payload = {c.name: getattr(row, c.name) for c in row.__table__.columns}
     payload.pop("_sa_instance_state", None)
@@ -420,56 +420,60 @@ async def delete_fiche(fiche_id: int, db: Session = Depends(get_db), current_use
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/{fiche_id}/messages", response_model=List[MessageResponse])
-def read_fiche_messages(
-    fiche_id: int,
+@router.get("/{automation_id}/messages", response_model=List[MessageResponse])
+def read_automation_messages(
+    automation_id: int,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    fiche = get_fiche(db, fiche_id)
-    if fiche is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+    automation = get_fiche(db, automation_id)
+    if automation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and fiche.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
-    return get_fiche_messages(db, fiche_id=fiche_id, skip=skip, limit=limit) or []
+    if not is_admin and automation.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
+    return get_fiche_messages(db, fiche_id=automation_id, skip=skip, limit=limit) or []
 
 
-@router.post("/{fiche_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
-def create_fiche_message(
-    fiche_id: int,
+@router.post("/{automation_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+def create_automation_message(
+    automation_id: int,
     message: MessageCreate,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    fiche = get_fiche(db, fiche_id)
-    if fiche is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+    automation = get_fiche(db, automation_id)
+    if automation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and fiche.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
-    return create_fiche_message_record(db=db, fiche_id=fiche_id, role=message.role, content=message.content)
+    if not is_admin and automation.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
+    return create_fiche_message_record(db=db, fiche_id=automation_id, role=message.role, content=message.content)
 
 
-@router.post("/{fiche_id}/task", status_code=status.HTTP_202_ACCEPTED)
-async def run_fiche_task(fiche_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    fiche = get_fiche(db, fiche_id)
-    if fiche is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+@router.post("/{automation_id}/task", status_code=status.HTTP_202_ACCEPTED)
+async def run_automation_task(
+    automation_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    automation = get_fiche(db, automation_id)
+    if automation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
 
-    # Authorization: only owner or admin may start a fiche's task run
+    # Authorization: only owner or admin may start an automation run
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and fiche.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
+    if not is_admin and automation.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
 
     from zerg.services.task_runner import execute_fiche_task
 
     try:
-        thread = await execute_fiche_task(db, fiche, thread_type="manual")
+        thread = await execute_fiche_task(db, automation, thread_type="manual")
     except ValueError as exc:
         if "already running" in str(exc).lower():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Fiche already running") from exc
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Automation already running") from exc
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"thread_id": thread.id}
