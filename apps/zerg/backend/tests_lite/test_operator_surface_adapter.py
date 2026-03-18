@@ -131,6 +131,12 @@ async def test_operator_adapter_build_run_kwargs_includes_optional_fields():
             "model_override": "gpt-5.3-codex",
             "reasoning_effort": "high",
             "return_on_deferred": False,
+            "session_id": "sess-123",
+            "shadow_review": {
+                "loop_review": {
+                    "mode_capability": "bounded_autonomy",
+                }
+            },
         }
     )
     assert event is not None
@@ -144,3 +150,5 @@ async def test_operator_adapter_build_run_kwargs_includes_optional_fields():
     assert kwargs["model_override"] == "gpt-5.3-codex"
     assert kwargs["reasoning_effort"] == "high"
     assert kwargs["return_on_deferred"] is False
+    assert kwargs["operator_capability_ceiling"] == "bounded_autonomy"
+    assert kwargs["operator_target_session_id"] == "sess-123"

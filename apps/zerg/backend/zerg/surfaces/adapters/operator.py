@@ -89,6 +89,16 @@ class OperatorSurfaceAdapter:
         reasoning_effort = (event.raw or {}).get("reasoning_effort")
         if reasoning_effort:
             run_kwargs["reasoning_effort"] = str(reasoning_effort)
+        shadow_review = (event.raw or {}).get("shadow_review")
+        if isinstance(shadow_review, dict):
+            loop_review = shadow_review.get("loop_review")
+            if isinstance(loop_review, dict):
+                capability = str(loop_review.get("mode_capability", "") or "").strip()
+                if capability:
+                    run_kwargs["operator_capability_ceiling"] = capability
+        target_session_id = str((event.raw or {}).get("session_id", "") or "").strip()
+        if target_session_id:
+            run_kwargs["operator_target_session_id"] = target_session_id
         return run_kwargs
 
     async def deliver(self, *, owner_id: int, text: str, event: SurfaceInboundEvent) -> None:
