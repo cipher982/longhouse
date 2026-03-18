@@ -93,8 +93,8 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         overview_response = client.get("/automations/dashboard")
         assert overview_response.status_code == 200, overview_response.text
         overview_payload = overview_response.json()
-        assert overview_payload["fiches"][0]["id"] == automation_id
-        assert overview_payload["runs"] == [{"fiche_id": automation_id, "runs": []}]
+        assert overview_payload["automations"][0]["id"] == automation_id
+        assert overview_payload["runs"] == [{"automation_id": automation_id, "runs": []}]
 
         delete_response = client.delete(f"/automations/{automation_id}")
         assert delete_response.status_code == 204, delete_response.text
@@ -194,7 +194,9 @@ def test_automation_nested_aliases_cover_runs_connectors_and_mcp_servers(tmp_pat
     try:
         runs_response = client.get(f"/automations/{automation_id}/runs")
         assert runs_response.status_code == 200, runs_response.text
-        assert [row["id"] for row in runs_response.json()] == [run.id]
+        runs_payload = runs_response.json()
+        assert [row["id"] for row in runs_payload] == [run.id]
+        assert runs_payload[0]["automation_id"] == automation_id
 
         connectors_response = client.get(f"/automations/{automation_id}/connectors/")
         assert connectors_response.status_code == 200, connectors_response.text

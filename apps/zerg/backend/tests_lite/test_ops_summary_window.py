@@ -160,10 +160,10 @@ def test_ops_summary_window_scopes_runs_cost_and_labels(tmp_path, monkeypatch):
         assert seven["errors_last_hour"] == 1
         assert thirty["errors_last_hour"] == 1
 
-        # Top fiches should reflect selected window totals
-        assert today["top_fiches"][0]["runs"] == 2
-        assert seven["top_fiches"][0]["runs"] == 3
-        assert thirty["top_fiches"][0]["runs"] == 4
+        # Top automations should reflect selected window totals
+        assert today["top_automations"][0]["runs"] == 2
+        assert seven["top_automations"][0]["runs"] == 3
+        assert thirty["top_automations"][0]["runs"] == 4
 
     finally:
         api_app_ref.dependency_overrides.clear()

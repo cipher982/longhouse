@@ -94,10 +94,10 @@ class DailyBreakdown(BaseModel):
     runs: int
 
 
-class TopFicheUsage(BaseModel):
-    """Fiche usage stats for user detail view."""
+class TopAutomationUsage(BaseModel):
+    """Automation usage stats for user detail view."""
 
-    fiche_id: int
+    automation_id: int
     name: str
     tokens: int
     cost_usd: float
@@ -111,4 +111,4 @@ class AdminUserDetailResponse(BaseModel):
     period: str
     summary: PeriodUsage
     daily_breakdown: list[DailyBreakdown]
-    top_fiches: list[TopFicheUsage]
+    top_automations: list[TopAutomationUsage]

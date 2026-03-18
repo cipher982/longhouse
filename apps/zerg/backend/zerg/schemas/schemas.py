@@ -283,7 +283,7 @@ class RunOut(UTCBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    fiche_id: int
+    automation_id: int = Field(validation_alias=AliasChoices("automation_id", "fiche_id"))
     thread_id: int
     status: RunStatus
     trigger: RunTrigger
@@ -303,7 +303,7 @@ class RunOut(UTCBaseModel):
 
 
 class RunBundle(BaseModel):
-    fiche_id: int
+    automation_id: int = Field(validation_alias=AliasChoices("automation_id", "fiche_id"))
     runs: List[RunOut] = []
 
 
@@ -311,7 +311,7 @@ class DashboardSnapshot(UTCBaseModel):
     scope: str
     fetched_at: datetime
     runs_limit: int
-    fiches: List[Fiche]
+    automations: List[Fiche] = Field(validation_alias=AliasChoices("automations", "fiches"))
     runs: List[RunBundle]
 
 

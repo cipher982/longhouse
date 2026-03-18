@@ -220,19 +220,19 @@ def read_dashboard_snapshot(
 ):
     start = perf_counter()
     status_label = "success"
-    fiches: List[Fiche] = []
+    automations: List[Fiche] = []
     bundles: List[RunBundle] = []
     total_runs = 0
 
     try:
-        fiches = _get_fiches_for_scope(db, current_user, scope, skip=skip, limit=limit)
+        automations = _get_fiches_for_scope(db, current_user, scope, skip=skip, limit=limit)
 
         if runs_limit > 0:
-            for fiche in fiches:
-                runs = list_fiche_runs(db, fiche.id, limit=runs_limit)
-                bundles.append(RunBundle(fiche_id=fiche.id, runs=runs))
+            for automation in automations:
+                runs = list_fiche_runs(db, automation.id, limit=runs_limit)
+                bundles.append(RunBundle(automation_id=automation.id, runs=runs))
         else:
-            bundles = [RunBundle(fiche_id=fiche.id, runs=[]) for fiche in fiches]
+            bundles = [RunBundle(automation_id=automation.id, runs=[]) for automation in automations]
 
         total_runs = sum(len(bundle.runs) for bundle in bundles)
 
@@ -240,7 +240,7 @@ def read_dashboard_snapshot(
             "Dashboard snapshot fetched (scope=%s, runs_limit=%s, fiches=%s, total_runs=%s)",
             scope,
             runs_limit,
-            len(fiches),
+            len(automations),
             total_runs,
         )
 
@@ -248,7 +248,7 @@ def read_dashboard_snapshot(
             scope=scope,
             fetched_at=utc_now_naive(),
             runs_limit=runs_limit,
-            fiches=fiches,
+            automations=automations,
             runs=bundles,
         )
     except Exception:
@@ -258,7 +258,7 @@ def read_dashboard_snapshot(
         duration = perf_counter() - start
         dashboard_snapshot_requests_total.labels(scope=scope, status=status_label).inc()
         dashboard_snapshot_latency_seconds.observe(duration)
-        dashboard_snapshot_fiches_returned.observe(float(len(fiches)))
+        dashboard_snapshot_fiches_returned.observe(float(len(automations)))
         dashboard_snapshot_runs_returned.observe(float(total_runs))
 
 

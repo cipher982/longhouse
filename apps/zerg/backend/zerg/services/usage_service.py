@@ -365,10 +365,10 @@ def get_user_usage_detail(
         for row in daily_query
     ]
 
-    # Get top fiches by cost
-    top_fiches_query = (
+    # Get top automations by cost
+    top_automations_query = (
         db.query(
-            FicheModel.id.label("fiche_id"),
+            FicheModel.id.label("automation_id"),
             FicheModel.name,
             func.coalesce(func.sum(func.coalesce(RunModel.total_tokens, 0)), 0).label("tokens"),
             func.coalesce(func.sum(func.coalesce(RunModel.total_cost_usd, 0.0)), 0.0).label("cost_usd"),
@@ -387,15 +387,15 @@ def get_user_usage_detail(
         .all()
     )
 
-    top_fiches = [
+    top_automations = [
         {
-            "fiche_id": row.fiche_id,
+            "automation_id": row.automation_id,
             "name": row.name,
             "tokens": int(row.tokens),
             "cost_usd": round(float(row.cost_usd), 4),
             "runs": int(row.runs),
         }
-        for row in top_fiches_query
+        for row in top_automations_query
     ]
 
     # Get usage for all periods for the user row
@@ -420,5 +420,5 @@ def get_user_usage_detail(
         "period": period,
         "summary": {"tokens": summary["tokens"], "cost_usd": summary["cost_usd"], "runs": summary["runs"]},
         "daily_breakdown": daily_breakdown,
-        "top_fiches": top_fiches,
+        "top_automations": top_automations,
     }

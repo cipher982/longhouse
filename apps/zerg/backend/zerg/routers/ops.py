@@ -18,10 +18,10 @@ from zerg.dependencies.auth import require_admin
 from zerg.models.models import User as UserModel
 from zerg.schemas.ops import OpsSummary
 from zerg.schemas.ops import TimeSeriesResponse
-from zerg.schemas.ops import TopFichesResponse
+from zerg.schemas.ops import TopAutomationsResponse
 from zerg.services.ops_service import get_summary as svc_get_summary
 from zerg.services.ops_service import get_timeseries as svc_get_timeseries
-from zerg.services.ops_service import get_top_fiches as svc_get_top_fiches
+from zerg.services.ops_service import get_top_automations as svc_get_top_automations
 
 router = APIRouter(prefix="/ops", tags=["ops"], dependencies=[Depends(require_admin)])
 
@@ -79,17 +79,17 @@ def get_timeseries(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/top", response_model=TopFichesResponse)
+@router.get("/top", response_model=TopAutomationsResponse)
 def get_top(
-    kind: str = Query("fiches", pattern="^fiches$"),
+    kind: str = Query("automations", pattern="^automations$"),
     window: str = Query("today", pattern="^(today|7d|30d)$"),
     limit: int = 5,
     db: Session = Depends(get_db),
 ):
-    if kind != "fiches":
-        raise HTTPException(status_code=400, detail="Only kind=fiches supported")
+    if kind != "automations":
+        raise HTTPException(status_code=400, detail="Only kind=automations supported")
     try:
-        top_fiches = svc_get_top_fiches(db, window=window, limit=limit)
-        return TopFichesResponse(top_fiches=top_fiches)
+        top_automations = svc_get_top_automations(db, window=window, limit=limit)
+        return TopAutomationsResponse(top_automations=top_automations)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
