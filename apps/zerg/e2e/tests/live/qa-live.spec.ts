@@ -482,13 +482,30 @@ test("session continuation backend is ready", async ({ context }) => {
 // Test 10: Auth refresh endpoint works (token rotation)
 // ---------------------------------------------------------------------------
 
-test("auth refresh endpoint rotates tokens", async ({ context }) => {
+test("auth refresh endpoint rotates tokens", async ({ playwright, apiBaseUrl }) => {
   test.setTimeout(10_000);
 
-  const page = await context.newPage();
+  const loginToken = process.env.SMOKE_LOGIN_TOKEN?.trim();
+  if (!loginToken) {
+    test.skip(true, "SMOKE_LOGIN_TOKEN not set");
+    return;
+  }
 
-  // The browser context already has session cookies from login
-  const res = await page.request.post("/api/auth/refresh");
+  // Create a fresh request context and login through accept-token to get both cookies
+  const ctx = await playwright.request.newContext({
+    baseURL: apiBaseUrl,
+  });
+
+  const loginRes = await ctx.post("/api/auth/accept-token", {
+    data: { token: loginToken },
+  });
+  expect(
+    loginRes.ok(),
+    `accept-token returned ${loginRes.status()} — cannot test refresh`,
+  ).toBe(true);
+
+  // Now call refresh — the context has both AT and RT cookies from accept-token
+  const res = await ctx.post("/api/auth/refresh");
   expect(
     res.ok(),
     `POST /api/auth/refresh returned ${res.status()} — refresh token rotation may be broken`,
@@ -497,5 +514,5 @@ test("auth refresh endpoint rotates tokens", async ({ context }) => {
   const body = await res.json();
   expect(body.expires_in, "Expected expires_in in refresh response").toBe(600);
 
-  await page.close();
+  await ctx.dispose();
 });
