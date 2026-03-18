@@ -132,23 +132,23 @@ export class ApiClient {
       ...data
     };
 
-    return await this.request('POST', '/api/fiches', ficheData);
+    return await this.request('POST', '/api/automations', ficheData);
   }
 
   async getFiche(id: string): Promise<Fiche> {
-    return await this.request('GET', `/api/fiches/${id}`);
+    return await this.request('GET', `/api/automations/${id}`);
   }
 
   async updateFiche(id: string, data: Partial<CreateFicheRequest>): Promise<Fiche> {
-    return await this.request('PUT', `/api/fiches/${id}`, data);
+    return await this.request('PUT', `/api/automations/${id}`, data);
   }
 
   async deleteFiche(id: string): Promise<void> {
-    await this.request('DELETE', `/api/fiches/${id}`);
+    await this.request('DELETE', `/api/automations/${id}`);
   }
 
   async listFiches(): Promise<Fiche[]> {
-    return await this.request('GET', '/api/fiches');
+    return await this.request('GET', '/api/automations');
   }
 
   async createThread(data: CreateThreadRequest): Promise<Thread> {

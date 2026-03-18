@@ -27,7 +27,7 @@ test('WebSocket envelopes include required fields for streaming events', async (
   const ficheId = await createFicheViaUI(page);
   await wsPromise;
 
-  const chatBtn = page.locator(`[data-testid="chat-fiche-${ficheId}"]`);
+  const chatBtn = page.locator(`[data-testid="chat-automation-${ficheId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 

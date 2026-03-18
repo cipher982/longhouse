@@ -36,7 +36,7 @@ test.describe('Commis Database Isolation', () => {
     // Each commis gets this test's own database automatically via fixtures
 
     // Create an fiche in this commis's database
-    const response = await request.post('/api/fiches', {
+    const response = await request.post('/api/automations', {
       data: {
         name: 'Test Fiche for Isolation',
         system_instructions: 'Test fiche',
@@ -50,7 +50,7 @@ test.describe('Commis Database Isolation', () => {
     console.log(`✅ Created fiche ID: ${fiche.id} in current commis's database`);
 
     // Verify we can see our own data
-    const listResponse = await request.get('/api/fiches');
+    const listResponse = await request.get('/api/automations');
     expect(listResponse.status()).toBe(200);
     const fiches = await listResponse.json();
     const foundFiche = fiches.find((a: any) => a.id === fiche.id);
@@ -61,7 +61,7 @@ test.describe('Commis Database Isolation', () => {
     await waitForDashboardReady(page);
 
     // Wait for fiche row to be visible (deterministic)
-    const ficheRow = page.locator(`tr[data-fiche-id="${fiche.id}"]`);
+    const ficheRow = page.locator(`tr[data-automation-id="${fiche.id}"]`);
     await expect(ficheRow).toBeVisible({ timeout: 10000 });
     console.log('✅ Fiche visible in UI');
 
@@ -80,7 +80,7 @@ test.describe('Commis Database Isolation', () => {
     console.log('🎯 Testing: Commis isolation for threads');
 
     // Create fiche in this commis's database
-    const ficheResponse = await request.post('/api/fiches', {
+    const ficheResponse = await request.post('/api/automations', {
       data: {
         name: 'Fiche for Thread Isolation Test',
         system_instructions: 'Test fiche',
@@ -123,7 +123,7 @@ test.describe('Commis Database Isolation', () => {
     console.log('🎯 Testing: WebSocket commis parameter injection');
 
     // Create an fiche
-    const ficheResponse = await request.post('/api/fiches', {
+    const ficheResponse = await request.post('/api/automations', {
       data: {
         name: 'WebSocket Test Fiche',
         system_instructions: 'Test fiche',

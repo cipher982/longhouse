@@ -20,7 +20,7 @@ test.describe('Comprehensive Database Isolation', () => {
     await page.goto('/dashboard');
     await waitForPageReady(page);
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 10000 });
 
     // Test API endpoints directly with proper headers
     // Test simple health check first
@@ -32,7 +32,7 @@ test.describe('Comprehensive Database Isolation', () => {
     expect(healthResponse.ok()).toBe(true);
 
     // Test fiche endpoint
-    const ficheResponse = await request.get('/api/fiches', {
+    const ficheResponse = await request.get('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
       }
@@ -42,7 +42,7 @@ test.describe('Comprehensive Database Isolation', () => {
     expect(Array.isArray(fiches)).toBe(true);
 
     // Test fiche creation
-    const createResponse = await request.post('/api/fiches', {
+    const createResponse = await request.post('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
@@ -57,7 +57,7 @@ test.describe('Comprehensive Database Isolation', () => {
     const createdFiche = await createResponse.json();
     expect(createdFiche.id).toBeDefined();
 
-    const ficheListAfter = await request.get('/api/fiches', {
+    const ficheListAfter = await request.get('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
       }
@@ -68,7 +68,7 @@ test.describe('Comprehensive Database Isolation', () => {
     expect(idsAfter).toContain(createdFiche.id);
 
     // Verify isolation by querying a different commis DB
-    const otherListResponse = await request.get('/api/fiches', {
+    const otherListResponse = await request.get('/api/automations', {
       headers: {
         'X-Test-Commis': otherCommisId,
       }

@@ -24,7 +24,7 @@ test.describe('Dashboard - Core', () => {
     await page.goto('/dashboard');
 
     // Wait for the create fiche button to be visible and ready
-    const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+    const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 15000 });
     await expect(createBtn).toBeEnabled();
   });

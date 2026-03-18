@@ -97,14 +97,14 @@ export async function createFicheViaUI(page: Page): Promise<string> {
   // Navigate to dashboard (root redirects to timeline in auth-disabled mode)
   await page.goto('/dashboard');
 
-  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
   // Capture API response to get the ACTUAL created fiche ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
     ),
     createBtn.click(),
@@ -119,7 +119,7 @@ export async function createFicheViaUI(page: Page): Promise<string> {
   }
 
   // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
-  const newRow = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+  const newRow = page.locator(`tr[data-automation-id="${ficheId}"]`);
   await expect(newRow).toBeVisible({ timeout: 10000 });
 
   testLog.info(`✅ Fiche created via UI with ID: ${ficheId}`);
@@ -168,7 +168,7 @@ export async function verifyFicheExists(
  * Wait for fiche to appear in UI
  */
 export async function waitForFicheInUI(page: Page, ficheId: string, timeout: number = 10000): Promise<void> {
-  await expect(page.locator(`tr[data-fiche-id="${ficheId}"]`)).toBeVisible({ timeout });
+  await expect(page.locator(`tr[data-automation-id="${ficheId}"]`)).toBeVisible({ timeout });
 }
 
 /**
@@ -186,7 +186,7 @@ export async function editFicheViaUI(
   }
 ): Promise<void> {
   // Open edit modal
-  await page.locator(`[data-testid="edit-fiche-${ficheId}"]`).click();
+  await page.locator(`[data-testid="edit-automation-${ficheId}"]`).click();
   await expect(page.locator('#fiche-modal')).toBeVisible({ timeout: 5000 });
   await page.waitForSelector('#fiche-name:not([disabled])', { timeout: 5000 });
 
@@ -240,15 +240,15 @@ export async function deleteFicheViaUI(page: Page, ficheId: string, confirm: boo
   });
 
   // Click delete button
-  await page.locator(`[data-testid="delete-fiche-${ficheId}"]`).click();
+  await page.locator(`[data-testid="delete-automation-${ficheId}"]`).click();
 
   if (confirm) {
     // Wait for row to disappear
-    await expect(page.locator(`tr[data-fiche-id="${ficheId}"]`)).toHaveCount(0, { timeout: 5000 });
+    await expect(page.locator(`tr[data-automation-id="${ficheId}"]`)).toHaveCount(0, { timeout: 5000 });
     testLog.info(`✅ Fiche ${ficheId} deleted via UI`);
   } else {
     // Row should still be present
-    await expect(page.locator(`tr[data-fiche-id="${ficheId}"]`)).toHaveCount(1);
+    await expect(page.locator(`tr[data-automation-id="${ficheId}"]`)).toHaveCount(1);
     testLog.info(`✅ Fiche ${ficheId} deletion cancelled`);
   }
 }
@@ -305,7 +305,7 @@ export async function getFicheCount(commisId: string): Promise<number> {
  * Navigate to chat for a specific fiche
  */
 export async function navigateToFicheChat(page: Page, ficheId: string): Promise<void> {
-  await page.locator(`[data-testid="chat-fiche-${ficheId}"]`).click();
+  await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
 
   // Wait for chat interface to load
   try {

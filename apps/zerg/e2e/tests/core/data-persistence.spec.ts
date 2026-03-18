@@ -24,14 +24,14 @@ async function createFicheViaUI(page: Page): Promise<string> {
   await page.goto('/dashboard');
   await waitForPageReady(page, { timeout: 20000 });
 
-  const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+  const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 20000 });
   await expect(createBtn).toBeEnabled({ timeout: 20000 });
 
   // Capture API response to get the ACTUAL created fiche ID
   const [response] = await Promise.all([
     page.waitForResponse(
-      (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+      (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 20000 }
     ),
     createBtn.click(),
@@ -46,7 +46,7 @@ async function createFicheViaUI(page: Page): Promise<string> {
   }
 
   // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
-  const row = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+  const row = page.locator(`tr[data-automation-id="${ficheId}"]`);
   await expect(row).toBeVisible({ timeout: 20000 });
 
   return ficheId;
@@ -56,7 +56,7 @@ async function createFicheViaUI(page: Page): Promise<string> {
  * Navigate to chat for an fiche.
  */
 async function navigateToChat(page: Page, ficheId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-fiche-${ficheId}"]`);
+  const chatBtn = page.locator(`[data-testid="chat-automation-${ficheId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 10000 });
   await chatBtn.click();
 
@@ -104,7 +104,7 @@ test.describe('Data Persistence - Core', () => {
     // Navigate away
     await page.goto('/dashboard');
     await waitForPageReady(page, { timeout: 20000 });
-    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 20000 });
 
     // Navigate back
     await navigateToChat(page, ficheId);
@@ -129,7 +129,7 @@ test.describe('Data Persistence - Core', () => {
     // Navigate to dashboard
     await page.goto('/dashboard');
     await waitForPageReady(page, { timeout: 20000 });
-    await expect(page.locator('[data-testid="create-fiche-btn"]')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 20000 });
 
     // Navigate back to the exact thread URL
     await page.goto(threadUrl);

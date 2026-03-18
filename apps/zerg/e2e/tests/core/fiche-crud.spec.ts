@@ -19,17 +19,17 @@ test.describe('Fiche CRUD - Core', () => {
   test('create fiche - fiche appears in dashboard', async ({ page }) => {
     await page.goto('/dashboard');
 
-    const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+    const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
     await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-    const ficheRows = page.locator('tr[data-fiche-id]');
+    const ficheRows = page.locator('tr[data-automation-id]');
     const initialCount = await ficheRows.count();
 
     // Wait for API response
     await Promise.all([
       page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+        (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
       ),
       createBtn.click(),
@@ -41,14 +41,14 @@ test.describe('Fiche CRUD - Core', () => {
     const newRow = ficheRows.first();
     await expect(newRow).toBeVisible();
 
-    const ficheId = await newRow.getAttribute('data-fiche-id');
+    const ficheId = await newRow.getAttribute('data-automation-id');
     expect(ficheId).toBeTruthy();
     expect(ficheId).toMatch(/^\d+$/);
   });
 
   test('backend auto-generates placeholder name', async ({ request }) => {
     // Create fiche via API (no name field sent)
-    const response = await request.post('/api/fiches', {
+    const response = await request.post('/api/automations', {
       data: {
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
@@ -67,7 +67,7 @@ test.describe('Fiche CRUD - Core', () => {
     const idempotencyKey = `test-${Date.now()}-${Math.random()}`;
 
     // Create fiche with idempotency key
-    const response1 = await request.post('/api/fiches', {
+    const response1 = await request.post('/api/automations', {
       headers: { 'Idempotency-Key': idempotencyKey },
       data: {
         system_instructions: 'Test instructions',
@@ -79,7 +79,7 @@ test.describe('Fiche CRUD - Core', () => {
     const fiche1 = await response1.json();
 
     // Retry with same idempotency key (simulates double-click)
-    const response2 = await request.post('/api/fiches', {
+    const response2 = await request.post('/api/automations', {
       headers: { 'Idempotency-Key': idempotencyKey },
       data: {
         system_instructions: 'Different instructions',

@@ -19,12 +19,12 @@ test.describe('Run Button Real-time Update', () => {
   });
 
   async function createFicheAndGetId(page: any): Promise<string> {
-    const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+    const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
 
     const [response] = await Promise.all([
       page.waitForResponse(
-        (r: any) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+        (r: any) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
       ),
       createBtn.click(),
@@ -36,7 +36,7 @@ test.describe('Run Button Real-time Update', () => {
       throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
     }
 
-    const ficheRow = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+    const ficheRow = page.locator(`tr[data-automation-id="${ficheId}"]`);
     await expect(ficheRow).toBeVisible({ timeout: 5000 });
     return ficheId;
   }
@@ -45,20 +45,20 @@ test.describe('Run Button Real-time Update', () => {
     await page.goto('/dashboard');
 
     // Slow down run requests so optimistic UI has time to render Running
-    await page.route('**/api/fiches/*/task', async (route) => {
+    await page.route('**/api/automations/*/task', async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 750));
       await route.continue();
     });
 
     const ficheId = await createFicheAndGetId(page);
-    const ficheRow = page.locator(`tr[data-fiche-id="${ficheId}"]`);
+    const ficheRow = page.locator(`tr[data-automation-id="${ficheId}"]`);
 
     // Get initial status
     const statusCell = ficheRow.locator('td[data-label="Status"]');
     await expect(statusCell).toContainText('Idle', { timeout: 5000 });
 
     // Find and click the run button
-    const runButton = page.locator(`[data-testid="run-fiche-${ficheId}"]`);
+    const runButton = page.locator(`[data-testid="run-automation-${ficheId}"]`);
     await expect(runButton).toBeVisible({ timeout: 5000 });
     await runButton.click();
 
@@ -74,7 +74,7 @@ test.describe('Run Button Real-time Update', () => {
     await page.goto('/dashboard');
 
     // Slow down run requests so optimistic UI has time to render Running
-    await page.route('**/api/fiches/*/task', async (route) => {
+    await page.route('**/api/automations/*/task', async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 750));
       await route.continue();
     });
@@ -82,8 +82,8 @@ test.describe('Run Button Real-time Update', () => {
     const firstFicheId = await createFicheAndGetId(page);
     const secondFicheId = await createFicheAndGetId(page);
 
-    const firstFicheRow = page.locator(`tr[data-fiche-id="${firstFicheId}"]`);
-    const secondFicheRow = page.locator(`tr[data-fiche-id="${secondFicheId}"]`);
+    const firstFicheRow = page.locator(`tr[data-automation-id="${firstFicheId}"]`);
+    const secondFicheRow = page.locator(`tr[data-automation-id="${secondFicheId}"]`);
 
     // Get both status cells
     const firstStatusCell = firstFicheRow.locator('td[data-label="Status"]');
@@ -94,7 +94,7 @@ test.describe('Run Button Real-time Update', () => {
     await expect(secondStatusCell).toContainText('Idle', { timeout: 5000 });
 
     // Click run on the first fiche
-    const firstRunButton = page.locator(`[data-testid="run-fiche-${firstFicheId}"]`);
+    const firstRunButton = page.locator(`[data-testid="run-automation-${firstFicheId}"]`);
     await expect(firstRunButton).toBeVisible({ timeout: 5000 });
     await firstRunButton.click();
 
@@ -103,7 +103,7 @@ test.describe('Run Button Real-time Update', () => {
     await expect(secondStatusCell).toContainText('Idle', { timeout: 5000 });
 
     // Now click run on the second fiche
-    const secondRunButton = page.locator(`[data-testid="run-fiche-${secondFicheId}"]`);
+    const secondRunButton = page.locator(`[data-testid="run-automation-${secondFicheId}"]`);
     await expect(secondRunButton).toBeVisible({ timeout: 5000 });
     await secondRunButton.click();
 
@@ -114,35 +114,35 @@ test.describe('Run Button Real-time Update', () => {
   test('should rollback optimistic update when API call fails', async ({ page }) => {
     await page.goto('/dashboard');
 
-    const createBtn = page.locator('[data-testid="create-fiche-btn"]');
+    const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
 
     // Create fiche with deterministic wait
     await Promise.all([
       page.waitForResponse(
-        (r) => r.url().includes('/api/fiches') && r.request().method() === 'POST' && r.status() === 201,
+        (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
       ),
       createBtn.click(),
     ]);
 
     // Wait for the new fiche row
-    const ficheRow = page.locator('tr[data-fiche-id]').last();
+    const ficheRow = page.locator('tr[data-automation-id]').last();
     await expect(ficheRow).toBeVisible({ timeout: 5000 });
 
-    const ficheId = await ficheRow.getAttribute('data-fiche-id');
+    const ficheId = await ficheRow.getAttribute('data-automation-id');
     const statusCell = ficheRow.locator('td[data-label="Status"]');
 
     // Verify initial status
     await expect(statusCell).toContainText('Idle', { timeout: 5000 });
 
     // Find the run button
-    const runButton = page.locator(`[data-testid="run-fiche-${ficheId}"]`);
+    const runButton = page.locator(`[data-testid="run-automation-${ficheId}"]`);
     await expect(runButton).toBeVisible({ timeout: 5000 });
 
     // Mock the API to fail (and assert the route is actually hit to avoid false positives)
     let taskRequests = 0;
-    await page.route('**/api/fiches/*/task', async (route) => {
+    await page.route('**/api/automations/*/task', async (route) => {
       taskRequests += 1;
       await route.abort('failed');
     });
