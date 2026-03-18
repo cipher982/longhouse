@@ -54,9 +54,11 @@ describe("SwarmOpsPage", () => {
         return Promise.resolve([
           {
             id: 7,
+            automation_id: 101,
             task_id: 101,
             fiche_id: 77,
             thread_id: 501,
+            automation_name: "Priority Inbox",
             task_name: "Priority Inbox",
             fiche_name: "Legacy Fiche Name",
             status: "running",
