@@ -2,7 +2,11 @@ import type { components } from "../../generated/openapi-types";
 
 type Schemas = components["schemas"];
 
-export type Automation = Schemas["Fiche"];
+type AutomationSchema = Schemas["Fiche"];
+type AutomationCreateSchema = Schemas["FicheCreate"];
+type AutomationUpdateSchema = Schemas["FicheUpdate"];
+
+export type Automation = AutomationSchema;
 export type AutomationSummary = Automation;
 export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
@@ -121,13 +125,10 @@ export type McpServerAddRequest = components["schemas"]["MCPServerAddRequest"];
 export type McpServerResponse = components["schemas"]["MCPServerResponse"];
 export type McpTestConnectionResponse = components["schemas"]["MCPTestConnectionResponse"];
 
-type AutomationCreate = Schemas["FicheCreate"];
-type AutomationUpdate = Schemas["FicheUpdate"];
+export type AutomationCreatePayload = Pick<AutomationCreateSchema, "system_instructions" | "task_instructions" | "model"> &
+  Partial<Omit<AutomationCreateSchema, "system_instructions" | "task_instructions" | "model">>;
 
-export type AutomationCreatePayload = Pick<AutomationCreate, "system_instructions" | "task_instructions" | "model"> &
-  Partial<Omit<AutomationCreate, "system_instructions" | "task_instructions" | "model">>;
-
-export type AutomationUpdatePayload = AutomationUpdate;
+export type AutomationUpdatePayload = AutomationUpdateSchema;
 
 export interface AutomationRunsBundle {
   automationId: number;

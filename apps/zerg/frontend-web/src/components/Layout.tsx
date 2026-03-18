@@ -75,11 +75,10 @@ function WelcomeHeader() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [userMenuOpen]);
 
-  // Only show shelf toggle on routes that have drawer UI
-  const SHELF_ENABLED_ROUTES = ["/fiche"];
-  const shouldShowShelfToggle = SHELF_ENABLED_ROUTES.some(route =>
-    location.pathname.startsWith(route)
-  );
+  // Only show the shelf toggle on routes that actually render the thread sidebar.
+  const shouldShowShelfToggle =
+    location.pathname === "/chat" ||
+    /^\/automations\/[^/]+\/thread(?:\/|$)/.test(location.pathname);
 
   // Generate user initials from display name or email
   const getUserInitials = (user: { display_name?: string | null; email: string } | null) => {
@@ -218,8 +217,8 @@ function WelcomeHeader() {
           <button
             id="shelf-toggle-btn"
             className="header-button shelf-toggle"
-            aria-label="Toggle automation panel"
-            aria-controls="fiche-shelf"
+            aria-label="Toggle thread panel"
+            aria-controls="thread-sidebar"
             aria-expanded={isShelfOpen}
             onClick={toggleShelf}
           >

@@ -107,7 +107,6 @@ export const test = base.extend<TestFixtures>({
         window.localStorage.setItem('zerg_use_react_dashboard', '1');
         window.localStorage.setItem('zerg_use_react_chat', '1');
         window.localStorage.setItem('zerg_react_dashboard_url', `${normalized}/dashboard`);
-        window.localStorage.setItem('zerg_react_chat_base', `${normalized}/fiche`);
 
         // Add test JWT token for React authentication
         window.localStorage.setItem('zerg_jwt', 'test-jwt-token-for-e2e-tests');

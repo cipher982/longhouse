@@ -2240,6 +2240,30 @@ Notes:
 
 ---
 
+## [Refactor][Product] Rename Browser Automation Shell + Oikos Run Aliases Off Fiche
+
+**Status (2026-03-17):** Done. The handwritten browser layer now uses automation-first Oikos run aliases and no longer uses `fiche` for the live thread shelf/bootstrap surface.
+
+**Goal:** Make first-party browser/test code automation-first without renaming internal ORM storage or generated compatibility surfaces in this tranche.
+
+**Done when:**
+- `/api/oikos/runs` exposes `automation_id` / `automation_name` aliases alongside the existing task compatibility fields
+- SwarmOps/Oikos browser clients consume automation-first aliases instead of `fiche_*`
+- Shelf/bootstrap/UI identifiers no longer use `fiche` where they refer to the automation shell
+- Frontend unit/tests, SDK generation, `make test`, and focused browser verification are green
+
+- [x] Add `automation_*` aliases to Oikos run summaries and filters
+- [x] Move SwarmOps/Oikos browser consumers off `fiche_*` fallbacks
+- [x] Rename first-party shelf/bootstrap/UI identifiers off `fiche`
+- [x] Verify with SDK generation, frontend units, `make test`, and focused browser coverage
+
+Notes:
+- 2026-03-17: Keep this tranche in handwritten browser/test code plus the Oikos run API shape. Do not touch ORM column names, generated OpenAPI operation IDs, or internal storage models here.
+- 2026-03-17: Shipped `automation_id` / `automation_name` aliases on `/api/oikos/runs`, moved SwarmOps and the Oikos browser client to prefer those aliases, and cleaned the thread-sidebar shelf/bootstrap naming in first-party browser/test code.
+- 2026-03-17: Verification passed via `make generate-sdk`, `make test-frontend-unit`, `make test`, and `E2E_BACKEND_PORT=48070 E2E_FRONTEND_PORT=48071 make test-e2e-single TEST='--project=chromium tests/dashboard.basic.spec.ts tests/dashboard.scope-toggle.spec.ts tests/core/chat-send.spec.ts'`.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

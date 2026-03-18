@@ -90,7 +90,7 @@ describeContract('Backend API Contract Integration', () => {
       expect(result.data).toHaveProperty('window_label');
       expect(result.data).toHaveProperty('runs');
       expect(result.data).toHaveProperty('cost_usd');
-      expect(result.data).toHaveProperty('top_fiches');
+      expect(result.data).toHaveProperty('top_automations');
       expect(result.data).toHaveProperty('budget_user');
       expect(result.data).toHaveProperty('budget_global');
       expect(result.data).toHaveProperty('errors_last_hour');
