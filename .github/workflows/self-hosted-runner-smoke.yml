@@ -2,7 +2,7 @@ name: Self-hosted Runner Smoke Test
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch: {}
 
 concurrency:
