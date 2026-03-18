@@ -162,14 +162,19 @@ async def _run_operator_canary(
     run_id: int,
     session_id: str,
     shadow_review: dict,
+    message_session_id: str | None = None,
 ):
     adapter = OperatorSurfaceAdapter(owner_id=owner_id)
     orchestrator = SurfaceOrchestrator(session_factory=lambda: _session_factory(SessionLocal))
+    prompt_session_id = message_session_id or session_id
     return await orchestrator.handle_inbound(
         adapter,
         {
             "owner_id": owner_id,
-            "message": f"System/operator wakeup: Continue session {session_id} by running the pending targeted tests.",
+            "message": (
+                f"System/operator wakeup: Continue session {prompt_session_id} "
+                "by running the pending targeted tests."
+            ),
             "message_id": str(uuid4()),
             "conversation_id": "operator:main",
             "run_id": run_id,
@@ -265,4 +270,46 @@ async def test_operator_loop_canary_blocks_notify_only_resume_attempt(monkeypatc
         assert wakeup.reason == "no_action"
         assert wakeup.payload["outcome"] == "ignore"
         assert wakeup.payload["shadow_expected_outcome"] == "notify_user"
+        assert wakeup.payload["shadow_alignment"] == "more_conservative"
+
+
+@pytest.mark.asyncio
+async def test_operator_loop_canary_blocks_bounded_resume_for_wrong_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    SessionLocal = _make_db(tmp_path, "operator_loop_canary_wrong_session.db")
+
+    with SessionLocal() as db:
+        _patch_oikos_side_effects(monkeypatch)
+        user = _create_user(db, email="operator-loop-wrong-session@example.com")
+        session_id = "33333333-3333-3333-3333-333333333333"
+        run, shadow_review = _seed_operator_run(
+            db,
+            owner_id=user.id,
+            session_id=session_id,
+            mode_capability="bounded_autonomy",
+        )
+        owner_id = user.id
+        run_id = run.id
+
+    result = await _run_operator_canary(
+        SessionLocal,
+        owner_id=owner_id,
+        run_id=run_id,
+        session_id=session_id,
+        shadow_review=shadow_review,
+        message_session_id="44444444-4444-4444-4444-444444444444",
+    )
+
+    assert result.status == SurfaceHandleStatus.PROCESSED
+    assert result.run_status == "success"
+    assert "exact session named in the operator wakeup" in (result.response_text or "").lower()
+
+    with SessionLocal() as db:
+        assert db.query(CommisJob).filter(CommisJob.oikos_run_id == run_id).count() == 0
+
+        wakeup = db.query(OikosWakeup).filter(OikosWakeup.run_id == run_id).one()
+        assert wakeup.status == "ignored"
+        assert wakeup.reason == "no_action"
+        assert wakeup.payload["outcome"] == "ignore"
+        assert wakeup.payload["shadow_expected_outcome"] == "continue_session"
         assert wakeup.payload["shadow_alignment"] == "more_conservative"
