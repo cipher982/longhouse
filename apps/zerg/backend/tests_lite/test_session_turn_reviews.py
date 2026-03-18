@@ -15,6 +15,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import UserRole
 from zerg.models.user import User
@@ -165,3 +166,35 @@ async def test_turn_review_dedupes_same_completed_assistant_turn(monkeypatch, tm
         assert first.id == second.id
         count = db.query(SessionTurnReview).filter(SessionTurnReview.session_id == session_id).count()
         assert count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("presence_state", ["needs_user", "blocked"])
+async def test_turn_review_still_records_when_latest_presence_is_pause_state(monkeypatch, tmp_path, presence_state):
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "0")
+    SessionLocal = _make_db(tmp_path, f"turn_review_pause_{presence_state}.db")
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="finish the verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+        db.add(
+            SessionPresence(
+                session_id=str(session_id),
+                state=presence_state,
+                provider="claude",
+                project="zerg",
+                updated_at=_now(),
+            )
+        )
+        db.commit()
+
+        review = await maybe_record_session_turn_review(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.decision == "continue"
+        assert review.execution_state == "awaiting_user_approval"
+        assert review.status == "recorded"

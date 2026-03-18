@@ -31,6 +31,7 @@ _TURN_REVIEW_FRESH_WINDOW_MINUTES = 10
 _EXPECTED_IGNORE_OUTCOME = "ignore"
 _EXPECTED_NOTIFY_OUTCOME = "notify_user"
 _EXPECTED_CONTINUE_OUTCOME = "continue_session"
+_ACTIVE_PRESENCE_STATES = {"thinking", "running"}
 
 
 @dataclass(frozen=True)
@@ -173,9 +174,8 @@ def load_latest_completed_assistant_turn(db: Session, session_id: str) -> Comple
 
 
 def _load_auto_continue_streak(db: Session, session_id: str) -> int:
-    rows = (
-        db.query(SessionTurnReview).filter(SessionTurnReview.session_id == session_id).order_by(SessionTurnReview.id.desc()).limit(5).all()
-    )
+    query = db.query(SessionTurnReview).filter(SessionTurnReview.session_id == session_id)
+    rows = query.order_by(SessionTurnReview.id.desc()).limit(5).all()
     streak = 0
     for row in rows:
         actual_outcome = str(row.actual_outcome or "").strip().lower()
@@ -504,7 +504,7 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
         if (
             updated_at is not None
             and (now - updated_at).total_seconds() <= (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60)
-            and presence.state in {"thinking", "running", "needs_user", "blocked"}
+            and presence.state in _ACTIVE_PRESENCE_STATES
         ):
             return None
 
@@ -531,6 +531,7 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
         auto_continue_streak=_load_auto_continue_streak(db, session_id),
     )
     mode_application = _build_mode_application(session=session, policy=policy, outcome=outcome)
+    recommended_action_value = mode_application["recommended_action"]
 
     review = SessionTurnReview(
         session_id=session.id,
@@ -546,7 +547,7 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
         mode_capability=str(mode_application["mode_capability"]),
         mode_summary=str(mode_application["mode_summary"]),
         execution_state=str(mode_application["execution_state"]),
-        recommended_action=(str(mode_application["recommended_action"]) if mode_application["recommended_action"] else None),
+        recommended_action=str(recommended_action_value) if recommended_action_value else None,
         blocked_reasons=list(outcome.blocked_reasons),
         status="recorded",
     )

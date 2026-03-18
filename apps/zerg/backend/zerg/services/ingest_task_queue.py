@@ -140,7 +140,7 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
     return claimed
 
 
-async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str) -> None:
+async def _maybe_process_completed_turn_loop(task_id: str, session_id: str) -> None:
     factory = get_session_factory()
     db = factory()
     try:
@@ -165,7 +165,7 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
 
         _mark_status(task_id, "done", error=None, retry=False)
         if task_type == "summary":
-            await _maybe_invoke_operator_completion_wakeup(task_id, session_id)
+            await _maybe_process_completed_turn_loop(task_id, session_id)
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
     except Exception as e:
         logger.exception("Ingest task %s (%s/%s) failed", task_id, task_type, session_id)
