@@ -29,12 +29,13 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTask
+from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
-from zerg.models.work import OikosWakeup
 from zerg.services.ingest_task_queue import _claim_pending
 from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 from zerg.services.ingest_task_queue import reset_stale_running_tasks
@@ -63,11 +64,11 @@ def _get_tasks(factory, *, status=None):
     return tasks
 
 
-def _get_wakeups(factory):
+def _get_turn_reviews(factory):
     db = factory()
-    wakeups = db.query(OikosWakeup).order_by(OikosWakeup.id).all()
+    reviews = db.query(SessionTurnReview).order_by(SessionTurnReview.id).all()
     db.close()
-    return wakeups
+    return reviews
 
 
 def _seed_completion_summary_task(
@@ -79,6 +80,7 @@ def _seed_completion_summary_task(
     user_context: dict | None = None,
     summary: str = "Code landed and a targeted next step may still exist.",
     loop_mode: SessionLoopMode = SessionLoopMode.MANUAL,
+    assistant_text: str = "Only targeted verification remains. Run the pending targeted tests.",
 ):
     db = factory()
     user = User(email="owner@example.com", context=user_context or {})
@@ -100,6 +102,21 @@ def _seed_completion_summary_task(
         loop_mode=loop_mode.value,
     )
     db.add(session)
+    user_event = AgentEvent(
+        session_id=session_id,
+        role="user",
+        content_text="Finish the remaining verification work.",
+        timestamp=ended_at - timedelta(minutes=1),
+    )
+    assistant_event = AgentEvent(
+        session_id=session_id,
+        role="assistant",
+        content_text=assistant_text,
+        timestamp=ended_at,
+    )
+    db.add(user_event)
+    db.add(assistant_event)
+    db.flush()
 
     if presence_state is not None:
         db.add(
@@ -116,7 +133,7 @@ def _seed_completion_summary_task(
     db.add(SessionTask(id=task_id, session_id=session_id, task_type="summary", status="running"))
     db.commit()
     db.close()
-    return session_id, task_id, user.id
+    return session_id, task_id, user.id, assistant_event.id
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +313,7 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, "worker_operator_completion.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session_id, task_id, owner_id = _seed_completion_summary_task(
+    session_id, task_id, owner_id, assistant_event_id = _seed_completion_summary_task(
         factory,
         ended_at=ended_at,
         presence_state="idle",
@@ -325,28 +342,27 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     args = invoke_oikos.await_args.args
     kwargs = invoke_oikos.await_args.kwargs
     assert args[0] == owner_id
-    assert "Trigger: session_completed" in args[1]
-    assert args[2] == f"operator-session-completed-{session_id}-{task_id}"
+    assert "Trigger: turn.completed" in args[1]
+    assert args[2] == f"operator-turn-loop-{session_id}-{assistant_event_id}"
     assert kwargs["source"] == "operator"
-    assert kwargs["surface_payload"]["trigger_type"] == "session_completed"
+    assert kwargs["surface_payload"]["trigger_type"] == "turn.completed"
     assert kwargs["surface_payload"]["session_id"] == session_id
-    assert kwargs["surface_payload"]["shadow_review"]["decision"]["decision"] == "suggest_continue"
-    assert kwargs["surface_payload"]["shadow_review"]["loop_review"]["loop_mode"] == "assist"
-    assert kwargs["surface_payload"]["shadow_review"]["loop_review"]["mode_capability"] == "notify_only"
+    assert kwargs["surface_payload"]["turn_review"]["decision"]["decision"] == "continue"
+    assert kwargs["surface_payload"]["turn_review"]["loop_review"]["loop_mode"] == "assist"
+    assert kwargs["surface_payload"]["turn_review"]["loop_review"]["mode_capability"] == "notify_only"
 
     tasks = _get_tasks(factory, status="done")
-    wakeups = _get_wakeups(factory)
+    reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
-    assert len(wakeups) == 1
-    assert wakeups[0].status == "enqueued"
-    assert wakeups[0].run_id == 123
-    assert wakeups[0].trigger_type == "session_completed"
-    assert wakeups[0].payload["presence_state"] == "idle"
-    assert wakeups[0].payload["shadow_review"]["decision"]["decision"] == "suggest_continue"
-    assert wakeups[0].payload["shadow_review"]["decision"]["execution_state"] == "awaiting_user_approval"
-    assert wakeups[0].payload["shadow_review"]["context"]["primary_session"]["loop_mode"] == "assist"
-    assert wakeups[0].payload["shadow_review"]["loop_review"]["mode_capability"] == "notify_only"
-    assert wakeups[0].payload["shadow_review"]["loop_review"]["would_notify_user"] is True
+    assert len(reviews) == 1
+    assert reviews[0].status == "enqueued"
+    assert reviews[0].run_id == 123
+    assert reviews[0].trigger_type == "turn.completed"
+    assert reviews[0].decision == "continue"
+    assert reviews[0].execution_state == "awaiting_user_approval"
+    assert reviews[0].loop_mode == "assist"
+    assert reviews[0].mode_capability == "notify_only"
+    assert reviews[0].recommended_action == "continue_session"
 
 
 @pytest.mark.asyncio
@@ -358,7 +374,7 @@ async def test_summary_task_skips_operator_when_session_is_still_active(tmp_path
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, f"worker_operator_skip_{presence_state}.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session_id, task_id, _owner_id = _seed_completion_summary_task(
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_summary_task(
         factory,
         ended_at=ended_at,
         presence_state=presence_state,
@@ -373,11 +389,9 @@ async def test_summary_task_skips_operator_when_session_is_still_active(tmp_path
     invoke_oikos.assert_not_awaited()
 
     tasks = _get_tasks(factory, status="done")
-    wakeups = _get_wakeups(factory)
+    reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
-    assert len(wakeups) == 1
-    assert wakeups[0].status == "suppressed"
-    assert wakeups[0].reason == f"fresh_presence_{presence_state}"
+    assert len(reviews) == 0
 
 
 @pytest.mark.asyncio
@@ -388,7 +402,7 @@ async def test_summary_task_skips_operator_for_historical_completed_session(tmp_
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, "worker_operator_skip_historical.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=45)
-    session_id, task_id, _owner_id = _seed_completion_summary_task(
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_summary_task(
         factory,
         ended_at=ended_at,
         presence_state=None,
@@ -402,11 +416,9 @@ async def test_summary_task_skips_operator_for_historical_completed_session(tmp_
     invoke_oikos.assert_not_awaited()
 
     tasks = _get_tasks(factory, status="done")
-    wakeups = _get_wakeups(factory)
+    reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
-    assert len(wakeups) == 1
-    assert wakeups[0].status == "suppressed"
-    assert wakeups[0].reason == "stale_completion"
+    assert len(reviews) == 0
 
 
 @pytest.mark.asyncio
@@ -417,7 +429,7 @@ async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, "worker_operator_skip_policy.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session_id, task_id, _owner_id = _seed_completion_summary_task(
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_summary_task(
         factory,
         ended_at=ended_at,
         presence_state="idle",
@@ -433,11 +445,11 @@ async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path
     invoke_oikos.assert_not_awaited()
 
     tasks = _get_tasks(factory, status="done")
-    wakeups = _get_wakeups(factory)
+    reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
-    assert len(wakeups) == 1
-    assert wakeups[0].status == "suppressed"
-    assert wakeups[0].reason == "user_policy_disabled"
+    assert len(reviews) == 1
+    assert reviews[0].status == "recorded"
+    assert reviews[0].decision == "continue"
 
 
 @pytest.mark.asyncio

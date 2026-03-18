@@ -352,6 +352,47 @@ class SessionEmbedding(AgentsBase):
     )
 
 
+class SessionTurnReview(AgentsBase):
+    """Deterministic turn-end loop review for one completed assistant turn."""
+
+    __tablename__ = "session_turn_reviews"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _fk_ref = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    session_id = Column(
+        GUID(),
+        ForeignKey(_fk_ref, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    owner_id = Column(Integer, nullable=True, index=True)
+    assistant_event_id = Column(Integer, nullable=False, index=True)
+    turn_index = Column(Integer, nullable=False)
+    trigger_type = Column(String(64), nullable=False, server_default=text("'turn.completed'"), index=True)
+    loop_mode = Column(String(20), nullable=False)
+    decision = Column(String(32), nullable=False, index=True)  # continue | ask_user | wait | done | escalate
+    summary = Column(Text, nullable=False)
+    rationale = Column(Text, nullable=True)
+    turn_excerpt = Column(Text, nullable=True)
+    mode_capability = Column(String(32), nullable=True)
+    mode_summary = Column(Text, nullable=True)
+    execution_state = Column(String(32), nullable=True)
+    recommended_action = Column(String(64), nullable=True)
+    blocked_reasons = Column(JSON(), nullable=True)
+    status = Column(String(32), nullable=False, server_default=text("'recorded'"), index=True)
+    reason = Column(String(100), nullable=True)
+    run_id = Column(Integer, nullable=True, index=True)
+    actual_outcome = Column(String(32), nullable=True)
+    shadow_alignment = Column(String(32), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "assistant_event_id", name="uq_session_turn_review_assistant_event"),
+        Index("ix_session_turn_reviews_session_created", "session_id", "created_at"),
+        Index("ix_session_turn_reviews_run_status", "run_id", "status"),
+    )
+
+
 class SessionPresence(AgentsBase):
     """Real-time presence state for an active Claude Code session.
 

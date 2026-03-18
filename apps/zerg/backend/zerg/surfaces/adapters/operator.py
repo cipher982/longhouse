@@ -89,9 +89,11 @@ class OperatorSurfaceAdapter:
         reasoning_effort = (event.raw or {}).get("reasoning_effort")
         if reasoning_effort:
             run_kwargs["reasoning_effort"] = str(reasoning_effort)
-        shadow_review = (event.raw or {}).get("shadow_review")
-        if isinstance(shadow_review, dict):
-            loop_review = shadow_review.get("loop_review")
+        review_payload = (event.raw or {}).get("turn_review")
+        if not isinstance(review_payload, dict):
+            review_payload = (event.raw or {}).get("shadow_review")
+        if isinstance(review_payload, dict):
+            loop_review = review_payload.get("loop_review")
             if isinstance(loop_review, dict):
                 capability = str(loop_review.get("mode_capability", "") or "").strip()
                 if capability:
@@ -116,19 +118,21 @@ def _augment_operator_message(base_text: str, payload: dict[str, Any]) -> str:
 
 
 def _format_loop_review_guidance(payload: dict[str, Any]) -> str:
-    shadow_review = payload.get("shadow_review")
-    if not isinstance(shadow_review, dict):
+    review_payload = payload.get("turn_review")
+    if not isinstance(review_payload, dict):
+        review_payload = payload.get("shadow_review")
+    if not isinstance(review_payload, dict):
         return ""
 
-    loop_review = shadow_review.get("loop_review")
+    loop_review = review_payload.get("loop_review")
     if not isinstance(loop_review, dict):
         return ""
 
-    decision = shadow_review.get("decision")
+    decision = review_payload.get("decision")
     if not isinstance(decision, dict):
         decision = {}
 
-    lines = ["Deterministic loop review (shadow-only hard bound):"]
+    lines = ["Deterministic turn-loop review (hard bound):"]
 
     loop_mode = str(loop_review.get("loop_mode") or "").strip()
     if loop_mode:

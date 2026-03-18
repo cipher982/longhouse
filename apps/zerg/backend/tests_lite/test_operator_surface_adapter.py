@@ -40,7 +40,7 @@ async def test_operator_adapter_appends_shadow_loop_review_guidance():
             "message_id": "msg-2",
             "conversation_id": "operator:main",
             "run_id": 100,
-            "shadow_review": {
+            "turn_review": {
                 "decision": {
                     "summary": "The next step is explicit and bounded.",
                 },
@@ -58,7 +58,7 @@ async def test_operator_adapter_appends_shadow_loop_review_guidance():
 
     assert event is not None
     assert "operator wakeup" in event.text
-    assert "Deterministic loop review (shadow-only hard bound):" in event.text
+    assert "Deterministic turn-loop review (hard bound):" in event.text
     assert "- Loop mode: autopilot" in event.text
     assert "- Capability ceiling: bounded_autonomy" in event.text
     assert "- Shadow execution state: would_auto_continue" in event.text
