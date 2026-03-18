@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SessionContextPane } from "../SessionContextPane";
@@ -144,10 +144,11 @@ describe("SessionContextPane", () => {
     renderPane({ latestShadowReview: makeShadowReview(), shadowRollup: makeShadowRollup() });
 
     expect(screen.getByTestId("session-shadow-review")).toBeInTheDocument();
-    expect(screen.getByTestId("session-shadow-rollup")).toBeInTheDocument();
-    expect(screen.getByText(/Promising/i)).toBeInTheDocument();
-    expect(screen.getByText(/4 completed • 1 pending/i)).toBeInTheDocument();
-    expect(screen.getByText(/Matched 3 • Conservative 1 • Caution 0/i)).toBeInTheDocument();
+    const shadowRollup = screen.getByTestId("session-shadow-rollup");
+    expect(shadowRollup).toBeInTheDocument();
+    expect(within(shadowRollup).getByText(/^Promising$/i)).toBeInTheDocument();
+    expect(within(shadowRollup).getByText(/4 completed • 1 pending/i)).toBeInTheDocument();
+    expect(within(shadowRollup).getByText(/Matched 3 • Conservative 1 • Caution 0/i)).toBeInTheDocument();
     expect(screen.getByText(/Awaiting Approval/i)).toBeInTheDocument();
     expect(screen.getByText(/More Conservative/i)).toBeInTheDocument();
     expect(screen.getByText(/Trigger: presence.blocked/i)).toBeInTheDocument();
@@ -155,6 +156,33 @@ describe("SessionContextPane", () => {
     expect(screen.getByText(/Shadow expected outcome: Notify User/i)).toBeInTheDocument();
     expect(screen.getByText(/Actual outcome: Ignore/i)).toBeInTheDocument();
     expect(screen.getByText(/Waiting on direct approval/i)).toBeInTheDocument();
+  });
+
+  it("shows promising assist guidance for manual sessions with healthy shadow signal", () => {
+    renderPane({
+      session: makeSession({ loop_mode: "manual" }),
+      latestShadowReview: makeShadowReview(),
+      shadowRollup: makeShadowRollup(),
+    });
+
+    expect(screen.getByText(/Promising Assist candidate/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/This session looks safe to try in Assist before you consider bounded Autopilot/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows caution guidance when shadow reviews diverge", () => {
+    renderPane({
+      session: makeSession({ loop_mode: "assist" }),
+      latestShadowReview: makeShadowReview(),
+      shadowRollup: makeShadowRollup({
+        readiness: "caution",
+        moreAggressive: 1,
+      }),
+    });
+
+    expect(screen.getByText(/Recent wakeups need caution/i)).toBeInTheDocument();
+    expect(screen.getByText(/Stay on Manual or Assist until the signal cleans up/i)).toBeInTheDocument();
   });
 
   it("shows a graceful empty state when no shadow review is available", () => {

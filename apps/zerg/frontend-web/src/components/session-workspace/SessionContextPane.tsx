@@ -73,6 +73,59 @@ const SHADOW_READINESS_META: Record<
   caution: { label: "Needs Caution", variant: "warning" },
 };
 
+function getLoopModeGuidance(
+  loopMode: SessionLoopMode,
+  shadowRollup: SessionShadowRollup | null,
+): { tone: "neutral" | "warning" | "success"; title: string; body: string } | null {
+  if (!shadowRollup) return null;
+
+  if (shadowRollup.readiness === "no_signal") {
+    return {
+      tone: "neutral",
+      title: "No shadow signal yet",
+      body: "Leave this session on Manual until Oikos has seen a few comparable decision points.",
+    };
+  }
+
+  if (shadowRollup.readiness === "early") {
+    return {
+      tone: "neutral",
+      title: "Shadow signal is still early",
+      body: "Assist is reasonable for summaries and nudges, but keep Autopilot off until more wakeups match the shadow review.",
+    };
+  }
+
+  if (shadowRollup.readiness === "caution") {
+    return {
+      tone: "warning",
+      title: "Recent wakeups need caution",
+      body: "Oikos recently diverged or acted more aggressively than the shadow ceiling. Stay on Manual or Assist until the signal cleans up.",
+    };
+  }
+
+  if (loopMode === "manual") {
+    return {
+      tone: "success",
+      title: "Promising Assist candidate",
+      body: "Recent shadow reviews are lining up. This session looks safe to try in Assist before you consider bounded Autopilot.",
+    };
+  }
+
+  if (loopMode === "assist") {
+    return {
+      tone: "success",
+      title: "Promising Autopilot candidate",
+      body: "Assist looks stable so far. This session is a good bounded Autopilot candidate for obvious continue turns.",
+    };
+  }
+
+  return {
+    tone: "success",
+    title: "Autopilot signal looks healthy",
+    body: "Shadow reviews are matching so far. Keep watching the alignment strip as this session keeps running.",
+  };
+}
+
 function formatRecommendedAction(value: string | null): string | null {
   if (!value) return null;
   return value
@@ -135,6 +188,7 @@ export function SessionContextPane({
   const cautionCount = shadowRollup
     ? shadowRollup.moreAggressive + shadowRollup.different + shadowRollup.failed
     : 0;
+  const loopModeGuidance = getLoopModeGuidance(session.loop_mode, shadowRollup);
 
   return (
     <div className="session-context-pane">
@@ -216,6 +270,12 @@ export function SessionContextPane({
         <div className="session-loop-mode__caption">
           Stored session preference for Oikos supervision. Live autonomy remains shadow-only for now.
         </div>
+        {loopModeGuidance ? (
+          <div className={`session-loop-mode__advisory session-loop-mode__advisory--${loopModeGuidance.tone}`}>
+            <div className="session-loop-mode__advisory-title">{loopModeGuidance.title}</div>
+            <div className="session-loop-mode__advisory-body">{loopModeGuidance.body}</div>
+          </div>
+        ) : null}
       </div>
 
       <div className="session-pane-section">
