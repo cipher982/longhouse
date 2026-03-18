@@ -120,6 +120,7 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     # Session continuity / workspace commis scenarios
     is_resume = any(k in text for k in ("resume", "continue session", "pick up where"))
     is_workspace = any(k in text for k in ("workspace", "git repo", "code change", "repository"))
+    is_targeted_follow_up = "pending targeted tests" in text or "targeted verification" in text
     # Extract session ID if present (UUID-like pattern or explicit session ID mention)
     session_match = re.search(r"session[:\s]+([a-f0-9-]{36})", text) or re.search(r"([a-f0-9-]{36})", text)
     resume_session_id = session_match.group(1) if session_match else None
@@ -134,6 +135,14 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
         return None
 
     # Oikos: workspace commis scenarios (session continuity, git repos)
+    if role == "oikos" and is_resume and is_targeted_follow_up:
+        return {
+            "role": "oikos",
+            "name": "operator_resume_follow_up",
+            "evidence_keyword": "targeted tests",
+            "resume_session_id": resume_session_id,
+        }
+
     if role == "oikos" and (is_resume or is_workspace):
         return {
             "role": "oikos",
@@ -200,7 +209,12 @@ def _static_response_for_prompt(prompt: str) -> Optional[str]:
         return "Hello!"
 
     if "robot exploring mars" in text:
-        return "A small robot trundled across Mars, mapping dunes, sampling rocks, " "and logging the red horizon with steady curiosity."
+        return "".join(
+            [
+                "A small robot trundled across Mars, mapping dunes, sampling rocks, ",
+                "and logging the red horizon with steady curiosity.",
+            ]
+        )
 
     return None
 
@@ -468,6 +482,20 @@ class ScriptedChatLLM:
                 "git_repo": "https://github.com/octocat/Hello-World.git",
             }
             # Include resume_session_id if one was extracted from the prompt
+            if scenario.get("resume_session_id"):
+                args["resume_session_id"] = scenario["resume_session_id"]
+
+            tool_call = {
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "name": "spawn_workspace_commis",
+                "args": args,
+            }
+            return AIMessage(content="", tool_calls=[tool_call])
+
+        if role == "oikos" and scenario and scenario.get("name") == "operator_resume_follow_up":
+            args = {
+                "task": "Run the pending targeted tests",
+            }
             if scenario.get("resume_session_id"):
                 args["resume_session_id"] = scenario["resume_session_id"]
 

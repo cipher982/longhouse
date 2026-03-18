@@ -765,6 +765,7 @@ async def _handle_spawn_calls(
             owner_id=resolver.owner_id,
             ctx=ctx,
             resume_session_id=resume_session_id,
+            git_repo=git_repo,
         )
         if policy_error:
             logger.info("Blocked operator continuation for run %s: %s", oikos_run_id, policy_error)

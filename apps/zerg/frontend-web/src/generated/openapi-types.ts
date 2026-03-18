@@ -4188,6 +4188,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/loop-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set Timeline Session Loop Mode */
+        patch: operations["set_timeline_session_loop_mode_timeline_sessions__session_id__loop_mode_patch"];
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}": {
         parameters: {
             query?: never;
@@ -4602,6 +4619,29 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/loop-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set Session Loop Mode
+         * @description Set the explicit loop mode for a coding session.
+         *
+         *     This is the structured per-session autonomy knob that future UI surfaces
+         *     can expose as a small radio-button control.
+         */
+        patch: operations["set_session_loop_mode_agents_sessions__session_id__loop_mode_patch"];
         trace?: never;
     };
     "/api/agents/sessions/{session_id}": {
@@ -5184,6 +5224,11 @@ export interface components {
              * @default active
              */
             user_state: string;
+            /**
+             * @description Session loop mode: manual|assist|autopilot
+             * @default manual
+             */
+            loop_mode: components["schemas"]["SessionLoopMode"];
         };
         /**
          * ActiveSessionsResponse
@@ -8900,6 +8945,23 @@ export interface components {
             fork_available: boolean;
         };
         /**
+         * SessionLoopMode
+         * @description How much autonomy Oikos may exercise for a coding session.
+         * @enum {string}
+         */
+        SessionLoopMode: "manual" | "assist" | "autopilot";
+        /** SessionLoopModeRequest */
+        SessionLoopModeRequest: {
+            /** @description manual | assist | autopilot */
+            loop_mode: components["schemas"]["SessionLoopMode"];
+        };
+        /** SessionLoopModeResponse */
+        SessionLoopModeResponse: {
+            /** Session Id */
+            session_id: string;
+            loop_mode: components["schemas"]["SessionLoopMode"];
+        };
+        /**
          * SessionPreviewMessage
          * @description Preview message entry for session picker.
          */
@@ -9100,6 +9162,11 @@ export interface components {
              * @default false
              */
             is_sidechain: boolean;
+            /**
+             * @description Session loop mode: manual|assist|autopilot
+             * @default manual
+             */
+            loop_mode: components["schemas"]["SessionLoopMode"];
         };
         /**
          * SessionSummaryResponse
@@ -17704,6 +17771,43 @@ export interface operations {
             };
         };
     };
+    set_timeline_session_loop_mode_timeline_sessions__session_id__loop_mode_patch: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionLoopModeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionLoopModeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_session_timeline_sessions__session_id__get: {
         parameters: {
             query?: {
@@ -18511,6 +18615,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_session_loop_mode_agents_sessions__session_id__loop_mode_patch: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionLoopModeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionLoopModeResponse"];
                 };
             };
             /** @description Validation Error */

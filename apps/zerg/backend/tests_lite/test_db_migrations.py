@@ -225,6 +225,50 @@ def test_startup_migration_adds_runner_availability_policy_and_backfills_default
     ]
 
 
+def test_startup_migration_adds_session_loop_mode_and_backfills_manual(tmp_path):
+    db_path = tmp_path / "legacy_sessions_loop_mode.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE sessions (
+                id VARCHAR(36) PRIMARY KEY,
+                provider VARCHAR(50) NOT NULL,
+                environment VARCHAR(20),
+                project VARCHAR(255),
+                device_id VARCHAR(255),
+                cwd TEXT,
+                git_repo TEXT,
+                git_branch VARCHAR(255),
+                started_at DATETIME NOT NULL,
+                ended_at DATETIME,
+                user_messages INTEGER DEFAULT 0,
+                assistant_messages INTEGER DEFAULT 0,
+                tool_calls INTEGER DEFAULT 0,
+                provider_session_id VARCHAR(255),
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            INSERT INTO sessions (id, provider, environment, started_at, user_messages, assistant_messages, tool_calls)
+            VALUES ('00000000-0000-0000-0000-000000000123', 'claude', 'production', CURRENT_TIMESTAMP, 1, 1, 0)
+            """
+        )
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+        rows = conn.execute(text("SELECT id, loop_mode FROM sessions")).fetchall()
+
+    assert "loop_mode" in columns
+    assert rows == [("00000000-0000-0000-0000-000000000123", "manual")]
+
+
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):
     db_path = tmp_path / "legacy_pending.db"
     engine = make_engine(f"sqlite:///{db_path}")

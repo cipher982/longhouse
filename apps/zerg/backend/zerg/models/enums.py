@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from enum import Enum
 
+from zerg.session_loop_mode import SessionLoopMode
+
 
 class UserRole(str, Enum):
     USER = "USER"
@@ -77,4 +79,5 @@ __all__ = [
     "ThreadType",
     "RunnerStatus",
     "RunnerJobStatus",
+    "SessionLoopMode",
 ]

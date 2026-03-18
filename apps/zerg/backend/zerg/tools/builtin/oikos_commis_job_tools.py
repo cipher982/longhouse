@@ -24,16 +24,32 @@ def operator_resume_permission_error(
     owner_id: int,
     ctx,
     resume_session_id: str | None,
+    git_repo: str | None = None,
 ) -> str | None:
-    """Return a policy error when operator-mode resume is not allowed."""
-    if not resume_session_id:
-        return None
+    """Return a policy error when operator-mode commis spawning is not allowed."""
     if getattr(ctx, "source_surface_id", None) != "operator":
         return None
 
     from zerg.services.oikos_operator_policy import get_operator_policy
 
     policy = get_operator_policy(db, owner_id)
+    capability = str(getattr(ctx, "operator_capability_ceiling", "") or "").strip().lower()
+    target_session_id = str(getattr(ctx, "operator_target_session_id", "") or "").strip()
+    has_shadow_ceiling = bool(capability or target_session_id)
+
+    if has_shadow_ceiling:
+        if capability != "bounded_autonomy":
+            return (
+                "This operator wakeup is capped below autonomous continuation. "
+                "Do not start cloud work from this wakeup; notify the user or ignore it instead."
+            )
+        if not resume_session_id:
+            return "Bounded autonomy only allows resuming the same session from this operator wakeup. " "Do not start a new cloud session."
+        if target_session_id and str(resume_session_id).strip() != target_session_id:
+            return "Bounded autonomy only allows resuming the exact session named in the operator wakeup."
+
+    if not resume_session_id:
+        return None
     if policy.enabled and policy.allow_continue:
         return None
 
@@ -76,6 +92,7 @@ async def _spawn_workspace_commis_core_async(
         owner_id=owner_id,
         ctx=ctx,
         resume_session_id=resume_session_id,
+        git_repo=git_repo,
     )
     if policy_error:
         return tool_error(ErrorType.PERMISSION_DENIED, policy_error)

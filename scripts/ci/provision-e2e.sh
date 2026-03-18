@@ -216,6 +216,7 @@ for _ in {1..40}; do
   if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "Instance container not running." >&2
     docker ps -a
+    docker logs "$CONTAINER_NAME" || true
     exit 1
   fi
 done

@@ -617,6 +617,8 @@ class OikosService:
         source_message_id: str | None = None,
         source_event_id: str | None = None,
         source_idempotency_key: str | None = None,
+        operator_capability_ceiling: str | None = None,
+        operator_target_session_id: str | None = None,
     ) -> OikosRunResult:
         """Run oikos with per-owner serialization to prevent cross-surface races."""
         owner_lock = await _get_owner_run_lock(owner_id)
@@ -636,6 +638,8 @@ class OikosService:
                 source_message_id=source_message_id,
                 source_event_id=source_event_id,
                 source_idempotency_key=source_idempotency_key,
+                operator_capability_ceiling=operator_capability_ceiling,
+                operator_target_session_id=operator_target_session_id,
             )
 
     async def _run_oikos_unlocked(
@@ -654,6 +658,8 @@ class OikosService:
         source_message_id: str | None = None,
         source_event_id: str | None = None,
         source_idempotency_key: str | None = None,
+        operator_capability_ceiling: str | None = None,
+        operator_target_session_id: str | None = None,
     ) -> OikosRunResult:
         """Run the oikos fiche with a task.
 
@@ -679,6 +685,8 @@ class OikosService:
             source_message_id: Source platform message ID (if available)
             source_event_id: Source platform event/update ID (if available)
             source_idempotency_key: Source idempotency key (if available)
+            operator_capability_ceiling: Optional deterministic ceiling for operator wakeups
+            operator_target_session_id: Optional session ID allowed for bounded operator resumes
 
         Returns:
             OikosRunResult with run details and result
@@ -876,6 +884,8 @@ class OikosService:
                 model=model_override or fiche.model,
                 reasoning_effort=reasoning_effort,
                 source_surface_id=source_surface_id,
+                operator_capability_ceiling=operator_capability_ceiling,
+                operator_target_session_id=operator_target_session_id,
             )
 
             # Set up injected emitter for event emission (Phase 2 of emitter refactor)

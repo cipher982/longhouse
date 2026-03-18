@@ -27,6 +27,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from zerg.models.types import GUID
+from zerg.session_loop_mode import SessionLoopMode
 
 if TYPE_CHECKING:
     pass
@@ -105,6 +106,7 @@ class AgentSession(AgentsBase):
     # active (default) | parked | snoozed | archived
     user_state = Column(String(20), nullable=False, server_default=text("'active'"))
     user_state_at = Column(DateTime(timezone=True), nullable=True)
+    loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.MANUAL.value}'"))
 
     # Reflection tracking — stamped when session has been analyzed by reflection service
     reflected_at = Column(DateTime(timezone=True), nullable=True)

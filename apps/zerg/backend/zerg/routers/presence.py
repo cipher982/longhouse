@@ -46,6 +46,7 @@ from zerg.models.user import User
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.oikos_operator_policy import operator_master_switch_enabled
 from zerg.services.oikos_service import invoke_oikos
+from zerg.services.oikos_shadow_review import build_session_shadow_review
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
@@ -177,7 +178,7 @@ async def _maybe_invoke_operator_wakeup(
         return
 
     trigger_type = f"presence.{payload.state}"
-    wakeup_payload = _build_operator_surface_payload(payload=payload, project=project, tool_name=tool_name)
+    surface_payload = _build_operator_surface_payload(payload=payload, project=project, tool_name=tool_name)
     wakeup_key = _build_presence_wakeup_key(payload, tool_name)
     owner_id = _resolve_owner_id(db, token)
     if owner_id is None:
@@ -191,12 +192,13 @@ async def _maybe_invoke_operator_wakeup(
             session_id=payload.session_id,
             conversation_id=_OPERATOR_CONVERSATION_ID,
             wakeup_key=wakeup_key,
-            payload=wakeup_payload,
+            payload=surface_payload,
         )
         db.commit()
         logger.debug("Skipping operator wakeup for session %s: no owner resolved", payload.session_id)
         return
-    if not get_operator_policy(db, owner_id).enabled:
+    policy = get_operator_policy(db, owner_id)
+    if not policy.enabled:
         append_wakeup(
             db,
             owner_id=owner_id,
@@ -207,7 +209,7 @@ async def _maybe_invoke_operator_wakeup(
             session_id=payload.session_id,
             conversation_id=_OPERATOR_CONVERSATION_ID,
             wakeup_key=wakeup_key,
-            payload=wakeup_payload,
+            payload=surface_payload,
         )
         db.commit()
         logger.debug(
@@ -216,6 +218,22 @@ async def _maybe_invoke_operator_wakeup(
             owner_id,
         )
         return
+
+    ledger_payload = dict(surface_payload)
+    if policy.shadow_mode:
+        try:
+            shadow_review = await build_session_shadow_review(
+                db,
+                trigger_type=trigger_type,
+                session_id=payload.session_id,
+                trigger_summary=f"Operator wakeup from {trigger_type}.",
+                trigger_payload=surface_payload,
+                policy=policy,
+            )
+            if shadow_review is not None:
+                ledger_payload["shadow_review"] = shadow_review
+        except Exception:
+            logger.exception("Failed to build shadow review for presence wakeup on session %s", payload.session_id)
 
     message = _build_operator_message(payload=payload, project=project, tool_name=tool_name)
     message_id = f"operator-presence-{payload.session_id}-{payload.state}-{uuid4()}"
@@ -227,7 +245,7 @@ async def _maybe_invoke_operator_wakeup(
             message_id,
             source="operator",
             surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
-            surface_payload=wakeup_payload,
+            surface_payload=ledger_payload,
         )
         append_wakeup(
             db,
@@ -239,7 +257,7 @@ async def _maybe_invoke_operator_wakeup(
             conversation_id=_OPERATOR_CONVERSATION_ID,
             wakeup_key=wakeup_key,
             run_id=run_id,
-            payload=wakeup_payload,
+            payload=ledger_payload,
         )
         db.commit()
     except Exception:
@@ -253,7 +271,7 @@ async def _maybe_invoke_operator_wakeup(
             session_id=payload.session_id,
             conversation_id=_OPERATOR_CONVERSATION_ID,
             wakeup_key=wakeup_key,
-            payload=wakeup_payload,
+            payload=ledger_payload,
         )
         db.commit()
         logger.exception("Failed to invoke operator wakeup for session %s", payload.session_id)
