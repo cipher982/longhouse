@@ -206,7 +206,7 @@ test-lite: ## Fast SQLite-lite backend tests (no Docker)
 
 test-autonomy-journeys: ## Run deterministic Oikos autonomy journey harness tests
 	@echo "🧪 Running Oikos autonomy journey harness tests..."
-	cd apps/zerg/backend && ./run_backend_tests_lite.sh tests_lite/test_oikos_autonomy_journeys.py tests_lite/test_session_loop_mode.py
+	cd apps/zerg/backend && ./run_backend_tests_lite.sh tests_lite/test_oikos_autonomy_journeys.py tests_lite/test_session_loop_mode.py tests_lite/test_oikos_operator_loop_canary.py
 
 run-autonomy-journeys: ## Run Oikos autonomy journey fixtures and save artifacts to .tmp/
 	@echo "🧪 Running Oikos autonomy journeys with durable artifacts..."
