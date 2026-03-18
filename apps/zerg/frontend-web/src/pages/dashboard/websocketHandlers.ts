@@ -18,7 +18,7 @@ export function applyAutomationStateUpdate(
       : undefined;
 
   let changed = false;
-  const nextAutomations = current.fiches.map((automation) => {
+  const nextAutomations = current.automations.map((automation) => {
     if (automation.id !== automationId) {
       return automation;
     }
@@ -49,7 +49,7 @@ export function applyAutomationStateUpdate(
 
   return {
     ...current,
-    fiches: nextAutomations,
+    automations: nextAutomations,
   };
 }
 
@@ -68,11 +68,11 @@ export function applyRunUpdate(
     typeof dataPayload.thread_id === "number" ? (dataPayload.thread_id as number) : undefined;
 
   const runBundles = current.runs.slice();
-  let bundleIndex = runBundles.findIndex((bundle) => bundle.ficheId === automationId);
+  let bundleIndex = runBundles.findIndex((bundle) => bundle.automationId === automationId);
   let runsChanged = false;
 
   if (bundleIndex === -1) {
-    runBundles.push({ ficheId: automationId, runs: [] });
+    runBundles.push({ automationId, runs: [] });
     bundleIndex = runBundles.length - 1;
     runsChanged = true;
   }
@@ -170,14 +170,14 @@ export function applyRunUpdate(
 
   if (runsChanged) {
     runBundles[bundleIndex] = {
-      ficheId: automationId,
+      automationId,
       runs: nextRuns,
     };
   }
 
   let automationsChanged = false;
   const validAutomationStatuses = ["idle", "running", "processing", "error"] as const;
-  const updatedAutomations = current.fiches.map((automation) => {
+  const updatedAutomations = current.automations.map((automation) => {
     if (automation.id !== automationId) {
       return automation;
     }
@@ -208,7 +208,7 @@ export function applyRunUpdate(
 
   return {
     ...current,
-    fiches: automationsChanged ? updatedAutomations : current.fiches,
+    automations: automationsChanged ? updatedAutomations : current.automations,
     runs: runsChanged ? runBundles : current.runs,
   };
 }

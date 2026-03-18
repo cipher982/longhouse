@@ -106,9 +106,9 @@ describe("DashboardPage", () => {
       scope: "my",
       fetchedAt: new Date().toISOString(),
       runsLimit: 50,
-      fiches: initialAutomations,
+      automations: initialAutomations,
       runs: initialAutomations.map((automation) => ({
-        ficheId: automation.id,
+        automationId: automation.id,
         runs: runsLookup[automation.id] ?? [],
       })),
     };

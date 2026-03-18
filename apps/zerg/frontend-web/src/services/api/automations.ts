@@ -85,9 +85,9 @@ export async function fetchAutomationOverview(
     scope: response.scope,
     fetchedAt: response.fetched_at,
     runsLimit: response.runs_limit,
-    fiches: response.fiches,
+    automations: response.fiches,
     runs: response.runs.map((bundle) => ({
-      ficheId: bundle.fiche_id,
+      automationId: bundle.fiche_id,
       runs: bundle.runs,
     })),
   };

@@ -189,7 +189,7 @@ export default function DashboardPage() {
     refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
-  const automations: AutomationSummary[] = useMemo(() => dashboardData?.fiches ?? [], [dashboardData]);
+  const automations: AutomationSummary[] = useMemo(() => dashboardData?.automations ?? [], [dashboardData]);
 
   const runsByAutomation: AutomationRunsState = useMemo(() => {
     if (!dashboardData) {
@@ -198,10 +198,10 @@ export default function DashboardPage() {
 
     const lookup: AutomationRunsState = {};
     for (const bundle of dashboardData.runs) {
-      lookup[bundle.ficheId] = bundle.runs;
+      lookup[bundle.automationId] = bundle.runs;
     }
 
-    for (const automation of dashboardData.fiches) {
+    for (const automation of dashboardData.automations) {
       if (!lookup[automation.id]) {
         lookup[automation.id] = [];
       }
@@ -248,8 +248,8 @@ export default function DashboardPage() {
 
         return {
           ...current,
-          fiches: current.fiches.map((fiche) =>
-            fiche.id === automationId ? { ...fiche, status: "running" as const } : fiche
+          automations: current.automations.map((automation) =>
+            automation.id === automationId ? { ...automation, status: "running" as const } : automation
           ),
         };
       });
@@ -557,7 +557,7 @@ export default function DashboardPage() {
       />
 
       <div className="dashboard-content">
-        <Table className="fiches-table">
+        <Table className="automations-table">
           <Table.Header>
             {renderHeaderCell("Name", "name", sortConfig, handleSort)}
             {includeOwner && renderHeaderCell("Owner", "owner", sortConfig, handleSort, false)}
@@ -597,8 +597,8 @@ export default function DashboardPage() {
               />
             ))}
             {sortedAutomations.length === 0 && (
-              <Table.Row className="fiches-empty-row">
-                <Table.Cell colSpan={emptyColspan} className="fiches-empty-cell">
+              <Table.Row className="automations-empty-row">
+                <Table.Cell colSpan={emptyColspan} className="automations-empty-cell">
                   <EmptyState
                     icon={<img src={appLogo} alt="Longhouse Logo" className="dashboard-empty-logo" />}
                     title="No automations found"
