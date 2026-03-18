@@ -1,12 +1,12 @@
-"""Fiche Connector Credentials API.
+"""Automation connector credentials API.
 
-REST endpoints for managing per-fiche connector credentials:
+REST endpoints for managing automation-specific connector credentials:
 - List all connector types and their configuration status
 - Configure (create/update) credentials for a connector
 - Test credentials before or after saving
 - Delete connector credentials
 
-All endpoints are scoped to fiches owned by the authenticated user.
+All endpoints are scoped to automations owned by the authenticated user.
 Credentials are encrypted at rest and never returned in responses.
 """
 
@@ -33,7 +33,7 @@ from zerg.connectors.testers import test_connector
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import ConnectorCredential
-from zerg.models.models import Fiche
+from zerg.models.models import Fiche as AutomationProfile
 from zerg.schemas.connector_schemas import ConnectorConfigureRequest
 from zerg.schemas.connector_schemas import ConnectorStatusResponse
 from zerg.schemas.connector_schemas import ConnectorSuccessResponse
@@ -46,81 +46,71 @@ from zerg.utils.crypto import encrypt
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/fiches/{fiche_id}/connectors",
-    tags=["fiche-connectors"],
-)
-
-automation_router = APIRouter(
     prefix="/automations/{automation_id}/connectors",
-    tags=["fiche-connectors"],
+    tags=["automation-connectors"],
+)
+
+legacy_router = APIRouter(
+    prefix="/fiches/{fiche_id}/connectors",
+    tags=["automation-connectors"],
 )
 
 
-# ---------------------------------------------------------------------------
-# Helper functions
-# ---------------------------------------------------------------------------
+def _get_automation_or_404(db: Session, automation_id: int, current_user: Any) -> AutomationProfile:
+    """Get an automation and verify ownership."""
+    automation = db.query(AutomationProfile).filter(AutomationProfile.id == automation_id).first()
+    if not automation or automation.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Automation not found")
+    return automation
 
 
-def _get_fiche_or_404(db: Session, fiche_id: int, current_user: Any) -> Fiche:
-    """Get fiche and verify ownership, raise 404 if not found/owned."""
-    fiche = db.query(Fiche).filter(Fiche.id == fiche_id).first()
-    if not fiche or fiche.owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Fiche not found")
-    return fiche
-
-
-def _get_credential_or_404(db: Session, fiche_id: int, connector_type: str) -> ConnectorCredential:
-    """Get credential and raise 404 if not found."""
-    cred = (
+def _get_connector_credential_or_404(db: Session, automation_id: int, connector_type: str) -> ConnectorCredential:
+    """Get connector credentials for an automation."""
+    credential = (
         db.query(ConnectorCredential)
         .filter(
-            ConnectorCredential.fiche_id == fiche_id,
+            ConnectorCredential.fiche_id == automation_id,
             ConnectorCredential.connector_type == connector_type,
         )
         .first()
     )
-    if not cred:
+    if not credential:
         raise HTTPException(status_code=404, detail="Connector not configured")
-    return cred
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
+    return credential
 
 
 @router.get("/", response_model=list[ConnectorStatusResponse])
-def list_fiche_connectors(
-    fiche_id: int = Path(..., gt=0),
+def list_automation_connectors(
+    automation_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
 ) -> list[ConnectorStatusResponse]:
-    """List all connector types and their configuration status for a fiche.
+    """List all connector types and their configuration status for an automation.
 
     Returns all available connector types with:
     - Metadata (name, description, required fields)
-    - Whether credentials are configured for this fiche
-    - Test status and metadata from last test
+    - Whether credentials are configured for this automation
+    - Test status and metadata from the last test
     """
-    _get_fiche_or_404(db, fiche_id, current_user)
+    _get_automation_or_404(db, automation_id, current_user)
 
-    # Get all configured credentials for this fiche
-    configured_creds = {c.connector_type: c for c in db.query(ConnectorCredential).filter(ConnectorCredential.fiche_id == fiche_id).all()}
+    configured_credentials = {
+        credential.connector_type: credential
+        for credential in db.query(ConnectorCredential).filter(ConnectorCredential.fiche_id == automation_id).all()
+    }
 
     result = []
     for conn_type, definition in CONNECTOR_REGISTRY.items():
-        cred = configured_creds.get(conn_type.value)
-
-        # Convert field definitions to schema objects
+        credential = configured_credentials.get(conn_type.value)
         fields = [
             CredentialFieldSchema(
-                key=f["key"],
-                label=f["label"],
-                type=f["type"],
-                placeholder=f["placeholder"],
-                required=f["required"],
+                key=field["key"],
+                label=field["label"],
+                type=field["type"],
+                placeholder=field["placeholder"],
+                required=field["required"],
             )
-            for f in definition["fields"]
+            for field in definition["fields"]
         ]
 
         result.append(
@@ -132,11 +122,11 @@ def list_fiche_connectors(
                 icon=definition["icon"],
                 docs_url=definition["docs_url"],
                 fields=fields,
-                configured=cred is not None,
-                display_name=cred.display_name if cred else None,
-                test_status=cred.test_status if cred else "untested",
-                last_tested_at=cred.last_tested_at if cred else None,
-                metadata=cred.connector_metadata if cred else None,
+                configured=credential is not None,
+                display_name=credential.display_name if credential else None,
+                test_status=credential.test_status if credential else "untested",
+                last_tested_at=credential.last_tested_at if credential else None,
+                metadata=credential.connector_metadata if credential else None,
             )
         )
 
@@ -144,22 +134,15 @@ def list_fiche_connectors(
 
 
 @router.post("/", response_model=ConnectorSuccessResponse, status_code=status.HTTP_201_CREATED)
-def configure_connector(
+def configure_automation_connector(
     request: ConnectorConfigureRequest,
-    fiche_id: int = Path(..., gt=0),
+    automation_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
 ) -> ConnectorSuccessResponse:
-    """Configure (create or update) connector credentials for a fiche.
+    """Configure connector credentials for an automation."""
+    _get_automation_or_404(db, automation_id, current_user)
 
-    If credentials already exist for this connector type, they are updated.
-    Otherwise, new credentials are created.
-
-    Test status is reset to 'untested' when credentials are updated.
-    """
-    _get_fiche_or_404(db, fiche_id, current_user)
-
-    # Validate connector type
     try:
         conn_type = ConnectorType(request.connector_type)
     except ValueError:
@@ -168,7 +151,6 @@ def configure_connector(
             detail=f"Unknown connector type: {request.connector_type}",
         )
 
-    # Validate required fields
     required_fields = get_required_fields(conn_type)
     for field in required_fields:
         if field not in request.credentials or not request.credentials[field]:
@@ -177,57 +159,47 @@ def configure_connector(
                 detail=f"Missing required field: {field}",
             )
 
-    # Encrypt credentials as JSON
     encrypted = encrypt(json.dumps(request.credentials))
-
-    # Upsert: check if credential exists
     existing = (
         db.query(ConnectorCredential)
         .filter(
-            ConnectorCredential.fiche_id == fiche_id,
+            ConnectorCredential.fiche_id == automation_id,
             ConnectorCredential.connector_type == conn_type.value,
         )
         .first()
     )
 
     if existing:
-        # Update existing
         existing.encrypted_value = encrypted
         existing.display_name = request.display_name
         existing.test_status = "untested"
         existing.last_tested_at = None
         existing.connector_metadata = None
-        logger.info("Updated %s credentials for fiche %d", conn_type.value, fiche_id)
+        logger.info("Updated %s credentials for automation %d", conn_type.value, automation_id)
     else:
-        # Create new
-        cred = ConnectorCredential(
-            fiche_id=fiche_id,
+        credential = ConnectorCredential(
+            fiche_id=automation_id,
             connector_type=conn_type.value,
             encrypted_value=encrypted,
             display_name=request.display_name,
         )
-        db.add(cred)
-        logger.info("Created %s credentials for fiche %d", conn_type.value, fiche_id)
+        db.add(credential)
+        logger.info("Created %s credentials for automation %d", conn_type.value, automation_id)
 
     db.commit()
     return ConnectorSuccessResponse(success=True)
 
 
 @router.post("/test", response_model=ConnectorTestResponse)
-def test_credentials_before_save(
+def test_automation_credentials_before_save(
     request: ConnectorTestRequest,
-    fiche_id: int = Path(..., gt=0),
+    automation_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
 ) -> ConnectorTestResponse:
-    """Test credentials before saving them.
+    """Test automation connector credentials before saving them."""
+    _get_automation_or_404(db, automation_id, current_user)
 
-    This endpoint allows testing credentials without persisting them.
-    Useful for validating credentials in the UI before committing.
-    """
-    _get_fiche_or_404(db, fiche_id, current_user)
-
-    # Validate connector type
     try:
         conn_type = ConnectorType(request.connector_type)
     except ValueError:
@@ -236,7 +208,6 @@ def test_credentials_before_save(
             detail=f"Unknown connector type: {request.connector_type}",
         )
 
-    # Validate required fields
     required_fields = get_required_fields(conn_type)
     for field in required_fields:
         if field not in request.credentials or not request.credentials[field]:
@@ -245,9 +216,7 @@ def test_credentials_before_save(
                 message=f"Missing required field: {field}",
             )
 
-    # Test credentials
     result = test_connector(conn_type, request.credentials)
-
     return ConnectorTestResponse(
         success=result["success"],
         message=result["message"],
@@ -256,38 +225,27 @@ def test_credentials_before_save(
 
 
 @router.post("/{connector_type}/test", response_model=ConnectorTestResponse)
-def test_configured_connector(
+def test_configured_automation_connector(
     connector_type: str = Path(...),
-    fiche_id: int = Path(..., gt=0),
+    automation_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
 ) -> ConnectorTestResponse:
-    """Test already-configured connector credentials.
+    """Test already-configured connector credentials for an automation."""
+    _get_automation_or_404(db, automation_id, current_user)
 
-    Tests the stored credentials and updates the test_status and metadata.
-    """
-    _get_fiche_or_404(db, fiche_id, current_user)
+    credential = _get_connector_credential_or_404(db, automation_id, connector_type)
 
-    cred = _get_credential_or_404(db, fiche_id, connector_type)
-
-    # Decrypt credentials
     try:
-        decrypted = json.loads(decrypt(cred.encrypted_value))
+        decrypted = json.loads(decrypt(credential.encrypted_value))
     except Exception:
-        logger.exception("Failed to decrypt credentials for fiche %d connector %s", fiche_id, connector_type)
+        logger.exception("Failed to decrypt credentials for automation %d connector %s", automation_id, connector_type)
         raise HTTPException(status_code=500, detail="Failed to decrypt credentials")
 
-    # Test credentials
     result = test_connector(connector_type, decrypted)
-
-    # Update test status
-    cred.test_status = "success" if result["success"] else "failed"
-    cred.last_tested_at = datetime.now(timezone.utc)
-
-    # Always update metadata: if test failed or returned no metadata, clear it.
-    # This prevents "zombie" metadata from persisting after a credential breaks.
-    cred.connector_metadata = result.get("metadata")
-
+    credential.test_status = "success" if result["success"] else "failed"
+    credential.last_tested_at = datetime.now(timezone.utc)
+    credential.connector_metadata = result.get("metadata")
     db.commit()
 
     return ConnectorTestResponse(
@@ -298,76 +256,72 @@ def test_configured_connector(
 
 
 @router.delete("/{connector_type}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_connector(
-    connector_type: str = Path(...),
-    fiche_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> Response:
-    """Remove connector credentials from a fiche.
-
-    This deletes the stored credentials permanently.
-    """
-    _get_fiche_or_404(db, fiche_id, current_user)
-
-    cred = _get_credential_or_404(db, fiche_id, connector_type)
-
-    db.delete(cred)
-    db.commit()
-
-    logger.info("Deleted %s credentials for fiche %d", connector_type, fiche_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@automation_router.get("/", response_model=list[ConnectorStatusResponse])
-def list_automation_connectors(
-    automation_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> list[ConnectorStatusResponse]:
-    return list_fiche_connectors(fiche_id=automation_id, db=db, current_user=current_user)
-
-
-@automation_router.post("/", response_model=ConnectorSuccessResponse, status_code=status.HTTP_201_CREATED)
-def configure_automation_connector(
-    request: ConnectorConfigureRequest,
-    automation_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> ConnectorSuccessResponse:
-    return configure_connector(request=request, fiche_id=automation_id, db=db, current_user=current_user)
-
-
-@automation_router.post("/test", response_model=ConnectorTestResponse)
-def test_automation_credentials_before_save(
-    request: ConnectorTestRequest,
-    automation_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> ConnectorTestResponse:
-    return test_credentials_before_save(request=request, fiche_id=automation_id, db=db, current_user=current_user)
-
-
-@automation_router.post("/{connector_type}/test", response_model=ConnectorTestResponse)
-def test_configured_automation_connector(
-    connector_type: str = Path(...),
-    automation_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> ConnectorTestResponse:
-    return test_configured_connector(
-        connector_type=connector_type,
-        fiche_id=automation_id,
-        db=db,
-        current_user=current_user,
-    )
-
-
-@automation_router.delete("/{connector_type}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_automation_connector(
     connector_type: str = Path(...),
     automation_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
 ) -> Response:
-    return delete_connector(connector_type=connector_type, fiche_id=automation_id, db=db, current_user=current_user)
+    """Remove stored connector credentials from an automation."""
+    _get_automation_or_404(db, automation_id, current_user)
+
+    credential = _get_connector_credential_or_404(db, automation_id, connector_type)
+    db.delete(credential)
+    db.commit()
+
+    logger.info("Deleted %s credentials for automation %d", connector_type, automation_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@legacy_router.get("/", response_model=list[ConnectorStatusResponse])
+def list_legacy_fiche_connectors(
+    fiche_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> list[ConnectorStatusResponse]:
+    return list_automation_connectors(automation_id=fiche_id, db=db, current_user=current_user)
+
+
+@legacy_router.post("/", response_model=ConnectorSuccessResponse, status_code=status.HTTP_201_CREATED)
+def configure_legacy_fiche_connector(
+    request: ConnectorConfigureRequest,
+    fiche_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> ConnectorSuccessResponse:
+    return configure_automation_connector(request=request, automation_id=fiche_id, db=db, current_user=current_user)
+
+
+@legacy_router.post("/test", response_model=ConnectorTestResponse)
+def test_legacy_fiche_credentials_before_save(
+    request: ConnectorTestRequest,
+    fiche_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> ConnectorTestResponse:
+    return test_automation_credentials_before_save(request=request, automation_id=fiche_id, db=db, current_user=current_user)
+
+
+@legacy_router.post("/{connector_type}/test", response_model=ConnectorTestResponse)
+def test_legacy_fiche_connector(
+    connector_type: str = Path(...),
+    fiche_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> ConnectorTestResponse:
+    return test_configured_automation_connector(
+        connector_type=connector_type,
+        automation_id=fiche_id,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@legacy_router.delete("/{connector_type}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_legacy_fiche_connector(
+    connector_type: str = Path(...),
+    fiche_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+) -> Response:
+    return delete_automation_connector(connector_type=connector_type, automation_id=fiche_id, db=db, current_user=current_user)

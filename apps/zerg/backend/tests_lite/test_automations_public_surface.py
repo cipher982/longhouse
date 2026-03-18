@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -156,6 +157,9 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert f"/automations/{{automation_id}}/runs" in paths
         assert f"/automations/{{automation_id}}/connectors/" in paths
         assert f"/automations/{{automation_id}}/mcp-servers/" in paths
+        assert paths[f"/automations/{{automation_id}}/connectors/"]["get"]["tags"] == ["automation-connectors"]
+        assert "fiche" not in json.dumps(paths[f"/automations/{{automation_id}}/connectors/"]).lower()
+        assert "fiche" not in json.dumps(paths[f"/automations/{{automation_id}}/mcp-servers/"]).lower()
         assert "/fiches" not in paths
         assert f"/fiches/{{automation_id}}" not in paths
         assert f"/fiches/{{fiche_id}}/runs" not in paths
@@ -275,5 +279,29 @@ def test_automation_nested_aliases_cover_runs_connectors_and_mcp_servers(tmp_pat
         tools_response = client.get(f"/automations/{automation_id}/mcp-servers/available-tools")
         assert tools_response.status_code == 200, tools_response.text
         assert set(tools_response.json().keys()) == {"builtin", "mcp"}
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_automation_connector_and_mcp_errors_use_automation_wording(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        owner = User(email="owner@test.local", role=UserRole.ADMIN.value)
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+    current_user = SimpleNamespace(id=owner.id, email=owner.email, role=owner.role)
+    client, api_app = _make_client(session_local, current_user)
+
+    try:
+        connectors_response = client.get("/automations/999999/connectors/")
+        assert connectors_response.status_code == 404, connectors_response.text
+        assert connectors_response.json() == {"detail": "Automation not found"}
+
+        mcp_response = client.get("/automations/999999/mcp-servers/")
+        assert mcp_response.status_code == 404, mcp_response.text
+        assert mcp_response.json() == {"detail": "Automation not found"}
     finally:
         api_app.dependency_overrides.clear()

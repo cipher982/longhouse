@@ -1,4 +1,4 @@
-"""MCP server management routes."""
+"""Automation MCP server management routes."""
 
 import logging
 from typing import Any
@@ -33,13 +33,13 @@ from zerg.utils.json_helpers import set_json_field
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/fiches/{fiche_id}/mcp-servers",
+    prefix="/automations/{automation_id}/mcp-servers",
     tags=["mcp-servers"],
     dependencies=[Depends(get_current_user)],
 )
 
-automation_router = APIRouter(
-    prefix="/automations/{automation_id}/mcp-servers",
+legacy_router = APIRouter(
+    prefix="/fiches/{fiche_id}/mcp-servers",
     tags=["mcp-servers"],
     dependencies=[Depends(get_current_user)],
 )
@@ -112,38 +112,42 @@ class MCPTestConnectionResponse(BaseModel):
 
 # Helper functions
 def _get_mcp_servers_from_config(config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract MCP server configurations from fiche config."""
+    """Extract MCP server configurations from automation config."""
     if not config:
         return []
     return config.get("mcp_servers", [])
 
 
 def _update_mcp_servers_in_config(config: Dict[str, Any], mcp_servers: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Update MCP server configurations in fiche config."""
+    """Update MCP server configurations in automation config."""
     if not config:
         config = {}
     config["mcp_servers"] = mcp_servers
     return config
 
 
+def _get_automation_or_404(db: Session, automation_id: int, current_user):
+    """Load an automation and verify ownership."""
+    automation = get_fiche(db, fiche_id=automation_id)
+    if not automation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
+    if automation.owner_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this automation")
+    return automation
+
+
 # API endpoints
 @router.get("/", response_model=List[MCPServerResponse])
-async def list_mcp_servers(
-    fiche_id: int,
+async def list_automation_mcp_servers(
+    automation_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """List all MCP servers configured for a fiche."""
-    # Get fiche and check permissions
-    fiche = get_fiche(db, fiche_id=fiche_id)
-    if not fiche:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
-
-    if fiche.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this fiche")
+    """List all MCP servers configured for an automation."""
+    automation = _get_automation_or_404(db, automation_id, current_user)
 
     # Get MCP servers from config
-    mcp_servers = _get_mcp_servers_from_config(fiche.config)
+    mcp_servers = _get_mcp_servers_from_config(automation.config)
 
     # Build response with tool information
     response = []
@@ -204,28 +208,22 @@ async def list_mcp_servers(
 
     _ = MCPManager()
     # NOTE: We deliberately skip adapters that are **not** present in the stored
-    # configuration so the API reflects exactly what is persisted on the Fiche
-    # row.  This avoids stale entries after a server is removed within the same
+    # configuration so the API reflects exactly what is persisted on the automation
+    # record. This avoids stale entries after a server is removed within the same
     # request cycle (test_remove_mcp_server regression).
 
     return response
 
 
 @router.post("/", response_model=Automation, status_code=status.HTTP_201_CREATED)
-async def add_mcp_server(
-    fiche_id: int,
+async def add_automation_mcp_server(
+    automation_id: int,
     request: MCPServerAddRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Add an MCP server to a fiche."""
-    # Get fiche and check permissions
-    fiche = get_fiche(db, fiche_id=fiche_id)
-    if not fiche:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
-
-    if fiche.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this fiche")
+    """Add an MCP server to an automation."""
+    automation = _get_automation_or_404(db, automation_id, current_user)
 
     # Build MCP server config
     if request.preset:
@@ -261,8 +259,8 @@ async def add_mcp_server(
     if request.allowed_tools:
         server_config["allowed_tools"] = request.allowed_tools
 
-    # Add to fiche config
-    current_config = fiche.config or {}
+    # Add to automation config
+    current_config = automation.config or {}
     mcp_servers = _get_mcp_servers_from_config(current_config)
 
     # Check for duplicates
@@ -270,17 +268,17 @@ async def add_mcp_server(
         if request.preset and existing.get("preset") == request.preset:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Preset '{request.preset}' is already configured for this fiche",
+                detail=f"Preset '{request.preset}' is already configured for this automation",
             )
         elif request.transport == "stdio" and existing.get("command") == request.command:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Server with command '{request.command}' is already configured for this fiche",
+                detail=f"Server with command '{request.command}' is already configured for this automation",
             )
         elif request.transport == "http" and not request.preset and existing.get("url") == request.url:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Server URL '{request.url}' is already configured for this fiche",
+                detail=f"Server URL '{request.url}' is already configured for this automation",
             )
 
     # Try to connect to the server
@@ -297,35 +295,29 @@ async def add_mcp_server(
         logger.exception("Failed to add MCP server")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-    # Update fiche config
+    # Update automation config
     mcp_servers.append(server_config)
     updated_config = _update_mcp_servers_in_config(current_config, mcp_servers)
 
     # Save to database
-    set_json_field(fiche, "config", updated_config)
+    set_json_field(automation, "config", updated_config)
     db.commit()
-    db.refresh(fiche)
-    return fiche
+    db.refresh(automation)
+    return automation
 
 
 @router.delete("/{server_name}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_mcp_server(
-    fiche_id: int,
+async def remove_automation_mcp_server(
+    automation_id: int,
     server_name: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Remove an MCP server from a fiche."""
-    # Get fiche and check permissions
-    fiche = get_fiche(db, fiche_id=fiche_id)
-    if not fiche:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
-
-    if fiche.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this fiche")
+    """Remove an MCP server from an automation."""
+    automation = _get_automation_or_404(db, automation_id, current_user)
 
     # Get MCP servers from config
-    current_config = fiche.config or {}
+    current_config = automation.config or {}
     mcp_servers = _get_mcp_servers_from_config(current_config)
 
     # Find and remove the server
@@ -348,8 +340,8 @@ async def remove_mcp_server(
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"MCP server '{server_name}' not found")
 
-    # Update fiche config
-    set_json_field(fiche, "config", {"mcp_servers": updated_servers})
+    # Update automation config
+    set_json_field(automation, "config", {"mcp_servers": updated_servers})
     db.commit()
 
     # If any removed servers were stdio transport, shut down their processes
@@ -375,20 +367,14 @@ async def remove_mcp_server(
 
 
 @router.post("/test", response_model=MCPTestConnectionResponse)
-async def test_mcp_connection(
-    fiche_id: int,
+async def test_automation_mcp_connection(
+    automation_id: int,
     request: MCPServerAddRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Test connection to an MCP server without saving it."""
-    # Get fiche and check permissions (for context)
-    fiche = get_fiche(db, fiche_id=fiche_id)
-    if not fiche:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
-
-    if fiche.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to test servers for this fiche")
+    _get_automation_or_404(db, automation_id, current_user)
 
     # Build MCP server config
     if request.preset:
@@ -458,19 +444,13 @@ async def test_mcp_connection(
 
 
 @router.get("/available-tools", response_model=Dict[str, Any])
-async def get_available_tools(
-    fiche_id: int,
+async def get_available_automation_tools(
+    automation_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Get all available tools for a fiche (built-in + MCP)."""
-    # Get fiche and check permissions
-    fiche = get_fiche(db, fiche_id=fiche_id)
-    if not fiche:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
-
-    if fiche.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this fiche")
+    """Get all available tools for an automation (built-in + MCP)."""
+    _get_automation_or_404(db, automation_id, current_user)
 
     # Get all tools from registry (built-in + MCP)
     resolver = get_registry()
@@ -499,49 +479,54 @@ async def get_available_tools(
     }
 
 
-@automation_router.get("/", response_model=List[MCPServerResponse])
-async def list_automation_mcp_servers(
-    automation_id: int,
+@legacy_router.get("/", response_model=List[MCPServerResponse])
+async def list_legacy_fiche_mcp_servers(
+    fiche_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return await list_mcp_servers(fiche_id=automation_id, db=db, current_user=current_user)
+    return await list_automation_mcp_servers(automation_id=fiche_id, db=db, current_user=current_user)
 
 
-@automation_router.post("/", response_model=Automation, status_code=status.HTTP_201_CREATED)
-async def add_automation_mcp_server(
-    automation_id: int,
+@legacy_router.post("/", response_model=Automation, status_code=status.HTTP_201_CREATED)
+async def add_legacy_fiche_mcp_server(
+    fiche_id: int,
     request: MCPServerAddRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return await add_mcp_server(fiche_id=automation_id, request=request, db=db, current_user=current_user)
+    return await add_automation_mcp_server(automation_id=fiche_id, request=request, db=db, current_user=current_user)
 
 
-@automation_router.delete("/{server_name}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_automation_mcp_server(
-    automation_id: int,
+@legacy_router.delete("/{server_name}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_legacy_fiche_mcp_server(
+    fiche_id: int,
     server_name: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return await remove_mcp_server(fiche_id=automation_id, server_name=server_name, db=db, current_user=current_user)
+    return await remove_automation_mcp_server(
+        automation_id=fiche_id,
+        server_name=server_name,
+        db=db,
+        current_user=current_user,
+    )
 
 
-@automation_router.post("/test", response_model=MCPTestConnectionResponse)
-async def test_automation_mcp_connection(
-    automation_id: int,
+@legacy_router.post("/test", response_model=MCPTestConnectionResponse)
+async def test_legacy_fiche_mcp_connection(
+    fiche_id: int,
     request: MCPServerAddRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return await test_mcp_connection(fiche_id=automation_id, request=request, db=db, current_user=current_user)
+    return await test_automation_mcp_connection(automation_id=fiche_id, request=request, db=db, current_user=current_user)
 
 
-@automation_router.get("/available-tools", response_model=Dict[str, Any])
-async def get_available_automation_tools(
-    automation_id: int,
+@legacy_router.get("/available-tools", response_model=Dict[str, Any])
+async def get_available_legacy_fiche_tools(
+    fiche_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return await get_available_tools(fiche_id=automation_id, db=db, current_user=current_user)
+    return await get_available_automation_tools(automation_id=fiche_id, db=db, current_user=current_user)

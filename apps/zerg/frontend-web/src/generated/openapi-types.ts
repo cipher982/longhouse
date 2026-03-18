@@ -135,10 +135,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Automation Mcp Servers */
+        /**
+         * List Automation Mcp Servers
+         * @description List all MCP servers configured for an automation.
+         */
         get: operations["list_automation_mcp_servers_automations__automation_id__mcp_servers__get"];
         put?: never;
-        /** Add Automation Mcp Server */
+        /**
+         * Add Automation Mcp Server
+         * @description Add an MCP server to an automation.
+         */
         post: operations["add_automation_mcp_server_automations__automation_id__mcp_servers__post"];
         delete?: never;
         options?: never;
@@ -156,7 +162,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Remove Automation Mcp Server */
+        /**
+         * Remove Automation Mcp Server
+         * @description Remove an MCP server from an automation.
+         */
         delete: operations["remove_automation_mcp_server_automations__automation_id__mcp_servers__server_name__delete"];
         options?: never;
         head?: never;
@@ -172,7 +181,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Test Automation Mcp Connection */
+        /**
+         * Test Automation Mcp Connection
+         * @description Test connection to an MCP server without saving it.
+         */
         post: operations["test_automation_mcp_connection_automations__automation_id__mcp_servers_test_post"];
         delete?: never;
         options?: never;
@@ -187,7 +199,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Available Automation Tools */
+        /**
+         * Get Available Automation Tools
+         * @description Get all available tools for an automation (built-in + MCP).
+         */
         get: operations["get_available_automation_tools_automations__automation_id__mcp_servers_available_tools_get"];
         put?: never;
         post?: never;
@@ -2921,10 +2936,21 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Automation Connectors */
+        /**
+         * List Automation Connectors
+         * @description List all connector types and their configuration status for an automation.
+         *
+         *     Returns all available connector types with:
+         *     - Metadata (name, description, required fields)
+         *     - Whether credentials are configured for this automation
+         *     - Test status and metadata from the last test
+         */
         get: operations["list_automation_connectors_automations__automation_id__connectors__get"];
         put?: never;
-        /** Configure Automation Connector */
+        /**
+         * Configure Automation Connector
+         * @description Configure connector credentials for an automation.
+         */
         post: operations["configure_automation_connector_automations__automation_id__connectors__post"];
         delete?: never;
         options?: never;
@@ -2941,7 +2967,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Test Automation Credentials Before Save */
+        /**
+         * Test Automation Credentials Before Save
+         * @description Test automation connector credentials before saving them.
+         */
         post: operations["test_automation_credentials_before_save_automations__automation_id__connectors_test_post"];
         delete?: never;
         options?: never;
@@ -2958,7 +2987,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Test Configured Automation Connector */
+        /**
+         * Test Configured Automation Connector
+         * @description Test already-configured connector credentials for an automation.
+         */
         post: operations["test_configured_automation_connector_automations__automation_id__connectors__connector_type__test_post"];
         delete?: never;
         options?: never;
@@ -2976,7 +3008,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete Automation Connector */
+        /**
+         * Delete Automation Connector
+         * @description Remove stored connector credentials from an automation.
+         */
         delete: operations["delete_automation_connector_automations__automation_id__connectors__connector_type__delete"];
         options?: never;
         head?: never;
@@ -3077,7 +3112,7 @@ export interface paths {
          * @description Remove account-level connector credentials.
          *
          *     This deletes the stored credentials permanently.
-         *     Note: Any fiches with per-fiche overrides will still work.
+         *     Note: Any automations with automation-specific overrides will still work.
          */
         delete: operations["delete_account_connector_account_connectors__connector_type__delete"];
         options?: never;
@@ -4979,7 +5014,7 @@ export interface components {
          * @description Status of a connector type at account level.
          *
          *     Similar to ConnectorStatusResponse but for account-level credentials
-         *     that are shared across all fiches owned by the user.
+         *     that are shared across all automations owned by the user.
          */
         AccountConnectorStatusResponse: {
             /**
@@ -5829,7 +5864,7 @@ export interface components {
         };
         /**
          * ConnectorStatusResponse
-         * @description Status of a connector type for an fiche.
+         * @description Status of a connector type for an automation.
          *
          *     Used in the list endpoint to show all available connectors
          *     and their configuration status.
