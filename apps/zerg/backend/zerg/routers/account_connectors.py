@@ -6,8 +6,8 @@ REST endpoints for managing account-level connector credentials:
 - Test credentials before or after saving
 - Delete connector credentials
 
-Account-level credentials are shared across all fiches owned by the user.
-Individual fiches can still override with per-fiche credentials.
+Account-level credentials are shared across all automations owned by the user.
+Individual automations can still override them with automation-specific credentials.
 
 Credentials are encrypted at rest and never returned in responses.
 """
@@ -286,7 +286,7 @@ def delete_account_connector(
     """Remove account-level connector credentials.
 
     This deletes the stored credentials permanently.
-    Note: Any fiches with per-fiche overrides will still work.
+    Note: Any automations with automation-specific overrides will still work.
     """
     cred = (
         db.query(AccountConnectorCredential)

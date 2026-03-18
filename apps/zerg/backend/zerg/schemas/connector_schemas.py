@@ -1,7 +1,7 @@
-"""Pydantic schemas for fiche connector credentials API.
+"""Pydantic schemas for automation connector credentials APIs.
 
-These schemas define the request/response models for the fiche connectors
-API endpoints used to configure credentials for built-in connector tools.
+These schemas define the request/response models for the automation and
+account connector APIs used to configure credentials for built-in tools.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class CredentialFieldSchema(BaseModel):
 
 
 class ConnectorStatusResponse(UTCBaseModel):
-    """Status of a connector type for an fiche.
+    """Status of a connector type for an automation.
 
     Used in the list endpoint to show all available connectors
     and their configuration status.
@@ -61,7 +61,7 @@ class AccountConnectorStatusResponse(UTCBaseModel):
     """Status of a connector type at account level.
 
     Similar to ConnectorStatusResponse but for account-level credentials
-    that are shared across all fiches owned by the user.
+    that are shared across all automations owned by the user.
     """
 
     type: str = Field(..., description="Connector type identifier (e.g., 'slack', 'github')")

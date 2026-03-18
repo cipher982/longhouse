@@ -2362,7 +2362,7 @@ Notes:
 
 ## [Refactor][Product] Rename Automation Connector Surface Off Fiche Module Naming
 
-**Status (2026-03-17):** In progress. Canonical automation connector routes work, but the module/file naming, tags, and route copy still teach `fiche` as the product noun.
+**Status (2026-03-17):** Done. The canonical connector module, tags, and MCP/browser-facing copy are automation-first; hidden fiche compatibility routes remain off-schema.
 
 **Goal:** Make the automation connector/MCP browser surface and route modules automation-first while keeping legacy hidden compatibility routes alive.
 
@@ -2372,12 +2372,13 @@ Notes:
 - Canonical automation MCP route copy no longer teaches `fiche`
 - SDK generation, frontend units, `make test`, and focused automation coverage are green
 
-- [ ] Rename the connectors router/module to automation-first naming and update imports
-- [ ] Clean canonical connector/MCP route docs and messages off `fiche`
-- [ ] Verify with SDK generation, frontend units, `make test`, and focused automation coverage
+- [x] Rename the connectors router/module to automation-first naming and update imports
+- [x] Clean canonical connector/MCP route docs and messages off `fiche`
+- [x] Verify with SDK generation, frontend units, `make test`, and focused automation coverage
 
 Notes:
 - 2026-03-17: Keep the hidden `/api/fiches/*/connectors` and `/api/fiches/*/mcp-servers` compatibility routes alive in this tranche. This is about canonical naming and public product copy.
+- 2026-03-17: Canonical connector OpenAPI now uses `automation-connectors`, canonical missing-resource errors say `Automation not found`, and `main.py` imports the renamed `automation_connectors` module directly.
 
 ---
 

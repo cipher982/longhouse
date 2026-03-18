@@ -64,6 +64,8 @@ from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.auth_internal import router as auth_internal_router
+from zerg.routers.automation_connectors import legacy_router as fiche_connectors_router
+from zerg.routers.automation_connectors import router as automation_connectors_router
 from zerg.routers.capabilities import router as capabilities_router
 from zerg.routers.channels_webhooks import router as channels_webhooks_router
 from zerg.routers.commis_internal import router as commis_internal_router
@@ -74,8 +76,6 @@ from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.email_config import router as email_config_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.fiche_config import router as fiche_config_router
-from zerg.routers.fiche_connectors import automation_router as automation_connectors_router
-from zerg.routers.fiche_connectors import router as fiche_connectors_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.heartbeat import router as heartbeat_router
@@ -84,8 +84,8 @@ from zerg.routers.insights import router as insights_router
 from zerg.routers.job_settings import router as job_settings_router
 from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
-from zerg.routers.mcp_servers import automation_router as automation_mcp_servers_router
-from zerg.routers.mcp_servers import router as mcp_servers_router
+from zerg.routers.mcp_servers import legacy_router as mcp_servers_router
+from zerg.routers.mcp_servers import router as automation_mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
 from zerg.routers.oauth import router as oauth_router
@@ -1023,8 +1023,8 @@ app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 # relative sub-prefix since the /api mount point handles the top-level prefix.
 api_app.include_router(fiches_router, prefix=AUTOMATIONS_PREFIX)
 api_app.include_router(fiches_router, prefix=FICHES_PREFIX, include_in_schema=False)
-api_app.include_router(mcp_servers_router, include_in_schema=False)  # MCP servers nested under fiches
-api_app.include_router(automation_mcp_servers_router)  # Canonical MCP servers nested under automations
+api_app.include_router(mcp_servers_router, include_in_schema=False)  # Hidden fiche-compat MCP server routes
+api_app.include_router(automation_mcp_servers_router)  # Canonical automation MCP server routes
 api_app.include_router(threads_router, prefix=THREADS_PREFIX)
 api_app.include_router(models_router, prefix=MODELS_PREFIX)
 api_app.include_router(websocket_router)
@@ -1055,7 +1055,7 @@ api_app.include_router(capabilities_router)  # LLM provider config + enhanced ca
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)  # Public beacon (no auth)
 api_app.include_router(fiche_config_router)
-api_app.include_router(fiche_connectors_router, include_in_schema=False)  # Fiche connector credentials
+api_app.include_router(fiche_connectors_router, include_in_schema=False)  # Hidden fiche-compat connector routes
 api_app.include_router(automation_connectors_router)  # Canonical automation connector credentials
 api_app.include_router(account_connectors_router)  # Account-level connector credentials
 api_app.include_router(funnel_router)  # Funnel tracking
