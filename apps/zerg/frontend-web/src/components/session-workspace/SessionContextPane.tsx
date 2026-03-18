@@ -1,5 +1,6 @@
 import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
+import type { SessionShadowReview } from "../../services/api/oikos";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -24,6 +25,9 @@ interface SessionContextPaneProps {
   } | null;
   loopModePending?: boolean;
   onLoopModeChange?: (nextMode: SessionLoopMode) => void;
+  latestShadowReview?: SessionShadowReview | null;
+  shadowReviewLoading?: boolean;
+  shadowReviewUnavailable?: boolean;
 }
 
 const LOOP_MODE_OPTIONS: Array<{
@@ -35,6 +39,25 @@ const LOOP_MODE_OPTIONS: Array<{
   { value: "assist", label: "Assist", hint: "Suggest next steps" },
   { value: "autopilot", label: "Autopilot", hint: "Bounded continues" },
 ];
+
+const EXECUTION_STATE_META: Record<
+  string,
+  { label: string; variant: "neutral" | "warning" | "success" }
+> = {
+  observe_only: { label: "Observe Only", variant: "neutral" },
+  awaiting_user_approval: { label: "Awaiting Approval", variant: "warning" },
+  would_auto_continue: { label: "Would Auto-Continue", variant: "success" },
+  needs_human: { label: "Needs Human", variant: "warning" },
+  no_action: { label: "No Action", variant: "neutral" },
+};
+
+function formatRecommendedAction(value: string | null): string | null {
+  if (!value) return null;
+  return value
+    .split("_")
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
 
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
@@ -56,8 +79,18 @@ export function SessionContextPane({
   continuationNotice = null,
   loopModePending = false,
   onLoopModeChange,
+  latestShadowReview = null,
+  shadowReviewLoading = false,
+  shadowReviewUnavailable = false,
 }: SessionContextPaneProps) {
   const turnCount = session.user_messages + session.assistant_messages;
+  const shadowState = latestShadowReview
+    ? EXECUTION_STATE_META[latestShadowReview.executionState] ?? {
+        label: latestShadowReview.executionState,
+        variant: "neutral" as const,
+      }
+    : null;
+  const recommendedAction = formatRecommendedAction(latestShadowReview?.recommendedAction ?? null);
 
   return (
     <div className="session-context-pane">
@@ -139,6 +172,49 @@ export function SessionContextPane({
         <div className="session-loop-mode__caption">
           Stored session preference for Oikos supervision. Live autonomy remains shadow-only for now.
         </div>
+      </div>
+
+      <div className="session-pane-section">
+        <div className="session-pane-section-title">Shadow Review</div>
+        {shadowReviewLoading ? (
+          <div className="session-shadow-review__empty">Loading latest shadow review...</div>
+        ) : latestShadowReview ? (
+          <div className="session-shadow-review" data-testid="session-shadow-review">
+            <div className="session-shadow-review__header">
+              {shadowState ? <Badge variant={shadowState.variant}>{shadowState.label}</Badge> : null}
+              <span className="session-shadow-review__stamp">
+                {formatFullDate(latestShadowReview.generatedAt)}
+              </span>
+            </div>
+            <div className="session-shadow-review__summary">{latestShadowReview.summary}</div>
+            {latestShadowReview.modeSummary ? (
+              <div className="session-shadow-review__mode">{latestShadowReview.modeSummary}</div>
+            ) : null}
+            <div className="session-shadow-review__meta">
+              Trigger: {latestShadowReview.triggerType}
+            </div>
+            {recommendedAction ? (
+              <div className="session-shadow-review__meta">
+                Recommended action: {recommendedAction}
+              </div>
+            ) : null}
+            {latestShadowReview.blockedReasons.length > 0 ? (
+              <div className="session-shadow-review__blockers">
+                {latestShadowReview.blockedReasons.map((reason) => (
+                  <div key={reason} className="session-shadow-review__blocker">
+                    {reason}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="session-shadow-review__empty">
+            {shadowReviewUnavailable
+              ? "Shadow review is unavailable right now."
+              : "No shadow review recorded for this session yet."}
+          </div>
+        )}
       </div>
 
       {continuationNotice ? (
