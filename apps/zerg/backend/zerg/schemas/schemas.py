@@ -4,11 +4,14 @@ from typing import Dict
 from typing import List
 from typing import Optional
 
+from pydantic import AliasChoices
+
 # ---------------------------------------------------------------------------
 # New *Run History* schemas
 # ---------------------------------------------------------------------------
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import Field
 
 from zerg.models.enums import FicheStatus
 from zerg.models.enums import RunStatus
@@ -143,18 +146,24 @@ class ThreadMessageResponse(UTCBaseModel, ThreadMessageBase):
 # Thread schemas
 class ThreadBase(BaseModel):
     title: str
-    fiche_state: Optional[Dict[str, Any]] = None
+    automation_state: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("automation_state", "fiche_state"),
+    )
     active: Optional[bool] = True
     thread_type: Optional[str] = "chat"  # Types: chat, scheduled, manual
 
 
 class ThreadCreate(ThreadBase):
-    fiche_id: int
+    automation_id: int = Field(validation_alias=AliasChoices("automation_id", "fiche_id"))
 
 
 class ThreadUpdate(BaseModel):
     title: Optional[str] = None
-    fiche_state: Optional[Dict[str, Any]] = None
+    automation_state: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("automation_state", "fiche_state"),
+    )
     active: Optional[bool] = None
     thread_type: Optional[str] = None
 
@@ -163,7 +172,7 @@ class Thread(UTCBaseModel, ThreadBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    fiche_id: int
+    automation_id: int = Field(validation_alias=AliasChoices("automation_id", "fiche_id"))
     created_at: datetime
     updated_at: datetime
     messages: List[ThreadMessageResponse] = []
@@ -175,7 +184,7 @@ class ThreadSummary(UTCBaseModel, ThreadBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    fiche_id: int
+    automation_id: int = Field(validation_alias=AliasChoices("automation_id", "fiche_id"))
     created_at: datetime
     updated_at: datetime
 

@@ -477,7 +477,7 @@ export default function SwarmOpsPage() {
                         disabled={!selectedRun.thread_id || selectedTaskId == null}
                         onClick={() => {
                           if (selectedRun.thread_id && selectedTaskId != null) {
-                            navigate(`/fiche/${selectedTaskId}/thread/${selectedRun.thread_id}`);
+                            navigate(`/automations/${selectedTaskId}/thread/${selectedRun.thread_id}`);
                           }
                         }}
                       >

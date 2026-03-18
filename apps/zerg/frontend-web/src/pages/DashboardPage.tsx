@@ -656,7 +656,7 @@ export default function DashboardPage() {
     automationName: string
   ) {
     event.stopPropagation();
-    navigate(`/fiche/${automationId}/thread/?name=${encodeURIComponent(automationName)}`);
+    navigate(`/automations/${automationId}/thread/?name=${encodeURIComponent(automationName)}`);
   }
 
   function handleDebugAutomation(event: ReactMouseEvent<HTMLButtonElement>, automationId: number) {

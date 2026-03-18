@@ -68,7 +68,7 @@ test.describe('Automation History Section', () => {
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -77,7 +77,7 @@ test.describe('Automation History Section', () => {
     // Create a scheduled automation run via API
     const response = await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Scheduled Test Run',
         thread_type: 'scheduled',
       }
@@ -124,7 +124,7 @@ test.describe('Automation History Section', () => {
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -133,7 +133,7 @@ test.describe('Automation History Section', () => {
     // Create a scheduled run
     const response = await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Scheduled Automation',
         thread_type: 'scheduled',
       }
@@ -173,7 +173,7 @@ test.describe('Automation History Section', () => {
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -182,7 +182,7 @@ test.describe('Automation History Section', () => {
     // Create a manual run
     const response = await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Manual Run',
         thread_type: 'manual',
       }
@@ -222,7 +222,7 @@ test.describe('Automation History Section', () => {
     // Create both types of threads
     const chatResponse = await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Regular Chat Thread',
         thread_type: 'chat'
       }
@@ -233,7 +233,7 @@ test.describe('Automation History Section', () => {
 
     const scheduledResponse = await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Scheduled Run',
         thread_type: 'scheduled'
       }
@@ -278,7 +278,7 @@ test.describe('Automation History Section', () => {
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -288,7 +288,7 @@ test.describe('Automation History Section', () => {
     for (let i = 0; i < 3; i++) {
       const response = await request.post('/api/threads', {
         data: {
-          fiche_id: parseInt(automationId),
+          automation_id: parseInt(automationId),
           title: `Automation Run ${i + 1}`,
           thread_type: i % 2 === 0 ? 'scheduled' : 'manual',
         }
@@ -323,7 +323,7 @@ test.describe('Automation History Section', () => {
     // Create a chat thread first to prevent auto-creation
     await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Chat Thread',
         thread_type: 'chat',
       }
@@ -332,7 +332,7 @@ test.describe('Automation History Section', () => {
     // Create automation run with a message
     const response = await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Clickable Automation',
         thread_type: 'manual',
       }
@@ -369,7 +369,7 @@ test.describe('Automation History Section', () => {
     // Only create a regular chat thread
     await request.post('/api/threads', {
       data: {
-        fiche_id: parseInt(automationId),
+        automation_id: parseInt(automationId),
         title: 'Chat Only',
         thread_type: 'chat'
       }

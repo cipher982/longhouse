@@ -76,7 +76,7 @@ export async function navigateToChat(page: Page, agentId: string): Promise<void>
   await chatBtn.click();
 
   // Wait for URL to change to the fiche's chat
-  await page.waitForURL((url) => url.pathname.includes(`/fiche/${agentId}/thread`), { timeout: 10000 });
+  await page.waitForURL((url) => url.pathname.includes(`/automations/${agentId}/thread`), { timeout: 10000 });
 
   // Wait for chat UI to be fully interactive
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });

@@ -29,7 +29,7 @@ export default function ChatPage() {
   const { isShelfOpen, closeShelf, toggleShelf } = useShelf();
   const creatingThreadRef = useRef(false);
 
-  const automationId = useRequiredNumber(params.ficheId);
+  const automationId = useRequiredNumber(params.automationId);
   const threadIdParam = useRequiredNumber(params.threadId ?? undefined);
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(threadIdParam);
   const [editingThreadId, setEditingThreadId] = useState<number | null>(null);
@@ -80,9 +80,9 @@ export default function ChatPage() {
   // Handle URL navigation
   useEffect(() => {
     if (automationId != null && effectiveThreadId != null) {
-      navigate(`/fiche/${automationId}/thread/${effectiveThreadId}`, { replace: true });
+      navigate(`/automations/${automationId}/thread/${effectiveThreadId}`, { replace: true });
     } else if (automationId != null) {
-      navigate(`/fiche/${automationId}/thread/`, { replace: true });
+      navigate(`/automations/${automationId}/thread/`, { replace: true });
     }
   }, [automationId, effectiveThreadId, navigate]);
 
@@ -98,7 +98,7 @@ export default function ChatPage() {
       // Auto-select the first (most recent) thread
       const mostRecentThread = chatThreads[0];
       setSelectedThreadId(mostRecentThread.id);
-      navigate(`/fiche/${automationId}/thread/${mostRecentThread.id}`, { replace: true });
+      navigate(`/automations/${automationId}/thread/${mostRecentThread.id}`, { replace: true });
     }
   }, [automationId, selectedThreadId, chatThreads, chatThreadsQuery.isLoading, navigate]);
 
@@ -116,7 +116,7 @@ export default function ChatPage() {
         const thread = await createThread(automationId, "Thread 1");
         await queryClient.invalidateQueries({ queryKey: ["threads", automationId, "chat"] });
         setSelectedThreadId(thread.id);
-        navigate(`/fiche/${automationId}/thread/${thread.id}`, { replace: true });
+        navigate(`/automations/${automationId}/thread/${thread.id}`, { replace: true });
       } catch (error) {
         console.error('[ChatPage] Failed to auto-create default thread:', error);
         toast.error('Failed to create default chat thread. Please try creating one manually.');
@@ -150,7 +150,7 @@ export default function ChatPage() {
   // Event handlers
   const handleSelectThread = (thread: Thread) => {
     setSelectedThreadId(thread.id);
-    navigate(`/fiche/${automationId}/thread/${thread.id}`, { replace: true });
+    navigate(`/automations/${automationId}/thread/${thread.id}`, { replace: true });
   };
 
   const handleEditThreadTitle = (thread: Thread, e: React.MouseEvent) => {
@@ -277,7 +277,7 @@ export default function ChatPage() {
       const thread = await createThread(automationId, title);
       queryClient.invalidateQueries({ queryKey: ["threads", automationId, "chat"] });
       // Navigate to the new thread - strict URL state
-      navigate(`/fiche/${automationId}/thread/${thread.id}`, { replace: true });
+      navigate(`/automations/${automationId}/thread/${thread.id}`, { replace: true });
     } catch {
       toast.error("Failed to create thread", { duration: 6000 });
     }
@@ -320,8 +320,8 @@ export default function ChatPage() {
           >
             ←
           </button>
-          <div className="fiche-info">
-            <div className="fiche-name">{automation?.name ?? "Automation"}</div>
+          <div className="automation-info">
+            <div className="automation-name">{automation?.name ?? "Automation"}</div>
             <div>
               <span className="thread-title-label">Thread: </span>
               <span className="thread-title-text">

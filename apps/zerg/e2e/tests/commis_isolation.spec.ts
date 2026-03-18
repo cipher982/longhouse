@@ -94,7 +94,7 @@ test.describe('Commis Database Isolation', () => {
     // Create a thread for this automation.
     const threadResponse = await request.post('/api/threads', {
       data: {
-        fiche_id: automation.id,
+        automation_id: automation.id,
         title: 'Test Thread',
         thread_type: 'chat',
       }
@@ -105,7 +105,7 @@ test.describe('Commis Database Isolation', () => {
     console.log(`✅ Created thread ID: ${thread.id}`);
 
     // Verify we can see our thread
-    const threadsResponse = await request.get(`/api/threads?fiche_id=${automation.id}`);
+    const threadsResponse = await request.get(`/api/threads?automation_id=${automation.id}`);
     expect(threadsResponse.status()).toBe(200);
     const threads = await threadsResponse.json();
     const foundThread = threads.find((t: any) => t.id === thread.id);

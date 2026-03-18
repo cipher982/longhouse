@@ -94,6 +94,6 @@ describe("SwarmOpsPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Open thread" }));
 
-    expect(mockNavigate).toHaveBeenCalledWith("/fiche/101/thread/501");
+    expect(mockNavigate).toHaveBeenCalledWith("/automations/101/thread/501");
   });
 });
