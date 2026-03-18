@@ -366,9 +366,9 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("presence_state", ["thinking", "running", "needs_user", "blocked"])
+@pytest.mark.parametrize("presence_state", ["thinking", "running"])
 async def test_summary_task_skips_operator_when_session_is_still_active(tmp_path, monkeypatch, presence_state):
-    """Fresh active/pause presence suppresses completion wakeups."""
+    """Fresh active presence suppresses completed-turn evaluation."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
@@ -392,6 +392,50 @@ async def test_summary_task_skips_operator_when_session_is_still_active(tmp_path
     reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
     assert len(reviews) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("presence_state", ["needs_user", "blocked"])
+async def test_summary_task_reviews_completed_turn_even_when_session_is_paused(tmp_path, monkeypatch, presence_state):
+    """Pause states still represent a finished turn and should be reviewed."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    factory = _make_db(tmp_path, f"worker_operator_pause_{presence_state}.db")
+    ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_summary_task(
+        factory,
+        ended_at=ended_at,
+        presence_state=presence_state,
+        presence_updated_at=datetime.now(timezone.utc),
+        loop_mode=SessionLoopMode.ASSIST,
+        user_context={
+            "preferences": {
+                "operator_mode": {
+                    "enabled": True,
+                    "shadow_mode": True,
+                    "allow_continue": False,
+                    "allow_notify": True,
+                }
+            }
+        },
+    )
+
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
+            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
+                invoke_oikos.return_value = 321
+                await _execute_task(task_id, session_id, "summary")
+
+    invoke_oikos.assert_awaited_once()
+
+    tasks = _get_tasks(factory, status="done")
+    reviews = _get_turn_reviews(factory)
+    assert len(tasks) == 1
+    assert len(reviews) == 1
+    assert reviews[0].status == "enqueued"
+    assert reviews[0].execution_state == "awaiting_user_approval"
+    assert reviews[0].decision == "continue"
 
 
 @pytest.mark.asyncio
