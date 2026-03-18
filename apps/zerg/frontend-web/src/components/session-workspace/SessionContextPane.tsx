@@ -106,6 +106,7 @@ export function SessionContextPane({
     : null;
   const recommendedAction = formatRecommendedAction(latestTurnReview?.recommendedAction ?? null);
   const actualOutcome = formatRecommendedAction(latestTurnReview?.actualOutcome ?? null);
+  const followUpPrompt = latestTurnReview?.followUpPrompt?.trim() || null;
 
   return (
     <div className="session-context-pane">
@@ -209,6 +210,9 @@ export function SessionContextPane({
             </div>
             {recommendedAction ? (
               <div className="session-shadow-review__meta">Recommended action: {recommendedAction}</div>
+            ) : null}
+            {followUpPrompt ? (
+              <div className="session-shadow-review__meta">Suggested next prompt: {followUpPrompt}</div>
             ) : null}
             {actualOutcome ? (
               <div className="session-shadow-review__meta">Live outcome: {actualOutcome}</div>

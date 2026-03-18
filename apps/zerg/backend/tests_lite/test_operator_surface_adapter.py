@@ -43,6 +43,7 @@ async def test_operator_adapter_appends_shadow_loop_review_guidance():
             "turn_review": {
                 "decision": {
                     "summary": "The next step is explicit and bounded.",
+                    "follow_up_prompt": "Run the pending targeted tests.",
                 },
                 "loop_review": {
                     "loop_mode": "autopilot",
@@ -62,6 +63,7 @@ async def test_operator_adapter_appends_shadow_loop_review_guidance():
     assert "- Loop mode: autopilot" in event.text
     assert "- Capability ceiling: bounded_autonomy" in event.text
     assert "- Execution state: would_auto_continue" in event.text
+    assert "- Suggested follow-up prompt: Run the pending targeted tests." in event.text
     assert "- Recommended action: continue_session" in event.text
     assert "Stay within this ceiling." in event.text
 

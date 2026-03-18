@@ -20,6 +20,7 @@ from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import UserRole
 from zerg.models.user import User
+from zerg.models.work import OikosWakeup
 from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
@@ -145,6 +146,84 @@ async def test_turn_review_autopilot_enqueues_same_session_continue_job(monkeypa
         assert jobs[0].config["backend"] == "zai"
         assert jobs[0].config["trigger"] == "turn_loop"
         assert jobs[0].config["assistant_event_id"] == review.assistant_event_id
+
+
+@pytest.mark.asyncio
+async def test_turn_review_assist_enqueues_operator_wakeup(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_assist_operator.db")
+    calls: list[dict[str, object]] = []
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="The same session has one obvious bounded next step.",
+            rationale="This is the routine continue case after a completed assistant turn.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=21,
+        )
+
+    async def _fake_invoke(owner_id, message, message_id, **kwargs):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "message": message,
+                "message_id": message_id,
+                **kwargs,
+            }
+        )
+        return 321
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+
+    with SessionLocal() as db:
+        user = _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="finish the session detail page",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.decision == "continue"
+        assert review.execution_state == "awaiting_user_approval"
+        assert review.status == "enqueued"
+        assert review.reason == "notify_user"
+        assert review.run_id == 321
+        assert review.actual_outcome is None
+        assert review.shadow_alignment is None
+        assert review.follow_up_prompt == "Run the pending targeted tests."
+
+        jobs = db.query(CommisJob).all()
+        wakeups = db.query(OikosWakeup).order_by(OikosWakeup.id.asc()).all()
+
+        assert jobs == []
+        assert len(wakeups) == 1
+        assert wakeups[0].owner_id == user.id
+        assert wakeups[0].source == "turn_loop"
+        assert wakeups[0].trigger_type == "turn.completed"
+        assert wakeups[0].status == "enqueued"
+        assert wakeups[0].run_id == 321
+        assert wakeups[0].session_id == str(session_id)
+        assert wakeups[0].payload["turn_review"]["decision"]["follow_up_prompt"] == "Run the pending targeted tests."
+        assert wakeups[0].payload["turn_review"]["loop_review"]["execution_state"] == "awaiting_user_approval"
+
+    assert len(calls) == 1
+    assert calls[0]["owner_id"] == user.id
+    assert "System/turn loop" in str(calls[0]["message"])
+    assert "Suggested follow-up prompt: Run the pending targeted tests." in str(calls[0]["message"])
+    assert calls[0]["source"] == "operator"
+    assert getattr(calls[0]["surface_adapter"], "surface_id", None) == "operator"
+    assert (
+        calls[0]["surface_payload"]["turn_review"]["decision"]["follow_up_prompt"]
+        == "Run the pending targeted tests."
+    )
 
 
 @pytest.mark.asyncio

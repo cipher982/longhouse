@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import desc
 from sqlalchemy import inspect as sa_inspect
@@ -28,6 +29,8 @@ from zerg.session_loop_mode import SessionLoopMode
 logger = logging.getLogger(__name__)
 
 _TURN_TRIGGER_TYPE = "turn.completed"
+_TURN_OPERATOR_SOURCE = "turn_loop"
+_TURN_OPERATOR_CONVERSATION_ID = "operator:main"
 _RECENT_EVENT_LIMIT = 160
 _TURN_EXCERPT_MAX_CHARS = 4000
 _TURN_REVIEW_FRESH_WINDOW_MINUTES = 10
@@ -365,15 +368,14 @@ def _serialize_turn_review_payload(
 def _build_turn_loop_message(
     *,
     session: AgentSession,
-    turn: CompletedAssistantTurn,
-    outcome: TurnOutcome,
+    review: SessionTurnReview,
 ) -> str:
     lines = [
         "System/turn loop: a coding session just finished an assistant turn.",
         "",
         f"Trigger: {_TURN_TRIGGER_TYPE}",
         f"Session ID: {session.id}",
-        f"Assistant Event ID: {turn.assistant_event_id}",
+        f"Assistant Event ID: {review.assistant_event_id}",
     ]
     if session.provider:
         lines.append(f"Provider: {session.provider}")
@@ -381,29 +383,89 @@ def _build_turn_loop_message(
         lines.append(f"Project: {session.project}")
     if session.cwd:
         lines.append(f"CWD: {session.cwd}")
-    lines.extend(
-        [
-            "",
-            "Latest assistant turn:",
-            turn.text[:2000],
-        ]
-    )
-    if outcome.summary:
+    if review.turn_excerpt:
         lines.extend(
             [
                 "",
-                f"Deterministic turn decision: {outcome.decision}",
-                f"Decision summary: {outcome.summary}",
+                "Latest assistant turn excerpt:",
+                review.turn_excerpt[:2000],
             ]
         )
+    if review.summary:
+        lines.extend(
+            [
+                "",
+                f"Turn decision: {review.decision}",
+                f"Decision summary: {review.summary}",
+            ]
+        )
+    if review.follow_up_prompt:
+        lines.append(f"Suggested follow-up prompt: {review.follow_up_prompt}")
+    if review.blocked_reasons:
+        clean_reasons = [str(item).strip() for item in review.blocked_reasons if str(item).strip()]
+        lines.append(f"Blocked reasons: {'; '.join(clean_reasons)}")
     lines.extend(
         [
             "",
-            "Decide whether to continue the same session, ask the user, wait, or stop.",
-            "Do nothing if no action is warranted.",
+            "Stay within the deterministic turn review and keep any user-facing follow-up concise.",
         ]
     )
     return "\n".join(lines)
+
+
+def _serialize_recorded_turn_review_payload(
+    *,
+    session: AgentSession,
+    review: SessionTurnReview,
+) -> dict[str, Any]:
+    blocked_reasons = [str(reason).strip() for reason in (review.blocked_reasons or []) if str(reason).strip()]
+    return {
+        "trigger_type": _TURN_TRIGGER_TYPE,
+        "conversation_id": _TURN_OPERATOR_CONVERSATION_ID,
+        "session_id": str(session.id),
+        "turn_review": {
+            "decision": {
+                "decision": review.decision,
+                "summary": review.summary,
+                "rationale": review.rationale,
+                "recommended_action": review.recommended_action,
+                "follow_up_prompt": review.follow_up_prompt,
+                "blocked_reasons": blocked_reasons,
+            },
+            "loop_review": {
+                "loop_mode": review.loop_mode,
+                "mode_capability": review.mode_capability,
+                "mode_summary": review.mode_summary,
+                "execution_state": review.execution_state,
+                "recommended_action": review.recommended_action,
+                "blocked_reasons": blocked_reasons,
+                "would_notify_user": review.execution_state in {"awaiting_user_approval", "needs_human"},
+                "would_continue_session": review.execution_state == "would_auto_continue",
+            },
+            "context": {
+                "trigger": {
+                    "type": review.trigger_type,
+                    "source_session_id": str(session.id),
+                    "assistant_event_id": review.assistant_event_id,
+                    "turn_index": review.turn_index,
+                },
+                "primary_session": {
+                    "session_id": str(session.id),
+                    "provider": session.provider,
+                    "project": session.project,
+                    "cwd": session.cwd,
+                    "summary_title": session.summary_title,
+                    "summary": session.summary,
+                    "loop_mode": review.loop_mode,
+                },
+                "latest_turn": {
+                    "assistant_event_id": review.assistant_event_id,
+                    "turn_index": review.turn_index,
+                    "text": review.turn_excerpt,
+                },
+            },
+        },
+    }
 
 
 def _resolve_owner_id(db: Session) -> int | None:
@@ -512,7 +574,7 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
             )
             outcome = _failure_outcome(
                 "Loop controller could not decide this completed turn.",
-                ("The AI loop controller failed, so this session should stay " "conservative until the next explicit review."),
+                "The AI loop controller failed, so this session should stay " "conservative until the next explicit review.",
                 blocked_reason="Loop controller evaluation failed.",
             )
             review_status = "failed"
@@ -560,6 +622,152 @@ def _mark_review_outcome(
     review.shadow_alignment = _classify_alignment(_expected_outcome(review), actual_outcome)
     db.commit()
     db.refresh(review)
+
+
+async def maybe_enqueue_turn_review_operator_wakeup(*, db: Session, review: SessionTurnReview) -> int | None:
+    if review.status != "recorded":
+        return None
+    if review.execution_state not in {"awaiting_user_approval", "needs_human"}:
+        return None
+    if review.owner_id is None:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="missing_owner",
+            actual_outcome="failed",
+        )
+        return None
+
+    session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
+    if session is None:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="missing_session",
+            actual_outcome="failed",
+        )
+        return None
+
+    from zerg.services.oikos_service import invoke_oikos
+    from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
+    from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
+    from zerg.services.oikos_wakeup_ledger import append_wakeup
+    from zerg.services.oikos_wakeup_ledger import classify_wakeup_outcome_for_run
+    from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
+    from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
+
+    wakeup_payload = _serialize_recorded_turn_review_payload(session=session, review=review)
+    wakeup_key = f"{_TURN_OPERATOR_SOURCE}:{review.session_id}:{review.assistant_event_id}"
+    message_id = f"operator-turn-loop-{review.session_id}-{review.assistant_event_id}-{uuid4()}"
+
+    try:
+        run_id = await invoke_oikos(
+            review.owner_id,
+            _build_turn_loop_message(session=session, review=review),
+            message_id,
+            source="operator",
+            surface_adapter=OperatorSurfaceAdapter(
+                owner_id=review.owner_id,
+                conversation_id=_TURN_OPERATOR_CONVERSATION_ID,
+            ),
+            surface_payload=wakeup_payload,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to invoke operator wakeup for turn review %s session %s",
+            review.id,
+            review.session_id,
+        )
+        append_wakeup(
+            db,
+            owner_id=review.owner_id,
+            source=_TURN_OPERATOR_SOURCE,
+            trigger_type=_TURN_TRIGGER_TYPE,
+            status=WAKEUP_STATUS_FAILED,
+            reason="invoke_failed",
+            session_id=str(review.session_id),
+            conversation_id=_TURN_OPERATOR_CONVERSATION_ID,
+            wakeup_key=wakeup_key,
+            payload=wakeup_payload,
+        )
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="invoke_failed",
+            actual_outcome="failed",
+        )
+        return None
+
+    append_wakeup(
+        db,
+        owner_id=review.owner_id,
+        source=_TURN_OPERATOR_SOURCE,
+        trigger_type=_TURN_TRIGGER_TYPE,
+        status=WAKEUP_STATUS_ENQUEUED,
+        session_id=str(review.session_id),
+        conversation_id=_TURN_OPERATOR_CONVERSATION_ID,
+        wakeup_key=wakeup_key,
+        run_id=run_id,
+        payload=wakeup_payload,
+    )
+    review.status = "enqueued"
+    review.reason = "notify_user"
+    review.run_id = run_id
+    db.commit()
+    db.refresh(review)
+
+    from zerg.models.enums import RunStatus
+    from zerg.models.models import Run
+
+    run_row = db.query(Run).filter(Run.id == run_id).first()
+    if run_row is not None:
+        run_status = run_row.status.value if hasattr(run_row.status, "value") else str(run_row.status)
+        if run_status in {RunStatus.SUCCESS.value, RunStatus.WAITING.value}:
+            wakeups_changed = classify_wakeup_outcome_for_run(db, run_id=run_id)
+            reviews_changed = classify_turn_review_outcome_for_run(db, run_id=run_id)
+            if wakeups_changed or reviews_changed:
+                db.commit()
+                db.refresh(review)
+        elif run_status == RunStatus.CANCELLED.value:
+            wakeups_changed = finalize_wakeups_for_run(
+                db,
+                run_id=run_id,
+                status=WAKEUP_STATUS_FAILED,
+                reason="run_cancelled",
+                payload_updates={"outcome": "failed"},
+            )
+            reviews_changed = finalize_turn_reviews_for_run(
+                db,
+                run_id=run_id,
+                status="failed",
+                reason="run_cancelled",
+                actual_outcome="failed",
+            )
+            if wakeups_changed or reviews_changed:
+                db.commit()
+                db.refresh(review)
+        elif run_status == RunStatus.FAILED.value:
+            wakeups_changed = finalize_wakeups_for_run(
+                db,
+                run_id=run_id,
+                status=WAKEUP_STATUS_FAILED,
+                reason="run_failed",
+                payload_updates={"outcome": "failed"},
+            )
+            reviews_changed = finalize_turn_reviews_for_run(
+                db,
+                run_id=run_id,
+                status="failed",
+                reason="run_failed",
+                actual_outcome="failed",
+            )
+            if wakeups_changed or reviews_changed:
+                db.commit()
+                db.refresh(review)
+    return run_id
 
 
 def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurnReview) -> CommisJob | None:
@@ -660,6 +868,7 @@ async def maybe_process_session_turn_loop(*, db: Session, session_id: str) -> Se
     if review is None:
         return None
     maybe_execute_recorded_turn_review(db=db, review=review)
+    await maybe_enqueue_turn_review_operator_wakeup(db=db, review=review)
     return review
 
 
