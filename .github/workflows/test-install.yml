@@ -54,6 +54,8 @@ jobs:
 
   installer-first-run-remote:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
     strategy:
       fail-fast: false
       matrix:
