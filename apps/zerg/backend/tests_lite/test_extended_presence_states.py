@@ -50,6 +50,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.user import User
 from zerg.models.work import OikosWakeup
+from zerg.session_loop_mode import SessionLoopMode
 
 # ---------------------------------------------------------------------------
 # DB + client fixtures (same pattern as other tests_lite tests)
@@ -100,7 +101,13 @@ def _auth_headers() -> dict:
     return {"X-Agents-Token": "test-token"}
 
 
-def _make_session(db, sid: str | None = None) -> AgentSession:
+def _make_session(
+    db,
+    sid: str | None = None,
+    *,
+    summary: str | None = None,
+    loop_mode: SessionLoopMode = SessionLoopMode.MANUAL,
+) -> AgentSession:
     """Create a minimal AgentSession row."""
     if sid is None:
         sid = str(uuid4())
@@ -113,6 +120,8 @@ def _make_session(db, sid: str | None = None) -> AgentSession:
         user_messages=0,
         assistant_messages=0,
         tool_calls=0,
+        summary=summary,
+        loop_mode=loop_mode.value,
     )
     db.add(s)
     db.commit()
@@ -478,6 +487,29 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     with TestClient(api_app) as c:
         sid = str(uuid4())
+        with SessionLocal() as db:
+            db.add(
+                User(
+                    id=42,
+                    email="owner@example.com",
+                    context={
+                        "preferences": {
+                            "operator_mode": {
+                                "enabled": True,
+                                "shadow_mode": True,
+                                "allow_continue": True,
+                                "allow_notify": True,
+                            }
+                        }
+                    },
+                )
+            )
+            _make_session(
+                db,
+                sid,
+                summary="Only targeted verification remains.",
+                loop_mode=SessionLoopMode.AUTOPILOT,
+            )
         response = c.post(
             "/agents/presence",
             json={"session_id": sid, "state": "blocked", "tool_name": "Bash", "cwd": "/tmp/test"},
@@ -501,6 +533,9 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
     assert calls[0]["surface_adapter"].surface_id == "operator"
     assert calls[0]["surface_payload"]["session_id"] == sid
     assert calls[0]["surface_payload"]["trigger_type"] == "presence.blocked"
+    assert calls[0]["surface_payload"]["shadow_review"]["decision"]["decision"] == "continue_session"
+    assert calls[0]["surface_payload"]["shadow_review"]["loop_review"]["loop_mode"] == "autopilot"
+    assert calls[0]["surface_payload"]["shadow_review"]["loop_review"]["mode_capability"] == "bounded_autonomy"
     assert len(wakeups) == 1
     assert wakeups[0].status == "enqueued"
     assert wakeups[0].run_id == 123
@@ -508,6 +543,11 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
     assert wakeups[0].trigger_type == "presence.blocked"
     assert wakeups[0].session_id == sid
     assert wakeups[0].payload["tool_name"] == "Bash"
+    assert wakeups[0].payload["shadow_review"]["decision"]["decision"] == "continue_session"
+    assert wakeups[0].payload["shadow_review"]["decision"]["execution_state"] == "would_auto_continue"
+    assert wakeups[0].payload["shadow_review"]["context"]["primary_session"]["loop_mode"] == "autopilot"
+    assert wakeups[0].payload["shadow_review"]["loop_review"]["mode_capability"] == "bounded_autonomy"
+    assert wakeups[0].payload["shadow_review"]["loop_review"]["would_continue_session"] is True
 
 
 def test_repeated_blocked_state_does_not_rewake_operator(monkeypatch, tmp_path):

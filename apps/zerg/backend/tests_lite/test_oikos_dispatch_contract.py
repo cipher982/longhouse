@@ -46,6 +46,21 @@ def test_dispatch_commis_delegation_for_infra_task():
     assert _classify_dispatch_lane(response.tool_calls) == "cli_delegation"
 
 
+def test_dispatch_operator_follow_up_uses_bounded_resume_shape():
+    llm = ScriptedChatLLM()
+    session_id = "11111111-1111-1111-1111-111111111111"
+    response = llm._generate_native(
+        _oikos_messages(f"System/operator wakeup: Continue session {session_id} by running the pending targeted tests.")
+    )
+
+    assert response.tool_calls is not None
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0]["name"] == "spawn_workspace_commis"
+    assert response.tool_calls[0]["args"]["task"] == "Run the pending targeted tests"
+    assert response.tool_calls[0]["args"]["resume_session_id"] == session_id
+    assert _classify_dispatch_lane(response.tool_calls) == "cli_delegation"
+
+
 def test_dispatch_backend_preference_detection_from_user_text():
     messages = _oikos_messages("Use codex for this investigation")
     assert _infer_requested_backend(messages) == "codex"

@@ -30,6 +30,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -59,19 +61,26 @@ jobs:
           set -euo pipefail
           short_sha="${GITHUB_SHA::7}"
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:latest"
+          before_sha="${{ github.event.before }}"
+          runtime_paths=(
+            .dockerignore
+            bun.lock
+            apps/zerg/backend
+            apps/zerg/frontend-web
+            config
+            docker/entrypoint.sh
+            docker/runtime.dockerfile
+            .github/workflows/runtime-image.yml
+          )
 
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]] && \
-             [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]] && \
-             git diff --name-only "${{ github.event.before }}" "${GITHUB_SHA}" -- \
-               .dockerignore \
-               bun.lock \
-               apps/zerg/backend \
-               apps/zerg/frontend-web \
-               config \
-               docker/entrypoint.sh \
-               docker/runtime.dockerfile \
-               .github/workflows/runtime-image.yml | grep -q .; then
-            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${short_sha}"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]] && [[ "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
+            if ! git rev-parse --verify "${before_sha}^{commit}" >/dev/null 2>&1; then
+              git fetch --no-tags origin "$before_sha"
+            fi
+
+            if git diff --name-only "$before_sha" "$GITHUB_SHA" -- "${runtime_paths[@]}" | grep -q .; then
+              image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${short_sha}"
+            fi
           fi
 
           echo "image=$image" >> "$GITHUB_OUTPUT"

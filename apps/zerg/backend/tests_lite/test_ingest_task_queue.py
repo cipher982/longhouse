@@ -14,10 +14,10 @@ import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 from uuid import uuid4
-from types import SimpleNamespace
 
 import pytest
 
@@ -38,6 +38,7 @@ from zerg.models.work import OikosWakeup
 from zerg.services.ingest_task_queue import _claim_pending
 from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 from zerg.services.ingest_task_queue import reset_stale_running_tasks
+from zerg.session_loop_mode import SessionLoopMode
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -76,6 +77,8 @@ def _seed_completion_summary_task(
     presence_state: str | None,
     presence_updated_at: datetime | None = None,
     user_context: dict | None = None,
+    summary: str = "Code landed and a targeted next step may still exist.",
+    loop_mode: SessionLoopMode = SessionLoopMode.MANUAL,
 ):
     db = factory()
     user = User(email="owner@example.com", context=user_context or {})
@@ -92,8 +95,9 @@ def _seed_completion_summary_task(
         started_at=ended_at - timedelta(minutes=5),
         ended_at=ended_at,
         summary_title="Autonomy follow-up",
-        summary="Code landed and a targeted next step may still exist.",
+        summary=summary,
         user_state="active",
+        loop_mode=loop_mode.value,
     )
     db.add(session)
 
@@ -297,6 +301,18 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
         ended_at=ended_at,
         presence_state="idle",
         presence_updated_at=ended_at,
+        summary="Only targeted verification remains.",
+        loop_mode=SessionLoopMode.ASSIST,
+        user_context={
+            "preferences": {
+                "operator_mode": {
+                    "enabled": True,
+                    "shadow_mode": True,
+                    "allow_continue": False,
+                    "allow_notify": True,
+                }
+            }
+        },
     )
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
@@ -314,6 +330,9 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     assert kwargs["source"] == "operator"
     assert kwargs["surface_payload"]["trigger_type"] == "session_completed"
     assert kwargs["surface_payload"]["session_id"] == session_id
+    assert kwargs["surface_payload"]["shadow_review"]["decision"]["decision"] == "suggest_continue"
+    assert kwargs["surface_payload"]["shadow_review"]["loop_review"]["loop_mode"] == "assist"
+    assert kwargs["surface_payload"]["shadow_review"]["loop_review"]["mode_capability"] == "notify_only"
 
     tasks = _get_tasks(factory, status="done")
     wakeups = _get_wakeups(factory)
@@ -323,6 +342,11 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     assert wakeups[0].run_id == 123
     assert wakeups[0].trigger_type == "session_completed"
     assert wakeups[0].payload["presence_state"] == "idle"
+    assert wakeups[0].payload["shadow_review"]["decision"]["decision"] == "suggest_continue"
+    assert wakeups[0].payload["shadow_review"]["decision"]["execution_state"] == "awaiting_user_approval"
+    assert wakeups[0].payload["shadow_review"]["context"]["primary_session"]["loop_mode"] == "assist"
+    assert wakeups[0].payload["shadow_review"]["loop_review"]["mode_capability"] == "notify_only"
+    assert wakeups[0].payload["shadow_review"]["loop_review"]["would_notify_user"] is True
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,8 @@
  * - Bottom dock: inline cloud continuation composer for supported providers
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "react-hot-toast";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SessionChat } from "../components/SessionChat";
@@ -18,6 +19,12 @@ import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
 import type { ActiveSession } from "../hooks/useActiveSessions";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
+import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
+import {
+  fetchSessionShadowTelemetry,
+  type SessionShadowReview,
+  type SessionShadowRollup,
+} from "../services/api/oikos";
 import {
   formatProviderLabel,
   getSessionOriginLabel,
@@ -41,6 +48,12 @@ export default function SessionDetailPage() {
   const shouldAutoResume = useMemo(() => searchParams.get("resume") === "1", [searchParams]);
 
   const workspace = useSessionWorkspace(sessionId || null, { highlightEventId });
+  const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
+  const [loopModePending, setLoopModePending] = useState(false);
+  const [latestShadowReview, setLatestShadowReview] = useState<SessionShadowReview | null>(null);
+  const [shadowRollup, setShadowRollup] = useState<SessionShadowRollup | null>(null);
+  const [shadowReviewLoading, setShadowReviewLoading] = useState(false);
+  const [shadowReviewUnavailable, setShadowReviewUnavailable] = useState(false);
 
   const {
     session,
@@ -114,6 +127,46 @@ export default function SessionDetailPage() {
     };
   }, [sessionLoading, eventsLoading]);
 
+  useEffect(() => {
+    setLoopModeOverride(null);
+    setLoopModePending(false);
+  }, [session?.id, session?.loop_mode]);
+
+  useEffect(() => {
+    if (!session?.id) {
+      setLatestShadowReview(null);
+      setShadowRollup(null);
+      setShadowReviewLoading(false);
+      setShadowReviewUnavailable(false);
+      return;
+    }
+
+    let cancelled = false;
+    setShadowReviewLoading(true);
+    setShadowReviewUnavailable(false);
+
+    void fetchSessionShadowTelemetry(session.id)
+      .then((telemetry) => {
+        if (cancelled) return;
+        setLatestShadowReview(telemetry.latestReview);
+        setShadowRollup(telemetry.rollup);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLatestShadowReview(null);
+        setShadowRollup(null);
+        setShadowReviewUnavailable(true);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setShadowReviewLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id]);
+
   if (sessionLoading) {
     return (
       <div className="session-workspace-route session-workspace-route--empty">
@@ -151,6 +204,9 @@ export default function SessionDetailPage() {
     session.summary_title && session.summary_title !== "Untitled Session"
       ? session.summary_title
       : session.project || session.git_branch || "Session";
+  const effectiveLoopMode = loopModeOverride ?? session.loop_mode;
+  const displaySession =
+    effectiveLoopMode === session.loop_mode ? session : { ...session, loop_mode: effectiveLoopMode };
 
   const continuationSourceSession = currentThreadSession || session;
   const providerLabel = formatProviderLabel(continuationSourceSession.provider);
@@ -239,6 +295,10 @@ export default function SessionDetailPage() {
         presence_tool: null,
         presence_updated_at: null,
         user_state: "active",
+        loop_mode:
+          continuationSourceSession.id === session.id
+            ? effectiveLoopMode
+            : continuationSourceSession.loop_mode,
       }
     : null;
 
@@ -251,6 +311,23 @@ export default function SessionDetailPage() {
         body: `This ${providerLabel} transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.`,
       }
     : null;
+
+  const handleLoopModeChange = async (nextMode: SessionLoopMode) => {
+    if (loopModePending || nextMode === effectiveLoopMode) {
+      return;
+    }
+    setLoopModeOverride(nextMode);
+    setLoopModePending(true);
+    try {
+      await setSessionLoopMode(session.id, nextMode);
+      toast.success(`Loop mode set to ${nextMode}.`);
+    } catch (error) {
+      setLoopModeOverride(null);
+      toast.error(error instanceof Error ? error.message : "Failed to update loop mode.");
+    } finally {
+      setLoopModePending(false);
+    }
+  };
 
   return (
     <div className="session-workspace-route">
@@ -274,7 +351,7 @@ export default function SessionDetailPage() {
         }
         sidebar={
           <SessionContextPane
-            session={session}
+            session={displaySession}
             title={title}
             headThreadSession={headThreadSession}
             threadSessions={threadSessions}
@@ -282,6 +359,12 @@ export default function SessionDetailPage() {
             onOpenSession={navigateToSession}
             onOpenLatest={() => headThreadSession && navigateToSession(headThreadSession.id)}
             continuationNotice={continuationNotice}
+            loopModePending={loopModePending}
+            onLoopModeChange={handleLoopModeChange}
+            latestShadowReview={latestShadowReview}
+            shadowRollup={shadowRollup}
+            shadowReviewLoading={shadowReviewLoading}
+            shadowReviewUnavailable={shadowReviewUnavailable}
           />
         }
         main={

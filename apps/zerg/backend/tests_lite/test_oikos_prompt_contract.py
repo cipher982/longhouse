@@ -38,6 +38,8 @@ def test_prompt_documents_operator_wakeup_continuation_contract():
     assert "resume_session_id" in BASE_OIKOS_PROMPT
     assert "allow_continue=false" in BASE_OIKOS_PROMPT
     assert "shadow_mode=true" in BASE_OIKOS_PROMPT
+    assert "Deterministic loop review" in BASE_OIKOS_PROMPT
+    assert "Never exceed the listed capability ceiling" in BASE_OIKOS_PROMPT
 
 
 def test_prompt_uses_wait_for_commis_not_removed_wait_parameter():
@@ -68,6 +70,7 @@ def test_assistant_prompt_mentions_runner_verification_rule():
 def test_assistant_prompt_mentions_operator_wakeups():
     assert "System/operator wakeup" in BASE_OIKOS_ASSISTANT_PROMPT
     assert "resume_session_id" in BASE_OIKOS_ASSISTANT_PROMPT
+    assert "Deterministic loop review" in BASE_OIKOS_ASSISTANT_PROMPT
 
 
 def test_build_prompt_injects_effective_operator_policy(monkeypatch):
