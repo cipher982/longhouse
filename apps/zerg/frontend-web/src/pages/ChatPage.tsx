@@ -275,7 +275,8 @@ export default function ChatPage() {
     const title = `Thread ${threadCount}`;
     try {
       const thread = await createThread(automationId, title);
-      queryClient.invalidateQueries({ queryKey: ["threads", automationId, "chat"] });
+      await queryClient.invalidateQueries({ queryKey: ["threads", automationId, "chat"] });
+      setSelectedThreadId(thread.id);
       // Navigate to the new thread - strict URL state
       navigate(`/automations/${automationId}/thread/${thread.id}`, { replace: true });
     } catch {
