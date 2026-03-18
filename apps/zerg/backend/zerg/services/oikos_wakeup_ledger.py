@@ -17,6 +17,51 @@ WAKEUP_STATUS_ACTED = "acted"
 WAKEUP_STATUS_FAILED = "failed"
 
 
+def _derive_shadow_expected_outcome(payload: dict[str, Any] | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    shadow_review = payload.get("shadow_review")
+    if not isinstance(shadow_review, dict):
+        return None
+
+    loop_review = shadow_review.get("loop_review")
+    if not isinstance(loop_review, dict):
+        return None
+
+    if bool(loop_review.get("would_continue_session")):
+        return "continue_session"
+    if bool(loop_review.get("would_notify_user")):
+        return "notify_user"
+
+    recommended_action = str(loop_review.get("recommended_action") or "").strip()
+    if recommended_action in {"continue_session", "notify_user", "ignore"}:
+        return recommended_action
+
+    execution_state = str(loop_review.get("execution_state") or "").strip()
+    if execution_state in {"observe_only", "no_action"}:
+        return "ignore"
+
+    return None
+
+
+def _classify_shadow_alignment(expected_outcome: str | None, actual_outcome: str | None) -> str | None:
+    if not expected_outcome or not actual_outcome:
+        return None
+    if expected_outcome == actual_outcome:
+        return "matched"
+    if actual_outcome == "failed":
+        return "failed"
+    if expected_outcome == "continue_session" and actual_outcome == "ignore":
+        return "more_conservative"
+    if expected_outcome == "notify_user" and actual_outcome == "ignore":
+        return "more_conservative"
+    if expected_outcome == "ignore" and actual_outcome in {"continue_session", "delegated_follow_up"}:
+        return "more_aggressive"
+    if expected_outcome == "notify_user" and actual_outcome in {"continue_session", "delegated_follow_up"}:
+        return "more_aggressive"
+    return "different"
+
+
 def append_wakeup(
     db: Session,
     *,
@@ -75,10 +120,18 @@ def finalize_wakeups_for_run(
     for row in rows:
         row.status = status
         row.reason = reason
+        payload = dict(row.payload or {})
+        expected_outcome = _derive_shadow_expected_outcome(payload)
+        actual_outcome = None
         if payload_updates:
-            payload = dict(row.payload or {})
             payload.update(payload_updates)
-            row.payload = payload
+            actual_outcome = payload_updates.get("outcome")
+        if expected_outcome and "shadow_expected_outcome" not in payload:
+            payload["shadow_expected_outcome"] = expected_outcome
+        alignment = _classify_shadow_alignment(expected_outcome, str(actual_outcome) if actual_outcome else None)
+        if alignment:
+            payload["shadow_alignment"] = alignment
+        row.payload = payload
     return len(rows)
 
 

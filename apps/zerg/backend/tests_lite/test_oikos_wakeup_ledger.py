@@ -52,7 +52,7 @@ def _patch_oikos_side_effects(monkeypatch) -> None:
     monkeypatch.setattr("zerg.services.memory_summarizer.schedule_run_summary", lambda **_kwargs: None)
 
 
-def _append_enqueued_wakeup(inner_db, *, owner_id: int, run_id: int) -> None:
+def _append_enqueued_wakeup(inner_db, *, owner_id: int, run_id: int, payload: dict | None = None) -> None:
     inner_db.add(
         OikosWakeup(
             owner_id=owner_id,
@@ -63,7 +63,7 @@ def _append_enqueued_wakeup(inner_db, *, owner_id: int, run_id: int) -> None:
             conversation_id="operator:main",
             wakeup_key=f"presence:session-123:{run_id}",
             run_id=run_id,
-            payload={"trigger_type": "presence.blocked", "session_id": "session-123"},
+            payload=payload or {"trigger_type": "presence.blocked", "session_id": "session-123"},
         )
     )
     inner_db.commit()
@@ -137,7 +137,23 @@ async def test_run_oikos_marks_waiting_wakeup_acted_when_continuing_session(monk
 
                 ctx = get_oikos_context()
                 assert ctx is not None
-                _append_enqueued_wakeup(inner_db, owner_id=user.id, run_id=ctx.run_id)
+                _append_enqueued_wakeup(
+                    inner_db,
+                    owner_id=user.id,
+                    run_id=ctx.run_id,
+                    payload={
+                        "trigger_type": "presence.blocked",
+                        "session_id": "session-123",
+                        "shadow_review": {
+                            "loop_review": {
+                                "would_continue_session": True,
+                                "would_notify_user": False,
+                                "execution_state": "would_auto_continue",
+                                "recommended_action": "continue_session",
+                            }
+                        },
+                    },
+                )
                 job = CommisJob(
                     owner_id=user.id,
                     oikos_run_id=ctx.run_id,
@@ -173,6 +189,74 @@ async def test_run_oikos_marks_waiting_wakeup_acted_when_continuing_session(monk
         assert wakeup.reason == "continue_session"
         assert wakeup.payload["outcome"] == "continue_session"
         assert wakeup.payload["resume_session_ids"] == ["session-123"]
+        assert wakeup.payload["shadow_expected_outcome"] == "continue_session"
+        assert wakeup.payload["shadow_alignment"] == "matched"
+
+
+@pytest.mark.asyncio
+async def test_run_oikos_marks_shadow_alignment_more_conservative_when_notify_only_is_not_taken(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "wakeup_shadow_more_conservative.db")
+
+    with SessionLocal() as db:
+        user = _create_user(db, "wakeup-shadow@example.com")
+        _patch_oikos_side_effects(monkeypatch)
+
+        class FakeRunner:
+            def __init__(self, *_args, **_kwargs):
+                self.usage_prompt_tokens = None
+                self.usage_completion_tokens = None
+                self.usage_total_tokens = None
+                self.usage_reasoning_tokens = None
+
+            async def run_thread(self, inner_db, thread):
+                from zerg.services.oikos_context import get_oikos_context
+
+                ctx = get_oikos_context()
+                assert ctx is not None
+                _append_enqueued_wakeup(
+                    inner_db,
+                    owner_id=user.id,
+                    run_id=ctx.run_id,
+                    payload={
+                        "trigger_type": "session_completed",
+                        "session_id": "session-123",
+                        "shadow_review": {
+                            "loop_review": {
+                                "would_continue_session": False,
+                                "would_notify_user": True,
+                                "execution_state": "awaiting_user_approval",
+                                "recommended_action": "notify_user",
+                            }
+                        },
+                    },
+                )
+                assistant = create_thread_message(
+                    db=inner_db,
+                    thread_id=thread.id,
+                    role="assistant",
+                    content="Looks good. No automatic follow-up taken.",
+                    processed=True,
+                )
+                return [assistant]
+
+        monkeypatch.setattr("zerg.services.oikos_service.Runner", FakeRunner)
+
+        service = OikosService(db)
+        result = await service.run_oikos(
+            owner_id=user.id,
+            task="Operator wakeup",
+            timeout=10,
+            source_surface_id="operator",
+            source_conversation_id="operator:main",
+        )
+
+        assert result.status == "success"
+        wakeup = db.query(OikosWakeup).one()
+        assert wakeup.status == "ignored"
+        assert wakeup.reason == "no_action"
+        assert wakeup.payload["outcome"] == "ignore"
+        assert wakeup.payload["shadow_expected_outcome"] == "notify_user"
+        assert wakeup.payload["shadow_alignment"] == "more_conservative"
 
 
 @pytest.mark.asyncio
