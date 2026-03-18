@@ -50,8 +50,8 @@ def _make_client(db_session, current_user):
     return TestClient(app, backend="asyncio"), api_app
 
 
-def test_oikos_runs_include_automation_and_task_aliases_and_support_filters(tmp_path):
-    """GET /api/oikos/runs returns automation/task aliases and keeps fiche filter compatibility."""
+def test_oikos_runs_are_automation_first_and_support_automation_filter(tmp_path):
+    """GET /api/oikos/runs returns automation-first summaries and filters by automation_id."""
     session_local = _make_db(tmp_path)
     base_time = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
 
@@ -155,26 +155,16 @@ def test_oikos_runs_include_automation_and_task_aliases_and_support_filters(tmp_
             assert [row["id"] for row in payload] == [owner_primary_run.id, owner_secondary_run.id]
             assert payload[0]["automation_id"] == owner_primary.id
             assert payload[0]["automation_name"] == "Priority Inbox"
-            assert payload[0]["task_id"] == owner_primary.id
-            assert payload[0]["task_name"] == "Priority Inbox"
-            assert payload[0]["fiche_id"] == owner_primary.id
-            assert payload[0]["fiche_name"] == "Priority Inbox"
+            assert "task_id" not in payload[0]
+            assert "task_name" not in payload[0]
+            assert "fiche_id" not in payload[0]
+            assert "fiche_name" not in payload[0]
             assert payload[0]["signal"] == "Need your input"
             assert payload[1]["automation_id"] == owner_secondary.id
             assert payload[1]["automation_name"] == "Background Sweep"
-            assert payload[1]["task_id"] == owner_secondary.id
-            assert payload[1]["task_name"] == "Background Sweep"
 
             automation_filtered = client.get(f"/api/oikos/runs?automation_id={owner_secondary.id}")
             assert automation_filtered.status_code == 200, automation_filtered.text
             assert [row["id"] for row in automation_filtered.json()] == [owner_secondary_run.id]
-
-            task_filtered = client.get(f"/api/oikos/runs?task_id={owner_secondary.id}")
-            assert task_filtered.status_code == 200, task_filtered.text
-            assert [row["id"] for row in task_filtered.json()] == [owner_secondary_run.id]
-
-            fiche_filtered = client.get(f"/api/oikos/runs?fiche_id={owner_primary.id}")
-            assert fiche_filtered.status_code == 200, fiche_filtered.text
-            assert [row["id"] for row in fiche_filtered.json()] == [owner_primary_run.id]
         finally:
             api_app_ref.dependency_overrides = {}

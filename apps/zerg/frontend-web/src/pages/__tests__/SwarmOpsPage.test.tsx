@@ -55,12 +55,8 @@ describe("SwarmOpsPage", () => {
           {
             id: 7,
             automation_id: 101,
-            task_id: 101,
-            fiche_id: 77,
             thread_id: 501,
             automation_name: "Priority Inbox",
-            task_name: "Priority Inbox",
-            fiche_name: "Legacy Fiche Name",
             status: "running",
             summary: "Need your input",
             signal: "Need your input",
@@ -84,15 +80,13 @@ describe("SwarmOpsPage", () => {
     });
   });
 
-  it("prefers task aliases for display and thread navigation", async () => {
+  it("uses automation fields for display and thread navigation", async () => {
     const user = userEvent.setup();
     renderSwarmOps();
 
     await waitFor(() => {
       expect(screen.getAllByText("Priority Inbox").length).toBeGreaterThan(0);
     });
-
-    expect(screen.queryByText("Legacy Fiche Name")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Open thread" }));
 
