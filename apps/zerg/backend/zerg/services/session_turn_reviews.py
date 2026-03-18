@@ -9,6 +9,8 @@ from datetime import timezone
 from typing import Any
 
 from sqlalchemy import desc
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from zerg.models import CommisJob
@@ -66,6 +68,20 @@ def _normalize_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _has_turn_review_table(db: Session) -> bool:
+    try:
+        bind = db.get_bind()
+    except Exception:
+        return False
+    if bind is None:
+        return False
+    try:
+        return bool(sa_inspect(bind).has_table(SessionTurnReview.__tablename__))
+    except Exception:
+        logger.debug("Failed to inspect turn review table availability", exc_info=True)
+        return False
 
 
 def _coerce_loop_mode(value: str | None) -> SessionLoopMode:
@@ -171,6 +187,8 @@ def load_latest_completed_assistant_turn(db: Session, session_id: str) -> Comple
 
 
 def _load_auto_continue_streak(db: Session, session_id: str) -> int:
+    if not _has_turn_review_table(db):
+        return 0
     query = db.query(SessionTurnReview).filter(SessionTurnReview.session_id == session_id)
     rows = query.order_by(SessionTurnReview.id.desc()).limit(5).all()
     streak = 0
@@ -392,6 +410,8 @@ def _load_policy(db: Session, owner_id: int | None) -> OikosOperatorPolicy:
 
 
 async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> SessionTurnReview | None:
+    if not _has_turn_review_table(db):
+        return None
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
         return None
@@ -554,14 +574,20 @@ def finalize_turn_reviews_for_run(
     reason: str | None = None,
     actual_outcome: str | None = None,
 ) -> int:
-    rows = (
-        db.query(SessionTurnReview)
-        .filter(
-            SessionTurnReview.run_id == run_id,
-            SessionTurnReview.status == "enqueued",
+    if not _has_turn_review_table(db):
+        return 0
+    try:
+        rows = (
+            db.query(SessionTurnReview)
+            .filter(
+                SessionTurnReview.run_id == run_id,
+                SessionTurnReview.status == "enqueued",
+            )
+            .all()
         )
-        .all()
-    )
+    except OperationalError:
+        logger.debug("Skipping turn review finalization because the table is unavailable", exc_info=True)
+        return 0
     if not rows:
         return 0
     for row in rows:

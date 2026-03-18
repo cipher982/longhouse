@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import threading
 import uuid
+import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -68,17 +70,25 @@ logger = logging.getLogger(__name__)
 
 # Thread type for oikos threads - distinguishes from regular fiche threads
 OIKOS_THREAD_TYPE = ThreadType.SUPER
-_OWNER_RUN_LOCKS: dict[int, asyncio.Lock] = {}
-_OWNER_RUN_LOCKS_GUARD = asyncio.Lock()
+_OWNER_RUN_LOCKS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    dict[int, asyncio.Lock],
+] = weakref.WeakKeyDictionary()
+_OWNER_RUN_LOCKS_GUARD = threading.Lock()
 
 
 async def _get_owner_run_lock(owner_id: int) -> asyncio.Lock:
-    """Return (and lazily create) a process-local per-owner lock."""
-    async with _OWNER_RUN_LOCKS_GUARD:
-        lock = _OWNER_RUN_LOCKS.get(owner_id)
+    """Return a per-owner lock scoped to the current event loop."""
+    loop = asyncio.get_running_loop()
+    with _OWNER_RUN_LOCKS_GUARD:
+        loop_locks = _OWNER_RUN_LOCKS.get(loop)
+        if loop_locks is None:
+            loop_locks = {}
+            _OWNER_RUN_LOCKS[loop] = loop_locks
+        lock = loop_locks.get(owner_id)
         if lock is None:
             lock = asyncio.Lock()
-            _OWNER_RUN_LOCKS[owner_id] = lock
+            loop_locks[owner_id] = lock
         return lock
 
 
