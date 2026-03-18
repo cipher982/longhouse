@@ -8,13 +8,13 @@ test.describe('Automation Creation', () => {
     await resetDatabase(request);
   });
 
-  test('creates automations with "New Fiche" placeholder name', async ({ page }) => {
+  test('creates automations with "New Automation" placeholder name', async ({ page }) => {
     await waitForDashboardReady(page);
 
     // Wait for create button to be ready
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 5000 });
 
-    // Create first fiche with deterministic wait for API response
+    // Create first automation with deterministic wait for API response
     await Promise.all([
       page.waitForResponse(
         (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
@@ -23,7 +23,7 @@ test.describe('Automation Creation', () => {
       page.click('[data-testid="create-automation-btn"]'),
     ]);
 
-    // Create second fiche with deterministic wait
+    // Create second automation with deterministic wait
     await Promise.all([
       page.waitForResponse(
         (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
@@ -32,7 +32,7 @@ test.describe('Automation Creation', () => {
       page.click('[data-testid="create-automation-btn"]'),
     ]);
 
-    // Create third fiche with deterministic wait
+    // Create third automation with deterministic wait
     await Promise.all([
       page.waitForResponse(
         (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
@@ -50,12 +50,12 @@ test.describe('Automation Creation', () => {
     const secondAutomationName = await automationRows.nth(1).locator('td[data-label="Name"]').textContent();
     const thirdAutomationName = await automationRows.nth(2).locator('td[data-label="Name"]').textContent();
 
-    expect(firstAutomationName).toBe('New Fiche');
-    expect(secondAutomationName).toBe('New Fiche');
-    expect(thirdAutomationName).toBe('New Fiche');
+    expect(firstAutomationName).toBe('New Automation');
+    expect(secondAutomationName).toBe('New Automation');
+    expect(thirdAutomationName).toBe('New Automation');
   });
 
-  test('backend auto-generates "New Fiche" placeholder name', async ({ request }) => {
+  test('backend auto-generates "New Automation" placeholder name', async ({ request }) => {
     // Create an automation without a name field.
     const response = await request.post('/api/automations', {
       data: {
@@ -68,7 +68,7 @@ test.describe('Automation Creation', () => {
     expect(response.ok()).toBeTruthy();
     const automation = await response.json();
 
-    expect(automation.name).toBe('New Fiche');
+    expect(automation.name).toBe('New Automation');
   });
 
   test('idempotency key prevents duplicate creation', async ({ request }) => {

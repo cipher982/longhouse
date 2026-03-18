@@ -20,10 +20,10 @@ test.describe('Dashboard - Core', () => {
     await expect(page.locator('.nav-tab:has-text("Oikos")')).toBeVisible();
   });
 
-  test('create fiche button is present', async ({ page }) => {
+  test('create automation button is present', async ({ page }) => {
     await page.goto('/dashboard');
 
-    // Wait for the create fiche button to be visible and ready
+    // Wait for the create automation button to be visible and ready
     const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 15000 });
     await expect(createBtn).toBeEnabled();

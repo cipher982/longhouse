@@ -4,7 +4,7 @@ const testCount = Number.parseInt(process.env.PROBE_TEST_COUNT ?? "64", 10);
 const holdMs = Number.parseInt(process.env.PROBE_HOLD_MS ?? "250", 10);
 
 // Module-scope state is per-Playwright-commis-process.
-let firstFicheIdSeen: number | null = null;
+let firstAutomationIdSeen: number | null = null;
 
 test.describe("Backend Parallelism Probe", () => {
   test("probe config sanity", async ({ request }) => {
@@ -15,10 +15,10 @@ test.describe("Backend Parallelism Probe", () => {
   });
 
   for (let i = 0; i < testCount; i++) {
-    test(`create fiche ${i}`, async ({ request }, testInfo) => {
-      const res = await request.post("/api/fiches", {
+    test(`create automation ${i}`, async ({ request }, testInfo) => {
+      const res = await request.post("/api/automations", {
         data: {
-          name: `Probe Fiche ${testInfo.commisIndex}-${i}`,
+          name: `Probe Automation ${testInfo.commisIndex}-${i}`,
           system_instructions: "probe",
           task_instructions: "probe",
           model: "gpt-5-nano",
@@ -26,9 +26,9 @@ test.describe("Backend Parallelism Probe", () => {
       });
       expect(res.status()).toBe(201);
       const created = await res.json();
-      if (firstFicheIdSeen === null) {
-        firstFicheIdSeen = created.id;
-        // With per-commis SQLite isolation, each Playwright commis's first created fiche should be ID=1.
+      if (firstAutomationIdSeen === null) {
+        firstAutomationIdSeen = created.id;
+        // With per-commis SQLite isolation, each Playwright commis's first created automation should be ID=1.
         expect(created.id).toBe(1);
       }
       if (holdMs > 0) {

@@ -59,7 +59,7 @@ test.describe('Automation CRUD - Core', () => {
     expect(response.ok()).toBeTruthy();
     const automation = await response.json();
 
-    expect(automation.name).toBe('New Fiche');
+    expect(automation.name).toBe('New Automation');
   });
 
   test('idempotency key prevents duplicate creation', async ({ request }) => {

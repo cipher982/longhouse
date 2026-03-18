@@ -352,7 +352,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
 
   return (
     <div
-      className={clsx("fiche-settings-backdrop", { open: isOpen })}
+      className={clsx("automation-settings-backdrop", { open: isOpen })}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
           handleClose();
@@ -360,8 +360,8 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
       }}
       role="presentation"
     >
-      <aside className={clsx("fiche-settings-drawer", { open: isOpen })} data-testid="fiche-debug-modal">
-        <header className="fiche-settings-header">
+      <aside className={clsx("automation-settings-drawer", { open: isOpen })} data-testid="automation-settings-modal">
+        <header className="automation-settings-header">
           <div>
             <h2>Automation Config</h2>
             <p>{automation?.name}</p>
@@ -371,7 +371,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
           </button>
         </header>
 
-        <section className="fiche-settings-section">
+        <section className="automation-settings-section">
           <h3>Container Execution</h3>
           <p className="section-description">
             Automations execute shell commands within ephemeral containers. Configure tool access via the allowlist below.
@@ -415,7 +415,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
         </section>
 
         {/* Unified Integrations Section */}
-        <section className="fiche-settings-section">
+        <section className="automation-settings-section">
           <div className="section-header">
             <div>
               <h3>Integrations & Tools</h3>
@@ -462,7 +462,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
                           )}
                           {/* Override badge (always valid if configured) */}
                           {hasAutomationOverride && (
-                            <span className="status-badge fiche-override" title="Using automation-specific credentials">
+                            <span className="status-badge automation-override" title="Using automation-specific credentials">
                               Override
                             </span>
                           )}
@@ -585,7 +585,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
 
         </section>
 
-        <section className="fiche-settings-section">
+        <section className="automation-settings-section">
           <header className="section-header">
             <div>
               <h3>MCP Servers</h3>
@@ -748,7 +748,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
           )}
         </section>
 
-        <footer className="fiche-settings-footer">
+        <footer className="automation-settings-footer">
           <Button type="button" variant="primary" onClick={handleClose}>
             Close
           </Button>

@@ -42,7 +42,7 @@ const CRITICAL_ENDPOINTS = [
   '/api/ops/timeseries',
   '/api/ops/top',
   '/api/users/me',
-  '/api/fiches',
+  '/api/automations',
 ];
 
 function loadOpenApiSchema(schemaPath: string): any {

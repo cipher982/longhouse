@@ -177,15 +177,7 @@ export async function testAutomationMcpServer(
   });
 }
 
-export const fetchFiches = fetchAutomations;
 export const fetchDashboardSnapshot = fetchAutomationOverview;
-export const createFiche = createAutomation;
-export const fetchFiche = fetchAutomation;
-export const updateFiche = updateAutomation;
-export const resetFiche = resetAutomation;
-export const deleteFiche = deleteAutomation;
-export const runFiche = runAutomation;
-export const fetchFicheRuns = fetchAutomationRuns;
 export const fetchAvailableTools = fetchAutomationAvailableTools;
 export const fetchMcpServers = fetchAutomationMcpServers;
 export const addMcpServer = addAutomationMcpServer;
