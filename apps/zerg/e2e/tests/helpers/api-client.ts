@@ -1,6 +1,5 @@
 import { testLog } from './test-logger';
 
-import { expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -27,7 +26,7 @@ function getBackendPort(): number {
   return 8001; // Default fallback
 }
 
-export interface CreateFicheRequest {
+export interface CreateAutomationRequest {
   name?: string;
   model?: string;
   system_instructions?: string;
@@ -35,7 +34,7 @@ export interface CreateFicheRequest {
   temperature?: number;
 }
 
-export interface Fiche {
+export interface Automation {
   id: string;
   name: string;
   model: string;
@@ -123,31 +122,31 @@ export class ApiClient {
     }
   }
 
-  async createFiche(data: CreateFicheRequest = {}): Promise<Fiche> {
-    const ficheData = {
-      name: data.name || `Test Fiche ${Date.now()}`,
+  async createAutomation(data: CreateAutomationRequest = {}): Promise<Automation> {
+    const automationData = {
+      name: data.name || `Test Automation ${Date.now()}`,
       model: data.model || 'gpt-mock',  // Use test-friendly model
       system_instructions: data.system_instructions || 'You are a helpful AI assistant.',
       task_instructions: data.task_instructions || 'Please help the user with their request.',
       ...data
     };
 
-    return await this.request('POST', '/api/automations', ficheData);
+    return await this.request('POST', '/api/automations', automationData);
   }
 
-  async getFiche(id: string): Promise<Fiche> {
+  async getAutomation(id: string): Promise<Automation> {
     return await this.request('GET', `/api/automations/${id}`);
   }
 
-  async updateFiche(id: string, data: Partial<CreateFicheRequest>): Promise<Fiche> {
+  async updateAutomation(id: string, data: Partial<CreateAutomationRequest>): Promise<Automation> {
     return await this.request('PUT', `/api/automations/${id}`, data);
   }
 
-  async deleteFiche(id: string): Promise<void> {
+  async deleteAutomation(id: string): Promise<void> {
     await this.request('DELETE', `/api/automations/${id}`);
   }
 
-  async listFiches(): Promise<Fiche[]> {
+  async listAutomations(): Promise<Automation[]> {
     return await this.request('GET', '/api/automations');
   }
 
@@ -168,8 +167,8 @@ export class ApiClient {
     await this.request('DELETE', `/api/threads/${id}`);
   }
 
-  async listThreads(ficheId?: string): Promise<Thread[]> {
-    const url = ficheId ? `/api/threads?fiche_id=${ficheId}` : '/api/threads';
+  async listThreads(automationId?: string): Promise<Thread[]> {
+    const url = automationId ? `/api/threads?fiche_id=${automationId}` : '/api/threads';
     return await this.request('GET', url);
   }
 
@@ -181,8 +180,8 @@ export class ApiClient {
     } catch (error) {
       testLog.error('Database reset failed, trying fallback cleanup...');
       // If reset fails, try to manually clean up test data
-      const fiches = await this.listFiches();
-      await Promise.all(fiches.map(fiche => this.deleteFiche(fiche.id)));
+      const automations = await this.listAutomations();
+      await Promise.all(automations.map(automation => this.deleteAutomation(automation.id)));
     }
   }
 

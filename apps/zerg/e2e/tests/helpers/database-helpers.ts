@@ -58,11 +58,11 @@ export async function resetDatabaseForCommis(
 
       if (!skipVerification) {
         // Verify reset was successful
-        const fiches = await apiClient.listFiches();
-        if (fiches.length === 0) {
+        const automations = await apiClient.listAutomations();
+        if (automations.length === 0) {
           return; // Success
         }
-        testLog.warn(`Database reset attempt ${attempts + 1}: Found ${fiches.length} remaining fiches`);
+        testLog.warn(`Database reset attempt ${attempts + 1}: Found ${automations.length} remaining automations`);
       } else {
         return; // Skip verification, assume success
       }
@@ -159,8 +159,8 @@ export function createDatabaseResetHook(options: DatabaseResetOptions = {}) {
 export async function verifyDatabaseEmpty(commisId: string): Promise<boolean> {
   try {
     const apiClient = createApiClient(commisId);
-    const fiches = await apiClient.listFiches();
-    return fiches.length === 0;
+    const automations = await apiClient.listAutomations();
+    return automations.length === 0;
   } catch (error) {
     testLog.warn(`Failed to verify database state for commis ${commisId}:`, error);
     return false;
@@ -171,15 +171,15 @@ export async function verifyDatabaseEmpty(commisId: string): Promise<boolean> {
  * Get database statistics for debugging
  */
 export async function getDatabaseStats(commisId: string): Promise<{
-  ficheCount: number;
+  automationCount: number;
   commisId: string;
   timestamp: string;
 }> {
   const apiClient = createApiClient(commisId);
-  const fiches = await apiClient.listFiches();
+  const automations = await apiClient.listAutomations();
 
   return {
-    ficheCount: fiches.length,
+    automationCount: automations.length,
     commisId,
     timestamp: new Date().toISOString()
   };

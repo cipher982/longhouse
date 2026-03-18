@@ -34,17 +34,17 @@ test.beforeEach(async ({ request }) => {
 // ============================================================================
 
 /**
- * Create an fiche via UI and return its ID.
- * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy).
+ * Create an automation via UI and return its ID.
+ * CRITICAL: Gets the ID from the API response, not from the DOM.
  */
-async function createFicheViaUI(page: Page): Promise<string> {
+async function createAutomationViaUI(page: Page): Promise<string> {
   await waitForDashboardReady(page);
 
   const createBtn = page.locator('[data-testid="create-automation-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-  // Capture API response to get the ACTUAL created fiche ID
+  // Capture the API response to get the actual created automation ID.
   const [response] = await Promise.all([
     page.waitForResponse(
       (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
@@ -53,31 +53,30 @@ async function createFicheViaUI(page: Page): Promise<string> {
     createBtn.click(),
   ]);
 
-  // Parse the fiche ID from the response body - this is deterministic
+  // Parse the automation ID from the response body. This is deterministic.
   const body = await response.json();
-  const ficheId = String(body.id);
+  const automationId = String(body.id);
 
-  if (!ficheId || ficheId === 'undefined') {
-    throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
+  if (!automationId || automationId === 'undefined') {
+    throw new Error(`Failed to get automation ID from API response: ${JSON.stringify(body)}`);
   }
 
-  // Wait for THIS SPECIFIC fiche's row to appear (not just any row)
-  const row = page.locator(`tr[data-automation-id="${ficheId}"]`);
+  const row = page.locator(`tr[data-automation-id="${automationId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
-  return ficheId;
+  return automationId;
 }
 
 /**
- * Navigate to chat for an fiche.
+ * Navigate to chat for an automation.
  * Waits for URL change and chat input to be ready.
  */
-async function navigateToChat(page: Page, ficheId: string): Promise<void> {
-  const chatBtn = page.locator(`[data-testid="chat-automation-${ficheId}"]`);
+async function navigateToChat(page: Page, automationId: string): Promise<void> {
+  const chatBtn = page.locator(`[data-testid="chat-automation-${automationId}"]`);
   await expect(chatBtn).toBeVisible({ timeout: 5000 });
   await chatBtn.click();
 
-  await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
+  await page.waitForURL((url) => url.pathname.includes(`/fiche/${automationId}/thread`), { timeout: 10000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 5000 });
 }
@@ -155,14 +154,14 @@ async function createNewThread(page: Page): Promise<number> {
 // ============================================================================
 
 test.describe('Smoke Tests - Core Functionality', () => {
-  test('SMOKE 1: Create Automation - fiche appears in dashboard', async ({ page }) => {
+  test('SMOKE 1: Create Automation - automation appears in dashboard', async ({ page }) => {
     await waitForDashboardReady(page);
 
     const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
     await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-    // Capture API response to get the ACTUAL created fiche ID (deterministic, no race)
+    // Capture the API response to get the actual created automation ID.
     const [response] = await Promise.all([
       page.waitForResponse(
         (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
@@ -171,23 +170,22 @@ test.describe('Smoke Tests - Core Functionality', () => {
       createBtn.click(),
     ]);
 
-    // Parse the fiche ID from the response body - this is deterministic
+    // Parse the automation ID from the response body. This is deterministic.
     const body = await response.json();
-    const ficheId = String(body.id);
+    const automationId = String(body.id);
 
-    expect(ficheId).toBeTruthy();
-    expect(ficheId).toMatch(/^\d+$/);
+    expect(automationId).toBeTruthy();
+    expect(automationId).toMatch(/^\d+$/);
 
-    // Wait for THIS SPECIFIC fiche's row to appear (not just any row via .first())
-    const newRow = page.locator(`tr[data-automation-id="${ficheId}"]`);
+    const newRow = page.locator(`tr[data-automation-id="${automationId}"]`);
     await expect(newRow).toBeVisible({ timeout: 10000 });
   });
 
   test('SMOKE 2: Navigate to Chat - URL and UI are correct', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const automationId = await createAutomationViaUI(page);
 
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
-    await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
+    await page.waitForURL((url) => url.pathname.includes(`/fiche/${automationId}/thread`), { timeout: 10000 });
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     const url = page.url();
@@ -202,8 +200,8 @@ test.describe('Smoke Tests - Core Functionality', () => {
   });
 
   test('SMOKE 3: Send Message - message appears in chat', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const testMessage = 'Hello, this is a smoke test message';
     await sendMessage(page, testMessage);
@@ -213,8 +211,8 @@ test.describe('Smoke Tests - Core Functionality', () => {
   });
 
   test('SMOKE 4: Input clears after sending message', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const testMessage = 'Message to test input clearing';
     await sendMessage(page, testMessage);
@@ -230,7 +228,7 @@ test.describe('Smoke Tests - Core Functionality', () => {
 
 test.describe('Thread Management', () => {
   test('THREAD 1: Create new thread - URL changes and thread appears', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const ficheId = await createAutomationViaUI(page);
     await navigateToChat(page, ficheId);
 
     const urlBeforeNewThread = page.url();
@@ -247,7 +245,7 @@ test.describe('Thread Management', () => {
   });
 
   test('THREAD 2: Switch threads - selected class changes', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const ficheId = await createAutomationViaUI(page);
     await navigateToChat(page, ficheId);
 
     // Create a second thread so we have two to switch between
@@ -269,7 +267,7 @@ test.describe('Thread Management', () => {
   });
 
   test('THREAD 3: New thread starts empty - no message bleed', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const ficheId = await createAutomationViaUI(page);
     await navigateToChat(page, ficheId);
 
     // Send message in first thread
@@ -295,7 +293,7 @@ test.describe('Thread Management', () => {
   });
 
   test('THREAD 4: Thread title editing', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const ficheId = await createAutomationViaUI(page);
     await navigateToChat(page, ficheId);
 
     // Create a new thread
@@ -342,7 +340,7 @@ test.describe('Thread Management', () => {
 
 test.describe('Data Persistence', () => {
   test('PERSIST 1: Message persists after navigation', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const ficheId = await createAutomationViaUI(page);
     await navigateToChat(page, ficheId);
 
     const testMessage = 'Persistence test message';
@@ -361,7 +359,7 @@ test.describe('Data Persistence', () => {
   });
 
   test('PERSIST 2: Message persists after page reload', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const ficheId = await createAutomationViaUI(page);
     await navigateToChat(page, ficheId);
 
     const persistentMessage = 'This should persist after reload';
@@ -391,7 +389,7 @@ test.describe('Data Persistence', () => {
 
 test.describe('URL Contract', () => {
   test('URL 1: No trailing slash bug - thread path always valid', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const ficheId = await createAutomationViaUI(page);
 
     await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
     await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
@@ -404,7 +402,7 @@ test.describe('URL Contract', () => {
   });
 
   test('URL 2: Thread ID preserved after sending message', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
+    const ficheId = await createAutomationViaUI(page);
     await navigateToChat(page, ficheId);
 
     const urlBeforeSend = page.url();
@@ -430,16 +428,15 @@ test.describe('URL Contract', () => {
 // ============================================================================
 
 test.describe('Navigation', () => {
-  test('NAV 1: Back to dashboard shows fiche list', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+  test('NAV 1: Back to dashboard shows automation list', async ({ page }) => {
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     // Go back to dashboard
     await page.goBack();
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible({ timeout: 10000 });
 
-    // Fiche should still be visible
-    await expect(page.locator(`tr[data-automation-id="${ficheId}"]`)).toBeVisible({ timeout: 5000 });
+    await expect(page.locator(`tr[data-automation-id="${automationId}"]`)).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -449,8 +446,8 @@ test.describe('Navigation', () => {
 
 test.describe('Chat UI', () => {
   test('CHAT 1: Follow-up message in same thread', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const firstMessage = 'First message';
     const followupMessage = 'Second message';
@@ -469,8 +466,8 @@ test.describe('Chat UI', () => {
   });
 
   test('CHAT 2: Empty thread displays appropriate state', async ({ page }) => {
-    const ficheId = await createFicheViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     // Wait for chat UI to be ready
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });

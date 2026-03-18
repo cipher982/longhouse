@@ -2,13 +2,13 @@ import { test, expect } from './fixtures';
 import { resetDatabase } from './test-utils';
 import { waitForDashboardReady } from './helpers/test-helpers';
 
-test.describe('Fiche Creation', () => {
+test.describe('Automation Creation', () => {
   // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ request }) => {
     await resetDatabase(request);
   });
 
-  test('creates fiches with "New Fiche" placeholder name', async ({ page }) => {
+  test('creates automations with "New Fiche" placeholder name', async ({ page }) => {
     await waitForDashboardReady(page);
 
     // Wait for create button to be ready
@@ -41,25 +41,22 @@ test.describe('Fiche Creation', () => {
       page.click('[data-testid="create-automation-btn"]'),
     ]);
 
-    // Wait for all 3 fiche rows to appear
+    // Wait for all 3 automation rows to appear.
     await expect(page.locator('#automations-table-body tr[data-automation-id]')).toHaveCount(3, { timeout: 10000 });
 
-    // Get all fiche rows
-    const ficheRows = page.locator('#automations-table-body tr[data-automation-id]');
+    const automationRows = page.locator('#automations-table-body tr[data-automation-id]');
 
-    // Check fiche names are all "New Fiche"
-    const firstFicheName = await ficheRows.nth(0).locator('td[data-label="Name"]').textContent();
-    const secondFicheName = await ficheRows.nth(1).locator('td[data-label="Name"]').textContent();
-    const thirdFicheName = await ficheRows.nth(2).locator('td[data-label="Name"]').textContent();
+    const firstAutomationName = await automationRows.nth(0).locator('td[data-label="Name"]').textContent();
+    const secondAutomationName = await automationRows.nth(1).locator('td[data-label="Name"]').textContent();
+    const thirdAutomationName = await automationRows.nth(2).locator('td[data-label="Name"]').textContent();
 
-    // Should all be "New Fiche"
-    expect(firstFicheName).toBe('New Fiche');
-    expect(secondFicheName).toBe('New Fiche');
-    expect(thirdFicheName).toBe('New Fiche');
+    expect(firstAutomationName).toBe('New Fiche');
+    expect(secondAutomationName).toBe('New Fiche');
+    expect(thirdAutomationName).toBe('New Fiche');
   });
 
   test('backend auto-generates "New Fiche" placeholder name', async ({ request }) => {
-    // Create fiche (no name field sent)
+    // Create an automation without a name field.
     const response = await request.post('/api/automations', {
       data: {
         system_instructions: 'Test instructions',
@@ -69,16 +66,15 @@ test.describe('Fiche Creation', () => {
     });
 
     expect(response.ok()).toBeTruthy();
-    const fiche = await response.json();
+    const automation = await response.json();
 
-    // Should have auto-generated name "New Fiche"
-    expect(fiche.name).toBe('New Fiche');
+    expect(automation.name).toBe('New Fiche');
   });
 
   test('idempotency key prevents duplicate creation', async ({ request }) => {
     const idempotencyKey = `test-${Date.now()}-${Math.random()}`;
 
-    // Create fiche with idempotency key
+    // Create an automation with an idempotency key.
     const response1 = await request.post('/api/automations', {
       headers: { 'Idempotency-Key': idempotencyKey },
       data: {
@@ -88,7 +84,7 @@ test.describe('Fiche Creation', () => {
       }
     });
     expect(response1.ok()).toBeTruthy();
-    const fiche1 = await response1.json();
+    const automation1 = await response1.json();
 
     // Retry with same idempotency key (simulates double-click)
     const response2 = await request.post('/api/automations', {
@@ -100,10 +96,9 @@ test.describe('Fiche Creation', () => {
       }
     });
     expect(response2.ok()).toBeTruthy();
-    const fiche2 = await response2.json();
+    const automation2 = await response2.json();
 
-    // Should return the SAME fiche (not create a new one)
-    expect(fiche2.id).toBe(fiche1.id);
-    expect(fiche2.name).toBe(fiche1.name);
+    expect(automation2.id).toBe(automation1.id);
+    expect(automation2.name).toBe(automation1.name);
   });
 });

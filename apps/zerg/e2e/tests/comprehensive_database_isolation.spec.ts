@@ -31,41 +31,41 @@ test.describe('Comprehensive Database Isolation', () => {
     });
     expect(healthResponse.ok()).toBe(true);
 
-    // Test fiche endpoint
-    const ficheResponse = await request.get('/api/automations', {
+    // Test the automation endpoint.
+    const automationResponse = await request.get('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
       }
     });
-    expect(ficheResponse.ok()).toBe(true);
-    const fiches = await ficheResponse.json();
-    expect(Array.isArray(fiches)).toBe(true);
+    expect(automationResponse.ok()).toBe(true);
+    const automations = await automationResponse.json();
+    expect(Array.isArray(automations)).toBe(true);
 
-    // Test fiche creation
+    // Test automation creation.
     const createResponse = await request.post('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
         'Content-Type': 'application/json',
       },
       data: {
-        system_instructions: 'You are a test fiche for database isolation testing',
+        system_instructions: 'You are a test automation for database isolation testing',
         task_instructions: 'Respond briefly',
         model: 'gpt-5.2',
       }
     });
     expect(createResponse.status()).toBe(201);
-    const createdFiche = await createResponse.json();
-    expect(createdFiche.id).toBeDefined();
+    const createdAutomation = await createResponse.json();
+    expect(createdAutomation.id).toBeDefined();
 
-    const ficheListAfter = await request.get('/api/automations', {
+    const automationListAfter = await request.get('/api/automations', {
       headers: {
         'X-Test-Commis': commisId,
       }
     });
-    expect(ficheListAfter.ok()).toBe(true);
-    const fichesAfter = await ficheListAfter.json();
-    const idsAfter = Array.isArray(fichesAfter) ? fichesAfter.map((f: any) => f.id) : [];
-    expect(idsAfter).toContain(createdFiche.id);
+    expect(automationListAfter.ok()).toBe(true);
+    const automationsAfter = await automationListAfter.json();
+    const idsAfter = Array.isArray(automationsAfter) ? automationsAfter.map((f: any) => f.id) : [];
+    expect(idsAfter).toContain(createdAutomation.id);
 
     // Verify isolation by querying a different commis DB
     const otherListResponse = await request.get('/api/automations', {
@@ -74,8 +74,8 @@ test.describe('Comprehensive Database Isolation', () => {
       }
     });
     expect(otherListResponse.ok()).toBe(true);
-    const otherFiches = await otherListResponse.json();
-    const otherIds = Array.isArray(otherFiches) ? otherFiches.map((f: any) => f.id) : [];
-    expect(otherIds).not.toContain(createdFiche.id);
+    const otherAutomations = await otherListResponse.json();
+    const otherIds = Array.isArray(otherAutomations) ? otherAutomations.map((f: any) => f.id) : [];
+    expect(otherIds).not.toContain(createdAutomation.id);
   });
 });

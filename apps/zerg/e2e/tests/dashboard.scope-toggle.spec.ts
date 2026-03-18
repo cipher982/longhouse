@@ -1,5 +1,5 @@
-// Checks that the Owner column in the Dashboard only appears when the
-// scope selector is switched to "All fiches".
+// Checks that the Owner column in the dashboard only appears when the
+// scope selector is switched to "All automations".
 
 import { test, expect } from './fixtures';
 import { waitForDashboardReady } from './helpers/test-helpers';
@@ -12,16 +12,16 @@ test('Owner column toggles with scope selector', async ({ page }) => {
   const scopeLabel = page.locator('label.scope-toggle');
   await expect(scopeLabel).toBeVisible();
 
-  // By default the dashboard shows the user's own fiches -> no Owner column.
+  // By default the dashboard shows the user's own automations -> no Owner column.
   await expect(scopeCheckbox).not.toBeChecked();
   await expect(page.locator('th', { hasText: 'Owner' })).toHaveCount(0);
 
-  // Switch to All fiches by clicking the visible label.
+  // Switch to All automations by clicking the visible label.
   await scopeLabel.click();
   await expect(scopeCheckbox).toBeChecked();
   await expect(page.locator('th', { hasText: 'Owner' })).toBeVisible();
 
-  // Toggle back to "My fiches" - Owner column should disappear.
+  // Toggle back to "My automations" - Owner column should disappear.
   await scopeLabel.click();
   await expect(scopeCheckbox).not.toBeChecked();
   await expect(page.locator('th', { hasText: 'Owner' })).toHaveCount(0);

@@ -18,7 +18,7 @@ test.describe('Run Button Real-time Update', () => {
     await resetDatabase(request);
   });
 
-  async function createFicheAndGetId(page: any): Promise<string> {
+  async function createAutomationAndGetId(page: any): Promise<string> {
     const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
 
@@ -31,14 +31,14 @@ test.describe('Run Button Real-time Update', () => {
     ]);
 
     const body = await response.json();
-    const ficheId = String(body.id);
-    if (!ficheId || ficheId === 'undefined') {
-      throw new Error(`Failed to get fiche ID from API response: ${JSON.stringify(body)}`);
+    const automationId = String(body.id);
+    if (!automationId || automationId === 'undefined') {
+      throw new Error(`Failed to get automation ID from API response: ${JSON.stringify(body)}`);
     }
 
-    const ficheRow = page.locator(`tr[data-automation-id="${ficheId}"]`);
-    await expect(ficheRow).toBeVisible({ timeout: 5000 });
-    return ficheId;
+    const automationRow = page.locator(`tr[data-automation-id="${automationId}"]`);
+    await expect(automationRow).toBeVisible({ timeout: 5000 });
+    return automationId;
   }
 
   test('should transition to running via optimistic update and websocket', async ({ page }) => {
@@ -50,15 +50,15 @@ test.describe('Run Button Real-time Update', () => {
       await route.continue();
     });
 
-    const ficheId = await createFicheAndGetId(page);
-    const ficheRow = page.locator(`tr[data-automation-id="${ficheId}"]`);
+    const automationId = await createAutomationAndGetId(page);
+    const automationRow = page.locator(`tr[data-automation-id="${automationId}"]`);
 
     // Get initial status
-    const statusCell = ficheRow.locator('td[data-label="Status"]');
+    const statusCell = automationRow.locator('td[data-label="Status"]');
     await expect(statusCell).toContainText('Idle', { timeout: 5000 });
 
     // Find and click the run button
-    const runButton = page.locator(`[data-testid="run-automation-${ficheId}"]`);
+    const runButton = page.locator(`[data-testid="run-automation-${automationId}"]`);
     await expect(runButton).toBeVisible({ timeout: 5000 });
     await runButton.click();
 
@@ -70,7 +70,7 @@ test.describe('Run Button Real-time Update', () => {
     await expect(runButton).toBeDisabled({ timeout: 5000 });
   });
 
-  test('should handle run button click with multiple fiches', async ({ page }) => {
+  test('should handle run button clicks with multiple automations', async ({ page }) => {
     await page.goto('/dashboard');
 
     // Slow down run requests so optimistic UI has time to render Running
@@ -79,35 +79,33 @@ test.describe('Run Button Real-time Update', () => {
       await route.continue();
     });
 
-    const firstFicheId = await createFicheAndGetId(page);
-    const secondFicheId = await createFicheAndGetId(page);
+    const firstAutomationId = await createAutomationAndGetId(page);
+    const secondAutomationId = await createAutomationAndGetId(page);
 
-    const firstFicheRow = page.locator(`tr[data-automation-id="${firstFicheId}"]`);
-    const secondFicheRow = page.locator(`tr[data-automation-id="${secondFicheId}"]`);
+    const firstAutomationRow = page.locator(`tr[data-automation-id="${firstAutomationId}"]`);
+    const secondAutomationRow = page.locator(`tr[data-automation-id="${secondAutomationId}"]`);
 
     // Get both status cells
-    const firstStatusCell = firstFicheRow.locator('td[data-label="Status"]');
-    const secondStatusCell = secondFicheRow.locator('td[data-label="Status"]');
+    const firstStatusCell = firstAutomationRow.locator('td[data-label="Status"]');
+    const secondStatusCell = secondAutomationRow.locator('td[data-label="Status"]');
 
     // Both should start as Idle
     await expect(firstStatusCell).toContainText('Idle', { timeout: 5000 });
     await expect(secondStatusCell).toContainText('Idle', { timeout: 5000 });
 
-    // Click run on the first fiche
-    const firstRunButton = page.locator(`[data-testid="run-automation-${firstFicheId}"]`);
+    const firstRunButton = page.locator(`[data-testid="run-automation-${firstAutomationId}"]`);
     await expect(firstRunButton).toBeVisible({ timeout: 5000 });
     await firstRunButton.click();
 
-    // Verify ONLY the first fiche's status changes
+    // Verify only the first automation's status changes.
     await expect(firstStatusCell).toHaveText(/Running/, { timeout: 10000 });
     await expect(secondStatusCell).toContainText('Idle', { timeout: 5000 });
 
-    // Now click run on the second fiche
-    const secondRunButton = page.locator(`[data-testid="run-automation-${secondFicheId}"]`);
+    const secondRunButton = page.locator(`[data-testid="run-automation-${secondAutomationId}"]`);
     await expect(secondRunButton).toBeVisible({ timeout: 5000 });
     await secondRunButton.click();
 
-    // Verify the second fiche's status also changes
+    // Verify the second automation's status also changes.
     await expect(secondStatusCell).toHaveText(/Running/, { timeout: 10000 });
   });
 
@@ -117,7 +115,7 @@ test.describe('Run Button Real-time Update', () => {
     const createBtn = page.locator('[data-testid="create-automation-btn"]');
     await expect(createBtn).toBeVisible({ timeout: 10000 });
 
-    // Create fiche with deterministic wait
+    // Create an automation with deterministic wait.
     await Promise.all([
       page.waitForResponse(
         (r) => r.url().includes('/api/automations') && r.request().method() === 'POST' && r.status() === 201,
@@ -126,18 +124,17 @@ test.describe('Run Button Real-time Update', () => {
       createBtn.click(),
     ]);
 
-    // Wait for the new fiche row
-    const ficheRow = page.locator('tr[data-automation-id]').last();
-    await expect(ficheRow).toBeVisible({ timeout: 5000 });
+    const automationRow = page.locator('tr[data-automation-id]').last();
+    await expect(automationRow).toBeVisible({ timeout: 5000 });
 
-    const ficheId = await ficheRow.getAttribute('data-automation-id');
-    const statusCell = ficheRow.locator('td[data-label="Status"]');
+    const automationId = await automationRow.getAttribute('data-automation-id');
+    const statusCell = automationRow.locator('td[data-label="Status"]');
 
     // Verify initial status
     await expect(statusCell).toContainText('Idle', { timeout: 5000 });
 
     // Find the run button
-    const runButton = page.locator(`[data-testid="run-automation-${ficheId}"]`);
+    const runButton = page.locator(`[data-testid="run-automation-${automationId}"]`);
     await expect(runButton).toBeVisible({ timeout: 5000 });
 
     // Mock the API to fail (and assert the route is actually hit to avoid false positives)

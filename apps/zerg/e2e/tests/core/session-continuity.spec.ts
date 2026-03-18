@@ -2,7 +2,7 @@
  * Session Continuity E2E Tests
  *
  * Tests session fetch/ship with Longhouse agents API.
- * Uses mock hatch CLI (can't run real Claude Code fiches in tests).
+ * Uses mock hatch CLI (can't run real Claude Code cloud sessions in tests).
  *
  * Requires:
  * - CommisJobProcessor running (included in E2E backend)

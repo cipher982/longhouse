@@ -10,7 +10,7 @@
 import { expect, type Page, type APIRequestContext } from '@playwright/test';
 
 /**
- * Create a fiche via UI and return its ID.
+ * Create an automation via UI and return its ID.
  *
  * CRITICAL: Gets ID from API response, NOT from DOM query.
  * This prevents race conditions where .first() returns a stale row.
@@ -39,7 +39,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
     throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
   }
 
-  // Wait for THIS SPECIFIC fiche's row to appear in DOM (not just any row)
+  // Wait for this specific automation row to appear in the DOM.
   const row = page.locator(`tr[data-automation-id="${agentId}"]`);
   await expect(row).toBeVisible({ timeout: 10000 });
 
@@ -67,7 +67,7 @@ export async function createAgentViaAPI(request: APIRequestContext): Promise<str
 }
 
 /**
- * Navigate to chat for a fiche.
+ * Navigate to chat for an automation.
  * Waits for URL change and chat UI to be fully ready.
  */
 export async function navigateToChat(page: Page, agentId: string): Promise<void> {
