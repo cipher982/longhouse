@@ -12,9 +12,11 @@ type RunFilter = "all" | "attention" | "active" | "done";
 
 type RunSummary = {
   id: number;
+  automation_id?: number;
   task_id?: number;
   fiche_id?: number;
   thread_id?: number;
+  automation_name?: string;
   task_name?: string;
   fiche_name?: string;
   status: string;
@@ -146,12 +148,14 @@ function getEventSummary(event: RunEvent): string {
   return "";
 }
 
-function getRunTaskId(run: Pick<RunSummary, "task_id" | "fiche_id">): number | null {
-  return run.task_id ?? run.fiche_id ?? null;
+function getRunAutomationId(run: Pick<RunSummary, "automation_id" | "task_id" | "fiche_id">): number | null {
+  return run.automation_id ?? run.task_id ?? run.fiche_id ?? null;
 }
 
-function getRunTaskName(run: Pick<RunSummary, "task_name" | "fiche_name">): string {
-  return run.task_name ?? run.fiche_name ?? "Untitled task";
+function getRunDisplayName(
+  run: Pick<RunSummary, "automation_name" | "task_name" | "fiche_name">
+): string {
+  return run.automation_name ?? run.task_name ?? run.fiche_name ?? "Untitled automation";
 }
 
 export default function SwarmOpsPage() {
@@ -248,8 +252,8 @@ export default function SwarmOpsPage() {
   }, [sortedRuns, selectedRunId]);
 
   const selectedRun = sortedRuns.find((run) => run.id === selectedRunId) ?? null;
-  const selectedTaskId = selectedRun ? getRunTaskId(selectedRun) : null;
-  const selectedTaskName = selectedRun ? getRunTaskName(selectedRun) : "Untitled task";
+  const selectedAutomationId = selectedRun ? getRunAutomationId(selectedRun) : null;
+  const selectedAutomationName = selectedRun ? getRunDisplayName(selectedRun) : "Untitled automation";
   const shouldPollEvents = selectedRun ? ACTIVE_STATUSES.has(selectedRun.status) : false;
 
   const runEventsQuery = useQuery({
@@ -397,7 +401,7 @@ export default function SwarmOpsPage() {
                     >
                       <div className="swarm-ops-item-main">
                         <div className="swarm-ops-item-title-row">
-                          <span className="swarm-ops-item-title">{getRunTaskName(run)}</span>
+                          <span className="swarm-ops-item-title">{getRunDisplayName(run)}</span>
                           <Badge variant={statusVariant}>{run.status}</Badge>
                         </div>
                         <div className="swarm-ops-item-summary">
@@ -427,7 +431,7 @@ export default function SwarmOpsPage() {
                 <Card className="swarm-ops-detail-card">
                   <Card.Header className="swarm-ops-detail-header">
                     <div>
-                      <div className="swarm-ops-detail-title">{selectedTaskName}</div>
+                      <div className="swarm-ops-detail-title">{selectedAutomationName}</div>
                       <div className="swarm-ops-detail-subtitle">
                         Run #{selectedRun.id} · {selectedRun.status} · {formatRelativeTime(selectedRun.created_at)}
                       </div>
@@ -474,10 +478,10 @@ export default function SwarmOpsPage() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        disabled={!selectedRun.thread_id || selectedTaskId == null}
+                        disabled={!selectedRun.thread_id || selectedAutomationId == null}
                         onClick={() => {
-                          if (selectedRun.thread_id && selectedTaskId != null) {
-                            navigate(`/automations/${selectedTaskId}/thread/${selectedRun.thread_id}`);
+                          if (selectedRun.thread_id && selectedAutomationId != null) {
+                            navigate(`/automations/${selectedAutomationId}/thread/${selectedRun.thread_id}`);
                           }
                         }}
                       >

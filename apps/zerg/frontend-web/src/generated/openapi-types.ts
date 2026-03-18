@@ -7993,12 +7993,16 @@ export interface components {
         OikosRunSummary: {
             /** Id */
             id: number;
+            /** Automation Id */
+            automation_id: number;
             /** Task Id */
             task_id: number;
             /** Fiche Id */
             fiche_id: number;
             /** Thread Id */
             thread_id?: number | null;
+            /** Automation Name */
+            automation_name: string;
             /** Task Name */
             task_name: string;
             /** Fiche Name */
@@ -15234,6 +15238,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                automation_id?: number | null;
                 task_id?: number | null;
                 fiche_id?: number | null;
                 session_factory?: unknown;

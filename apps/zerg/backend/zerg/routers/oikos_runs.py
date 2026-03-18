@@ -38,9 +38,11 @@ class OikosRunSummary(UTCBaseModel):
     """Minimal run summary for Oikos run triage."""
 
     id: int
+    automation_id: int
     task_id: int
     fiche_id: int
     thread_id: Optional[int] = None
+    automation_name: str
     task_name: str
     fiche_name: str
     status: str
@@ -83,6 +85,7 @@ def _get_owned_run(db: Session, *, run_id: int, owner_id: int) -> Run | None:
 @router.get("/runs", response_model=List[OikosRunSummary])
 def list_oikos_runs(
     limit: int = 50,
+    automation_id: Optional[int] = None,
     task_id: Optional[int] = None,
     fiche_id: Optional[int] = None,
     db: Session = Depends(get_db),
@@ -94,7 +97,7 @@ def list_oikos_runs(
     query = query.join(Fiche, Fiche.id == Run.fiche_id)
     query = query.filter(Fiche.owner_id == current_user.id)
 
-    selected_task_id = task_id if task_id is not None else fiche_id
+    selected_task_id = automation_id if automation_id is not None else task_id if task_id is not None else fiche_id
     if selected_task_id is not None:
         query = query.filter(Run.fiche_id == selected_task_id)
 
@@ -141,9 +144,11 @@ def list_oikos_runs(
         summaries.append(
             OikosRunSummary(
                 id=run.id,
+                automation_id=run.fiche_id,
                 task_id=run.fiche_id,
                 fiche_id=run.fiche_id,
                 thread_id=run.thread_id,
+                automation_name=task_name,
                 task_name=task_name,
                 fiche_name=task_name,
                 status=run.status.value if hasattr(run.status, "value") else str(run.status),
