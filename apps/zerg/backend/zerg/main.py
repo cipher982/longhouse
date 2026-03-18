@@ -1022,8 +1022,8 @@ app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 # Routers that previously used API_PREFIX ("/api") now use no prefix or their
 # relative sub-prefix since the /api mount point handles the top-level prefix.
 api_app.include_router(fiches_router, prefix=AUTOMATIONS_PREFIX)
-api_app.include_router(fiches_router, prefix=FICHES_PREFIX)
-api_app.include_router(mcp_servers_router)  # MCP servers nested under fiches
+api_app.include_router(fiches_router, prefix=FICHES_PREFIX, include_in_schema=False)
+api_app.include_router(mcp_servers_router, include_in_schema=False)  # MCP servers nested under fiches
 api_app.include_router(automation_mcp_servers_router)  # Canonical MCP servers nested under automations
 api_app.include_router(threads_router, prefix=THREADS_PREFIX)
 api_app.include_router(models_router, prefix=MODELS_PREFIX)
@@ -1055,7 +1055,7 @@ api_app.include_router(capabilities_router)  # LLM provider config + enhanced ca
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)  # Public beacon (no auth)
 api_app.include_router(fiche_config_router)
-api_app.include_router(fiche_connectors_router)  # Fiche connector credentials
+api_app.include_router(fiche_connectors_router, include_in_schema=False)  # Fiche connector credentials
 api_app.include_router(automation_connectors_router)  # Canonical automation connector credentials
 api_app.include_router(account_connectors_router)  # Account-level connector credentials
 api_app.include_router(funnel_router)  # Funnel tracking

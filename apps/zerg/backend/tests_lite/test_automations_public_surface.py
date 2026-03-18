@@ -70,12 +70,14 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert create_response.status_code == 201, create_response.text
         created = create_response.json()
         automation_id = created["id"]
+        assert created["display_type"] == "automation"
 
         list_response = client.get("/automations")
         assert list_response.status_code == 200, list_response.text
         list_payload = list_response.json()
         assert len(list_payload) == 1
         assert list_payload[0]["id"] == automation_id
+        assert list_payload[0]["display_type"] == "automation"
 
         compatibility_response = client.get("/fiches")
         assert compatibility_response.status_code == 200, compatibility_response.text
@@ -85,6 +87,11 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         detail_response = client.get(f"/automations/{automation_id}")
         assert detail_response.status_code == 200, detail_response.text
         assert detail_response.json()["id"] == automation_id
+
+        details_response = client.get(f"/automations/{automation_id}/details")
+        assert details_response.status_code == 200, details_response.text
+        assert details_response.json()["automation"]["id"] == automation_id
+        assert "fiche" not in details_response.json()
 
         update_response = client.put(f"/automations/{automation_id}", json={"name": "Renamed automation"})
         assert update_response.status_code == 200, update_response.text
@@ -126,7 +133,34 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert overview_response.status_code == 200, overview_response.text
         overview_payload = overview_response.json()
         assert overview_payload["automations"][0]["id"] == automation_id
+        assert overview_payload["automations"][0]["display_type"] == "automation"
         assert overview_payload["runs"] == [{"automation_id": automation_id, "runs": []}]
+
+        openapi_response = client.get("/openapi.json")
+        assert openapi_response.status_code == 200, openapi_response.text
+        openapi_payload = openapi_response.json()
+        schemas = openapi_payload["components"]["schemas"]
+        paths = openapi_payload["paths"]
+        assert "Automation" in schemas
+        assert "AutomationCreate" in schemas
+        assert "AutomationUpdate" in schemas
+        assert "AutomationDetails" in schemas
+        assert "AutomationMessage" in schemas
+        assert "Fiche" not in schemas
+        assert "FicheCreate" not in schemas
+        assert "FicheUpdate" not in schemas
+        assert "FicheDetails" not in schemas
+        assert "FicheMessage" not in schemas
+        assert "/automations" in paths
+        assert f"/automations/{{automation_id}}" in paths
+        assert f"/automations/{{automation_id}}/runs" in paths
+        assert f"/automations/{{automation_id}}/connectors/" in paths
+        assert f"/automations/{{automation_id}}/mcp-servers/" in paths
+        assert "/fiches" not in paths
+        assert f"/fiches/{{automation_id}}" not in paths
+        assert f"/fiches/{{fiche_id}}/runs" not in paths
+        assert f"/fiches/{{fiche_id}}/connectors/" not in paths
+        assert f"/fiches/{{fiche_id}}/mcp-servers/" not in paths
 
         delete_response = client.delete(f"/automations/{automation_id}")
         assert delete_response.status_code == 204, delete_response.text

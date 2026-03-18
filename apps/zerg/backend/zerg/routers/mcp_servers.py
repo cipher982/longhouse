@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from zerg.crud import get_fiche
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
-from zerg.schemas.schemas import Fiche
+from zerg.schemas.schemas import Automation
 from zerg.tools import get_registry
 
 # MCP manager singleton – needed by several endpoints
@@ -211,7 +211,7 @@ async def list_mcp_servers(
     return response
 
 
-@router.post("/", response_model=Fiche, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=Automation, status_code=status.HTTP_201_CREATED)
 async def add_mcp_server(
     fiche_id: int,
     request: MCPServerAddRequest,
@@ -508,7 +508,7 @@ async def list_automation_mcp_servers(
     return await list_mcp_servers(fiche_id=automation_id, db=db, current_user=current_user)
 
 
-@automation_router.post("/", response_model=Fiche, status_code=status.HTTP_201_CREATED)
+@automation_router.post("/", response_model=Automation, status_code=status.HTTP_201_CREATED)
 async def add_automation_mcp_server(
     automation_id: int,
     request: MCPServerAddRequest,
