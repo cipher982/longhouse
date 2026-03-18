@@ -143,6 +143,8 @@ async def test_spawn_workspace_commis_allows_operator_resume_when_continue_enabl
                 trace_id=None,
                 reasoning_effort="none",
                 source_surface_id="operator",
+                operator_capability_ceiling="bounded_autonomy",
+                operator_target_session_id="session-abc",
             ),
         )
         monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
@@ -159,3 +161,125 @@ async def test_spawn_workspace_commis_allows_operator_resume_when_continue_enabl
         assert job.config is not None
         assert job.config.get("execution_mode") == "workspace"
         assert job.config.get("resume_session_id") == "session-abc"
+
+
+@pytest.mark.asyncio
+async def test_spawn_workspace_commis_rejects_operator_spawn_when_shadow_cap_is_notify_only(tmp_path, monkeypatch):
+    """Operator session wakeups capped at notify_only cannot start cloud work."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(
+            email="operator-shadow-denied@example.com",
+            context={"preferences": {"operator_mode": {"enabled": True, "allow_continue": True}}},
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        resolver = SimpleNamespace(db=db, owner_id=user.id)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_credential_resolver", lambda: resolver)
+        monkeypatch.setattr(
+            oikos_commis_job_tools,
+            "get_oikos_context",
+            lambda: SimpleNamespace(
+                run_id=None,
+                trace_id=None,
+                reasoning_effort="none",
+                source_surface_id="operator",
+                operator_capability_ceiling="notify_only",
+                operator_target_session_id="session-123",
+            ),
+        )
+        monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+
+        result = await oikos_tools.spawn_workspace_commis_async(
+            task="Run the pending targeted tests",
+            resume_session_id="session-123",
+            _return_structured=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["ok"] is False
+        assert result["error_type"] == "permission_denied"
+        assert db.query(CommisJob).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_spawn_workspace_commis_rejects_operator_new_spawn_even_with_bounded_autonomy(tmp_path, monkeypatch):
+    """Bounded autonomy only allows resuming the same session, not starting new cloud work."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(
+            email="operator-new-spawn-denied@example.com",
+            context={"preferences": {"operator_mode": {"enabled": True, "allow_continue": True}}},
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        resolver = SimpleNamespace(db=db, owner_id=user.id)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_credential_resolver", lambda: resolver)
+        monkeypatch.setattr(
+            oikos_commis_job_tools,
+            "get_oikos_context",
+            lambda: SimpleNamespace(
+                run_id=None,
+                trace_id=None,
+                reasoning_effort="none",
+                source_surface_id="operator",
+                operator_capability_ceiling="bounded_autonomy",
+                operator_target_session_id="session-123",
+            ),
+        )
+        monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+
+        result = await oikos_tools.spawn_workspace_commis_async(
+            task="Investigate neighboring sessions and summarize",
+            _return_structured=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["ok"] is False
+        assert result["error_type"] == "permission_denied"
+        assert db.query(CommisJob).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_spawn_workspace_commis_rejects_operator_resume_for_wrong_session(tmp_path, monkeypatch):
+    """Bounded autonomy must stay tied to the same session named in the wakeup."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user = User(
+            email="operator-wrong-session@example.com",
+            context={"preferences": {"operator_mode": {"enabled": True, "allow_continue": True}}},
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        resolver = SimpleNamespace(db=db, owner_id=user.id)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_credential_resolver", lambda: resolver)
+        monkeypatch.setattr(
+            oikos_commis_job_tools,
+            "get_oikos_context",
+            lambda: SimpleNamespace(
+                run_id=None,
+                trace_id=None,
+                reasoning_effort="none",
+                source_surface_id="operator",
+                operator_capability_ceiling="bounded_autonomy",
+                operator_target_session_id="session-123",
+            ),
+        )
+        monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+
+        result = await oikos_tools.spawn_workspace_commis_async(
+            task="Run the pending targeted tests",
+            resume_session_id="session-other",
+            _return_structured=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["ok"] is False
+        assert result["error_type"] == "permission_denied"
+        assert db.query(CommisJob).count() == 0

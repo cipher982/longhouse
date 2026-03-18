@@ -27,6 +27,8 @@ _ALLOWED_RUN_KWARGS = {
     "model_override",
     "reasoning_effort",
     "return_on_deferred",
+    "operator_capability_ceiling",
+    "operator_target_session_id",
 }
 
 
