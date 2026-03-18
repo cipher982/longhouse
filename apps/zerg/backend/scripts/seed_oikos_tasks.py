@@ -1,12 +1,12 @@
-"""Seed baseline Oikos fiches for the Swarm Platform.
+"""Seed baseline Oikos tasks for the Swarm Platform.
 
-This script creates a set of pre-configured fiches designed to work with Oikos:
+This script creates a set of pre-configured tasks designed to work with Oikos:
 - Morning Digest: Daily summary of health, calendar, and important info
 - Health Watch: Periodic check-ins on WHOOP data and trends
 - Finance Snapshot: Daily financial overview
 
 Usage:
-    uv run python scripts/seed_oikos_fiches.py
+    uv run python scripts/seed_oikos_tasks.py
 """
 
 import sys
@@ -21,8 +21,8 @@ from zerg.models.enums import FicheStatus
 from zerg.models.models import Fiche
 from zerg.models_config import DEFAULT_COMMIS_MODEL_ID
 
-# Fiche definitions
-OIKOS_FICHES = [
+# Task definitions
+OIKOS_TASKS = [
     {
         "name": "Morning Digest",
         "system_instructions": """You are the Morning Digest assistant for Oikos.
@@ -113,9 +113,9 @@ Keep it to 2-3 sentences total.""",
 ]
 
 
-def seed_fiches():
-    """Create Oikos baseline fiches in the database."""
-    print("🌱 Seeding Oikos baseline fiches...")
+def seed_tasks():
+    """Create Oikos baseline tasks in the database."""
+    print("🌱 Seeding Oikos baseline tasks...")
 
     # Get database session
     db = next(get_db())
@@ -139,63 +139,61 @@ def seed_fiches():
     else:
         print(f"Found existing Oikos user: {oikos_email}")
 
-    # Create fiches
+    # Create tasks
     created_count = 0
     updated_count = 0
 
-    for fiche_def in OIKOS_FICHES:
-        # Check if fiche already exists
+    for task_def in OIKOS_TASKS:
+        # Check if task already exists
         existing = (
             db.query(Fiche)
             .filter(
-                Fiche.name == fiche_def["name"],
+                Fiche.name == task_def["name"],
                 Fiche.owner_id == oikos_user.id,
             )
             .first()
         )
 
         if existing:
-            print(f"  ⚠️  Fiche already exists: {fiche_def['name']} (updating...)")
-            # Update existing fiche
-            existing.system_instructions = fiche_def["system_instructions"]
-            existing.task_instructions = fiche_def["task_instructions"]
-            existing.schedule = fiche_def["schedule"]
-            existing.model = fiche_def["model"]
-            existing.config = fiche_def.get("config", {})
+            print(f"  ⚠️  Task already exists: {task_def['name']} (updating...)")
+            existing.system_instructions = task_def["system_instructions"]
+            existing.task_instructions = task_def["task_instructions"]
+            existing.schedule = task_def["schedule"]
+            existing.model = task_def["model"]
+            existing.config = task_def.get("config", {})
             existing.status = FicheStatus.IDLE
             db.add(existing)
             updated_count += 1
         else:
-            print(f"  ✨ Creating fiche: {fiche_def['name']}")
-            # Create new fiche
-            fiche = Fiche(
+            print(f"  ✨ Creating task: {task_def['name']}")
+            task = Fiche(
                 owner_id=oikos_user.id,
-                name=fiche_def["name"],
-                system_instructions=fiche_def["system_instructions"],
-                task_instructions=fiche_def["task_instructions"],
-                schedule=fiche_def["schedule"],
-                model=fiche_def["model"],
-                config=fiche_def.get("config", {}),
+                name=task_def["name"],
+                system_instructions=task_def["system_instructions"],
+                task_instructions=task_def["task_instructions"],
+                schedule=task_def["schedule"],
+                model=task_def["model"],
+                config=task_def.get("config", {}),
                 status=FicheStatus.IDLE,
             )
-            db.add(fiche)
+            db.add(task)
             created_count += 1
 
     db.commit()
 
     print("\n✅ Seeding complete!")
-    print(f"   Created: {created_count} fiches")
-    print(f"   Updated: {updated_count} fiches")
-    print(f"   Total: {created_count + updated_count} Oikos fiches")
-    print("\nThese fiches can now be dispatched via /api/oikos/chat")
-    print("Scheduled fiches will run automatically via APScheduler")
+    print(f"   Created: {created_count} tasks")
+    print(f"   Updated: {updated_count} tasks")
+    print(f"   Total: {created_count + updated_count} Oikos tasks")
+    print("\nThese tasks can now be dispatched via /api/oikos/chat")
+    print("Scheduled tasks will run automatically via APScheduler")
 
 
 if __name__ == "__main__":
     try:
-        seed_fiches()
+        seed_tasks()
     except Exception as e:
-        print(f"❌ Error seeding fiches: {e}")
+        print(f"❌ Error seeding tasks: {e}")
         import traceback
 
         traceback.print_exc()

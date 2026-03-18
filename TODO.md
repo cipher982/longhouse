@@ -586,7 +586,9 @@ Notes:
 - 2026-03-17: Verification for the frontend/browser automation naming cleanup passed via `git diff --check` and `make test-frontend-unit`.
 - 2026-03-17: Shipped the dashboard overview contract cleanup. The frontend overview shape is now canonically `automations` / `automationId`, and the dashboard row/detail/empty-state styling selectors moved off the old `fiches-*` naming without changing backend payload ownership.
 - 2026-03-17: Verification for the dashboard overview contract cleanup passed via `git diff --check`, `make test-frontend-unit`, and `E2E_BACKEND_PORT=48120 E2E_FRONTEND_PORT=48121 make test-e2e-single TEST='--project=chromium tests/dashboard.basic.spec.ts tests/dashboard.scope-toggle.spec.ts tests/core/automation-crud.spec.ts'`.
-- 2026-03-17: Current slice: clean the still-live Oikos `/fiches` frontend/API surface into task terminology while keeping backend/storage ownership stable.
+- 2026-03-17: Shipped the Oikos task-surface rename. The frontend/API surface now uses `/api/oikos/tasks`, `OikosTaskSummary`, `listTasks()`, `fetchTasks()`, and cached task state names while backend storage ownership remains unchanged.
+- 2026-03-17: Verification for the Oikos task-surface rename passed via `make generate-sdk`, `make test-frontend-unit`, and `make test`.
+- 2026-03-17: Current slice: remove the remaining browser/test `fiche` compatibility around Oikos and automation helpers, then collapse bounded transport aliases once no first-party caller still depends on them.
 - 2026-03-16: Restored the missing spec at `docs/specs/launch-runtime-simplification.md` so the bounded launch cleanup has an explicit vocabulary contract, provider matrix, and acceptance criteria again.
 - 2026-03-16: Current implementation scope for this pass is:
   1. restore the missing spec and lock the bounded cleanup plan,
@@ -2129,12 +2131,13 @@ Make `model` an explicit override only, not a forced default. New execution logi
 
 ---
 
-## [Product] Oikos Fiche Surface
+## [Product] Oikos Task Surface
 
-**Status (2026-03-02):** Fixed.
+**Status (2026-03-17):** Done.
 
-- [x] `/api/oikos/fiches` now returns persisted `fiche.next_run_at` (was always `null` even when scheduler populated it).
-- [x] Added API-lite regression test coverage for owner scoping + `next_run_at` serialization.
+- [x] `/api/oikos/tasks` is now the canonical Oikos task-list surface while backend storage still reuses `Fiche`.
+- [x] Oikos frontend/client state now uses task terminology (`OikosTaskSummary`, `listTasks`, `fetchTasks`, cached task state).
+- [x] Focused regression coverage still covers owner scoping and `next_run_at` serialization on the renamed route.
 
 ---
 

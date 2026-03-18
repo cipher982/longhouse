@@ -123,7 +123,7 @@ export interface AppState {
 
   // Oikos-Zerg integration
   oikosClient: unknown | null
-  cachedFiches: unknown[]
+  cachedTasks: unknown[]
 
   // Media state
   sharedMicStream: MediaStream | null
@@ -153,7 +153,7 @@ export type AppAction =
   | { type: 'SET_SIDEBAR_OPEN'; open: boolean }
   | { type: 'SET_CONNECTED'; connected: boolean }
   | { type: 'SET_OIKOS_CLIENT'; client: unknown }
-  | { type: 'SET_CACHED_FICHES'; fiches: unknown[] }
+  | { type: 'SET_CACHED_TASKS'; tasks: unknown[] }
   | { type: 'SET_MIC_STREAM'; stream: MediaStream | null }
   | { type: 'SET_AVAILABLE_MODELS'; models: ModelInfo[] }
   | { type: 'SET_PREFERENCES'; preferences: ChatPreferences }

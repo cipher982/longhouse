@@ -4,7 +4,7 @@ Sub-routers (each is a focused module with its own endpoints):
 - oikos_chat: POST /chat, POST /run/{id}/cancel
 - oikos_config: GET /bootstrap, PATCH /preferences, GET /thread, DELETE /thread, GET /session
 - oikos_history: GET /history, DELETE /history (deprecated compatibility)
-- oikos_fiches: GET /fiches
+- oikos_tasks: GET /tasks
 - oikos_runs: GET /runs, GET /runs/active, GET /runs/{id}, etc.
 - oikos_internal: POST /internal/runs/{id}/resume
 - voice: POST /voice/turn, POST /voice/transcribe, POST /voice/tts
@@ -26,10 +26,10 @@ from zerg.events.event_bus import event_bus
 from zerg.routers import oikos_chat
 from zerg.routers import oikos_config
 from zerg.routers import oikos_conversations
-from zerg.routers import oikos_fiches
 from zerg.routers import oikos_history
 from zerg.routers import oikos_internal
 from zerg.routers import oikos_runs
+from zerg.routers import oikos_tasks
 from zerg.voice import router as oikos_voice
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ router.include_router(oikos_chat.router)
 router.include_router(oikos_config.router)
 router.include_router(oikos_conversations.router)
 router.include_router(oikos_history.router)
-router.include_router(oikos_fiches.router)
+router.include_router(oikos_tasks.router)
 router.include_router(oikos_runs.router)
 router.include_router(oikos_internal.router)
 router.include_router(oikos_voice.router, tags=["oikos-voice"])

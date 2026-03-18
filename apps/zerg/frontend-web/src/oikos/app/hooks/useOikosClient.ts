@@ -2,7 +2,7 @@
  * useOikosClient hook - Zerg backend communication
  *
  * This hook manages the connection to the Zerg backend via OikosClient.
- * Handles authentication, session management, and fiche communication.
+ * Handles authentication, session management, and task communication.
  */
 
 import { useCallback, useEffect, useRef } from 'react'
@@ -41,7 +41,7 @@ export function useOikosClient(options: UseOikosClientOptions = {}) {
   const dispatch = useAppDispatch()
   const clientRef = useRef<ReturnType<typeof getOikosClient> | null>(null)
 
-  const { oikosClient, isConnected, cachedFiches } = state
+  const { oikosClient, isConnected, cachedTasks } = state
 
   // Initialize client
   const initialize = useCallback(async () => {
@@ -98,19 +98,19 @@ export function useOikosClient(options: UseOikosClientOptions = {}) {
     options.onDisconnected?.()
   }, [dispatch, options])
 
-  // Fetch available fiches
-  const fetchFiches = useCallback(async () => {
+  // Fetch available tasks
+  const fetchTasks = useCallback(async () => {
     if (!clientRef.current) {
       console.warn('[useOikosClient] Client not initialized')
       return []
     }
 
     try {
-      const fiches = await clientRef.current.listFiches()
-      dispatch({ type: 'SET_CACHED_FICHES', fiches })
-      return fiches
+      const tasks = await clientRef.current.listTasks()
+      dispatch({ type: 'SET_CACHED_TASKS', tasks })
+      return tasks
     } catch (error) {
-      console.error('[useOikosClient] Failed to fetch fiches:', error)
+      console.error('[useOikosClient] Failed to fetch tasks:', error)
       options.onError?.(error as Error)
       return []
     }
@@ -127,12 +127,12 @@ export function useOikosClient(options: UseOikosClientOptions = {}) {
     // State
     client: oikosClient,
     isConnected,
-    fiches: cachedFiches,
+    tasks: cachedTasks,
 
     // Actions
     initialize,
     connect,
     disconnect,
-    fetchFiches,
+    fetchTasks,
   }
 }

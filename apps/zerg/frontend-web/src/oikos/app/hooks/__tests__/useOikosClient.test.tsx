@@ -18,8 +18,8 @@ const mockClient = vi.hoisted(() => ({
     handlersRef.current = handlers;
   }),
   disconnectEventStream: vi.fn(),
-  listFiches: vi.fn().mockResolvedValue([
-    { id: 1, name: 'Fiche One', status: 'idle' },
+  listTasks: vi.fn().mockResolvedValue([
+    { id: 1, name: 'Task One', status: 'idle' },
   ]),
 }));
 
@@ -36,7 +36,7 @@ beforeEach(() => {
   mockClient.isAuthenticated.mockResolvedValue(false);
   mockClient.connectEventStream.mockClear();
   mockClient.disconnectEventStream.mockClear();
-  mockClient.listFiches.mockClear();
+  mockClient.listTasks.mockClear();
 });
 
 describe('useOikosClient', () => {
@@ -57,20 +57,20 @@ describe('useOikosClient', () => {
     expect(result.current.isConnected).toBe(true);
   });
 
-  it('fetchFiches requests fresh data and updates cache', async () => {
+  it('fetchTasks requests fresh data and updates cache', async () => {
     const { result } = renderHook(() => useOikosClient({ autoConnect: false }), { wrapper });
 
     await act(async () => {
       await result.current.initialize();
     });
 
-    let fiches: Array<{ id: number; name: string; status: string }> = [];
+    let tasks: Array<{ id: number; name: string; status: string }> = [];
     await act(async () => {
-      fiches = await result.current.fetchFiches();
+      tasks = await result.current.fetchTasks();
     });
 
-    expect(mockClient.listFiches).toHaveBeenCalledTimes(1);
-    expect(fiches).toEqual([{ id: 1, name: 'Fiche One', status: 'idle' }]);
-    expect(result.current.fiches).toEqual([{ id: 1, name: 'Fiche One', status: 'idle' }]);
+    expect(mockClient.listTasks).toHaveBeenCalledTimes(1);
+    expect(tasks).toEqual([{ id: 1, name: 'Task One', status: 'idle' }]);
+    expect(result.current.tasks).toEqual([{ id: 1, name: 'Task One', status: 'idle' }]);
   });
 });
