@@ -341,7 +341,10 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     assert wakeups[0].trigger_type == "session_completed"
     assert wakeups[0].payload["presence_state"] == "idle"
     assert wakeups[0].payload["shadow_review"]["decision"]["decision"] == "suggest_continue"
+    assert wakeups[0].payload["shadow_review"]["decision"]["execution_state"] == "awaiting_user_approval"
     assert wakeups[0].payload["shadow_review"]["context"]["primary_session"]["loop_mode"] == "assist"
+    assert wakeups[0].payload["shadow_review"]["loop_review"]["mode_capability"] == "notify_only"
+    assert wakeups[0].payload["shadow_review"]["loop_review"]["would_notify_user"] is True
 
 
 @pytest.mark.asyncio
