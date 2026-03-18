@@ -21,6 +21,10 @@ import type { ActiveSession } from "../hooks/useActiveSessions";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
 import {
+  fetchLatestSessionShadowReview,
+  type SessionShadowReview,
+} from "../services/api/oikos";
+import {
   formatProviderLabel,
   getSessionOriginLabel,
   supportsCloudContinuation,
@@ -45,6 +49,9 @@ export default function SessionDetailPage() {
   const workspace = useSessionWorkspace(sessionId || null, { highlightEventId });
   const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
   const [loopModePending, setLoopModePending] = useState(false);
+  const [latestShadowReview, setLatestShadowReview] = useState<SessionShadowReview | null>(null);
+  const [shadowReviewLoading, setShadowReviewLoading] = useState(false);
+  const [shadowReviewUnavailable, setShadowReviewUnavailable] = useState(false);
 
   const {
     session,
@@ -122,6 +129,38 @@ export default function SessionDetailPage() {
     setLoopModeOverride(null);
     setLoopModePending(false);
   }, [session?.id, session?.loop_mode]);
+
+  useEffect(() => {
+    if (!session?.id) {
+      setLatestShadowReview(null);
+      setShadowReviewLoading(false);
+      setShadowReviewUnavailable(false);
+      return;
+    }
+
+    let cancelled = false;
+    setShadowReviewLoading(true);
+    setShadowReviewUnavailable(false);
+
+    void fetchLatestSessionShadowReview(session.id)
+      .then((review) => {
+        if (cancelled) return;
+        setLatestShadowReview(review);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLatestShadowReview(null);
+        setShadowReviewUnavailable(true);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setShadowReviewLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id]);
 
   if (sessionLoading) {
     return (
@@ -317,6 +356,9 @@ export default function SessionDetailPage() {
             continuationNotice={continuationNotice}
             loopModePending={loopModePending}
             onLoopModeChange={handleLoopModeChange}
+            latestShadowReview={latestShadowReview}
+            shadowReviewLoading={shadowReviewLoading}
+            shadowReviewUnavailable={shadowReviewUnavailable}
           />
         }
         main={

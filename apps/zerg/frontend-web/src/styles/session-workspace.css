@@ -427,6 +427,57 @@
     color: var(--color-text-muted);
   }
 
+  .session-shadow-review {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(158, 124, 90, 0.16);
+    background: rgba(18, 11, 9, 0.56);
+  }
+
+  .session-shadow-review__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .session-shadow-review__stamp,
+  .session-shadow-review__meta,
+  .session-shadow-review__empty {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    line-height: 1.5;
+  }
+
+  .session-shadow-review__summary {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    line-height: 1.5;
+  }
+
+  .session-shadow-review__mode {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    line-height: 1.5;
+  }
+
+  .session-shadow-review__blockers {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .session-shadow-review__blocker {
+    font-size: var(--font-size-xs);
+    color: var(--color-warning-300);
+    line-height: 1.5;
+  }
+
   .timeline-pane__header {
     display: flex;
     align-items: center;

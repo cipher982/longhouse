@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SessionContextPane } from "../SessionContextPane";
 import type { AgentSession, SessionLoopMode } from "../../../services/api/agents";
+import type { SessionShadowReview } from "../../../services/api/oikos";
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -41,10 +42,16 @@ function renderPane(
     session = makeSession(),
     onLoopModeChange = vi.fn(),
     loopModePending = false,
+    latestShadowReview = null,
+    shadowReviewLoading = false,
+    shadowReviewUnavailable = false,
   }: {
     session?: AgentSession;
     onLoopModeChange?: (nextMode: SessionLoopMode) => void;
     loopModePending?: boolean;
+    latestShadowReview?: SessionShadowReview | null;
+    shadowReviewLoading?: boolean;
+    shadowReviewUnavailable?: boolean;
   } = {},
 ) {
   return render(
@@ -58,8 +65,31 @@ function renderPane(
       onOpenLatest={vi.fn()}
       onLoopModeChange={onLoopModeChange}
       loopModePending={loopModePending}
+      latestShadowReview={latestShadowReview}
+      shadowReviewLoading={shadowReviewLoading}
+      shadowReviewUnavailable={shadowReviewUnavailable}
     />,
   );
+}
+
+function makeShadowReview(overrides: Partial<SessionShadowReview> = {}): SessionShadowReview {
+  return {
+    generatedAt: "2026-03-17T11:00:00Z",
+    triggerType: "presence.blocked",
+    decision: "suggest_continue",
+    summary: "Ask the user whether Oikos should continue the bounded follow-up.",
+    rationale: "The session has one bounded next step but still needs approval.",
+    needsHuman: true,
+    loopMode: "assist",
+    modeCapability: "notify_only",
+    modeSummary: "Suggest bounded next steps or escalations, but wait for user approval before continuing.",
+    executionState: "awaiting_user_approval",
+    wouldNotifyUser: true,
+    wouldContinueSession: false,
+    blockedReasons: ["Waiting on direct approval before resuming the session."],
+    recommendedAction: "continue_session",
+    ...overrides,
+  };
 }
 
 describe("SessionContextPane", () => {
@@ -86,5 +116,21 @@ describe("SessionContextPane", () => {
     for (const label of ["Manual", "Assist", "Autopilot"]) {
       expect(screen.getByRole("radio", { name: new RegExp(label, "i") })).toBeDisabled();
     }
+  });
+
+  it("renders the latest shadow review details", () => {
+    renderPane({ latestShadowReview: makeShadowReview() });
+
+    expect(screen.getByTestId("session-shadow-review")).toBeInTheDocument();
+    expect(screen.getByText(/Awaiting Approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Trigger: presence.blocked/i)).toBeInTheDocument();
+    expect(screen.getByText(/Recommended action: Continue Session/i)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting on direct approval/i)).toBeInTheDocument();
+  });
+
+  it("shows a graceful empty state when no shadow review is available", () => {
+    renderPane({ shadowReviewUnavailable: true });
+
+    expect(screen.getByText(/Shadow review is unavailable right now/i)).toBeInTheDocument();
   });
 });
