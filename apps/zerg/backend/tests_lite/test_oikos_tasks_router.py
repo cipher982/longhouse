@@ -1,4 +1,4 @@
-"""Tests for Oikos fiche listing endpoint."""
+"""Tests for Oikos task listing endpoint."""
 
 from datetime import datetime
 
@@ -17,7 +17,7 @@ from zerg.models.enums import UserRole
 
 def _make_db(tmp_path):
     """Create a SQLite DB for tests and return a session factory."""
-    db_path = tmp_path / "test_oikos_fiches.db"
+    db_path = tmp_path / "test_oikos_tasks.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
@@ -43,8 +43,8 @@ def _make_client(db_session, current_user):
     return TestClient(app, backend="asyncio"), api_app
 
 
-def test_oikos_fiches_returns_next_run_at_and_scopes_to_owner(tmp_path):
-    """GET /api/oikos/fiches returns stored next_run_at and filters by owner."""
+def test_oikos_tasks_returns_next_run_at_and_scopes_to_owner(tmp_path):
+    """GET /api/oikos/tasks returns stored next_run_at and filters by owner."""
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
@@ -60,7 +60,7 @@ def test_oikos_fiches_returns_next_run_at_and_scopes_to_owner(tmp_path):
             [
                 Fiche(
                     owner_id=owner.id,
-                    name="Owner Fiche",
+                    name="Owner Task",
                     status=FicheStatus.IDLE.value,
                     system_instructions="owner system instructions",
                     task_instructions="owner task instructions",
@@ -70,7 +70,7 @@ def test_oikos_fiches_returns_next_run_at_and_scopes_to_owner(tmp_path):
                 ),
                 Fiche(
                     owner_id=other.id,
-                    name="Other Fiche",
+                    name="Other Task",
                     status=FicheStatus.IDLE.value,
                     system_instructions="other system instructions",
                     task_instructions="other task instructions",
@@ -84,12 +84,12 @@ def test_oikos_fiches_returns_next_run_at_and_scopes_to_owner(tmp_path):
 
         client, api_app_ref = _make_client(db, owner)
         try:
-            response = client.get("/api/oikos/fiches")
+            response = client.get("/api/oikos/tasks")
             assert response.status_code == 200
             payload = response.json()
 
             assert len(payload) == 1
-            assert payload[0]["name"] == "Owner Fiche"
+            assert payload[0]["name"] == "Owner Task"
             assert payload[0]["schedule"] == "30 14 * * *"
             assert payload[0]["next_run_at"] is not None
             assert payload[0]["next_run_at"].startswith("2026-03-05T14:30:00")

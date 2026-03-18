@@ -65,7 +65,7 @@ export interface AppState {
 
   // Oikos-Zerg integration
   oikosClient: OikosAPIClient | null; // Type from @oikos/core
-  cachedFiches: unknown[];
+  cachedTasks: unknown[];
   bootstrap: BootstrapData | null;
 
   // UI state
@@ -129,7 +129,7 @@ export class StateManager {
 
       // Oikos-Zerg integration
       oikosClient: null,
-      cachedFiches: [],
+      cachedTasks: [],
       bootstrap: null,
 
       // UI state
@@ -297,10 +297,10 @@ export class StateManager {
   }
 
   /**
-   * Update cached fiches
+   * Update cached tasks
    */
-  setCachedFiches(fiches: unknown[]): void {
-    this.state.cachedFiches = fiches;
+  setCachedTasks(tasks: unknown[]): void {
+    this.state.cachedTasks = tasks;
   }
 
   /**

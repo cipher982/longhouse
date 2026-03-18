@@ -34,7 +34,7 @@ const initialState: AppState = {
 
   // Oikos-Zerg integration
   oikosClient: null,
-  cachedFiches: [],
+  cachedTasks: [],
 
   // Media
   sharedMicStream: null,
@@ -115,8 +115,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, isConnected: action.connected }
     case 'SET_OIKOS_CLIENT':
       return { ...state, oikosClient: action.client }
-    case 'SET_CACHED_FICHES':
-      return { ...state, cachedFiches: action.fiches }
+    case 'SET_CACHED_TASKS':
+      return { ...state, cachedTasks: action.tasks }
     case 'SET_MIC_STREAM':
       return { ...state, sharedMicStream: action.stream }
     case 'SET_AVAILABLE_MODELS':

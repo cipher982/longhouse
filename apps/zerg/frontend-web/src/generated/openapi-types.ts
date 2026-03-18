@@ -2377,7 +2377,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/oikos/fiches": {
+    "/api/oikos/tasks": {
         parameters: {
             query?: never;
             header?: never;
@@ -2385,10 +2385,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Oikos Fiches
-         * @description List the current user's fiches with schedule and status summaries.
+         * List Oikos Tasks
+         * @description List the current user's tasks with schedule and status summaries.
          */
-        get: operations["list_oikos_fiches_oikos_fiches_get"];
+        get: operations["list_oikos_tasks_oikos_tasks_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7912,24 +7912,6 @@ export interface components {
             replay_scenario?: string | null;
         };
         /**
-         * OikosFicheSummary
-         * @description Minimal fiche summary for Oikos UI.
-         */
-        OikosFicheSummary: {
-            /** Id */
-            id: number;
-            /** Name */
-            name: string;
-            /** Status */
-            status: string;
-            /** Schedule */
-            schedule?: string | null;
-            /** Next Run At */
-            next_run_at?: string | null;
-            /** Description */
-            description?: string | null;
-        };
-        /**
          * OikosHistoryResponse
          * @description Chat history response.
          */
@@ -8051,6 +8033,24 @@ export interface components {
             updated_at: string;
             /** Completed At */
             completed_at?: string | null;
+        };
+        /**
+         * OikosTaskSummary
+         * @description Minimal task summary for Oikos UI.
+         */
+        OikosTaskSummary: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Schedule */
+            schedule?: string | null;
+            /** Next Run At */
+            next_run_at?: string | null;
+            /** Description */
+            description?: string | null;
         };
         /**
          * OikosThreadInfo
@@ -15197,7 +15197,7 @@ export interface operations {
             };
         };
     };
-    list_oikos_fiches_oikos_fiches_get: {
+    list_oikos_tasks_oikos_tasks_get: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -15216,7 +15216,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OikosFicheSummary"][];
+                    "application/json": components["schemas"]["OikosTaskSummary"][];
                 };
             };
             /** @description Validation Error */

@@ -3,13 +3,13 @@
  *
  * Provides typed client for Oikos-specific endpoints:
  * - Authentication (HttpOnly cookie via longhouse_session)
- * - Fiche listing
+ * - Task listing
  * - Run history
  * - Task dispatch
  * - SSE event streaming
  */
 
-export interface OikosFicheSummary {
+export interface OikosTaskSummary {
   id: number;
   name: string;
   status: string;
@@ -116,13 +116,13 @@ export class OikosAPIClient {
   }
 
   /**
-   * List available fiches
+   * List available tasks
    */
-  async listFiches(): Promise<OikosFicheSummary[]> {
-    const response = await this.authenticatedFetch(`${this._baseURL}/api/oikos/fiches`);
+  async listTasks(): Promise<OikosTaskSummary[]> {
+    const response = await this.authenticatedFetch(`${this._baseURL}/api/oikos/tasks`);
 
     if (!response.ok) {
-      throw new Error(`Failed to list fiches: ${response.statusText}`);
+      throw new Error(`Failed to list tasks: ${response.statusText}`);
     }
 
     return response.json();
@@ -131,13 +131,11 @@ export class OikosAPIClient {
   /**
    * Get recent task runs
    */
-  async listRuns(options?: { limit?: number; task_id?: number; fiche_id?: number }): Promise<OikosRunSummary[]> {
+  async listRuns(options?: { limit?: number; task_id?: number }): Promise<OikosRunSummary[]> {
     const params = new URLSearchParams();
     if (options?.limit != null) params.append('limit', options.limit.toString());
     if (options?.task_id != null) {
       params.append('task_id', options.task_id.toString());
-    } else if (options?.fiche_id != null) {
-      params.append('fiche_id', options.fiche_id.toString());
     }
 
     const url = `${this._baseURL}/api/oikos/runs${params.toString() ? '?' + params.toString() : ''}`;
