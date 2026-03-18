@@ -59,7 +59,6 @@ async def _event_generator(_current_user):
         await queue.put(event)
 
     event_bus.subscribe(EventType.AUTOMATION_UPDATED, _handler)
-    event_bus.subscribe(EventType.FICHE_UPDATED, _handler)
     event_bus.subscribe(EventType.RUN_CREATED, _handler)
     event_bus.subscribe(EventType.RUN_UPDATED, _handler)
 
@@ -89,7 +88,6 @@ async def _event_generator(_current_user):
         logger.info("Oikos SSE stream disconnected")
     finally:
         event_bus.unsubscribe(EventType.AUTOMATION_UPDATED, _handler)
-        event_bus.unsubscribe(EventType.FICHE_UPDATED, _handler)
         event_bus.unsubscribe(EventType.RUN_CREATED, _handler)
         event_bus.unsubscribe(EventType.RUN_UPDATED, _handler)
 

@@ -43,7 +43,7 @@
         }
       }
     },
-    "FicheRef": {
+    "AutomationRef": {
       "type": "object",
       "required": [
         "id"
@@ -380,7 +380,7 @@
         }
       }
     },
-    "FicheEventData": {
+    "AutomationEventData": {
       "type": "object",
       "required": [
         "id"
@@ -517,8 +517,6 @@
             "run_failed",
             "automation_created",
             "automation_updated",
-            "fiche_created",
-            "fiche_updated",
             "thread_message_created",
             "budget_denied"
           ]

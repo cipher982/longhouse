@@ -43,7 +43,7 @@
         "AssistantId"
       ]
     },
-    "FicheChannel": {
+    "AutomationChannel": {
       "address": "automation:{automation_id}",
       "description": "Automation lifecycle events and run updates",
       "parameters": {
@@ -56,7 +56,7 @@
         }
       },
       "messages": [
-        "FicheEvent",
+        "AutomationEvent",
         "RunUpdate"
       ]
     },
@@ -207,18 +207,14 @@
     "automation_event": {
       "summary": "Automation lifecycle or status event",
       "payload_schema": {
-        "$ref": "#/components/schemas/FicheEventData"
+        "$ref": "#/components/schemas/AutomationEventData"
       },
-      "handler_method": "handle_fiche_event",
+      "handler_method": "handle_automation_event",
       "aliases": [
         "automation_created",
         "automation_updated",
         "automation_deleted",
-        "automation_state",
-        "fiche_created",
-        "fiche_updated",
-        "fiche_deleted",
-        "fiche_state"
+        "automation_state"
       ]
     },
     "run_update": {
@@ -261,10 +257,10 @@
       },
       "messages": []
     },
-    "FicheOperations": {
+    "AutomationOperations": {
       "action": "send",
       "channel": {
-        "$ref": "#/channels/FicheChannel"
+        "$ref": "#/channels/AutomationChannel"
       },
       "messages": []
     },
@@ -305,7 +301,7 @@
       "subscribe"
     ],
     "authorization_checks": [
-      "fiche_event",
+      "automation_event",
       "run_update"
     ],
     "data_validation": "strict",

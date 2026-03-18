@@ -50,8 +50,8 @@ class Envelope(BaseModel):
 
 # Message payload schemas
 
-class FicheRef(BaseModel):
-    """Payload for FicheRef messages"""
+class AutomationRef(BaseModel):
+    """Payload for AutomationRef messages"""
 
     id: int = Field(ge=1, description='')
 
@@ -160,8 +160,8 @@ class AssistantIdData(BaseModel):
     thread_id: int = Field(ge=1, description='')
     message_id: int = Field(ge=1, description='')
 
-class FicheEventData(BaseModel):
-    """Payload for FicheEventData messages"""
+class AutomationEventData(BaseModel):
+    """Payload for AutomationEventData messages"""
 
     id: int = Field(ge=1, description='')
     status: Optional[str] = None
@@ -197,7 +197,7 @@ class UserUpdateData(BaseModel):
 class OpsEventData(BaseModel):
     """Payload for OpsEventData messages"""
 
-    type: Literal['run_started', 'run_success', 'run_failed', 'automation_created', 'automation_updated', 'fiche_created', 'fiche_updated', 'thread_message_created', 'budget_denied']
+    type: Literal['run_started', 'run_success', 'run_failed', 'automation_created', 'automation_updated', 'thread_message_created', 'budget_denied']
     fiche_id: Optional[int] = Field(default=None, ge=1, description='')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')

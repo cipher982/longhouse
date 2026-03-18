@@ -4,7 +4,7 @@ from zerg.websocket.manager import TopicConnectionManager
 
 
 @pytest.mark.asyncio
-async def test_automation_lifecycle_events_broadcast_to_canonical_and_legacy_topics():
+async def test_automation_lifecycle_events_broadcast_to_automation_topics():
     manager = object.__new__(TopicConnectionManager)
     broadcasts: list[tuple[str, dict]] = []
 
@@ -23,22 +23,17 @@ async def test_automation_lifecycle_events_broadcast_to_canonical_and_legacy_top
         },
     )
 
-    assert [topic for topic, _ in broadcasts] == ["automation:42", "fiche:42"]
+    assert [topic for topic, _ in broadcasts] == ["automation:42"]
 
     automation_message = broadcasts[0][1]
-    legacy_message = broadcasts[1][1]
 
     assert automation_message["type"] == "automation_updated"
     assert automation_message["topic"] == "automation:42"
     assert automation_message["data"] == {"id": 42, "status": "running", "name": "Nightly sync"}
 
-    assert legacy_message["type"] == "fiche_updated"
-    assert legacy_message["topic"] == "fiche:42"
-    assert legacy_message["data"] == automation_message["data"]
-
 
 @pytest.mark.asyncio
-async def test_run_updates_broadcast_to_canonical_and_legacy_topics():
+async def test_run_updates_broadcast_to_automation_topics():
     manager = object.__new__(TopicConnectionManager)
     broadcasts: list[tuple[str, dict]] = []
 
@@ -60,17 +55,12 @@ async def test_run_updates_broadcast_to_canonical_and_legacy_topics():
         },
     )
 
-    assert [topic for topic, _ in broadcasts] == ["automation:42", "fiche:42"]
+    assert [topic for topic, _ in broadcasts] == ["automation:42"]
 
     automation_message = broadcasts[0][1]
-    legacy_message = broadcasts[1][1]
 
     assert automation_message["type"] == "run_update"
     assert automation_message["topic"] == "automation:42"
     assert automation_message["data"]["id"] == 7
     assert automation_message["data"]["thread_id"] == 123
     assert "run_id" not in automation_message["data"]
-
-    assert legacy_message["type"] == "run_update"
-    assert legacy_message["topic"] == "fiche:42"
-    assert legacy_message["data"] == automation_message["data"]

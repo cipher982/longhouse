@@ -43,7 +43,7 @@ describe("OikosAPIClient event stream", () => {
     vi.unstubAllGlobals();
   });
 
-  it("routes automation and legacy update events through the automation-first handler surface", () => {
+  it("routes automation update events through the automation-first handler surface", () => {
     const client = new OikosAPIClient("/base");
     const onAutomationUpdated = vi.fn<(event: OikosEventData) => void>();
 
@@ -62,15 +62,5 @@ describe("OikosAPIClient event stream", () => {
 
     expect(onAutomationUpdated).toHaveBeenCalledTimes(1);
     expect(onAutomationUpdated).toHaveBeenLastCalledWith(automationEvent);
-
-    const legacyEvent: OikosEventData = {
-      type: "fiche_updated",
-      payload: { id: 42, status: "success" },
-      timestamp: "2026-03-17T10:01:00Z",
-    };
-    MockEventSource.instances[0].emit("fiche_updated", legacyEvent);
-
-    expect(onAutomationUpdated).toHaveBeenCalledTimes(2);
-    expect(onAutomationUpdated).toHaveBeenLastCalledWith(legacyEvent);
   });
 });

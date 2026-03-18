@@ -64,7 +64,7 @@ channels:
       AssistantId:
         $ref: '#/components/messages/AssistantId'
 
-  FicheChannel:
+  AutomationChannel:
     address: automation:{automation_id}
     description: Automation lifecycle events and run updates
     parameters:
@@ -72,8 +72,8 @@ channels:
         description: Numeric identifier of the automation
         examples: ["17", "42"]
     messages:
-      FicheEvent:
-        $ref: '#/components/messages/FicheEvent'
+      AutomationEvent:
+        $ref: '#/components/messages/AutomationEvent'
       RunUpdate:
         $ref: '#/components/messages/RunUpdate'
 
@@ -115,10 +115,10 @@ operations:
     summary: Handle thread-level WebSocket operations
 
   # Automation operations
-  FicheOperations:
+  AutomationOperations:
     action: send
     channel:
-      $ref: '#/channels/FicheChannel'
+      $ref: '#/channels/AutomationChannel'
     summary: Handle automation-level WebSocket operations
 
   # User operations
@@ -255,21 +255,17 @@ components:
       x-aliases: []
 
     # Automation messages
-    FicheEvent:
+    AutomationEvent:
       name: automation_event
       summary: Automation lifecycle or status event
       payload:
-        $ref: '#/components/schemas/FicheEventData'
-      x-handler-method: handle_fiche_event
+        $ref: '#/components/schemas/AutomationEventData'
+      x-handler-method: handle_automation_event
       x-aliases:
         - automation_created
         - automation_updated
         - automation_deleted
         - automation_state
-        - fiche_created
-        - fiche_updated
-        - fiche_deleted
-        - fiche_state
 
     RunUpdate:
       name: run_update
@@ -324,7 +320,7 @@ components:
           description: Message payload - structure depends on type
 
     # Base reference types
-    FicheRef:
+    AutomationRef:
       type: object
       required: [id]
       properties:
@@ -547,7 +543,7 @@ components:
           minimum: 1
 
     # Automation message payloads
-    FicheEventData:
+    AutomationEventData:
       type: object
       required: [id]
       properties:
@@ -637,8 +633,6 @@ components:
             - run_failed
             - automation_created
             - automation_updated
-            - fiche_created
-            - fiche_updated
             - thread_message_created
             - budget_denied
         # Common optional fields used by various event kinds
@@ -681,13 +675,13 @@ components:
 
 x-handler-groups:
   dashboard:
-    description: Handles fiche management, runs, and ops ticker
+    description: Handles automation management, runs, and ops ticker
     handles:
       - run_update
-      - fiche_event
+      - automation_event
       - ops_event
     topics:
-      - "fiche:*"
+      - "automation:*"
       - "ops:*"
 
   chat:
@@ -717,7 +711,7 @@ x-performance-contracts:
 
 x-security-contracts:
   authentication_required: ["send_message", "subscribe"]
-  authorization_checks: ["fiche_event", "run_update"]
+  authorization_checks: ["automation_event", "run_update"]
   data_validation: "strict"
   sanitization_rules:
     user_content: "html_escape"
