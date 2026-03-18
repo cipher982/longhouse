@@ -21,8 +21,9 @@ import type { ActiveSession } from "../hooks/useActiveSessions";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
 import {
-  fetchLatestSessionShadowReview,
+  fetchSessionShadowTelemetry,
   type SessionShadowReview,
+  type SessionShadowRollup,
 } from "../services/api/oikos";
 import {
   formatProviderLabel,
@@ -50,6 +51,7 @@ export default function SessionDetailPage() {
   const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
   const [loopModePending, setLoopModePending] = useState(false);
   const [latestShadowReview, setLatestShadowReview] = useState<SessionShadowReview | null>(null);
+  const [shadowRollup, setShadowRollup] = useState<SessionShadowRollup | null>(null);
   const [shadowReviewLoading, setShadowReviewLoading] = useState(false);
   const [shadowReviewUnavailable, setShadowReviewUnavailable] = useState(false);
 
@@ -133,6 +135,7 @@ export default function SessionDetailPage() {
   useEffect(() => {
     if (!session?.id) {
       setLatestShadowReview(null);
+      setShadowRollup(null);
       setShadowReviewLoading(false);
       setShadowReviewUnavailable(false);
       return;
@@ -142,14 +145,16 @@ export default function SessionDetailPage() {
     setShadowReviewLoading(true);
     setShadowReviewUnavailable(false);
 
-    void fetchLatestSessionShadowReview(session.id)
-      .then((review) => {
+    void fetchSessionShadowTelemetry(session.id)
+      .then((telemetry) => {
         if (cancelled) return;
-        setLatestShadowReview(review);
+        setLatestShadowReview(telemetry.latestReview);
+        setShadowRollup(telemetry.rollup);
       })
       .catch(() => {
         if (cancelled) return;
         setLatestShadowReview(null);
+        setShadowRollup(null);
         setShadowReviewUnavailable(true);
       })
       .finally(() => {
@@ -357,6 +362,7 @@ export default function SessionDetailPage() {
             loopModePending={loopModePending}
             onLoopModeChange={handleLoopModeChange}
             latestShadowReview={latestShadowReview}
+            shadowRollup={shadowRollup}
             shadowReviewLoading={shadowReviewLoading}
             shadowReviewUnavailable={shadowReviewUnavailable}
           />

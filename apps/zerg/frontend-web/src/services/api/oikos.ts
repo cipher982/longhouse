@@ -45,6 +45,13 @@ export type SessionShadowAlignment =
   | "failed"
   | (string & {});
 
+export type SessionShadowReadiness =
+  | "no_signal"
+  | "early"
+  | "promising"
+  | "caution"
+  | (string & {});
+
 export interface SessionShadowReview {
   generatedAt: string;
   triggerType: string;
@@ -65,6 +72,22 @@ export interface SessionShadowReview {
   actualOutcome: SessionShadowOutcome | null;
   expectedOutcome: SessionShadowOutcome | null;
   alignment: SessionShadowAlignment | null;
+}
+
+export interface SessionShadowRollup {
+  totalReviews: number;
+  pendingReviews: number;
+  matched: number;
+  moreConservative: number;
+  moreAggressive: number;
+  different: number;
+  failed: number;
+  readiness: SessionShadowReadiness;
+}
+
+export interface SessionShadowTelemetry {
+  latestReview: SessionShadowReview | null;
+  rollup: SessionShadowRollup | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -124,17 +147,69 @@ function parseShadowReview(wakeup: OikosWakeupSummary): SessionShadowReview | nu
   };
 }
 
+function buildSessionShadowRollup(reviews: SessionShadowReview[]): SessionShadowRollup | null {
+  if (reviews.length === 0) return null;
+
+  const rollup: SessionShadowRollup = {
+    totalReviews: 0,
+    pendingReviews: 0,
+    matched: 0,
+    moreConservative: 0,
+    moreAggressive: 0,
+    different: 0,
+    failed: 0,
+    readiness: "no_signal",
+  };
+
+  for (const review of reviews) {
+    if (!review.alignment) {
+      rollup.pendingReviews += 1;
+      continue;
+    }
+
+    rollup.totalReviews += 1;
+    if (review.alignment === "matched") rollup.matched += 1;
+    if (review.alignment === "more_conservative") rollup.moreConservative += 1;
+    if (review.alignment === "more_aggressive") rollup.moreAggressive += 1;
+    if (review.alignment === "different") rollup.different += 1;
+    if (review.alignment === "failed") rollup.failed += 1;
+  }
+
+  const cautionCount = rollup.moreAggressive + rollup.different + rollup.failed;
+  if (rollup.totalReviews === 0) {
+    rollup.readiness = "no_signal";
+  } else if (cautionCount > 0) {
+    rollup.readiness = "caution";
+  } else if (rollup.matched >= 3) {
+    rollup.readiness = "promising";
+  } else {
+    rollup.readiness = "early";
+  }
+
+  return rollup;
+}
+
+export async function fetchSessionShadowTelemetry(
+  sessionId: string,
+): Promise<SessionShadowTelemetry> {
+  const params = new URLSearchParams({
+    session_id: sessionId,
+    limit: "25",
+  });
+  const wakeups = await request<OikosWakeupSummary[]>(`/oikos/wakeups?${params.toString()}`);
+  const reviews = wakeups
+    .map(parseShadowReview)
+    .filter((review): review is SessionShadowReview => review !== null);
+
+  return {
+    latestReview: reviews[0] ?? null,
+    rollup: buildSessionShadowRollup(reviews),
+  };
+}
+
 export async function fetchLatestSessionShadowReview(
   sessionId: string,
 ): Promise<SessionShadowReview | null> {
-  const params = new URLSearchParams({
-    session_id: sessionId,
-    limit: "10",
-  });
-  const wakeups = await request<OikosWakeupSummary[]>(`/oikos/wakeups?${params.toString()}`);
-  for (const wakeup of wakeups) {
-    const parsed = parseShadowReview(wakeup);
-    if (parsed) return parsed;
-  }
-  return null;
+  const telemetry = await fetchSessionShadowTelemetry(sessionId);
+  return telemetry.latestReview;
 }
