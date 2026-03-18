@@ -1,6 +1,8 @@
 .session-workspace-route {
+    width: 100%;
     height: 100%;
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
@@ -17,6 +19,8 @@
     --workspace-inspector-width: 336px;
     flex: 1;
     min-height: 0;
+    min-width: 0;
+    width: 100%;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     gap: var(--space-3);
@@ -32,6 +36,8 @@
 
   .workspace-shell__body {
     min-height: 0;
+    min-width: 0;
+    width: 100%;
     display: grid;
     position: relative;
     grid-template-columns:
@@ -96,6 +102,7 @@
 
   .workspace-shell__pane {
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1033,23 +1040,41 @@
 
   @media (max-width: 900px) {
     .session-workspace-route {
-      padding: var(--space-4);
+      padding: var(--space-3);
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .workspace-shell {
+      flex: none;
+      min-height: auto;
     }
 
     .workspace-shell__body {
       grid-template-columns: 1fr;
-      grid-template-rows: auto minmax(360px, 1fr) minmax(280px, auto);
+      grid-template-rows: auto minmax(160px, auto) minmax(220px, auto);
       grid-template-areas:
-        "sidebar"
         "main"
+        "sidebar"
         "inspector";
+      overflow: visible;
     }
 
     .workspace-shell--inspector-collapsed .workspace-shell__body {
-      grid-template-rows: auto minmax(360px, 1fr);
+      grid-template-columns: 1fr;
+      grid-template-rows: auto minmax(160px, auto);
       grid-template-areas:
-        "sidebar"
-        "main";
+        "main"
+        "sidebar";
+    }
+
+    .workspace-shell__pane--main {
+      min-height: min(78svh, 560px);
+    }
+
+    .workspace-shell__pane--sidebar,
+    .workspace-shell__pane--inspector {
+      max-height: min(40svh, 420px);
     }
 
     .timeline-pane__header,
@@ -1059,14 +1084,35 @@
       align-items: stretch;
     }
 
+    .timeline-pane__header-main,
+    .timeline-pane__header-actions {
+      flex: 0 1 auto;
+      width: 100%;
+    }
+
     .session-workspace-header__context {
-      align-items: center;
+      align-items: flex-start;
       flex-wrap: wrap;
     }
 
     .timeline-pane__search {
       width: 100%;
       max-width: none;
+    }
+
+    .timeline-pane__title-group {
+      width: 100%;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .timeline-pane__filters {
+      width: 100%;
+    }
+
+    .timeline-pane__list {
+      min-height: min(32svh, 260px);
     }
 
     .timeline-row--message {
