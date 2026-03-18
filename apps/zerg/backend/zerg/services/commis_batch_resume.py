@@ -47,7 +47,7 @@ async def resume_oikos_batch(
         run_id: Run ID to resume.
         commis_results: List of dicts with tool_call_id, result, error, status.
         runner_factory: Callable that creates a ContinuationRunner from
-            (fiche, model_override, reasoning_effort). Defaults to FicheRunner.
+            (fiche, model_override, reasoning_effort). Defaults to RuntimeRunner.
 
     Returns:
         Dict with {"status": "success"|"waiting"|"error"|"skipped", ...}
@@ -57,7 +57,7 @@ async def resume_oikos_batch(
     from zerg.events import OikosEmitter
     from zerg.events import reset_emitter
     from zerg.events import set_emitter
-    from zerg.managers.fiche_runner import FicheInterrupted
+    from zerg.managers.runtime_runner import RunnerInterrupted
     from zerg.services.event_store import emit_run_event
     from zerg.services.oikos_context import reset_oikos_context
     from zerg.services.oikos_context import set_oikos_context
@@ -238,7 +238,7 @@ async def resume_oikos_batch(
         logger.info("Successfully batch resumed oikos run %s", run_id)
         return {"status": "success", "result": final_response}
 
-    except FicheInterrupted as e:
+    except RunnerInterrupted as e:
         # Oikos spawned more commis - set back to WAITING and reuse/reset barrier
         interrupt_value = e.interrupt_value
         interrupt_message = "Working on more tasks in the background..."

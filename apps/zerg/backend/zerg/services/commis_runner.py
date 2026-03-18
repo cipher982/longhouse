@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 @runtime_checkable
 class ContinuationRunner(Protocol):
-    """Protocol for continuation-capable fiche runners."""
+    """Protocol for continuation-capable runtime runners."""
 
     usage_prompt_tokens: int | None
     usage_completion_tokens: int | None
@@ -51,7 +51,7 @@ def default_runner_factory(
     model_override: str | None = None,
     reasoning_effort: str | None = None,
 ) -> ContinuationRunner:
-    """Create the default continuation runner backed by FicheRunner."""
-    from zerg.managers.fiche_runner import FicheRunner
+    """Create the default continuation runner backed by RuntimeRunner."""
+    from zerg.managers.runtime_runner import RuntimeRunner
 
-    return FicheRunner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)
+    return RuntimeRunner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)

@@ -6,8 +6,8 @@ manager implementation so that higher-level orchestration code can rely
 on a clean, well-typed interface rather than calling the low-level *crud*
 functions directly.
 
-The goal is **separation of concerns** – FicheDefinition (LLM logic) and
-FicheRunner (execution orchestration) should not be aware of SQLAlchemy or
+The goal is **separation of concerns** – prompt/runtime logic and
+RuntimeRunner (execution orchestration) should not be aware of SQLAlchemy or
 our schema details.
 """
 
@@ -216,7 +216,7 @@ class ThreadService:
         )
 
         # System prompt is now injected at runtime, not stored in DB
-        # See: fiche_runner.py run_thread() for runtime injection
+        # See: runtime_runner.py run_thread() for runtime injection
 
         return thread
 

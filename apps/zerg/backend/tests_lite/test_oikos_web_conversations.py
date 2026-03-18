@@ -57,7 +57,7 @@ def _patch_oikos_run_side_effects(monkeypatch, runner_cls):
     async def _noop_async(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr("zerg.services.oikos_service.Runner", runner_cls)
+    monkeypatch.setattr("zerg.services.oikos_service.RuntimeRunner", runner_cls)
     monkeypatch.setattr("zerg.services.event_store.emit_run_event", _noop_async)
     monkeypatch.setattr("zerg.services.oikos_service.emit_oikos_complete_success", _noop_async)
     monkeypatch.setattr("zerg.services.oikos_service.emit_stream_control_for_pending_commiss", _noop_async)

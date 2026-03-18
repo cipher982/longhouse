@@ -8,7 +8,7 @@ from zerg.crud import create_thread_message
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.managers.fiche_runner import FicheInterrupted
+from zerg.managers.runtime_runner import RunnerInterrupted
 from zerg.models.agents import AgentsBase
 from zerg.models.enums import UserRole
 from zerg.models.models import CommisJob
@@ -99,7 +99,7 @@ async def test_run_oikos_marks_enqueued_wakeup_ignored_when_no_follow_up(monkeyp
                 )
                 return [assistant]
 
-        monkeypatch.setattr("zerg.services.oikos_service.Runner", FakeRunner)
+        monkeypatch.setattr("zerg.services.oikos_service.RuntimeRunner", FakeRunner)
 
         service = OikosService(db)
         result = await service.run_oikos(
@@ -148,7 +148,7 @@ async def test_run_oikos_marks_waiting_wakeup_acted_when_continuing_session(monk
                 inner_db.add(job)
                 inner_db.commit()
                 inner_db.refresh(job)
-                raise FicheInterrupted(
+                raise RunnerInterrupted(
                     {
                         "type": "commis_pending",
                         "job_id": job.id,
@@ -156,7 +156,7 @@ async def test_run_oikos_marks_waiting_wakeup_acted_when_continuing_session(monk
                     }
                 )
 
-        monkeypatch.setattr("zerg.services.oikos_service.Runner", FakeRunner)
+        monkeypatch.setattr("zerg.services.oikos_service.RuntimeRunner", FakeRunner)
 
         service = OikosService(db)
         result = await service.run_oikos(
@@ -198,7 +198,7 @@ async def test_run_oikos_marks_enqueued_wakeup_failed_when_run_fails(monkeypatch
                 _append_enqueued_wakeup(inner_db, owner_id=user.id, run_id=ctx.run_id)
                 raise RuntimeError("boom")
 
-        monkeypatch.setattr("zerg.services.oikos_service.Runner", FakeRunner)
+        monkeypatch.setattr("zerg.services.oikos_service.RuntimeRunner", FakeRunner)
 
         service = OikosService(db)
         result = await service.run_oikos(

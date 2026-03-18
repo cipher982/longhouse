@@ -14,7 +14,7 @@ from zerg.crud import mark_run_finished
 from zerg.crud import mark_run_running
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.managers.fiche_runner import FicheRunner
+from zerg.managers.runtime_runner import RuntimeRunner
 from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Thread as ThreadModel
 
@@ -23,14 +23,14 @@ async def execute_thread_run_with_history(
     db: Session,
     fiche: FicheModel,
     thread: ThreadModel,
-    runner: FicheRunner,
+    runner: RuntimeRunner,
     trigger: str = "api",
 ) -> Sequence:
     """
-    Execute a single run of the fiche on the given thread,
+    Execute a single automation run on the given thread,
     recording Run rows and publishing run events.
 
-    Returns the sequence of created message rows from FicheRunner.run_thread().
+    Returns the sequence of created message rows from RuntimeRunner.run_thread().
     """
     # Create the Run (queued)
     run_row = create_run(

@@ -1,8 +1,8 @@
-"""ReAct engine for oikos fiches.
+"""ReAct engine for oikos runtimes.
 
 Pure async ReAct loop: messages in, messages + usage out.
 spawn_workspace_commis uses two-phase commit in parallel execution
-(returns ToolMessages + interrupt_value); single-tool calls raise FicheInterrupted.
+(returns ToolMessages + interrupt_value); single-tool calls raise RunnerInterrupted.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from datetime import timezone
 from typing import TYPE_CHECKING
 
 from zerg.context import get_commis_context
-from zerg.managers.fiche_runner import FicheInterrupted
+from zerg.managers.runtime_runner import RunnerInterrupted
 from zerg.services.openai_client import OpenAIChat
 from zerg.tools.result_utils import is_critical_tool_error
 from zerg.types.messages import AIMessage
@@ -445,7 +445,7 @@ async def _execute_tool(
 ) -> ToolMessage:
     """Execute a single tool call with event emission.
 
-    For spawn_workspace_commis variants, raises FicheInterrupted for queued jobs.
+    For spawn_workspace_commis variants, raises RunnerInterrupted for queued jobs.
     """
     from zerg.events import get_emitter
     from zerg.tools.result_utils import check_tool_error
@@ -491,7 +491,7 @@ async def _execute_tool(
                                 result_preview=f"Commis job {job_id} spawned",
                                 result=str(job_result),
                             )
-                        raise FicheInterrupted(
+                        raise RunnerInterrupted(
                             {
                                 "type": "commis_pending",
                                 "job_id": job_id,
@@ -529,7 +529,7 @@ async def _execute_tool(
                 else:
                     result_content = str(observation)
 
-        except FicheInterrupted:
+        except RunnerInterrupted:
             raise
         except Exception as exc:
             result_content = f"<tool-error> {exc}"
@@ -666,7 +666,7 @@ async def _execute_tools_parallel(
         async def _exec(tc: dict) -> ToolMessage:
             try:
                 return await _execute_tool(tc, tools_by_name, run_id=run_id, owner_id=owner_id, tool_getter=tool_getter)
-            except FicheInterrupted:
+            except RunnerInterrupted:
                 raise
             except Exception as exc:
                 logger.exception(f"Parallel tool error: {tc.get('name')}")
@@ -678,7 +678,7 @@ async def _execute_tools_parallel(
 
         results = await asyncio.gather(*[_exec(tc) for tc in other_calls], return_exceptions=True)
         for tc, result in zip(other_calls, results):
-            if isinstance(result, FicheInterrupted):
+            if isinstance(result, RunnerInterrupted):
                 raise result
             elif isinstance(result, Exception):
                 tool_results.append(

@@ -2,7 +2,7 @@
 
 This service handles:
 - Finding or creating the user's long-lived oikos thread
-- Running the oikos fiche with streaming events
+- Running the oikos runtime profile with streaming events
 - Coordinating commis execution and result synthesis
 
 The key invariant is ONE oikos thread per user that persists across sessions.
@@ -28,8 +28,8 @@ from zerg.crud import create_thread_message
 from zerg.crud import get_fiches
 from zerg.crud import get_threads
 from zerg.crud import get_user
-from zerg.managers.fiche_runner import FicheInterrupted
-from zerg.managers.fiche_runner import Runner
+from zerg.managers.runtime_runner import RunnerInterrupted
+from zerg.managers.runtime_runner import RuntimeRunner
 from zerg.models.enums import RunStatus
 from zerg.models.enums import ThreadType
 from zerg.models.models import CommisJob
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Thread type for oikos threads - distinguishes from regular fiche threads
+# Thread type for oikos threads - distinguishes from regular automation threads
 OIKOS_THREAD_TYPE = ThreadType.SUPER
 _OWNER_RUN_LOCKS: dict[int, asyncio.Lock] = {}
 _OWNER_RUN_LOCKS_GUARD = asyncio.Lock()
@@ -161,7 +161,7 @@ async def emit_stream_control(
 
 
 class OikosService:
-    """Service for managing oikos fiche execution."""
+    """Service for managing oikos runtime execution."""
 
     # Bump this whenever BASE_OIKOS_PROMPT meaningfully changes.
     OIKOS_PROMPT_VERSION = 4
@@ -481,9 +481,7 @@ class OikosService:
         # Use centralized tool list from oikos_tools.py (single source of truth)
         oikos_tools = get_oikos_allowed_tools()
 
-        task_instructions = (
-            "You are helping the user accomplish their goals. Analyze their request and decide how to handle it."
-        )
+        task_instructions = "You are helping the user accomplish their goals. Analyze their request and decide how to handle it."
 
         fiche = create_fiche(
             db=self.db,
@@ -572,9 +570,7 @@ class OikosService:
             conversation_id=conversation.id,
         )
         cleared_thread_messages = (
-            self.db.query(ThreadMessageModel)
-            .filter(ThreadMessageModel.thread_id == thread.id)
-            .delete(synchronize_session=False)
+            self.db.query(ThreadMessageModel).filter(ThreadMessageModel.thread_id == thread.id).delete(synchronize_session=False)
         )
         self.db.commit()
 
@@ -903,7 +899,7 @@ class OikosService:
             _user_ctx_token = set_current_user_id(owner_id)
 
             # Run the fiche with timeout (shielded so timeout doesn't cancel work)
-            runner = Runner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)
+            runner = RuntimeRunner(fiche, model_override=model_override, reasoning_effort=reasoning_effort)
             run_task = asyncio.create_task(runner.run_thread(self.db, thread))
             try:
                 # asyncio.shield() prevents timeout from cancelling the task -
@@ -960,9 +956,7 @@ class OikosService:
                     },
                 )
 
-                deferred_message = (
-                    f"Oikos run {run.id} deferred after {timeout}s timeout (continuing in background until completion)"
-                )
+                deferred_message = f"Oikos run {run.id} deferred after {timeout}s timeout (continuing in background until completion)"
                 logger.info(deferred_message)
 
                 if return_on_deferred:
@@ -990,14 +984,14 @@ class OikosService:
                         created_messages=list(created_messages),
                     )
 
-            except FicheInterrupted as interrupt:
+            except RunnerInterrupted as interrupt:
                 self._annotate_assistant_messages_after_id(
                     thread_id=thread.id,
                     min_message_id=user_message_row.id,
                     surface_metadata=surface_metadata,
                 )
                 # Oikos interrupt (spawn_commis waiting for commis completion)
-                # Run state is persisted; we'll resume via Runner.run_continuation
+                # Run state is persisted; we'll resume via RuntimeRunner.run_continuation
                 end_time = datetime.now(timezone.utc)
                 duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
@@ -1101,9 +1095,7 @@ class OikosService:
                             )
 
                     if already_completed:
-                        completed_message = (
-                            f"{already_completed}/{len(job_ids)} commiss already completed - scheduled barrier checks"
-                        )
+                        completed_message = f"{already_completed}/{len(job_ids)} commiss already completed - scheduled barrier checks"
                         logger.info(completed_message)
 
                 else:
@@ -1194,7 +1186,7 @@ class OikosService:
 
             # NOTE: Old "durable runs" code that checked for commis spawns after completion
             # has been removed. With the interrupt/resume pattern, spawn_commis raises
-            # FicheInterrupted before we get here. See the FicheInterrupted handler above.
+            # RunnerInterrupted before we get here. See the RunnerInterrupted handler above.
 
             # Update run status
             run.status = RunStatus.SUCCESS
@@ -1561,8 +1553,7 @@ class OikosService:
                     )
                 elif barrier_result["status"] == "waiting":
                     waiting_status = (
-                        f"Immediate barrier check for run {run_id}: "
-                        f"{barrier_result['completed']}/{barrier_result['expected']} complete"
+                        f"Immediate barrier check for run {run_id}: " f"{barrier_result['completed']}/{barrier_result['expected']} complete"
                     )
                     logger.info(waiting_status)
                 else:

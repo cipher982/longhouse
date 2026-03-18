@@ -1,6 +1,6 @@
 """Regression tests for thread context window selection.
 
-Ensures Oikos/FicheRunner context loading uses the latest N thread messages
+Ensures Oikos/runtime-runner context loading uses the latest N thread messages
 in chronological order, not the oldest N.
 """
 
@@ -8,7 +8,7 @@ from zerg.crud import create_fiche, create_thread_message, get_fiche
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.managers.fiche_runner import RuntimeView
+from zerg.managers.runtime_runner import RuntimeView
 from zerg.managers.message_builder import MessageArrayBuilder
 from zerg.models.models import User
 from zerg.services.thread_service import ThreadService

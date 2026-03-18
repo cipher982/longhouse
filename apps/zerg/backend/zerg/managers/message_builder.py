@@ -1,6 +1,6 @@
 """MessageBuilder - Cache-optimized message array construction.
 
-Centralizes message array construction for FicheRunner flows (run_thread,
+Centralizes message array construction for RuntimeRunner flows (run_thread,
 run_continuation, run_batch_continuation).
 
 Layout: [system] -> [conversation] -> [connectors] -> [memory] -> [time]
@@ -35,7 +35,7 @@ from zerg.types.messages import ToolMessage
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from zerg.managers.fiche_runner import RuntimeView
+    from zerg.managers.runtime_runner import RuntimeView
     from zerg.models.models import Fiche as FicheModel
     from zerg.skills.integration import SkillIntegration
 

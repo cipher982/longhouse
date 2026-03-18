@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import create_thread, create_thread_message, delete_thread
 from zerg.database import get_db
-from zerg.managers.fiche_runner import FicheRunner
+from zerg.managers.runtime_runner import RuntimeRunner
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
@@ -497,7 +497,7 @@ def build_replay_thread(
     )
 
     # Copy non-system messages from the original thread up to (but excluding) the task message.
-    # System messages in DB are intentionally excluded from LLM input (FicheRunner injects fresh system prompt).
+    # System messages in DB are intentionally excluded from LLM input (RuntimeRunner injects fresh system prompt).
     query = (
         db.query(ThreadMessage)
         .filter(
@@ -667,7 +667,7 @@ async def replay_run(
     db.commit()
     db.refresh(replay_run_row)
 
-    # Add task as an unprocessed user message (FicheRunner will pick it up)
+    # Add task as an unprocessed user message (RuntimeRunner will pick it up)
     create_thread_message(
         db=db,
         thread_id=replay_thread.id,
@@ -699,7 +699,7 @@ async def replay_run(
             stack.enter_context(ToolMocker(tool_name, blocked_async, blocked_sync))
 
         try:
-            runner = FicheRunner(replay_fiche)
+            runner = RuntimeRunner(replay_fiche)
             created_messages = await runner.run_thread(db, replay_thread)
 
             # Extract final result (last assistant message)
