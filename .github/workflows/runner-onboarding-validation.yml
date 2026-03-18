@@ -306,11 +306,13 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y make
 
-      - name: Install Playwright Chromium
+      - name: Install Playwright Chromium shell
         run: |
           cd apps/zerg/e2e
           bun install --silent
-          bunx playwright install --with-deps chromium
+          # This lane runs the onboarding-chromium project only.
+          bunx playwright install-deps chromium
+          bunx playwright install --only-shell chromium
 
       - name: Run runner install contract tests
         run: make test-install-runner
@@ -359,11 +361,13 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y make
 
-      - name: Install Playwright Chromium
+      - name: Install Playwright Chromium shell
         run: |
           cd apps/zerg/e2e
           bun install --silent
-          bunx playwright install --with-deps chromium
+          # This lane runs the onboarding-chromium project only.
+          bunx playwright install-deps chromium
+          bunx playwright install --only-shell chromium
 
       - name: Run runner install contract tests
         run: make test-install-runner
