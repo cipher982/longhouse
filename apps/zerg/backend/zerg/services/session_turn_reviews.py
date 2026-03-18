@@ -19,7 +19,8 @@ from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
-from zerg.services.oikos_operator_policy import operator_master_switch_enabled
+from zerg.services.session_loop_controller import build_loop_controller_payload
+from zerg.services.session_loop_controller import evaluate_session_turn_with_llm
 from zerg.session_loop_mode import SessionLoopMode
 
 logger = logging.getLogger(__name__)
@@ -76,10 +77,6 @@ def _coerce_loop_mode(value: str | None) -> SessionLoopMode:
 
 def _supports_resume(session: AgentSession) -> bool:
     return (session.provider or "").strip().lower() == "claude"
-
-
-def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
-    return any(phrase in text for phrase in phrases)
 
 
 def _load_recent_dialog_messages(
@@ -186,120 +183,27 @@ def _load_auto_continue_streak(db: Session, session_id: str) -> int:
     return streak
 
 
-def _evaluate_turn_outcome(
-    *,
-    session: AgentSession,
-    turn: CompletedAssistantTurn,
-    auto_continue_streak: int,
-) -> TurnOutcome:
-    combined = " ".join(
-        part.lower()
-        for part in (
-            turn.text,
-            turn.last_user_text,
-            session.summary,
-            session.summary_title,
-        )
-        if part
-    )
-
-    if _contains_any(
-        combined,
-        (
-            "rm -rf",
-            "drop the database",
-            "production migration",
-            "delete prod data",
-            "destructive",
-            "risky change",
-            "explicit refusal",
-            "do not proceed",
-        ),
-    ):
-        return TurnOutcome(
-            decision="escalate",
-            summary="The turn points at a risky next step that should not continue unattended.",
-            rationale="Risky or explicitly declined work must escalate instead of looping automatically.",
-            recommended_action="review_risky_step",
-            blocked_reasons=("Risky or explicitly declined next step requires direct approval.",),
-        )
-
-    if _contains_any(
-        combined,
-        (
-            "product decision",
-            "which option",
-            "which approach",
-            "direction choice",
-            "need your decision",
-            "need a decision",
-            "what do you prefer",
-            "pick between",
-        ),
-    ):
-        return TurnOutcome(
-            decision="escalate",
-            summary="The turn is asking for a real human decision, not a routine continue.",
-            rationale="A product or direction fork should escalate to the user instead of being auto-continued.",
-            recommended_action="review_product_decision",
-            blocked_reasons=("Meaningful product or direction choice requires user input.",),
-        )
-
-    if auto_continue_streak >= 3:
-        return TurnOutcome(
-            decision="ask_user",
-            summary="The session has already auto-continued several times and needs a deliberate check-in.",
-            rationale="Repeated autonomous continues should eventually ask the user before looping again.",
-            recommended_action="review_session_progress",
-            blocked_reasons=("Autonomous continue cap reached.",),
-        )
-
-    if _contains_any(
-        combined,
-        (
-            "runner appears asleep",
-            "runner is asleep",
-            "wake the runner",
-            "wake cinder",
-            "sleeping laptop",
-            "machine is asleep",
-        ),
-    ):
-        return TurnOutcome(
-            decision="wait",
-            summary="The next step depends on a sleeping on-demand machine.",
-            rationale="A sleeping on-demand target is a normal blocker; wait until it is available again.",
-            recommended_action="wake_runner",
-            blocked_reasons=("Required on-demand runner appears asleep.",),
-        )
-
-    if _contains_any(
-        combined,
-        (
-            "tests were not run",
-            "pending targeted tests",
-            "targeted tests still need to run",
-            "run the pending targeted tests",
-            "ready for phase 2",
-            "say continue",
-            "continue for phase 2",
-            "only targeted verification remains",
-            "next step is only",
-            "permission to rerun",
-        ),
-    ):
-        return TurnOutcome(
-            decision="continue",
-            summary="The turn left one obvious bounded next step ready to continue.",
-            rationale="This looks like the routine 'ok, continue' case the loop is meant to handle.",
-            recommended_action="continue_session",
-        )
-
+def _failure_outcome(summary: str, rationale: str, *, blocked_reason: str | None = None) -> TurnOutcome:
+    blocked_reasons = (blocked_reason,) if blocked_reason else ()
     return TurnOutcome(
-        decision="done",
-        summary="No follow-up action is needed from this turn right now.",
-        rationale="The latest assistant turn does not leave an obvious bounded next step or escalation.",
+        decision="ask_user",
+        summary=summary,
+        rationale=rationale,
+        recommended_action="ask_user",
+        blocked_reasons=blocked_reasons,
     )
+
+
+def _serialize_dialog_tail(messages: list[_TurnMessage]) -> list[dict[str, Any]]:
+    return [
+        {
+            "event_id": message.event_id,
+            "role": message.role,
+            "text": message.text,
+            "timestamp": message.timestamp.isoformat() if message.timestamp else None,
+        }
+        for message in messages
+    ]
 
 
 def _loop_mode_profile(session: AgentSession, policy: OikosOperatorPolicy) -> tuple[str, str]:
@@ -358,6 +262,8 @@ def _build_mode_application(
         elif supports_notify:
             execution_state = "awaiting_user_approval"
             would_notify_user = True
+        else:
+            execution_state = "observe_only"
     elif outcome.decision in {"ask_user", "wait"}:
         if supports_notify:
             execution_state = "needs_human"
@@ -525,11 +431,61 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
 
     owner_id = _resolve_owner_id(db)
     policy = _load_policy(db, owner_id)
-    outcome = _evaluate_turn_outcome(
-        session=session,
-        turn=turn,
-        auto_continue_streak=_load_auto_continue_streak(db, session_id),
-    )
+    auto_continue_streak = _load_auto_continue_streak(db, session_id)
+    dialog_tail = _serialize_dialog_tail(_load_recent_dialog_messages(db, session_id))
+    review_status = "recorded"
+    review_reason: str | None = None
+
+    if owner_id is None:
+        outcome = _failure_outcome(
+            "Loop controller could not run because no owner is configured.",
+            "Session loop decisions require a valid owner context to create the per-session loop thread.",
+            blocked_reason="Loop controller owner context missing.",
+        )
+        review_status = "failed"
+        review_reason = "missing_owner"
+    else:
+        try:
+            controller_decision = await evaluate_session_turn_with_llm(
+                db=db,
+                owner_id=owner_id,
+                session=session,
+                payload=build_loop_controller_payload(
+                    session=session,
+                    turn_text=turn.text,
+                    last_user_text=turn.last_user_text,
+                    turn_index=turn.turn_index,
+                    assistant_event_id=turn.assistant_event_id,
+                    auto_continue_streak=auto_continue_streak,
+                    dialog_tail=dialog_tail,
+                ),
+                metadata={
+                    "session_id": str(session.id),
+                    "assistant_event_id": turn.assistant_event_id,
+                    "turn_index": turn.turn_index,
+                    "trigger_type": _TURN_TRIGGER_TYPE,
+                },
+            )
+            outcome = TurnOutcome(
+                decision=controller_decision.decision,
+                summary=controller_decision.summary,
+                rationale=controller_decision.rationale,
+                recommended_action=controller_decision.recommended_action,
+                blocked_reasons=controller_decision.blocked_reasons,
+            )
+        except Exception:
+            logger.exception(
+                "Loop controller evaluation failed for session %s event %s",
+                session.id,
+                turn.assistant_event_id,
+            )
+            outcome = _failure_outcome(
+                "Loop controller could not decide this completed turn.",
+                ("The AI loop controller failed, so this session should stay " "conservative until the next explicit review."),
+                blocked_reason="Loop controller evaluation failed.",
+            )
+            review_status = "failed"
+            review_reason = "controller_error"
     mode_application = _build_mode_application(session=session, policy=policy, outcome=outcome)
     recommended_action_value = mode_application["recommended_action"]
 
@@ -549,52 +505,12 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
         execution_state=str(mode_application["execution_state"]),
         recommended_action=str(recommended_action_value) if recommended_action_value else None,
         blocked_reasons=list(outcome.blocked_reasons),
-        status="recorded",
+        status=review_status,
+        reason=review_reason,
     )
     db.add(review)
     db.commit()
     db.refresh(review)
-
-    if not operator_master_switch_enabled() or owner_id is None or not policy.enabled:
-        return review
-
-    if review.execution_state not in {"awaiting_user_approval", "would_auto_continue", "needs_human"}:
-        return review
-
-    from zerg.services.oikos_service import invoke_oikos
-    from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
-
-    payload = {
-        "trigger_type": _TURN_TRIGGER_TYPE,
-        "session_id": str(session.id),
-        "turn_review_id": review.id,
-        "turn_review": _serialize_turn_review_payload(
-            session=session,
-            turn=turn,
-            outcome=outcome,
-            mode_application=mode_application,
-        ),
-    }
-    message = _build_turn_loop_message(session=session, turn=turn, outcome=outcome)
-    message_id = f"operator-turn-loop-{session.id}-{turn.assistant_event_id}"
-
-    try:
-        run_id = await invoke_oikos(
-            owner_id,
-            message,
-            message_id,
-            source="operator",
-            surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
-            surface_payload=payload,
-        )
-        review.run_id = run_id
-        review.status = "enqueued"
-        db.commit()
-    except Exception:
-        review.status = "failed"
-        review.reason = "invoke_failed"
-        db.commit()
-        logger.exception("Failed to invoke turn loop for session %s event %s", session.id, turn.assistant_event_id)
     return review
 
 

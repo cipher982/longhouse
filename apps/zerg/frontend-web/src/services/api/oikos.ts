@@ -39,13 +39,6 @@ export type SessionTurnAlignment =
   | "failed"
   | (string & {});
 
-export type SessionTurnStability =
-  | "no_signal"
-  | "developing"
-  | "steady"
-  | "caution"
-  | (string & {});
-
 interface SessionTurnReviewSummary {
   id: number;
   session_id: string;
@@ -94,20 +87,8 @@ export interface SessionTurnReview {
   createdAt: string;
 }
 
-export interface SessionTurnRollup {
-  totalReviews: number;
-  pendingReviews: number;
-  matched: number;
-  moreConservative: number;
-  moreAggressive: number;
-  different: number;
-  failed: number;
-  stability: SessionTurnStability;
-}
-
 export interface SessionTurnTelemetry {
   latestReview: SessionTurnReview | null;
-  rollup: SessionTurnRollup | null;
 }
 
 function asString(value: unknown): string | null {
@@ -151,48 +132,6 @@ function parseTurnReview(row: SessionTurnReviewSummary): SessionTurnReview {
   };
 }
 
-function buildSessionTurnRollup(reviews: SessionTurnReview[]): SessionTurnRollup | null {
-  if (reviews.length === 0) return null;
-
-  const rollup: SessionTurnRollup = {
-    totalReviews: 0,
-    pendingReviews: 0,
-    matched: 0,
-    moreConservative: 0,
-    moreAggressive: 0,
-    different: 0,
-    failed: 0,
-    stability: "no_signal",
-  };
-
-  for (const review of reviews) {
-    if (!review.alignment) {
-      rollup.pendingReviews += 1;
-      continue;
-    }
-
-    rollup.totalReviews += 1;
-    if (review.alignment === "matched") rollup.matched += 1;
-    if (review.alignment === "more_conservative") rollup.moreConservative += 1;
-    if (review.alignment === "more_aggressive") rollup.moreAggressive += 1;
-    if (review.alignment === "different") rollup.different += 1;
-    if (review.alignment === "failed") rollup.failed += 1;
-  }
-
-  const cautionCount = rollup.moreAggressive + rollup.different + rollup.failed;
-  if (rollup.totalReviews === 0) {
-    rollup.stability = "no_signal";
-  } else if (cautionCount > 0) {
-    rollup.stability = "caution";
-  } else if (rollup.matched >= 3) {
-    rollup.stability = "steady";
-  } else {
-    rollup.stability = "developing";
-  }
-
-  return rollup;
-}
-
 export async function fetchSessionTurnTelemetry(sessionId: string): Promise<SessionTurnTelemetry> {
   const params = new URLSearchParams({
     session_id: sessionId,
@@ -202,6 +141,5 @@ export async function fetchSessionTurnTelemetry(sessionId: string): Promise<Sess
   const parsed = reviews.map(parseTurnReview);
   return {
     latestReview: parsed[0] ?? null,
-    rollup: buildSessionTurnRollup(parsed),
   };
 }

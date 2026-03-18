@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SessionContextPane } from "../SessionContextPane";
 import type { AgentSession, SessionLoopMode } from "../../../services/api/agents";
-import type { SessionTurnReview, SessionTurnRollup } from "../../../services/api/oikos";
+import type { SessionTurnReview } from "../../../services/api/oikos";
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -43,7 +43,6 @@ function renderPane(
     onLoopModeChange = vi.fn(),
     loopModePending = false,
     latestTurnReview = null,
-    turnRollup = null,
     turnReviewLoading = false,
     turnReviewUnavailable = false,
   }: {
@@ -51,7 +50,6 @@ function renderPane(
     onLoopModeChange?: (nextMode: SessionLoopMode) => void;
     loopModePending?: boolean;
     latestTurnReview?: SessionTurnReview | null;
-    turnRollup?: SessionTurnRollup | null;
     turnReviewLoading?: boolean;
     turnReviewUnavailable?: boolean;
   } = {},
@@ -68,7 +66,6 @@ function renderPane(
       onLoopModeChange={onLoopModeChange}
       loopModePending={loopModePending}
       latestTurnReview={latestTurnReview}
-      turnRollup={turnRollup}
       turnReviewLoading={turnReviewLoading}
       turnReviewUnavailable={turnReviewUnavailable}
     />,
@@ -102,20 +99,6 @@ function makeTurnReview(overrides: Partial<SessionTurnReview> = {}): SessionTurn
   };
 }
 
-function makeTurnRollup(overrides: Partial<SessionTurnRollup> = {}): SessionTurnRollup {
-  return {
-    totalReviews: 4,
-    pendingReviews: 1,
-    matched: 3,
-    moreConservative: 1,
-    moreAggressive: 0,
-    different: 0,
-    failed: 0,
-    stability: "steady",
-    ...overrides,
-  };
-}
-
 describe("SessionContextPane", () => {
   it("shows the current loop mode as the active radio option", () => {
     renderPane({ session: makeSession({ loop_mode: "assist" }) });
@@ -143,48 +126,17 @@ describe("SessionContextPane", () => {
   });
 
   it("renders the latest completed-turn review details", () => {
-    renderPane({ latestTurnReview: makeTurnReview(), turnRollup: makeTurnRollup() });
+    renderPane({ latestTurnReview: makeTurnReview() });
 
     const turnReview = screen.getByTestId("session-turn-review");
     expect(turnReview).toBeInTheDocument();
-    const turnRollup = screen.getByTestId("session-turn-rollup");
-    expect(turnRollup).toBeInTheDocument();
-    expect(within(turnRollup).getByText(/^Stable$/i)).toBeInTheDocument();
-    expect(within(turnRollup).getByText(/4 reviewed • 1 pending/i)).toBeInTheDocument();
-    expect(within(turnRollup).getByText(/Matched 3 • Conservative 1 • Caution 0/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/^Continue$/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/^Ask You$/i)).toBeInTheDocument();
-    expect(within(turnReview).getByText(/More Conservative/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Latest assistant turn #7/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Recommended action: Continue Session/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Live outcome: Ignore/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Only targeted verification remains\. Run the pending targeted tests\./i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Autonomous continue cap reached/i)).toBeInTheDocument();
-  });
-
-  it("shows steady manual guidance without weird candidate phrasing", () => {
-    renderPane({
-      session: makeSession({ loop_mode: "manual" }),
-      latestTurnReview: makeTurnReview(),
-      turnRollup: makeTurnRollup(),
-    });
-
-    expect(screen.getByText(/Manual is still fine here/i)).toBeInTheDocument();
-    expect(screen.getByText(/Assist is the next step/i)).toBeInTheDocument();
-  });
-
-  it("shows caution guidance when recent turn outcomes diverge", () => {
-    renderPane({
-      session: makeSession({ loop_mode: "assist" }),
-      latestTurnReview: makeTurnReview(),
-      turnRollup: makeTurnRollup({
-        stability: "caution",
-        moreAggressive: 1,
-      }),
-    });
-
-    expect(screen.getByText(/Recent turns need caution/i)).toBeInTheDocument();
-    expect(screen.getByText(/Keep this session conservative for now/i)).toBeInTheDocument();
   });
 
   it("shows a graceful empty state when no turn review is available", () => {

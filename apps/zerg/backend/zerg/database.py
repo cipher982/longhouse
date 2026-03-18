@@ -502,6 +502,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
+            if "loop_thread_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_thread_id INTEGER"))
             if "is_sidechain" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"))
             if "thread_root_session_id" not in columns:

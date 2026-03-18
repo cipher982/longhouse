@@ -1,6 +1,6 @@
 import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
-import type { SessionTurnReview, SessionTurnRollup } from "../../services/api/oikos";
+import type { SessionTurnReview } from "../../services/api/oikos";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -26,7 +26,6 @@ interface SessionContextPaneProps {
   loopModePending?: boolean;
   onLoopModeChange?: (nextMode: SessionLoopMode) => void;
   latestTurnReview?: SessionTurnReview | null;
-  turnRollup?: SessionTurnRollup | null;
   turnReviewLoading?: boolean;
   turnReviewUnavailable?: boolean;
 }
@@ -60,80 +59,6 @@ const EXECUTION_STATE_META: Record<
   no_action: { label: "No Action", variant: "neutral" },
 };
 
-const TURN_ALIGNMENT_META: Record<
-  string,
-  { label: string; variant: "neutral" | "warning" | "success" }
-> = {
-  matched: { label: "Matched", variant: "success" },
-  more_conservative: { label: "More Conservative", variant: "neutral" },
-  more_aggressive: { label: "More Aggressive", variant: "warning" },
-  different: { label: "Different", variant: "warning" },
-  failed: { label: "Failed", variant: "warning" },
-};
-
-const TURN_STABILITY_META: Record<
-  string,
-  { label: string; variant: "neutral" | "warning" | "success" }
-> = {
-  no_signal: { label: "No Signal", variant: "neutral" },
-  developing: { label: "Developing", variant: "neutral" },
-  steady: { label: "Stable", variant: "success" },
-  caution: { label: "Caution", variant: "warning" },
-};
-
-function getLoopModeGuidance(
-  loopMode: SessionLoopMode,
-  turnRollup: SessionTurnRollup | null,
-): { tone: "neutral" | "warning" | "success"; title: string; body: string } | null {
-  if (!turnRollup) return null;
-
-  if (turnRollup.stability === "no_signal") {
-    return {
-      tone: "neutral",
-      title: "No completed turn signal yet",
-      body: "This session has not produced enough completed turn outcomes to judge how reliable the loop looks.",
-    };
-  }
-
-  if (turnRollup.stability === "developing") {
-    return {
-      tone: "neutral",
-      title: "Turn signal is still developing",
-      body: "A few completed turns have lined up so far. Keep this conservative until the pattern settles.",
-    };
-  }
-
-  if (turnRollup.stability === "caution") {
-    return {
-      tone: "warning",
-      title: "Recent turns need caution",
-      body: "Some recent live outcomes diverged from the deterministic turn review. Keep this session conservative for now.",
-    };
-  }
-
-  if (loopMode === "manual") {
-    return {
-      tone: "success",
-      title: "Manual is still fine here",
-      body: "Recent turns look stable. If you want Oikos to start nudging instead of staying passive, Assist is the next step.",
-    };
-  }
-
-  if (loopMode === "assist") {
-    return {
-      tone: "success",
-      title: "Assist looks steady",
-      body: "Recent turns have been routine. Assist can keep nudging while still waiting for approval before continuing.",
-    };
-  }
-
-  return {
-    tone: "success",
-    title: "Autopilot stays bounded",
-    body: "Autopilot only continues obvious same-session follow-ups. Anything ambiguous should still stop or ask you.",
-  };
-}
-
 function formatRecommendedAction(value: string | null): string | null {
   if (!value) return null;
   return value
@@ -163,7 +88,6 @@ export function SessionContextPane({
   loopModePending = false,
   onLoopModeChange,
   latestTurnReview = null,
-  turnRollup = null,
   turnReviewLoading = false,
   turnReviewUnavailable = false,
 }: SessionContextPaneProps) {
@@ -180,22 +104,8 @@ export function SessionContextPane({
         variant: "neutral" as const,
       }
     : null;
-  const alignmentMeta = latestTurnReview?.alignment
-    ? TURN_ALIGNMENT_META[latestTurnReview.alignment] ?? {
-        label: latestTurnReview.alignment,
-        variant: "neutral" as const,
-      }
-    : null;
   const recommendedAction = formatRecommendedAction(latestTurnReview?.recommendedAction ?? null);
   const actualOutcome = formatRecommendedAction(latestTurnReview?.actualOutcome ?? null);
-  const stabilityMeta = turnRollup
-    ? TURN_STABILITY_META[turnRollup.stability] ?? {
-        label: turnRollup.stability,
-        variant: "neutral" as const,
-      }
-    : null;
-  const cautionCount = turnRollup ? turnRollup.moreAggressive + turnRollup.different + turnRollup.failed : 0;
-  const loopModeGuidance = getLoopModeGuidance(session.loop_mode, turnRollup);
 
   return (
     <div className="session-context-pane">
@@ -277,12 +187,6 @@ export function SessionContextPane({
         <div className="session-loop-mode__caption">
           Stored session preference for what Oikos may do after each completed assistant turn.
         </div>
-        {loopModeGuidance ? (
-          <div className={`session-loop-mode__advisory session-loop-mode__advisory--${loopModeGuidance.tone}`}>
-            <div className="session-loop-mode__advisory-title">{loopModeGuidance.title}</div>
-            <div className="session-loop-mode__advisory-body">{loopModeGuidance.body}</div>
-          </div>
-        ) : null}
       </div>
 
       <div className="session-pane-section">
@@ -291,23 +195,9 @@ export function SessionContextPane({
           <div className="session-shadow-review__empty">Loading latest completed-turn review...</div>
         ) : latestTurnReview ? (
           <div className="session-shadow-review" data-testid="session-turn-review">
-            {turnRollup ? (
-              <div className="session-shadow-review__rollup" data-testid="session-turn-rollup">
-                <div className="session-shadow-review__header">
-                  {stabilityMeta ? <Badge variant={stabilityMeta.variant}>{stabilityMeta.label}</Badge> : null}
-                  <span className="session-shadow-review__stamp">
-                    {turnRollup.totalReviews} reviewed • {turnRollup.pendingReviews} pending
-                  </span>
-                </div>
-                <div className="session-shadow-review__meta">
-                  Matched {turnRollup.matched} • Conservative {turnRollup.moreConservative} • Caution {cautionCount}
-                </div>
-              </div>
-            ) : null}
             <div className="session-shadow-review__header">
               {decisionMeta ? <Badge variant={decisionMeta.variant}>{decisionMeta.label}</Badge> : null}
               {executionMeta ? <Badge variant={executionMeta.variant}>{executionMeta.label}</Badge> : null}
-              {alignmentMeta ? <Badge variant={alignmentMeta.variant}>{alignmentMeta.label}</Badge> : null}
               <span className="session-shadow-review__stamp">{formatFullDate(latestTurnReview.createdAt)}</span>
             </div>
             <div className="session-shadow-review__summary">{latestTurnReview.summary}</div>
