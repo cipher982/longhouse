@@ -12,6 +12,7 @@ Usage:
     python scripts/smoke_models.py              # from repo root
     python scripts/smoke_models.py --json       # machine-readable output
     python scripts/smoke_models.py --ci         # exit 1 on any failure (for CI)
+    python scripts/smoke_models.py --scope active  # active profile only
 """
 
 from __future__ import annotations
@@ -60,6 +61,40 @@ def get_api_key(model_info: dict) -> tuple[str, str | None]:
     """Return (env_var_name, key_value) for a model."""
     env_var = model_info.get("apiKeyEnvVar") or PROVIDER_DEFAULT_KEYS.get(model_info["provider"], "")
     return env_var, os.getenv(env_var, "").strip() or None
+
+
+def _resolve_model_reference(config: dict, tier_or_model: str) -> str:
+    """Resolve a tier name or direct model ID from models.json."""
+    tiers = config.get("text", {}).get("tiers", {})
+    return tiers.get(tier_or_model, tier_or_model)
+
+
+def get_active_text_models(config: dict) -> list[tuple[str, dict]]:
+    """Return text models referenced by the active profile's routing."""
+    text_models = config.get("text", {}).get("models", {})
+    use_cases = dict(config.get("useCases", {}).get("text", {}))
+    defaults = dict(config.get("defaults", {}).get("text", {}))
+
+    raw_profiles = config.get("routingProfiles", {})
+    profiles = {name: cfg for name, cfg in raw_profiles.items() if isinstance(cfg, dict) and not name.startswith("$")}
+    active_profile = os.getenv("MODELS_PROFILE", "oss")
+    if profiles and active_profile not in profiles:
+        raise ValueError(f"Unknown MODELS_PROFILE '{active_profile}'. Valid profiles: {list(profiles.keys())}")
+
+    text_overrides = profiles.get(active_profile, {}).get("text", {})
+    use_cases.update(text_overrides.get("useCases", {}))
+    defaults.update(text_overrides.get("defaults", {}))
+
+    ordered_models: list[tuple[str, dict]] = []
+    seen: set[str] = set()
+
+    for tier_or_model in [*use_cases.values(), *defaults.values()]:
+        model_id = _resolve_model_reference(config, tier_or_model)
+        if model_id in text_models and model_id not in seen:
+            seen.add(model_id)
+            ordered_models.append((model_id, text_models[model_id]))
+
+    return ordered_models
 
 
 # ---------------------------------------------------------------------------
@@ -175,12 +210,19 @@ async def smoke_one_model(model_id: str, model_info: dict, category: str) -> dic
         return {"model": model_id, "category": category, "status": status, "ms": elapsed, "detail": detail}
 
 
-async def run_all() -> list[dict]:
+async def run_all(*, scope: str = "all") -> list[dict]:
     config = load_config()
     tasks = []
 
+    if scope == "all":
+        text_models = list(config.get("text", {}).get("models", {}).items())
+    elif scope == "active":
+        text_models = get_active_text_models(config)
+    else:
+        raise ValueError(f"Unknown smoke scope '{scope}'")
+
     # Text models
-    for model_id, model_info in config.get("text", {}).get("models", {}).items():
+    for model_id, model_info in text_models:
         tasks.append(smoke_one_model(model_id, model_info, "text"))
 
     # Realtime models — skip (require WebSocket, not HTTP)
@@ -201,8 +243,14 @@ async def run_all() -> list[dict]:
 def main():
     json_mode = "--json" in sys.argv
     ci_mode = "--ci" in sys.argv
+    scope = "all"
+    if "--scope" in sys.argv:
+        try:
+            scope = sys.argv[sys.argv.index("--scope") + 1]
+        except IndexError as exc:
+            raise SystemExit("--scope requires a value: all or active") from exc
 
-    results = asyncio.run(run_all())
+    results = asyncio.run(run_all(scope=scope))
 
     if json_mode:
         print(json.dumps(results, indent=2))

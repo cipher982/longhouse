@@ -36,6 +36,31 @@ def test_hosted_profile_summary_update_routes_to_openrouter(monkeypatch):
         _reload_models_config()
 
 
+def test_david_profile_summarization_stays_direct_openai(monkeypatch):
+    original_profile = os.environ.get("MODELS_PROFILE")
+    original_openai_key = os.environ.get("OPENAI_API_KEY")
+
+    monkeypatch.setenv("MODELS_PROFILE", "david")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    _reload_models_config()
+
+    try:
+        model_id, provider, key_env = models_config.validate_use_case_llm_config("summarization")
+        assert model_id == "gpt-5-mini"
+        assert provider == models_config.ModelProvider.OPENAI
+        assert key_env == "OPENAI_API_KEY"
+    finally:
+        if original_profile is None:
+            monkeypatch.delenv("MODELS_PROFILE", raising=False)
+        else:
+            monkeypatch.setenv("MODELS_PROFILE", original_profile)
+        if original_openai_key is None:
+            monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        else:
+            monkeypatch.setenv("OPENAI_API_KEY", original_openai_key)
+        _reload_models_config()
+
+
 def test_openrouter_make_llm_uses_openrouter_key_and_base_url(monkeypatch):
     captured: dict[str, object] = {}
 

@@ -8,6 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.pare
 
 from smoke_models import build_openai_smoke_request  # noqa: E402
 from smoke_models import classify_smoke_exception  # noqa: E402
+from smoke_models import get_active_text_models  # noqa: E402
+from smoke_models import load_config  # noqa: E402
 
 
 def test_classify_smoke_exception_skips_explicit_rate_limits():
@@ -37,3 +39,23 @@ def test_build_openai_smoke_request_keeps_non_gpt5_plain():
     request = build_openai_smoke_request("gpt-4.1-mini")
 
     assert "reasoning_effort" not in request
+
+
+def test_active_model_scope_defaults_to_direct_provider_tiers(monkeypatch):
+    monkeypatch.delenv("MODELS_PROFILE", raising=False)
+
+    active_models = {model_id for model_id, _ in get_active_text_models(load_config())}
+
+    assert {"gpt-5.2", "gpt-5-mini", "gpt-5-nano"}.issubset(active_models)
+    assert "openai/gpt-5-mini" not in active_models
+    assert "x-ai/grok-4.1-fast" not in active_models
+
+
+def test_active_model_scope_respects_hosted_profile_overrides(monkeypatch):
+    monkeypatch.setenv("MODELS_PROFILE", "hosted")
+
+    active_models = {model_id for model_id, _ in get_active_text_models(load_config())}
+
+    assert "x-ai/grok-4.1-fast" in active_models
+    assert "gpt-5.2" in active_models
+    assert "openai/gpt-5-mini" not in active_models
