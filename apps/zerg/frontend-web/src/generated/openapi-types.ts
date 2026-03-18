@@ -7665,18 +7665,10 @@ export interface components {
             id: number;
             /** Automation Id */
             automation_id: number;
-            /** Task Id */
-            task_id: number;
-            /** Fiche Id */
-            fiche_id: number;
             /** Thread Id */
             thread_id?: number | null;
             /** Automation Name */
             automation_name: string;
-            /** Task Name */
-            task_name: string;
-            /** Fiche Name */
-            fiche_name: string;
             /** Status */
             status: string;
             /** Summary */
@@ -14284,8 +14276,6 @@ export interface operations {
             query?: {
                 limit?: number;
                 automation_id?: number | null;
-                task_id?: number | null;
-                fiche_id?: number | null;
                 session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;

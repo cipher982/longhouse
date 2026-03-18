@@ -13,12 +13,8 @@ type RunFilter = "all" | "attention" | "active" | "done";
 type RunSummary = {
   id: number;
   automation_id?: number;
-  task_id?: number;
-  fiche_id?: number;
   thread_id?: number;
   automation_name?: string;
-  task_name?: string;
-  fiche_name?: string;
   status: string;
   summary?: string | null;
   signal?: string | null;
@@ -148,14 +144,12 @@ function getEventSummary(event: RunEvent): string {
   return "";
 }
 
-function getRunAutomationId(run: Pick<RunSummary, "automation_id" | "task_id" | "fiche_id">): number | null {
-  return run.automation_id ?? run.task_id ?? run.fiche_id ?? null;
+function getRunAutomationId(run: Pick<RunSummary, "automation_id">): number | null {
+  return run.automation_id ?? null;
 }
 
-function getRunDisplayName(
-  run: Pick<RunSummary, "automation_name" | "task_name" | "fiche_name">
-): string {
-  return run.automation_name ?? run.task_name ?? run.fiche_name ?? "Untitled automation";
+function getRunDisplayName(run: Pick<RunSummary, "automation_name">): string {
+  return run.automation_name ?? "Untitled automation";
 }
 
 export default function SwarmOpsPage() {

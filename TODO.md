@@ -2336,6 +2336,51 @@ Notes:
 
 ---
 
+## [Refactor][Product] Remove Oikos Run Compatibility Aliases Off Task/Fiche
+
+**Status (2026-03-17):** Done. The Oikos run triage surface is now automation-first end to end, without public task/fiche compatibility aliases.
+
+**Goal:** Make the Oikos run triage surface automation-first without carrying older task/fiche aliases in the public API or browser code.
+
+**Done when:**
+- `/api/oikos/runs` only publishes `automation_id` / `automation_name` in the run summary schema
+- `/api/oikos/runs` only accepts `automation_id` as the public filter
+- Oikos browser clients and `SwarmOpsPage` stop depending on `task_*` / `fiche_*`
+- SDK generation, frontend units, `make test`, and focused SwarmOps/browser verification are green
+
+- [x] Remove `task_*` / `fiche_*` aliases from `/api/oikos/runs`
+- [x] Update Oikos browser clients and focused tests to use automation-only fields
+- [x] Verify with SDK generation, frontend units, `make test`, and focused SwarmOps/browser coverage
+
+Notes:
+- 2026-03-17: Keep the internal run storage bound to `Run.fiche_id` in this tranche. This is a public Oikos/browser contract cleanup, not a storage migration.
+- 2026-03-17: `/api/oikos/runs` now only publishes `automation_id` / `automation_name` and only accepts `automation_id` as the public filter; `task_*` and `fiche_*` are no longer part of the generated Oikos schema.
+- 2026-03-17: `oikos-api-client.ts` and `SwarmOpsPage.tsx` no longer carry fallback logic for `task_*` / `fiche_*`, and the focused SwarmOps unit test now uses the automation-only run shape.
+- 2026-03-17: Verification passed via `make generate-sdk`, `make test-frontend-unit`, `make test`, and `git diff --check`.
+
+---
+
+## [Refactor][Product] Rename Automation Connector Surface Off Fiche Module Naming
+
+**Status (2026-03-17):** In progress. Canonical automation connector routes work, but the module/file naming, tags, and route copy still teach `fiche` as the product noun.
+
+**Goal:** Make the automation connector/MCP browser surface and route modules automation-first while keeping legacy hidden compatibility routes alive.
+
+**Done when:**
+- The canonical connectors router/module is automation-named instead of `fiche_connectors`
+- Canonical connector route tags, docstrings, and error messages use `automation`
+- Canonical automation MCP route copy no longer teaches `fiche`
+- SDK generation, frontend units, `make test`, and focused automation coverage are green
+
+- [ ] Rename the connectors router/module to automation-first naming and update imports
+- [ ] Clean canonical connector/MCP route docs and messages off `fiche`
+- [ ] Verify with SDK generation, frontend units, `make test`, and focused automation coverage
+
+Notes:
+- 2026-03-17: Keep the hidden `/api/fiches/*/connectors` and `/api/fiches/*/mcp-servers` compatibility routes alive in this tranche. This is about canonical naming and public product copy.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.
