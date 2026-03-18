@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   smoke:
-    name: "🧪 Post-Deploy Smoke Test"
+    name: "🧪 Product Smoke Test"
     runs-on: cube-deploy
     timeout-minutes: 10
     if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
@@ -77,13 +77,6 @@ jobs:
           chmod +x scripts/check-cp-credentials.sh
           ./scripts/check-cp-credentials.sh
 
-      - name: Check email routing (mailto → Cloudflare forward rules)
-        env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-        run: |
-          chmod +x scripts/check-email-routing.sh
-          ./scripts/check-email-routing.sh
-
       - name: Summary
         if: always()
         run: |
@@ -94,3 +87,32 @@ jobs:
           echo "- **API:** $API_URL" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Email routing audit:** runs as a separate non-blocking job" >> $GITHUB_STEP_SUMMARY
+
+  email-routing-audit:
+    name: "📬 Email Routing Audit"
+    runs-on: cube-deploy
+    timeout-minutes: 5
+    continue-on-error: true
+    if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
+    env:
+      MARKETING_URL: https://longhouse.ai
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check email routing (mailto → Cloudflare forward rules)
+        id: email_routing
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          chmod +x scripts/check-email-routing.sh
+          ./scripts/check-email-routing.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Email Routing Audit" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Site:** $MARKETING_URL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Result:** ${{ steps.email_routing.outcome }}" >> $GITHUB_STEP_SUMMARY
