@@ -2192,6 +2192,30 @@ Notes:
 
 ---
 
+## [Refactor][Product] Rename Browser Thread Surface Off Fiche
+
+**Status (2026-03-17):** Done. The browser thread/chat contract is now automation-first while internal storage ownership stays unchanged.
+
+**Goal:** Make the public thread/chat browser surface automation-first without dragging the internal storage model into this tranche.
+
+**Done when:**
+- Canonical browser chat routes use `/automations/:automationId/thread/:threadId?`
+- Public thread REST request/query/response fields prefer `automation_id` / `automation_state`
+- Dashboard/chat selectors, CSS hooks, and Playwright helpers/specs use automation-first names
+- Focused SDK/unit/E2E verification is green
+
+- [x] Rename the browser chat route and navigation targets off `/fiche/:id/thread`
+- [x] Rename the public thread API surface from `fiche_*` to `automation_*` while keeping backend storage untouched
+- [x] Rename dashboard/chat selectors and Playwright helpers off `fiche-*`
+- [x] Verify with SDK generation, frontend units, `make test`, and focused chat/dashboard E2E
+
+Notes:
+- 2026-03-17: Keep this tranche at the public/browser contract layer. Do not rename ORM columns or internal persistence ownership yet.
+- 2026-03-17: Shipped the browser thread-surface rename. The canonical chat route is now `/automations/:automationId/thread/:threadId?`, `/api/threads` now documents and returns `automation_id` / `automation_state`, and the dead first-party E2E helper code that still depended on `#fiche-modal` / `#save-fiche` was removed instead of being renamed.
+- 2026-03-17: Verification passed via `make generate-sdk`, `make test-frontend-unit`, `make test`, and `E2E_BACKEND_PORT=48030 E2E_FRONTEND_PORT=48031 make test-e2e-single TEST='--project=chromium tests/core/chat-send.spec.ts tests/core/thread-management.spec.ts tests/core/data-persistence.spec.ts tests/happy-paths.spec.ts tests/automation_history.spec.ts tests/commis_isolation.spec.ts'`.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 
@@ -64,7 +65,8 @@ router = APIRouter(
 @router.get("/", response_model=List[ThreadSummary])
 @router.get("", response_model=List[ThreadSummary])
 def read_threads(
-    fiche_id: Optional[int] = None,
+    request: Request,
+    automation_id: Optional[int] = None,
     thread_type: Optional[str] = None,
     title: Optional[str] = None,
     skip: int = 0,
@@ -72,16 +74,24 @@ def read_threads(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Get all threads, optionally filtered by fiche_id, thread_type, and/or title.
+    """Get all threads, optionally filtered by automation_id, thread_type, and/or title.
 
     If `title` is provided, returns threads matching that title.
     """
+    legacy_automation_id = request.query_params.get("fiche_id")
+    resolved_automation_id = automation_id
+    if resolved_automation_id is None and legacy_automation_id is not None:
+        try:
+            resolved_automation_id = int(legacy_automation_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid fiche_id") from exc
+
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     owner_id = None if is_admin else current_user.id
     threads = get_threads(
         db,
         owner_id=owner_id,
-        fiche_id=fiche_id,
+        fiche_id=resolved_automation_id,
         thread_type=thread_type,
         title=title,
         skip=skip,
@@ -96,34 +106,34 @@ def read_threads(
 @router.post("", response_model=Thread, status_code=status.HTTP_201_CREATED)
 def create_thread(thread: ThreadCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Create a new thread"""
-    # Ensure fiche exists and fetch row
-    fiche_row = get_fiche(db, fiche_id=thread.fiche_id)
-    if fiche_row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fiche not found")
+    # Ensure automation exists and fetch row
+    automation_row = get_fiche(db, fiche_id=thread.automation_id)
+    if automation_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation not found")
 
-    # Authorization: only owner (or admin) can create a thread for a fiche
+    # Authorization: only owner (or admin) can create a thread for an automation
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
-    if not is_admin and fiche_row.owner_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not fiche owner")
+    if not is_admin and automation_row.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not automation owner")
 
     # Delegate creation to ThreadService so the mandatory system message is
     # inserted atomically.
     created_thread = ThreadService.create_thread_with_system_message(
         db,
-        fiche_row,
+        automation_row,
         title=thread.title,
         thread_type=thread.thread_type or "chat",
         active=thread.active,
     )
 
-    # If the request supplied fiche_state we update the
+    # If the request supplied automation_state we update the
     # thread accordingly (ThreadService currently doesn't take those extras
     # to keep the helper minimal).
-    if thread.fiche_state:
+    if thread.automation_state:
         _ = update_thread_record(
             db,
             thread_id=created_thread.id,
-            fiche_state=thread.fiche_state,
+            fiche_state=thread.automation_state,
         )
 
     return created_thread
@@ -165,7 +175,7 @@ def update_thread(
         thread_id=thread_id,
         title=thread.title,
         active=thread.active,
-        fiche_state=thread.fiche_state,
+        fiche_state=thread.automation_state,
         thread_type=thread.thread_type,
     )
     return db_thread

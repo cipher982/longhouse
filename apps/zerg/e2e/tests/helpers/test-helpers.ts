@@ -34,7 +34,7 @@ export async function setupTestData(commisId: string, options: {
     const threadCount = options.threadsPerAutomation || 0;
     for (let i = 0; i < threadCount; i++) {
       const thread = await apiClient.createThread({
-        fiche_id: automation.id,
+        automation_id: automation.id,
         title: `Test Thread ${i + 1} for ${automation.name}`
       });
       context.threads.push(thread);
@@ -165,78 +165,6 @@ export async function createAutomationViaUI(page: Page): Promise<string> {
 }
 
 /**
- * Edit an automation via the UI modal.
- */
-export async function editAutomationViaUI(page: Page, automationId: string, data: {
-  name?: string;
-  systemInstructions?: string;
-  taskInstructions?: string;
-  temperature?: number;
-  model?: string;
-}): Promise<void> {
-  // Open edit modal
-  await page.locator(`[data-testid="edit-automation-${automationId}"]`).click();
-  await expect(page.locator('#fiche-modal')).toBeVisible({ timeout: 2000 });
-  await page.waitForSelector('#fiche-name:not([disabled])', { timeout: 2000 });
-
-  // Fill form fields
-  if (data.name !== undefined) {
-    await page.locator('#fiche-name').fill(data.name);
-  }
-
-  if (data.systemInstructions !== undefined) {
-    await page.locator('#system-instructions').fill(data.systemInstructions);
-  }
-
-  if (data.taskInstructions !== undefined) {
-    await page.locator('#default-task-instructions').fill(data.taskInstructions);
-  }
-
-  if (data.temperature !== undefined) {
-    const tempInput = page.locator('#temperature-input');
-    if (await tempInput.count() > 0) {
-      await tempInput.fill(data.temperature.toString());
-    }
-  }
-
-  if (data.model !== undefined) {
-    const modelSelect = page.locator('#model-select');
-    if (await modelSelect.count() > 0) {
-      await modelSelect.selectOption(data.model);
-    }
-  }
-
-  // Save changes
-  await page.locator('#save-fiche').click();
-
-  // Wait for modal to close (hidden)
-  await expect(page.locator('#fiche-modal')).not.toBeVisible({ timeout: 5000 });
-}
-
-/**
- * Delete an automation via the UI and handle the confirmation dialog.
- */
-export async function deleteAutomationViaUI(page: Page, automationId: string, confirm: boolean = true): Promise<void> {
-  // Set up dialog handler
-  page.once('dialog', (dialog) => {
-    if (confirm) {
-      dialog.accept();
-    } else {
-      dialog.dismiss();
-    }
-  });
-
-  // Click delete button
-  await page.locator(`[data-testid="delete-automation-${automationId}"]`).click();
-
-  if (confirm) {
-    await expect(page.locator(`tr[data-automation-id="${automationId}"]`)).toHaveCount(0, { timeout: 5000 });
-  } else {
-    await expect(page.locator(`tr[data-automation-id="${automationId}"]`)).toHaveCount(1);
-  }
-}
-
-/**
  * Navigate to chat for a specific automation.
  */
 export async function navigateToChat(page: Page, automationId: string): Promise<void> {
@@ -362,7 +290,7 @@ export async function createTestThread(page: Page, automationId: string, title: 
   const apiClient = createApiClient(commisId);
 
   const thread = await apiClient.createThread({
-    fiche_id: automationId,
+    automation_id: automationId,
     title: title || `Test Thread ${Date.now()}`,
   });
 

@@ -2,10 +2,11 @@ import { request } from "./base";
 import type { Thread, ThreadMessage, ThreadUpdatePayload } from "./types";
 
 type ThreadCreate = {
-  fiche_id: number;
+  automation_id: number;
   title: string;
   thread_type: string;
   active: boolean;
+  automation_state?: Record<string, unknown> | null;
 };
 
 type ThreadMessageCreate = {
@@ -13,8 +14,8 @@ type ThreadMessageCreate = {
   content: string;
 };
 
-export async function fetchThreads(ficheId: number, threadType?: string): Promise<Thread[]> {
-  const params = new URLSearchParams({ fiche_id: String(ficheId) });
+export async function fetchThreads(automationId: number, threadType?: string): Promise<Thread[]> {
+  const params = new URLSearchParams({ automation_id: String(automationId) });
   if (threadType) {
     params.append("thread_type", threadType);
   }
@@ -31,9 +32,9 @@ export async function fetchThreadMessages(threadId: number): Promise<ThreadMessa
   return request<ThreadMessage[]>(`/threads/${threadId}/messages`);
 }
 
-export async function createThread(ficheId: number, title: string): Promise<Thread> {
+export async function createThread(automationId: number, title: string): Promise<Thread> {
   const payload: ThreadCreate = {
-    fiche_id: ficheId,
+    automation_id: automationId,
     title,
     thread_type: "chat",
     active: true,

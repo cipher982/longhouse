@@ -41,7 +41,7 @@ const {
   fetchContainerPolicy: mockFetchContainerPolicy,
 } = apiMocks;
 
-function renderChatPage(initialEntry = "/fiche/1/thread/42") {
+function renderChatPage(initialEntry = "/automations/1/thread/42") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -54,7 +54,7 @@ function renderChatPage(initialEntry = "/fiche/1/thread/42") {
         <ShelfProvider>
           <TestRouter initialEntries={[initialEntry]}>
             <Routes>
-              <Route path="/fiche/:ficheId/thread/:threadId?" element={<ChatPage />} />
+              <Route path="/automations/:automationId/thread/:threadId?" element={<ChatPage />} />
               <Route path="/timeline" element={<div>Timeline Home</div>} />
             </Routes>
           </TestRouter>
@@ -73,9 +73,9 @@ describe("ChatPage", () => {
     const now = new Date().toISOString();
     const thread: Thread = {
       id: 42,
-      fiche_id: 1,
+      automation_id: 1,
       title: "Primary",
-      fiche_state: null,
+      automation_state: null,
       active: true,
       thread_type: "chat",
       created_at: now,
@@ -165,7 +165,7 @@ describe("ChatPage", () => {
   });
 
   it("shows timeline-focused recovery copy when automation context is missing", async () => {
-    renderChatPage("/fiche/not-a-number/thread/42");
+    renderChatPage("/automations/not-a-number/thread/42");
 
     expect(await screen.findByText("Missing automation context")).toBeInTheDocument();
     expect(screen.getByText("Open the timeline to pick a session or return to the main app.")).toBeInTheDocument();

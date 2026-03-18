@@ -110,8 +110,8 @@
 
   /* Card titles pop */
   body.marketing-mode .card-title,
-  body.marketing-mode .fiche-name,
-  body.marketing-mode .dashboard-fiche-name {
+  body.marketing-mode .automation-name,
+  body.marketing-mode .dashboard-automation-name {
     color: #f3f4f6 !important;
     text-shadow: 0 0 8px #342d20 !important;
   }

@@ -47,13 +47,13 @@ export interface Automation {
 
 export interface CreateThreadRequest {
   title?: string;
-  fiche_id: string;
+  automation_id: string;
 }
 
 export interface Thread {
   id: string;
   title: string;
-  fiche_id: string;
+  automation_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -168,7 +168,7 @@ export class ApiClient {
   }
 
   async listThreads(automationId?: string): Promise<Thread[]> {
-    const url = automationId ? `/api/threads?fiche_id=${automationId}` : '/api/threads';
+    const url = automationId ? `/api/threads?automation_id=${automationId}` : '/api/threads';
     return await this.request('GET', url);
   }
 

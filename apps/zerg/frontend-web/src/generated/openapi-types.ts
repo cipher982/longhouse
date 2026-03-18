@@ -414,7 +414,7 @@ export interface paths {
         };
         /**
          * Read Threads
-         * @description Get all threads, optionally filtered by fiche_id, thread_type, and/or title.
+         * @description Get all threads, optionally filtered by automation_id, thread_type, and/or title.
          *
          *     If `title` is provided, returns threads matching that title.
          */
@@ -440,7 +440,7 @@ export interface paths {
         };
         /**
          * Read Threads
-         * @description Get all threads, optionally filtered by fiche_id, thread_type, and/or title.
+         * @description Get all threads, optionally filtered by automation_id, thread_type, and/or title.
          *
          *     If `title` is provided, returns threads matching that title.
          */
@@ -9702,8 +9702,8 @@ export interface components {
         Thread: {
             /** Title */
             title: string;
-            /** Fiche State */
-            fiche_state?: {
+            /** Automation State */
+            automation_state?: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -9718,8 +9718,8 @@ export interface components {
             thread_type: string | null;
             /** Id */
             id: number;
-            /** Fiche Id */
-            fiche_id: number;
+            /** Automation Id */
+            automation_id: number;
             /**
              * Created At
              * Format: date-time
@@ -9740,8 +9740,8 @@ export interface components {
         ThreadCreate: {
             /** Title */
             title: string;
-            /** Fiche State */
-            fiche_state?: {
+            /** Automation State */
+            automation_state?: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -9754,8 +9754,8 @@ export interface components {
              * @default chat
              */
             thread_type: string | null;
-            /** Fiche Id */
-            fiche_id: number;
+            /** Automation Id */
+            automation_id: number;
         };
         /** ThreadMessageCreate */
         ThreadMessageCreate: {
@@ -9824,8 +9824,8 @@ export interface components {
         ThreadSummary: {
             /** Title */
             title: string;
-            /** Fiche State */
-            fiche_state?: {
+            /** Automation State */
+            automation_state?: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -9840,8 +9840,8 @@ export interface components {
             thread_type: string | null;
             /** Id */
             id: number;
-            /** Fiche Id */
-            fiche_id: number;
+            /** Automation Id */
+            automation_id: number;
             /**
              * Created At
              * Format: date-time
@@ -9857,8 +9857,8 @@ export interface components {
         ThreadUpdate: {
             /** Title */
             title?: string | null;
-            /** Fiche State */
-            fiche_state?: {
+            /** Automation State */
+            automation_state?: {
                 [key: string]: unknown;
             } | null;
             /** Active */
@@ -11569,7 +11569,7 @@ export interface operations {
     read_threads_threads_get: {
         parameters: {
             query?: {
-                fiche_id?: number | null;
+                automation_id?: number | null;
                 thread_type?: string | null;
                 title?: string | null;
                 skip?: number;
@@ -11640,7 +11640,7 @@ export interface operations {
     read_threads_threads__get: {
         parameters: {
             query?: {
-                fiche_id?: number | null;
+                automation_id?: number | null;
                 thread_type?: string | null;
                 title?: string | null;
                 skip?: number;

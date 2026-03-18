@@ -76,7 +76,7 @@ async function navigateToChat(page: Page, automationId: string): Promise<void> {
   await expect(chatBtn).toBeVisible({ timeout: 5000 });
   await chatBtn.click();
 
-  await page.waitForURL((url) => url.pathname.includes(`/fiche/${automationId}/thread`), { timeout: 10000 });
+  await page.waitForURL((url) => url.pathname.includes(`/automations/${automationId}/thread`), { timeout: 10000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 5000 });
 }
@@ -185,14 +185,14 @@ test.describe('Smoke Tests - Core Functionality', () => {
     const automationId = await createAutomationViaUI(page);
 
     await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
-    await page.waitForURL((url) => url.pathname.includes(`/fiche/${automationId}/thread`), { timeout: 10000 });
+    await page.waitForURL((url) => url.pathname.includes(`/automations/${automationId}/thread`), { timeout: 10000 });
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     const url = page.url();
 
     // URL must be either:
-    // - /fiche/{id}/thread/ (with trailing slash, no thread ID)
-    // - /fiche/{id}/thread/{tid} (with thread ID)
+    // - /automations/{id}/thread/ (with trailing slash, no thread ID)
+    // - /automations/{id}/thread/{tid} (with thread ID)
     const hasTrailingSlash = /\/thread\/(\?.*)?$/.test(url);
     const hasThreadId = /\/thread\/[a-zA-Z0-9-]+/.test(url);
 
@@ -392,7 +392,7 @@ test.describe('URL Contract', () => {
     const ficheId = await createAutomationViaUI(page);
 
     await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
-    await page.waitForURL((url) => url.pathname.includes(`/fiche/${ficheId}/thread`), { timeout: 10000 });
+    await page.waitForURL((url) => url.pathname.includes(`/automations/${ficheId}/thread`), { timeout: 10000 });
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     const url = page.url();
