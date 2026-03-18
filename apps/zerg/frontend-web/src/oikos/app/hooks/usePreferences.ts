@@ -9,6 +9,7 @@ import { useCallback } from 'react'
 import { useAppState, useAppDispatch } from '../context'
 import { CONFIG, toAbsoluteUrl } from '../../lib/config'
 import { logger } from '../../core'
+import { fetchWithRefresh } from '../../../lib/auth-refresh'
 
 export interface ChatPreferences {
   chat_model: string
@@ -39,7 +40,7 @@ export function usePreferences() {
 
       // Persist to server
       try {
-        const response = await fetch(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/preferences`), {
+        const response = await fetchWithRefresh(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/preferences`), {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',

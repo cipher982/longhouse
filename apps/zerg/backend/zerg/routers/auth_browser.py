@@ -21,8 +21,13 @@ from fastapi import status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from zerg.auth import refresh_tokens
+from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
+from zerg.auth.session_tokens import REFRESH_COOKIE_NAME
+from zerg.auth.session_tokens import _clear_refresh_cookie
 from zerg.auth.session_tokens import _clear_session_cookie
 from zerg.auth.session_tokens import _issue_access_token
+from zerg.auth.session_tokens import _set_refresh_cookie
 from zerg.auth.session_tokens import _set_session_cookie
 from zerg.config import get_settings
 from zerg.crud import count_users
@@ -38,6 +43,39 @@ from zerg.routers.auth_gmail import _normalize_email_address
 from zerg.schemas.schemas import TokenOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Refresh token cookie max-age: 90 days (matches absolute lifetime in refresh_tokens module).
+_REFRESH_COOKIE_MAX_AGE = 90 * 24 * 60 * 60
+
+
+def _issue_session(
+    response: Response,
+    db: Session,
+    user,
+    *,
+    display_name: str | None = None,
+    avatar_url: str | None = None,
+) -> TokenOut:
+    """Issue an access-token cookie + refresh-token cookie in one shot.
+
+    Every browser login flow should call this instead of manually wiring
+    ``_issue_access_token`` / ``_set_session_cookie``.
+    """
+    at_seconds = int(ACCESS_TOKEN_LIFETIME.total_seconds())
+    access_token = _issue_access_token(
+        user.id,
+        user.email,
+        display_name=display_name or getattr(user, "display_name", None),
+        avatar_url=avatar_url or getattr(user, "avatar_url", None),
+    )
+    _set_session_cookie(response, access_token, at_seconds)
+
+    raw_rt = refresh_tokens.create(db, user_id=user.id)
+    db.commit()
+    _set_refresh_cookie(response, raw_rt, _REFRESH_COOKIE_MAX_AGE)
+
+    return TokenOut(access_token=access_token, expires_in=at_seconds)
+
 
 _PASSWORD_RATE_LIMIT_MAX_ATTEMPTS = 5
 _PASSWORD_RATE_LIMIT_WINDOW_SECONDS = 60
@@ -154,34 +192,20 @@ def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
         request = google_requests.Request()
         return id_token.verify_oauth2_token(id_token_str, request, google_client_id)
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid Google token: {str(exc)}"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid Google token: {str(exc)}") from exc
 
 
 @router.post("/dev-login", response_model=TokenOut)
 def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenOut:
     settings = get_settings()
     if not settings.auth_disabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Dev login only available when AUTH_DISABLED=1"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dev login only available when AUTH_DISABLED=1")
 
     user = get_user_by_email(db, "dev@local")
     if not user:
-        user = create_user(
-            db, email="dev@local", provider="dev", provider_user_id="dev-user-1", role="ADMIN", skip_notification=True
-        )
+        user = create_user(db, email="dev@local", provider="dev", provider_user_id="dev-user-1", role="ADMIN", skip_notification=True)
 
-    expires_in = 30 * 60
-    access_token = _issue_access_token(
-        user.id,
-        user.email,
-        display_name=user.display_name or "Dev User",
-        avatar_url=user.avatar_url,
-    )
-    _set_session_cookie(response, access_token, expires_in)
-    return TokenOut(access_token=access_token, expires_in=expires_in)
+    return _issue_session(response, db, user, display_name=user.display_name or "Dev User")
 
 
 @router.post("/service-login", response_model=TokenOut, include_in_schema=False)
@@ -218,10 +242,7 @@ def service_login(request: Request, response: Response, db: Session = Depends(ge
                     detail="Failed to create service user",
                 )
 
-    expires_in = 30 * 60
-    access_token = _issue_access_token(user.id, user.email, display_name=display_name)
-    _set_session_cookie(response, access_token, expires_in)
-    return TokenOut(access_token=access_token, expires_in=expires_in)
+    return _issue_session(response, db, user, display_name=display_name)
 
 
 @router.post("/google", response_model=TokenOut)
@@ -270,9 +291,7 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
             except Exception:
                 total = 0
             if settings.max_users and total >= settings.max_users:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN, detail="Sign-ups disabled: user limit reached"
-                )
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sign-ups disabled: user limit reached")
 
         role = "ADMIN" if is_admin else "USER"
         user = create_user(db, email=email, provider="google", provider_user_id=sub, role=role)
@@ -286,15 +305,7 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
             except Exception:
                 pass
 
-    expires_in = 30 * 60
-    access_token = _issue_access_token(
-        user.id,
-        user.email,
-        display_name=user.display_name,
-        avatar_url=user.avatar_url,
-    )
-    _set_session_cookie(response, access_token, expires_in)
-    return TokenOut(access_token=access_token, expires_in=expires_in)
+    return _issue_session(response, db, user)
 
 
 @router.get("/verify", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
@@ -347,8 +358,60 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-def logout(response: Response):
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    # Revoke the refresh token family so the RT can't be replayed after logout.
+    raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
+    if raw_rt:
+        token_hash = refresh_tokens._hash_token(raw_rt)
+        row = db.query(refresh_tokens.RefreshSession).filter_by(token_hash=token_hash).first()
+        if row:
+            refresh_tokens.revoke_family(db, row.family_id)
+            db.commit()
+
     _clear_session_cookie(response)
+    _clear_refresh_cookie(response)
+
+
+@router.post("/refresh", response_model=TokenOut)
+def refresh_session(request: Request, response: Response, db: Session = Depends(get_db)) -> TokenOut:
+    """Exchange a valid refresh token for a new access token + rotated refresh token.
+
+    This is the silent-refresh endpoint called by the frontend on 401.
+    """
+    raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
+    if not raw_rt:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token")
+
+    result = refresh_tokens.rotate(db, raw_rt)
+    if result is None:
+        # Token invalid, expired, or revoked — clear cookies and force re-login.
+        _clear_session_cookie(response)
+        _clear_refresh_cookie(response)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired or revoked")
+
+    from zerg.crud import get_user
+
+    user = get_user(db, result.user_id)
+    if user is None or not getattr(user, "is_active", True):
+        refresh_tokens.revoke_family(db, result.family_id)
+        _clear_session_cookie(response)
+        _clear_refresh_cookie(response)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+
+    at_seconds = int(ACCESS_TOKEN_LIFETIME.total_seconds())
+    access_token = _issue_access_token(
+        user.id,
+        user.email,
+        display_name=getattr(user, "display_name", None),
+        avatar_url=getattr(user, "avatar_url", None),
+    )
+    _set_session_cookie(response, access_token, at_seconds)
+    _set_refresh_cookie(response, result.raw_token, _REFRESH_COOKIE_MAX_AGE)
+    db.commit()
+
+    return TokenOut(access_token=access_token, expires_in=at_seconds)
 
 
 @router.get("/methods")
@@ -377,6 +440,7 @@ def _resolve_password_user(db: Session):
     if settings.single_tenant and not settings.testing:
         from fastapi import HTTPException
         from fastapi import status
+
         from zerg.models import User
         from zerg.services.single_tenant import get_owner_email
 
@@ -432,15 +496,7 @@ def password_login(
     _clear_password_failures(client_ip)
     user = _resolve_password_user(db)
 
-    expires_in = 30 * 60
-    access_token = _issue_access_token(
-        user.id,
-        user.email,
-        display_name=user.display_name or "Local User",
-        avatar_url=user.avatar_url,
-    )
-    _set_session_cookie(response, access_token, expires_in)
-    return TokenOut(access_token=access_token, expires_in=expires_in)
+    return _issue_session(response, db, user, display_name=user.display_name or "Local User")
 
 
 class CLILoginRequest(BaseModel):

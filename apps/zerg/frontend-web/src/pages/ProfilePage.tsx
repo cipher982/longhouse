@@ -13,6 +13,7 @@ import {
 } from "../components/ui";
 
 import { parseUTC } from "../lib/dateUtils";
+import { fetchWithRefresh } from "../lib/auth-refresh";
 
 interface UserUpdatePayload {
   display_name?: string | null;
@@ -22,7 +23,7 @@ interface UserUpdatePayload {
 
 // API function for updating user profile
 async function updateUserProfile(data: UserUpdatePayload): Promise<{ id: number; email: string; display_name?: string; avatar_url?: string }> {
-  const response = await fetch("/api/users/me", {
+  const response = await fetchWithRefresh("/api/users/me", {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -44,7 +45,7 @@ async function uploadAvatar(file: File): Promise<{ id: number; email: string; di
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch("/api/users/me/avatar", {
+  const response = await fetchWithRefresh("/api/users/me/avatar", {
     method: "POST",
     credentials: 'include', // Cookie auth
     body: formData,

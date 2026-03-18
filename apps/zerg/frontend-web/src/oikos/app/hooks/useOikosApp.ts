@@ -37,6 +37,7 @@ import { uuid } from '../../lib/uuid'
 import { stateManager, type StateChangeEvent } from '../../lib/state-manager'
 import { eventBus } from '../../lib/event-bus'
 import { timelineLogger } from '../../lib/timeline-logger'
+import { fetchWithRefresh } from '../../../lib/auth-refresh'
 
 const VOICE_INPUT_MODE: 'turn-based' | 'realtime' = 'turn-based'
 
@@ -165,7 +166,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
   const fetchBootstrap = useCallback(async () => {
     try {
       logger.info('[useOikosApp] Fetching bootstrap configuration...')
-      const response = await fetch(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/bootstrap`), {
+      const response = await fetchWithRefresh(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/bootstrap`), {
         credentials: 'include',
       })
 
@@ -214,7 +215,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
       } else {
         // Fetch actual oikos thread info
         try {
-          const threadResponse = await fetch(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/thread`), {
+          const threadResponse = await fetchWithRefresh(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/thread`), {
             credentials: 'include',
           })
 
@@ -406,7 +407,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
   const checkForActiveRun = useCallback(async () => {
     try {
       logger.info('[useOikosApp] Checking for active run...')
-      const response = await fetch(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/runs/active`), {
+      const response = await fetchWithRefresh(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/runs/active`), {
         credentials: 'include',
       })
 
@@ -803,7 +804,7 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
 
   // Get session token for OpenAI
   const getSessionToken = async (): Promise<string> => {
-    const r = await fetch(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/session`), {
+    const r = await fetchWithRefresh(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/session`), {
       credentials: 'include',
     })
     if (!r.ok) throw new Error('Failed to get session token')

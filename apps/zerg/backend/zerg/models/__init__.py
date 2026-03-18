@@ -27,6 +27,9 @@ from .models import RunnerEnrollToken
 from .models import RunnerJob
 from .models import UserSkill
 from .models import UserTask
+
+# Re-export remaining models from models.py
+from .refresh_session import RefreshSession
 from .run import Run
 from .run_event import RunEvent
 from .surface_ingress import SurfaceIngressClaim
@@ -66,6 +69,7 @@ __all__ = [
     "User",
     "WaitlistEntry",
     "CommisBarrier",
+    "RefreshSession",
     # Remaining models (still in models.py)
     "AccountConnectorCredential",
     "ConnectorCredential",

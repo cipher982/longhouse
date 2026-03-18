@@ -1,4 +1,5 @@
 import { config } from "../../lib/config";
+import { fetchWithRefresh } from "../../lib/auth-refresh";
 import { logger } from "../../oikos/core/logger";
 
 export class ApiError extends Error {
@@ -52,7 +53,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("X-Test-Commis", String(testCommisHeader));
   }
 
-  const response = await fetch(url, {
+  const response = await fetchWithRefresh(url, {
     ...init,
     headers,
     credentials: 'include',

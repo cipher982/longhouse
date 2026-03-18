@@ -20,6 +20,7 @@ import { CONFIG, toAbsoluteUrl } from './config';
 import { eventBus } from './event-bus';
 import { commisProgressStore } from './commis-progress-store';
 import { parseUTC } from '../../lib/dateUtils';
+import { fetchWithRefresh } from '../../lib/auth-refresh';
 import {
   SSE_EVENT_TYPES,
   type SSEEventType,
@@ -209,7 +210,7 @@ export class OikosChatController {
         url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?${params.toString()}`);
       }
 
-      const response = await fetch(url, {
+      const response = await fetchWithRefresh(url, {
         method: 'GET',
         credentials: 'include', // Cookie auth
       });
@@ -395,7 +396,7 @@ export class OikosChatController {
       logger.debug('[OikosChat] Using replay scenario:', replayScenario);
     }
 
-    const response = await fetch(url, {
+    const response = await fetchWithRefresh(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1060,7 +1061,7 @@ export class OikosChatController {
       logger.debug('[OikosChat] Clearing server-side history...');
 
       const url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/thread`);
-      const response = await fetch(url, {
+      const response = await fetchWithRefresh(url, {
         method: 'DELETE',
         credentials: 'include', // Cookie auth
       });
@@ -1113,7 +1114,7 @@ export class OikosChatController {
         headers['Last-Event-ID'] = String(this.lastEventId);
       }
 
-      const response = await fetch(url.toString(), {
+      const response = await fetchWithRefresh(url.toString(), {
         method: 'GET',
         headers,
         credentials: 'include',

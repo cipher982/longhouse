@@ -12,6 +12,7 @@ import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import config from "../lib/config";
+import { fetchWithRefresh } from "../lib/auth-refresh";
 import { ZapIcon } from "./icons";
 
 // Types matching backend schema
@@ -38,7 +39,7 @@ interface UserUsageResponse {
 
 // Fetch user usage from API
 async function fetchUserUsage(period: "today" | "7d" | "30d" = "today"): Promise<UserUsageResponse> {
-  const response = await fetch(`${config.apiBaseUrl}/users/me/usage?period=${period}`, {
+  const response = await fetchWithRefresh(`${config.apiBaseUrl}/users/me/usage?period=${period}`, {
     credentials: "include",
   });
 

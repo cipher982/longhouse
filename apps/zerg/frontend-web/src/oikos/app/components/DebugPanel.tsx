@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAppState } from '../context'
 import config from '../../../lib/config'
+import { fetchWithRefresh } from '../../../lib/auth-refresh'
 import './DebugPanel.css'
 
 interface ThreadInfo {
@@ -35,7 +36,7 @@ export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: D
   // Fetch thread info
   const fetchThreadInfo = useCallback(async () => {
     try {
-      const response = await fetch(`${config.apiBaseUrl}/oikos/thread`, {
+      const response = await fetchWithRefresh(`${config.apiBaseUrl}/oikos/thread`, {
         credentials: 'include',
       })
       if (response.ok) {

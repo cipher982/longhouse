@@ -14,8 +14,11 @@ from fastapi import status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from zerg.auth import refresh_tokens
+from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
 from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import _issue_access_token
+from zerg.auth.session_tokens import _set_refresh_cookie
 from zerg.auth.session_tokens import _set_session_cookie
 from zerg.auth.strategy import _decode_jwt_fallback
 from zerg.config import get_settings
@@ -109,15 +112,21 @@ def _accept_token(response: Response, token: str, db: Session) -> TokenOut:
     if remaining == 0:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
 
-    expires_in = min(remaining, 30 * 60)
+    at_seconds = int(ACCESS_TOKEN_LIFETIME.total_seconds())
     access_token = _issue_access_token(
         user.id,
         user.email,
         display_name=getattr(user, "display_name", None),
         avatar_url=getattr(user, "avatar_url", None),
     )
-    _set_session_cookie(response, access_token, expires_in)
-    return TokenOut(access_token=access_token, expires_in=expires_in)
+    _set_session_cookie(response, access_token, at_seconds)
+
+    # Issue refresh token so the browser session survives beyond the AT lifetime.
+    raw_rt = refresh_tokens.create(db, user_id=user.id)
+    db.commit()
+    _set_refresh_cookie(response, raw_rt, 90 * 24 * 60 * 60)
+
+    return TokenOut(access_token=access_token, expires_in=at_seconds)
 
 
 @router.post("/accept-token", response_model=TokenOut)
