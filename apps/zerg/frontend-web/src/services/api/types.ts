@@ -133,21 +133,21 @@ export type AutomationUpdatePayload = AutomationUpdate;
 export type FicheCreatePayload = AutomationCreatePayload;
 export type FicheUpdatePayload = AutomationUpdatePayload;
 
-export interface DashboardRunsBundle {
-  ficheId: number;
+export interface AutomationRunsBundle {
+  automationId: number;
   runs: Run[];
 }
 
-export interface DashboardSnapshot {
+export interface AutomationOverviewSnapshot {
   scope: "my" | "all";
   fetchedAt: string;
   runsLimit: number;
-  fiches: FicheSummary[];
-  runs: DashboardRunsBundle[];
+  automations: AutomationSummary[];
+  runs: AutomationRunsBundle[];
 }
 
-export type AutomationRunsBundle = DashboardRunsBundle;
-export type AutomationOverviewSnapshot = DashboardSnapshot;
+export type DashboardRunsBundle = AutomationRunsBundle;
+export type DashboardSnapshot = AutomationOverviewSnapshot;
 
 export interface ModelConfig {
   id: string;

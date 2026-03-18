@@ -155,7 +155,7 @@ function AutomationTableRowComponent({
     <Fragment>
       <Table.Row
         data-automation-id={automation.id}
-        className={clsx('fiche-row', automation.status === "error" && "error-row")}
+        className={clsx('automation-row', automation.status === "error" && "error-row")}
         onClick={() => onToggleRow(automation.id)}
         onKeyDown={handleRowKeyDown}
       >
@@ -257,9 +257,9 @@ function AutomationTableRowComponent({
         </Table.Cell>
       </Table.Row>
       {isExpanded && (
-        <tr className="fiche-detail-row" key={`detail-${automation.id}`}>
+        <tr className="automation-detail-row" key={`detail-${automation.id}`}>
           <td colSpan={emptyColspan}>
-            <div className="fiche-detail-container">
+            <div className="automation-detail-container">
               {runsDataLoading && <span>Loading run history...</span>}
               {!runsDataLoading && runs && runs.length === 0 && (
                 <span>No runs recorded yet.</span>
