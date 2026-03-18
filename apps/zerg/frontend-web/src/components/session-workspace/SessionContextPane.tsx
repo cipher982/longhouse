@@ -1,6 +1,6 @@
 import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
-import type { SessionShadowReview } from "../../services/api/oikos";
+import type { SessionShadowReview, SessionShadowRollup } from "../../services/api/oikos";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -26,6 +26,7 @@ interface SessionContextPaneProps {
   loopModePending?: boolean;
   onLoopModeChange?: (nextMode: SessionLoopMode) => void;
   latestShadowReview?: SessionShadowReview | null;
+  shadowRollup?: SessionShadowRollup | null;
   shadowReviewLoading?: boolean;
   shadowReviewUnavailable?: boolean;
 }
@@ -62,6 +63,16 @@ const SHADOW_ALIGNMENT_META: Record<
   failed: { label: "Run Failed", variant: "warning" },
 };
 
+const SHADOW_READINESS_META: Record<
+  string,
+  { label: string; variant: "neutral" | "warning" | "success" }
+> = {
+  no_signal: { label: "No Signal Yet", variant: "neutral" },
+  early: { label: "Early Signal", variant: "neutral" },
+  promising: { label: "Promising", variant: "success" },
+  caution: { label: "Needs Caution", variant: "warning" },
+};
+
 function formatRecommendedAction(value: string | null): string | null {
   if (!value) return null;
   return value
@@ -95,6 +106,7 @@ export function SessionContextPane({
   loopModePending = false,
   onLoopModeChange,
   latestShadowReview = null,
+  shadowRollup = null,
   shadowReviewLoading = false,
   shadowReviewUnavailable = false,
 }: SessionContextPaneProps) {
@@ -114,6 +126,15 @@ export function SessionContextPane({
   const recommendedAction = formatRecommendedAction(latestShadowReview?.recommendedAction ?? null);
   const actualOutcome = formatOutcome(latestShadowReview?.actualOutcome ?? null);
   const expectedOutcome = formatOutcome(latestShadowReview?.expectedOutcome ?? null);
+  const readinessMeta = shadowRollup
+    ? SHADOW_READINESS_META[shadowRollup.readiness] ?? {
+        label: shadowRollup.readiness,
+        variant: "neutral" as const,
+      }
+    : null;
+  const cautionCount = shadowRollup
+    ? shadowRollup.moreAggressive + shadowRollup.different + shadowRollup.failed
+    : 0;
 
   return (
     <div className="session-context-pane">
@@ -203,6 +224,19 @@ export function SessionContextPane({
           <div className="session-shadow-review__empty">Loading latest shadow review...</div>
         ) : latestShadowReview ? (
           <div className="session-shadow-review" data-testid="session-shadow-review">
+            {shadowRollup ? (
+              <div className="session-shadow-review__rollup" data-testid="session-shadow-rollup">
+                <div className="session-shadow-review__header">
+                  {readinessMeta ? <Badge variant={readinessMeta.variant}>{readinessMeta.label}</Badge> : null}
+                  <span className="session-shadow-review__stamp">
+                    {shadowRollup.totalReviews} completed • {shadowRollup.pendingReviews} pending
+                  </span>
+                </div>
+                <div className="session-shadow-review__meta">
+                  Matched {shadowRollup.matched} • Conservative {shadowRollup.moreConservative} • Caution {cautionCount}
+                </div>
+              </div>
+            ) : null}
             <div className="session-shadow-review__header">
               {shadowState ? <Badge variant={shadowState.variant}>{shadowState.label}</Badge> : null}
               {shadowAlignment ? (

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SessionContextPane } from "../SessionContextPane";
 import type { AgentSession, SessionLoopMode } from "../../../services/api/agents";
-import type { SessionShadowReview } from "../../../services/api/oikos";
+import type { SessionShadowReview, SessionShadowRollup } from "../../../services/api/oikos";
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -43,6 +43,7 @@ function renderPane(
     onLoopModeChange = vi.fn(),
     loopModePending = false,
     latestShadowReview = null,
+    shadowRollup = null,
     shadowReviewLoading = false,
     shadowReviewUnavailable = false,
   }: {
@@ -50,6 +51,7 @@ function renderPane(
     onLoopModeChange?: (nextMode: SessionLoopMode) => void;
     loopModePending?: boolean;
     latestShadowReview?: SessionShadowReview | null;
+    shadowRollup?: SessionShadowRollup | null;
     shadowReviewLoading?: boolean;
     shadowReviewUnavailable?: boolean;
   } = {},
@@ -66,6 +68,7 @@ function renderPane(
       onLoopModeChange={onLoopModeChange}
       loopModePending={loopModePending}
       latestShadowReview={latestShadowReview}
+      shadowRollup={shadowRollup}
       shadowReviewLoading={shadowReviewLoading}
       shadowReviewUnavailable={shadowReviewUnavailable}
     />,
@@ -97,6 +100,20 @@ function makeShadowReview(overrides: Partial<SessionShadowReview> = {}): Session
   };
 }
 
+function makeShadowRollup(overrides: Partial<SessionShadowRollup> = {}): SessionShadowRollup {
+  return {
+    totalReviews: 4,
+    pendingReviews: 1,
+    matched: 3,
+    moreConservative: 1,
+    moreAggressive: 0,
+    different: 0,
+    failed: 0,
+    readiness: "promising",
+    ...overrides,
+  };
+}
+
 describe("SessionContextPane", () => {
   it("shows the current loop mode as the active radio option", () => {
     renderPane({ session: makeSession({ loop_mode: "assist" }) });
@@ -124,9 +141,13 @@ describe("SessionContextPane", () => {
   });
 
   it("renders the latest shadow review details", () => {
-    renderPane({ latestShadowReview: makeShadowReview() });
+    renderPane({ latestShadowReview: makeShadowReview(), shadowRollup: makeShadowRollup() });
 
     expect(screen.getByTestId("session-shadow-review")).toBeInTheDocument();
+    expect(screen.getByTestId("session-shadow-rollup")).toBeInTheDocument();
+    expect(screen.getByText(/Promising/i)).toBeInTheDocument();
+    expect(screen.getByText(/4 completed • 1 pending/i)).toBeInTheDocument();
+    expect(screen.getByText(/Matched 3 • Conservative 1 • Caution 0/i)).toBeInTheDocument();
     expect(screen.getByText(/Awaiting Approval/i)).toBeInTheDocument();
     expect(screen.getByText(/More Conservative/i)).toBeInTheDocument();
     expect(screen.getByText(/Trigger: presence.blocked/i)).toBeInTheDocument();
