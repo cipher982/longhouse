@@ -164,6 +164,7 @@
     "$comment": "Maps use cases to tiers - quality-critical tasks get TIER_1 even for small outputs",
     "text": {
       "fiche_conversation": "TIER_1",
+      "loop_controller": "x-ai/grok-4.1-fast",
       "routing_decision": "TIER_1",
       "tool_selection": "TIER_1",
       "commis_task": "TIER_1",

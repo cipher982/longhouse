@@ -19,6 +19,7 @@ from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import UserRole
 from zerg.models.user import User
+from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
 
 
@@ -95,14 +96,22 @@ def _seed_session(
 
 
 @pytest.mark.asyncio
-async def test_turn_review_records_bounded_continue_and_enqueues_operator(monkeypatch, tmp_path):
-    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+async def test_turn_review_records_bounded_continue_from_loop_controller(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_continue.db")
 
-    async def _fake_invoke(*_args, **_kwargs):
-        return 42
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="The next step is a bounded same-session continue.",
+            rationale="The assistant left exactly one obvious follow-up.",
+            recommended_action="continue_session",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=11,
+        )
 
-    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
 
     with SessionLocal() as db:
         _create_user(db, allow_continue=True)
@@ -118,14 +127,27 @@ async def test_turn_review_records_bounded_continue_and_enqueues_operator(monkey
         assert review.decision == "continue"
         assert review.execution_state == "would_auto_continue"
         assert review.recommended_action == "continue_session"
-        assert review.status == "enqueued"
-        assert review.run_id == 42
+        assert review.status == "recorded"
+        assert review.run_id is None
 
 
 @pytest.mark.asyncio
 async def test_turn_review_keeps_manual_mode_observe_only_even_for_escalation(monkeypatch, tmp_path):
-    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     SessionLocal = _make_db(tmp_path, "turn_review_manual_escalate.db")
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="escalate",
+            summary="A real product decision is required.",
+            rationale="The assistant is asking for a human choice, not a routine continue.",
+            recommended_action="escalate",
+            blocked_reasons=("Meaningful product decision required.",),
+            model_id="gpt-test",
+            raw_response='{"decision":"escalate"}',
+            loop_thread_id=12,
+        )
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
 
     with SessionLocal() as db:
         _create_user(db, allow_continue=True)
@@ -146,8 +168,21 @@ async def test_turn_review_keeps_manual_mode_observe_only_even_for_escalation(mo
 
 @pytest.mark.asyncio
 async def test_turn_review_dedupes_same_completed_assistant_turn(monkeypatch, tmp_path):
-    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "0")
     SessionLocal = _make_db(tmp_path, "turn_review_dedupe.db")
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Continue the same session.",
+            rationale="Same bounded next step remains.",
+            recommended_action="continue_session",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=13,
+        )
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
 
     with SessionLocal() as db:
         _create_user(db, allow_continue=True)
@@ -171,8 +206,21 @@ async def test_turn_review_dedupes_same_completed_assistant_turn(monkeypatch, tm
 @pytest.mark.asyncio
 @pytest.mark.parametrize("presence_state", ["needs_user", "blocked"])
 async def test_turn_review_still_records_when_latest_presence_is_pause_state(monkeypatch, tmp_path, presence_state):
-    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "0")
     SessionLocal = _make_db(tmp_path, f"turn_review_pause_{presence_state}.db")
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Continue after this completed turn.",
+            rationale="The next step is still bounded.",
+            recommended_action="continue_session",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=14,
+        )
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
 
     with SessionLocal() as db:
         _create_user(db, allow_continue=False)
@@ -198,3 +246,29 @@ async def test_turn_review_still_records_when_latest_presence_is_pause_state(mon
         assert review.decision == "continue"
         assert review.execution_state == "awaiting_user_approval"
         assert review.status == "recorded"
+
+
+@pytest.mark.asyncio
+async def test_turn_review_marks_controller_failures(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_controller_failure.db")
+
+    async def _boom(**_kwargs):
+        raise RuntimeError("llm exploded")
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _boom)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=True)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="continue if the next step is obvious",
+            assistant_text="Only targeted verification remains.",
+        )
+
+        review = await maybe_record_session_turn_review(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.decision == "ask_user"
+        assert review.status == "failed"
+        assert review.reason == "controller_error"
+        assert "Loop controller evaluation failed." in (review.blocked_reasons or [])

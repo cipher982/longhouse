@@ -92,8 +92,10 @@ class AgentSession(AgentsBase):
     # Pre-computed summary (generated async after ingest)
     summary = Column(Text, nullable=True)  # 2-4 sentence quick summary
     summary_title = Column(String(200), nullable=True)  # Short title for briefing
-    summary_event_count = Column(Integer, server_default=text("0"))  # Events covered by current summary (legacy count-based cursor)
-    last_summarized_event_id = Column(Integer, nullable=True)  # ID of last AgentEvent included in summary (efficient cursor)
+    # Events covered by current summary (legacy count-based cursor)
+    summary_event_count = Column(Integer, server_default=text("0"))
+    # ID of last AgentEvent included in summary (efficient cursor)
+    last_summarized_event_id = Column(Integer, nullable=True)
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -107,6 +109,9 @@ class AgentSession(AgentsBase):
     user_state = Column(String(20), nullable=False, server_default=text("'active'"))
     user_state_at = Column(DateTime(timezone=True), nullable=True)
     loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.MANUAL.value}'"))
+    # App-level reference to the per-session loop-controller thread.
+    # This intentionally avoids a cross-metadata SQL FK to the main Thread table.
+    loop_thread_id = Column(Integer, nullable=True, index=True)
 
     # Reflection tracking — stamped when session has been analyzed by reflection service
     reflected_at = Column(DateTime(timezone=True), nullable=True)
@@ -276,8 +281,22 @@ class AgentSourceLine(AgentsBase):
     session = relationship("AgentSession", back_populates="source_lines")
 
     __table_args__ = (
-        UniqueConstraint("session_id", "branch_id", "source_path", "source_offset", "revision", name="uq_source_line_revision"),
-        UniqueConstraint("session_id", "branch_id", "source_path", "source_offset", "line_hash", name="uq_source_line_hash"),
+        UniqueConstraint(
+            "session_id",
+            "branch_id",
+            "source_path",
+            "source_offset",
+            "revision",
+            name="uq_source_line_revision",
+        ),
+        UniqueConstraint(
+            "session_id",
+            "branch_id",
+            "source_path",
+            "source_offset",
+            "line_hash",
+            name="uq_source_line_hash",
+        ),
         Index("ix_source_lines_session_offset", "session_id", "branch_id", "source_offset"),
     )
 

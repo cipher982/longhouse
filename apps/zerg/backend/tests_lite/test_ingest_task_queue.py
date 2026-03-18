@@ -39,6 +39,7 @@ from zerg.models.user import User
 from zerg.services.ingest_task_queue import _claim_pending
 from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 from zerg.services.ingest_task_queue import reset_stale_running_tasks
+from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.session_loop_mode import SessionLoopMode
 
 # ---------------------------------------------------------------------------
@@ -134,6 +135,19 @@ def _seed_completion_summary_task(
     db.commit()
     db.close()
     return session_id, task_id, user.id, assistant_event.id
+
+
+def _continue_decision() -> LoopControllerDecision:
+    return LoopControllerDecision(
+        decision="continue",
+        summary="The same session has one obvious bounded next step.",
+        rationale="This is the routine continue case after a completed assistant turn.",
+        recommended_action="continue_session",
+        blocked_reasons=(),
+        model_id="glm-test",
+        raw_response='{"decision":"continue"}',
+        loop_thread_id=42,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +321,7 @@ async def test_worker_marks_done_on_success(tmp_path):
 
 @pytest.mark.asyncio
 async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp_path, monkeypatch):
-    """Recent completed turns wake operator mode after summary succeeds."""
+    """Recent completed turns record an AI loop review after summary succeeds."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
@@ -334,29 +348,20 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
-                invoke_oikos.return_value = 123
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
                 await _execute_task(task_id, session_id, "summary")
-
-    invoke_oikos.assert_awaited_once()
-    args = invoke_oikos.await_args.args
-    kwargs = invoke_oikos.await_args.kwargs
-    assert args[0] == owner_id
-    assert "Trigger: turn.completed" in args[1]
-    assert args[2] == f"operator-turn-loop-{session_id}-{assistant_event_id}"
-    assert kwargs["source"] == "operator"
-    assert kwargs["surface_payload"]["trigger_type"] == "turn.completed"
-    assert kwargs["surface_payload"]["session_id"] == session_id
-    assert kwargs["surface_payload"]["turn_review"]["decision"]["decision"] == "continue"
-    assert kwargs["surface_payload"]["turn_review"]["loop_review"]["loop_mode"] == "assist"
-    assert kwargs["surface_payload"]["turn_review"]["loop_review"]["mode_capability"] == "notify_only"
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
     assert len(reviews) == 1
-    assert reviews[0].status == "enqueued"
-    assert reviews[0].run_id == 123
+    assert owner_id > 0
+    assert assistant_event_id > 0
+    assert reviews[0].status == "recorded"
+    assert reviews[0].run_id is None
     assert reviews[0].trigger_type == "turn.completed"
     assert reviews[0].decision == "continue"
     assert reviews[0].execution_state == "awaiting_user_approval"
@@ -423,17 +428,18 @@ async def test_summary_task_reviews_completed_turn_even_when_session_is_paused(t
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
-                invoke_oikos.return_value = 321
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
                 await _execute_task(task_id, session_id, "summary")
-
-    invoke_oikos.assert_awaited_once()
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
     assert len(reviews) == 1
-    assert reviews[0].status == "enqueued"
+    assert reviews[0].status == "recorded"
+    assert reviews[0].run_id is None
     assert reviews[0].execution_state == "awaiting_user_approval"
     assert reviews[0].decision == "continue"
 
@@ -467,7 +473,7 @@ async def test_summary_task_skips_operator_for_historical_completed_session(tmp_
 
 @pytest.mark.asyncio
 async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path, monkeypatch):
-    """User-backed operator prefs can disable post-ingest completion wakeups."""
+    """User-backed operator prefs still allow review recording, but keep execution observe-only."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
@@ -483,10 +489,11 @@ async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
                 await _execute_task(task_id, session_id, "summary")
-
-    invoke_oikos.assert_not_awaited()
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -494,6 +501,7 @@ async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path
     assert len(reviews) == 1
     assert reviews[0].status == "recorded"
     assert reviews[0].decision == "continue"
+    assert reviews[0].execution_state == "observe_only"
 
 
 @pytest.mark.asyncio

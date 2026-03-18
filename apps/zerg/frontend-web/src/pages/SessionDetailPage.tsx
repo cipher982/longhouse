@@ -23,7 +23,6 @@ import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents
 import {
   fetchSessionTurnTelemetry,
   type SessionTurnReview,
-  type SessionTurnRollup,
 } from "../services/api/oikos";
 import {
   formatProviderLabel,
@@ -51,7 +50,6 @@ export default function SessionDetailPage() {
   const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
   const [loopModePending, setLoopModePending] = useState(false);
   const [latestTurnReview, setLatestTurnReview] = useState<SessionTurnReview | null>(null);
-  const [turnRollup, setTurnRollup] = useState<SessionTurnRollup | null>(null);
   const [turnReviewLoading, setTurnReviewLoading] = useState(false);
   const [turnReviewUnavailable, setTurnReviewUnavailable] = useState(false);
 
@@ -135,7 +133,6 @@ export default function SessionDetailPage() {
   useEffect(() => {
     if (!session?.id) {
       setLatestTurnReview(null);
-      setTurnRollup(null);
       setTurnReviewLoading(false);
       setTurnReviewUnavailable(false);
       return;
@@ -149,12 +146,10 @@ export default function SessionDetailPage() {
       .then((telemetry) => {
         if (cancelled) return;
         setLatestTurnReview(telemetry.latestReview);
-        setTurnRollup(telemetry.rollup);
       })
       .catch(() => {
         if (cancelled) return;
         setLatestTurnReview(null);
-        setTurnRollup(null);
         setTurnReviewUnavailable(true);
       })
       .finally(() => {
@@ -362,7 +357,6 @@ export default function SessionDetailPage() {
             loopModePending={loopModePending}
             onLoopModeChange={handleLoopModeChange}
             latestTurnReview={latestTurnReview}
-            turnRollup={turnRollup}
             turnReviewLoading={turnReviewLoading}
             turnReviewUnavailable={turnReviewUnavailable}
           />
