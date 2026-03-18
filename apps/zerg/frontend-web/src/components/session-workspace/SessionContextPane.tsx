@@ -51,12 +51,27 @@ const EXECUTION_STATE_META: Record<
   no_action: { label: "No Action", variant: "neutral" },
 };
 
+const SHADOW_ALIGNMENT_META: Record<
+  string,
+  { label: string; variant: "neutral" | "warning" | "success" }
+> = {
+  matched: { label: "Matched Shadow", variant: "success" },
+  more_conservative: { label: "More Conservative", variant: "neutral" },
+  more_aggressive: { label: "More Aggressive", variant: "warning" },
+  different: { label: "Different Outcome", variant: "warning" },
+  failed: { label: "Run Failed", variant: "warning" },
+};
+
 function formatRecommendedAction(value: string | null): string | null {
   if (!value) return null;
   return value
     .split("_")
     .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
     .join(" ");
+}
+
+function formatOutcome(value: string | null): string | null {
+  return formatRecommendedAction(value);
 }
 
 function MetaRow({ label, value }: { label: string; value: string }) {
@@ -90,7 +105,15 @@ export function SessionContextPane({
         variant: "neutral" as const,
       }
     : null;
+  const shadowAlignment = latestShadowReview?.alignment
+    ? SHADOW_ALIGNMENT_META[latestShadowReview.alignment] ?? {
+        label: latestShadowReview.alignment,
+        variant: "neutral" as const,
+      }
+    : null;
   const recommendedAction = formatRecommendedAction(latestShadowReview?.recommendedAction ?? null);
+  const actualOutcome = formatOutcome(latestShadowReview?.actualOutcome ?? null);
+  const expectedOutcome = formatOutcome(latestShadowReview?.expectedOutcome ?? null);
 
   return (
     <div className="session-context-pane">
@@ -182,6 +205,9 @@ export function SessionContextPane({
           <div className="session-shadow-review" data-testid="session-shadow-review">
             <div className="session-shadow-review__header">
               {shadowState ? <Badge variant={shadowState.variant}>{shadowState.label}</Badge> : null}
+              {shadowAlignment ? (
+                <Badge variant={shadowAlignment.variant}>{shadowAlignment.label}</Badge>
+              ) : null}
               <span className="session-shadow-review__stamp">
                 {formatFullDate(latestShadowReview.generatedAt)}
               </span>
@@ -197,6 +223,12 @@ export function SessionContextPane({
               <div className="session-shadow-review__meta">
                 Recommended action: {recommendedAction}
               </div>
+            ) : null}
+            {expectedOutcome ? (
+              <div className="session-shadow-review__meta">Shadow expected outcome: {expectedOutcome}</div>
+            ) : null}
+            {actualOutcome ? (
+              <div className="session-shadow-review__meta">Actual outcome: {actualOutcome}</div>
             ) : null}
             {latestShadowReview.blockedReasons.length > 0 ? (
               <div className="session-shadow-review__blockers">

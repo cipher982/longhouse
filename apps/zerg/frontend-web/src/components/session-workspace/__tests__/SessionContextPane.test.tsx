@@ -88,6 +88,11 @@ function makeShadowReview(overrides: Partial<SessionShadowReview> = {}): Session
     wouldContinueSession: false,
     blockedReasons: ["Waiting on direct approval before resuming the session."],
     recommendedAction: "continue_session",
+    wakeupStatus: "ignored",
+    wakeupReason: "no_action",
+    actualOutcome: "ignore",
+    expectedOutcome: "notify_user",
+    alignment: "more_conservative",
     ...overrides,
   };
 }
@@ -123,8 +128,11 @@ describe("SessionContextPane", () => {
 
     expect(screen.getByTestId("session-shadow-review")).toBeInTheDocument();
     expect(screen.getByText(/Awaiting Approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/More Conservative/i)).toBeInTheDocument();
     expect(screen.getByText(/Trigger: presence.blocked/i)).toBeInTheDocument();
     expect(screen.getByText(/Recommended action: Continue Session/i)).toBeInTheDocument();
+    expect(screen.getByText(/Shadow expected outcome: Notify User/i)).toBeInTheDocument();
+    expect(screen.getByText(/Actual outcome: Ignore/i)).toBeInTheDocument();
     expect(screen.getByText(/Waiting on direct approval/i)).toBeInTheDocument();
   });
 
