@@ -20,7 +20,7 @@ type FetchAutomationsParams = {
 };
 
 type AutomationRunsBundleResponse = {
-  fiche_id: number;
+  automation_id: number;
   runs: Run[];
 };
 
@@ -28,7 +28,7 @@ type AutomationOverviewResponse = {
   scope: "my" | "all";
   fetched_at: string;
   runs_limit: number;
-  fiches: AutomationSummary[];
+  automations: AutomationSummary[];
   runs: AutomationRunsBundleResponse[];
 };
 
@@ -85,9 +85,9 @@ export async function fetchAutomationOverview(
     scope: response.scope,
     fetchedAt: response.fetched_at,
     runsLimit: response.runs_limit,
-    automations: response.fiches,
+    automations: response.automations,
     runs: response.runs.map((bundle) => ({
-      automationId: bundle.fiche_id,
+      automationId: bundle.automation_id,
       runs: bundle.runs,
     })),
   };

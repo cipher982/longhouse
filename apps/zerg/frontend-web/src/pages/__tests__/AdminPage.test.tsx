@@ -44,9 +44,9 @@ function buildOpsSummary(window: "today" | "7d" | "30d") {
     window_label: byWindow.label,
     runs: byWindow.runs,
     cost_usd: byWindow.cost,
-    top_fiches: [
+    top_automations: [
       {
-        fiche_id: 1,
+        automation_id: 1,
         name: "Test Automation",
         owner_email: "test@example.com",
         runs: 50,
@@ -54,7 +54,7 @@ function buildOpsSummary(window: "today" | "7d" | "30d") {
         p95_ms: 300,
       },
       {
-        fiche_id: 2,
+        automation_id: 2,
         name: "Helper Automation",
         owner_email: "helper@example.com",
         runs: 30,
@@ -73,8 +73,8 @@ function buildOpsSummary(window: "today" | "7d" | "30d") {
       percent: 34.5,
     },
     active_users_24h: 5,
-    fiches_total: 12,
-    fiches_scheduled: 3,
+    automations_total: 12,
+    automations_scheduled: 3,
     latency_ms: {
       p50: 250,
       p95: 800,

@@ -5505,8 +5505,8 @@ export interface components {
             summary: components["schemas"]["PeriodUsage"];
             /** Daily Breakdown */
             daily_breakdown: components["schemas"]["DailyBreakdown"][];
-            /** Top Fiches */
-            top_fiches: components["schemas"]["TopFicheUsage"][];
+            /** Top Automations */
+            top_automations: components["schemas"]["TopAutomationUsage"][];
         };
         /**
          * AdminUserRow
@@ -6613,8 +6613,8 @@ export interface components {
             fetched_at: string;
             /** Runs Limit */
             runs_limit: number;
-            /** Fiches */
-            fiches: components["schemas"]["Fiche"][];
+            /** Automations */
+            automations: components["schemas"]["Fiche"][];
             /** Runs */
             runs: components["schemas"]["RunBundle"][];
         };
@@ -8151,23 +8151,23 @@ export interface components {
             budget_global: components["schemas"]["BudgetInfo"];
             /** Active Users 24H */
             active_users_24h: number;
-            /** Fiches Total */
-            fiches_total: number;
-            /** Fiches Scheduled */
-            fiches_scheduled: number;
+            /** Automations Total */
+            automations_total: number;
+            /** Automations Scheduled */
+            automations_scheduled: number;
             latency_ms: components["schemas"]["LatencyStats"];
             /** Errors Last Hour */
             errors_last_hour: number;
-            /** Top Fiches */
-            top_fiches: components["schemas"]["OpsTopFiche"][];
+            /** Top Automations */
+            top_automations: components["schemas"]["OpsTopAutomation"][];
         };
         /**
-         * OpsTopFiche
-         * @description Top performing fiche information.
+         * OpsTopAutomation
+         * @description Top performing automation information.
          */
-        OpsTopFiche: {
-            /** Fiche Id */
-            fiche_id: number;
+        OpsTopAutomation: {
+            /** Automation Id */
+            automation_id: number;
             /** Name */
             name: string;
             /** Owner Email */
@@ -8499,8 +8499,8 @@ export interface components {
         ResetType: "clear_data" | "full_rebuild";
         /** RunBundle */
         RunBundle: {
-            /** Fiche Id */
-            fiche_id: number;
+            /** Automation Id */
+            automation_id: number;
             /**
              * Runs
              * @default []
@@ -8542,8 +8542,8 @@ export interface components {
         RunOut: {
             /** Id */
             id: number;
-            /** Fiche Id */
-            fiche_id: number;
+            /** Automation Id */
+            automation_id: number;
             /** Thread Id */
             thread_id: number;
             status: components["schemas"]["RunStatus"];
@@ -10015,12 +10015,12 @@ export interface components {
             commis?: components["schemas"]["CommisInfo"] | null;
         };
         /**
-         * TopFicheUsage
-         * @description Fiche usage stats for user detail view.
+         * TopAutomationUsage
+         * @description Automation usage stats for user detail view.
          */
-        TopFicheUsage: {
-            /** Fiche Id */
-            fiche_id: number;
+        TopAutomationUsage: {
+            /** Automation Id */
+            automation_id: number;
             /** Name */
             name: string;
             /** Tokens */
@@ -10031,12 +10031,12 @@ export interface components {
             runs: number;
         };
         /**
-         * TopFichesResponse
-         * @description Response containing top fiches list.
+         * TopAutomationsResponse
+         * @description Response containing top automations list.
          */
-        TopFichesResponse: {
-            /** Top Fiches */
-            top_fiches: components["schemas"]["OpsTopFiche"][];
+        TopAutomationsResponse: {
+            /** Top Automations */
+            top_automations: components["schemas"]["OpsTopAutomation"][];
         };
         /**
          * TraccarCredentials
@@ -16349,7 +16349,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TopFichesResponse"];
+                    "application/json": components["schemas"]["TopAutomationsResponse"];
                 };
             };
             /** @description Validation Error */

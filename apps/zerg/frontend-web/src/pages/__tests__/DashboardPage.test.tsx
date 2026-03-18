@@ -191,7 +191,7 @@ describe("DashboardPage", () => {
     const runs: Run[] = [
       {
         id: 42,
-        fiche_id: 1,
+        automation_id: 1,
         thread_id: 9,
         status: "success",
         trigger: "manual",
@@ -204,7 +204,7 @@ describe("DashboardPage", () => {
       },
       {
         id: 43,
-        fiche_id: 1,
+        automation_id: 1,
         thread_id: 10,
         status: "failed",
         trigger: "schedule",
@@ -217,7 +217,7 @@ describe("DashboardPage", () => {
       },
       {
         id: 44,
-        fiche_id: 1,
+        automation_id: 1,
         thread_id: 11,
         status: "success",
         trigger: "manual",
@@ -230,7 +230,7 @@ describe("DashboardPage", () => {
       },
       {
         id: 45,
-        fiche_id: 1,
+        automation_id: 1,
         thread_id: 12,
         status: "success",
         trigger: "schedule",
@@ -243,7 +243,7 @@ describe("DashboardPage", () => {
       },
       {
         id: 46,
-        fiche_id: 1,
+        automation_id: 1,
         thread_id: 13,
         status: "running",
         trigger: "manual",
@@ -256,7 +256,7 @@ describe("DashboardPage", () => {
       },
       {
         id: 47,
-        fiche_id: 1,
+        automation_id: 1,
         thread_id: 14,
         status: "success",
         trigger: "manual",

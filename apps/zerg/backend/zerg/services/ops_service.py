@@ -145,9 +145,9 @@ def get_summary(db: Session, current_user: UserModel, window: str = "today") -> 
     active_user_ids = {row[0] for row in user_ids_from_runs.all()} | {row[0] for row in user_ids_from_messages.all()}
     active_users_24h = len({uid for uid in active_user_ids if uid is not None})
 
-    # Fiches: total and scheduled (simple: schedule IS NOT NULL)
-    fiches_total = int(db.query(func.count(FicheModel.id)).scalar() or 0)
-    fiches_scheduled = int(db.query(func.count(FicheModel.id)).filter(FicheModel.schedule.isnot(None)).scalar() or 0)
+    # Automations: total and scheduled (simple: schedule IS NOT NULL)
+    automations_total = int(db.query(func.count(FicheModel.id)).scalar() or 0)
+    automations_scheduled = int(db.query(func.count(FicheModel.id)).filter(FicheModel.schedule.isnot(None)).scalar() or 0)
 
     # Latency: p50/p95 for successful runs in selected window
     durations_rows = db.query(RunModel.duration_ms).filter(
@@ -174,8 +174,8 @@ def get_summary(db: Session, current_user: UserModel, window: str = "today") -> 
         or 0
     )
 
-    # Top fiches in selected window: run count, cost sum (nullable), p95 duration
-    top_fiches = get_top_fiches(db, window=window, limit=5)
+    # Top automations in selected window: run count, cost sum (nullable), p95 duration
+    top_automations = get_top_automations(db, window=window, limit=5)
 
     return {
         "window": window,
@@ -193,11 +193,11 @@ def get_summary(db: Session, current_user: UserModel, window: str = "today") -> 
             "percent": global_percent,
         },
         "active_users_24h": active_users_24h,
-        "fiches_total": fiches_total,
-        "fiches_scheduled": fiches_scheduled,
+        "automations_total": automations_total,
+        "automations_scheduled": automations_scheduled,
         "latency_ms": {"p50": latency_p50, "p95": latency_p95},
         "errors_last_hour": errors_last_hour,
-        "top_fiches": top_fiches,
+        "top_automations": top_automations,
     }
 
 
@@ -306,8 +306,8 @@ def get_timeseries(db: Session, metric: str, window: str = "today") -> List[Dict
     return out
 
 
-def get_top_fiches(db: Session, window: str = "today", limit: int = 5) -> List[Dict[str, Any]]:
-    """Compute per-fiche aggregates for the given window.
+def get_top_automations(db: Session, window: str = "today", limit: int = 5) -> List[Dict[str, Any]]:
+    """Compute per-automation aggregates for the given window.
 
     Supports "today", "7d", and "30d".
     """
@@ -320,7 +320,7 @@ def get_top_fiches(db: Session, window: str = "today", limit: int = 5) -> List[D
     elif window != "today":
         raise ValueError("Unsupported window")
 
-    # Base: runs started today per fiche
+    # Base: runs started today per automation
     base_runs_q = db.query(RunModel.fiche_id, func.count(RunModel.id).label("runs")).filter(RunModel.started_at.isnot(None))
     if start_date is not None:
         base_runs_q = base_runs_q.filter(func.date(RunModel.started_at) >= start_date)
@@ -351,11 +351,11 @@ def get_top_fiches(db: Session, window: str = "today", limit: int = 5) -> List[D
     else:
         base_dur_q = base_dur_q.filter(func.date(RunModel.started_at) == today)
     dur_rows = base_dur_q.all()
-    durations_by_fiche: Dict[int, List[int]] = defaultdict(list)
+    durations_by_automation: Dict[int, List[int]] = defaultdict(list)
     for fiche_id, d in dur_rows:
         if d is not None and fiche_id is not None:
-            durations_by_fiche[int(fiche_id)].append(int(d))
-    p95_map = {fid: (_percentile(vals, 95) or 0) for fid, vals in durations_by_fiche.items()}
+            durations_by_automation[int(fiche_id)].append(int(d))
+    p95_map = {fid: (_percentile(vals, 95) or 0) for fid, vals in durations_by_automation.items()}
 
     # Join with fiche + owner info
     fiches_info_rows = (
@@ -374,7 +374,7 @@ def get_top_fiches(db: Session, window: str = "today", limit: int = 5) -> List[D
         name, owner_email = info_map.get(fid, (None, None))
         result.append(
             {
-                "fiche_id": fid,
+                "automation_id": fid,
                 "name": name,
                 "owner_email": owner_email,
                 "runs": runs_map.get(fid, 0),

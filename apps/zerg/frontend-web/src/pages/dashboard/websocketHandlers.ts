@@ -89,7 +89,7 @@ export function applyRunUpdate(
 
     const newRun: Run = {
       id: runId,
-      fiche_id: automationId,
+      automation_id: automationId,
       thread_id: threadId,
       status:
         typeof dataPayload.status === "string"

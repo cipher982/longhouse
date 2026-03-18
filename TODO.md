@@ -2216,6 +2216,30 @@ Notes:
 
 ---
 
+## [Refactor][Product] Rename Automation Overview + Run Surface Off Fiche
+
+**Status (2026-03-17):** Done. The public dashboard/admin overview and run payloads are now automation-first, while internal run storage remains unchanged for the follow-on persistence sweep.
+
+**Goal:** Make the public automation overview/run/admin contract automation-first without renaming the internal run storage model in this tranche.
+
+**Done when:**
+- Dashboard/overview payloads return `automations` and run bundles keyed by `automation_id`
+- Public run payloads expose `automation_id` instead of `fiche_id`
+- Admin/ops browser surfaces use `top_automations` / `automations_total` / `automations_scheduled`
+- SDK, units, `make test`, and focused dashboard/admin verification are green
+
+- [x] Rename public dashboard snapshot and run bundle fields off `fiches` / `fiche_id`
+- [x] Rename public run payloads off `fiche_id` and update dashboard/browser consumers
+- [x] Rename admin ops surface keys off `top_fiches` / `fiches_*`
+- [x] Verify with SDK generation, frontend units, `make test`, and focused dashboard/admin E2E or unit coverage
+
+Notes:
+- 2026-03-17: Keep this tranche at the public payload layer. Do not rename ORM columns, event bus internals, or Oikos run/task compatibility fields yet.
+- 2026-03-17: Shipped the overview/admin surface rename. Dashboard snapshots now return `automations`, run payloads expose `automation_id`, and the ops/admin browser contract now uses `top_automations`, `automations_total`, and `automations_scheduled`.
+- 2026-03-17: Verification passed via `make generate-sdk`, `make test-frontend-unit`, `make test`, and `E2E_BACKEND_PORT=48050 E2E_FRONTEND_PORT=48051 make test-e2e-single TEST='--project=chromium tests/dashboard.basic.spec.ts tests/dashboard.scope-toggle.spec.ts'`.
+
+---
+
 ## [Product] Briefings + AI Features
 
 **Status (2026-02-23):** Core wired. Depends on LLM summarization running.

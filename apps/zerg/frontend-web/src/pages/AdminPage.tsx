@@ -56,7 +56,7 @@ interface DailyBreakdown {
 }
 
 interface TopAutomationUsage {
-  fiche_id: number;
+  automation_id: number;
   name: string;
   tokens: number;
   cost_usd: number;
@@ -68,7 +68,7 @@ interface AdminUserDetailResponse {
   period: string;
   summary: UserPeriodUsage;
   daily_breakdown: DailyBreakdown[];
-  top_fiches: TopAutomationUsage[];
+  top_automations: TopAutomationUsage[];
 }
 
 // Types for ops data - matching actual backend contract
@@ -88,18 +88,18 @@ interface OpsSummary {
     percent: number | null;
   };
   active_users_24h: number;
-  fiches_total: number;
-  fiches_scheduled: number;
+  automations_total: number;
+  automations_scheduled: number;
   latency_ms: {
     p50: number;
     p95: number;
   };
   errors_last_hour: number;
-  top_fiches: OpsTopAutomation[];
+  top_automations: OpsTopAutomation[];
 }
 
 interface OpsTopAutomation {
-  fiche_id: number;
+  automation_id: number;
   name: string;
   owner_email: string;
   runs: number;
@@ -436,9 +436,9 @@ function TopAutomationsTable({
         <Table.Cell isHeader>Cost (USD)</Table.Cell>
         <Table.Cell isHeader>P95 Latency</Table.Cell>
       </Table.Header>
-      <Table.Body>
-        {automations.map((automation) => (
-          <Table.Row key={automation.fiche_id}>
+        <Table.Body>
+          {automations.map((automation) => (
+          <Table.Row key={automation.automation_id}>
             <Table.Cell className="agent-name">{automation.name}</Table.Cell>
             <Table.Cell className="owner-email">{automation.owner_email}</Table.Cell>
             <Table.Cell className="runs-count">{automation.runs}</Table.Cell>
@@ -647,7 +647,7 @@ function UserDetailModal({
             )}
 
             {/* Top Automations */}
-            {detail.top_fiches.length > 0 && (
+            {detail.top_automations.length > 0 && (
               <div className="detail-section">
                 <h5>Top Automations by Cost</h5>
                 <table className="breakdown-table">
@@ -660,8 +660,8 @@ function UserDetailModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.top_fiches.map((automation) => (
-                      <tr key={automation.fiche_id}>
+                    {detail.top_automations.map((automation) => (
+                      <tr key={automation.automation_id}>
                         <td>{automation.name}</td>
                         <td className="numeric">{automation.tokens.toLocaleString()}</td>
                         <td className="numeric">{formatCost(automation.cost_usd)}</td>
@@ -1082,7 +1082,7 @@ function AdminPage() {
             </Card.Header>
             <Card.Body>
               <TopAutomationsTable
-                automations={summary.top_fiches}
+                automations={summary.top_automations}
                 windowLabel={summary.window_label}
               />
             </Card.Body>
@@ -1191,11 +1191,11 @@ function AdminPage() {
                 <div className="info-grid">
                   <div className="info-item">
                     <span className="info-label">Total Automations:</span>
-                    <span className="info-value">{summary.fiches_total}</span>
+                    <span className="info-value">{summary.automations_total}</span>
                   </div>
                   <div className="info-item">
                     <span className="info-label">Scheduled Automations:</span>
-                    <span className="info-value">{summary.fiches_scheduled}</span>
+                    <span className="info-value">{summary.automations_scheduled}</span>
                   </div>
                   <div className="info-item">
                     <span className="info-label">Active Users (24h):</span>
