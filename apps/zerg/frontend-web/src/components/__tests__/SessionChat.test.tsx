@@ -124,6 +124,15 @@ describe("SessionChat", () => {
     expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
   });
 
+  it("can hide the dock header when the boundary already lives in the timeline", () => {
+    const { container } = renderSessionChat({
+      dockHeaderStyle: "hidden",
+    });
+
+    expect(screen.queryByTestId("session-chat-divider")).not.toBeInTheDocument();
+    expect(container.querySelector(".session-chat-callout")).toBeNull();
+  });
+
   it("navigates only after persisted continuation events land", async () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();

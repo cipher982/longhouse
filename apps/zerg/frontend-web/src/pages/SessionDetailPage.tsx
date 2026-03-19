@@ -61,6 +61,7 @@ export default function SessionDetailPage() {
     currentThreadSession,
     headThreadSession,
     isViewingHead,
+    continuationBoundary,
     totalEvents,
     events,
     items,
@@ -358,6 +359,7 @@ export default function SessionDetailPage() {
         }
         main={
           <TimelinePane
+            continuationBoundary={continuationBoundary}
             items={items}
             filteredItems={filteredItems}
             totalEvents={totalEvents}
@@ -387,7 +389,7 @@ export default function SessionDetailPage() {
                   key={`${activeSessionForChat.id}:${continuationMode}`}
                   session={activeSessionForChat}
                   layout="dock"
-                  dockHeaderStyle="divider"
+                  dockHeaderStyle={continuationMode === "head" ? "hidden" : "divider"}
                   introEyebrow={
                     continuationMode === "branch" ? "Cloud branch" : "Cloud continuation"
                   }

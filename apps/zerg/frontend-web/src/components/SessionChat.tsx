@@ -76,7 +76,7 @@ interface SessionChatProps {
   composerPlaceholder?: string;
   onSessionChanged?: (nextSessionId: string, createdContinuation: boolean) => void;
   layout?: "panel" | "dock";
-  dockHeaderStyle?: "callout" | "divider";
+  dockHeaderStyle?: "callout" | "divider" | "hidden";
   introEyebrow?: string;
   introTitle?: string;
   introDescription?: string;
@@ -392,7 +392,7 @@ export function SessionChat({
       data-testid={isDock ? "session-continuation-panel" : undefined}
     >
       {isDock ? (
-        dockHeaderStyle === "divider" ? (
+        dockHeaderStyle === "hidden" ? null : dockHeaderStyle === "divider" ? (
           <div className="session-chat-divider" data-testid="session-chat-divider">
             <div className="session-chat-divider__copy">
               <div className="session-chat-divider__rule" />

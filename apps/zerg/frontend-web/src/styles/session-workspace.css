@@ -722,6 +722,53 @@
       linear-gradient(180deg, rgba(18, 11, 9, 0.92), rgba(13, 9, 7, 0.97));
   }
 
+  .timeline-boundary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-3);
+    align-items: center;
+    padding: var(--space-2) 0 var(--space-3);
+  }
+
+  .timeline-boundary__rule {
+    height: 1px;
+    margin-bottom: var(--space-2);
+    background: linear-gradient(
+      90deg,
+      rgba(212, 184, 122, 0.72),
+      rgba(158, 124, 90, 0.18)
+    );
+  }
+
+  .timeline-boundary__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .timeline-boundary__label {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: rgba(212, 184, 122, 0.84);
+  }
+
+  .timeline-boundary__description {
+    font-size: var(--font-size-xs);
+    line-height: 1.45;
+    color: var(--color-text-muted);
+  }
+
+  .timeline-boundary__stamp {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono);
+    white-space: nowrap;
+    align-self: start;
+  }
+
   .timeline-row {
     display: flex;
     flex-direction: column;
