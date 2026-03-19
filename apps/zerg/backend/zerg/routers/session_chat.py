@@ -288,6 +288,7 @@ async def stream_claude_output(
     workspace_path: Path,
     message: str,
     request_id: str,
+    db: Session | None = None,
 ) -> AsyncIterator[str]:
     """Stream Claude Code output as SSE events.
 
@@ -420,6 +421,8 @@ async def stream_claude_output(
         await proc.wait()
 
         shipped_id: str | None = None
+        persisted_events = 0
+        persistence_error: str | None = None
         if proc.returncode != 0:
             logger.error(f"[{request_id}] Claude exited with code {proc.returncode}")
             yield SSEEvent(
@@ -433,9 +436,10 @@ async def stream_claude_output(
             ).encode()
         else:
             try:
-                shipped_id = await ship_session_to_zerg(
+                ship_result = await ship_session_to_zerg(
                     workspace_path=workspace_path,
                     commis_id=request_id,
+                    db=db,
                     session_id=target_session_id,
                     thread_root_session_id=thread_root_session_id,
                     continued_from_session_id=continued_from_session_id,
@@ -443,9 +447,27 @@ async def stream_claude_output(
                     origin_label="Cloud",
                     branched_from_event_id=branched_from_event_id,
                 )
-                if shipped_id:
-                    logger.info(f"[{request_id}] Shipped session to Longhouse: {shipped_id}")
+                if ship_result:
+                    shipped_id = ship_result.session_id
+                    persisted_events = ship_result.events_inserted
+                    if ship_result.events_inserted > 0:
+                        logger.info(
+                            "[%s] Shipped session to Longhouse: %s (events inserted=%s skipped=%s)",
+                            request_id,
+                            shipped_id,
+                            ship_result.events_inserted,
+                            ship_result.events_skipped,
+                        )
+                    else:
+                        persistence_error = (
+                            "Response completed, but Longhouse could not extract any new timeline events "
+                            "from the continuation transcript."
+                        )
+                        logger.warning("[%s] Shipped continuation contained no new events", request_id)
+                else:
+                    persistence_error = "Response completed, but Longhouse could not save the continuation transcript to the timeline."
             except Exception as e:
+                persistence_error = "Response completed, but Longhouse could not save the continuation transcript to the timeline."
                 logger.warning(f"[{request_id}] Failed to ship session to Longhouse: {e}")
 
         yield SSEEvent(
@@ -454,12 +476,14 @@ async def stream_claude_output(
                 {
                     "session_id": target_session_id,
                     "source_session_id": source_session_id,
-                    "shipped_session_id": shipped_id or target_session_id,
+                    "shipped_session_id": shipped_id,
                     "created_continuation": created_continuation,
                     "branched_from_event_id": branched_from_event_id,
                     "exit_code": proc.returncode,
                     "execution_backend": runtime.backend if "runtime" in locals() else SESSION_CHAT_BACKEND_AMBIENT,
                     "total_text_length": len(assistant_text),
+                    "persisted_events": persisted_events,
+                    "persistence_error": persistence_error,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             ),
@@ -596,6 +620,7 @@ async def chat_with_session(
                     workspace_path=resolved_workspace.path,
                     message=body.message,
                     request_id=request_id,
+                    db=db,
                 ):
                     yield event
             finally:

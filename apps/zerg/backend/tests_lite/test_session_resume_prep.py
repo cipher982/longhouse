@@ -22,9 +22,11 @@ from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
 from zerg.services.session_continuity import ResolvedWorkspace
+from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import WorkspaceResolver
 from zerg.services.session_continuity import encode_cwd_for_claude
 from zerg.services.session_continuity import prepare_session_for_resume
+from zerg.services.session_continuity import ship_session_to_zerg
 
 
 def _make_db(tmp_path):
@@ -322,6 +324,64 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
             api_app.dependency_overrides.clear()
 
 
+def test_ship_session_to_zerg_uses_local_ingest_when_db_provided(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    claude_config = tmp_path / ".claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_config))
+
+    async def fail_post(*_args, **_kwargs):
+        raise AssertionError("ship_session_to_zerg should not self-post when db is provided")
+
+    monkeypatch.setattr("zerg.services.session_continuity.httpx.AsyncClient.post", fail_post)
+
+    with SessionLocal() as db:
+        source_session_id = _seed_session(db)
+        provider_session_id = asyncio.run(
+            prepare_session_for_resume(
+                session_id=str(source_session_id),
+                workspace_path=workspace,
+                db=db,
+            )
+        )
+
+        store = AgentsStore(db)
+        target = store.create_continuation_session(
+            source_session_id,
+            continuation_kind="cloud",
+            origin_label="Cloud",
+            environment="Cloud",
+            device_id="zerg-commis-cloud",
+            provider_session_id=provider_session_id,
+            branched_from_event_id=store.get_latest_event_id(source_session_id),
+        )
+        db.commit()
+
+        shipped = asyncio.run(
+            ship_session_to_zerg(
+                workspace_path=workspace,
+                claude_config_dir=claude_config,
+                commis_id="local-ship",
+                db=db,
+                session_id=str(target.id),
+                thread_root_session_id=str(target.thread_root_session_id or target.id),
+                continued_from_session_id=str(target.continued_from_session_id),
+                continuation_kind="cloud",
+                origin_label="Cloud",
+                branched_from_event_id=target.branched_from_event_id,
+            )
+        )
+
+        assert shipped is not None
+        assert shipped.session_id == str(target.id)
+        assert shipped.events_inserted >= 1
+
+        db.expire_all()
+        persisted_target = db.query(AgentSession).filter(AgentSession.id == target.id).one()
+        assert persisted_target.user_messages >= 1
+
+
 def test_build_claude_resume_runtime_uses_zai_env(monkeypatch):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
@@ -419,7 +479,12 @@ def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
 
     async def fake_ship_session_to_zerg(**kwargs):
         captured["ship_kwargs"] = kwargs
-        return kwargs["session_id"]
+        return ShipSessionResult(
+            session_id=kwargs["session_id"],
+            events_inserted=2,
+            events_skipped=0,
+            session_created=True,
+        )
 
     monkeypatch.setattr(session_chat.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(session_chat, "ship_session_to_zerg", fake_ship_session_to_zerg)
@@ -464,7 +529,83 @@ def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
     assert any('"execution_backend": "zai"' in event for event in events)
     assert any("event: assistant_delta" in event for event in events)
     assert any("event: tool_result" in event for event in events)
+    assert any('"persisted_events": 2' in event for event in events)
     assert any("event: done" in event for event in events)
+
+
+def test_stream_claude_output_reports_persistence_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("E2E_FAKE_SESSION_CHAT", raising=False)
+
+    class FakeStdout:
+        def __init__(self):
+            self._lines = iter(
+                [
+                    (
+                        json.dumps(
+                            {
+                                "type": "assistant",
+                                "message": {"content": [{"type": "text", "text": "hello from glm"}]},
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._lines)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = FakeStdout()
+            self.returncode = 0
+
+        async def wait(self):
+            return None
+
+        def terminate(self):
+            return None
+
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        return FakeProc()
+
+    async def fake_ship_session_to_zerg(**_kwargs):
+        return None
+
+    monkeypatch.setattr(session_chat.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(session_chat, "ship_session_to_zerg", fake_ship_session_to_zerg)
+
+    async def collect_events():
+        return [
+            event
+            async for event in session_chat.stream_claude_output(
+                source_session_id=str(uuid4()),
+                target_session_id=str(uuid4()),
+                thread_root_session_id=str(uuid4()),
+                continued_from_session_id=str(uuid4()),
+                created_continuation=True,
+                branched_from_event_id=7,
+                provider_session_id="resume-root",
+                workspace_path=tmp_path,
+                message="anything else?",
+                request_id="req-persist-fail",
+            )
+        ]
+
+    events = asyncio.run(collect_events())
+    done_event = next(event for event in events if event.startswith("event: done"))
+    assert '"shipped_session_id": null' in done_event
+    assert '"persisted_events": 0' in done_event
+    assert "could not save the continuation transcript" in done_event
 
 
 def test_build_claude_resume_runtime_uses_anthropic_env(monkeypatch):

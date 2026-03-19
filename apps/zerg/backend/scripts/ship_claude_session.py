@@ -27,7 +27,7 @@ def main() -> int:
     )
     if not shipped:
         raise SystemExit(1)
-    print(shipped)
+    print(shipped.session_id)
     return 0
 
 
