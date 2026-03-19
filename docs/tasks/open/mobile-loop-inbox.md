@@ -20,7 +20,7 @@ Ship a tiny phone-first Loop Inbox so away-from-keyboard session follow-up does 
 - [x] Add a dedicated loop inbox read API for sessions needing attention
 - [x] Add a dedicated action-card read API for one session
 - [x] Add focused tests for inbox filtering, ordering, and payload shape
-- [ ] Add bounded action endpoints for the common mobile cases
+- [x] Add bounded action endpoints for the common mobile cases
 - [ ] Build the first tiny mobile shell for inbox + action card
 - [ ] Add notification delivery for attention-worthy finished turns
 - [ ] Dogfood the traveling / away-from-keyboard flow end to end
