@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent / "scripts"))
 
 from smoke_models import build_openai_smoke_request  # noqa: E402
@@ -47,8 +46,8 @@ def test_active_model_scope_defaults_to_direct_provider_tiers(monkeypatch):
     active_models = {model_id for model_id, _ in get_active_text_models(load_config())}
 
     assert {"gpt-5.2", "gpt-5-mini", "gpt-5-nano"}.issubset(active_models)
+    assert "x-ai/grok-4.1-fast" in active_models
     assert "openai/gpt-5-mini" not in active_models
-    assert "x-ai/grok-4.1-fast" not in active_models
 
 
 def test_active_model_scope_respects_hosted_profile_overrides(monkeypatch):

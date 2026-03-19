@@ -323,6 +323,7 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
 
 
 def test_build_claude_resume_runtime_uses_zai_env(monkeypatch):
+    monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
     monkeypatch.setenv(session_chat.SESSION_CHAT_MODEL_ENV, "glm-4.7")
@@ -353,6 +354,7 @@ def test_build_claude_resume_runtime_uses_zai_env(monkeypatch):
 
 
 def test_build_claude_resume_runtime_requires_zai_key(monkeypatch):
+    monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.delenv("ZAI_API_KEY", raising=False)
 
@@ -364,6 +366,7 @@ def test_build_claude_resume_runtime_requires_zai_key(monkeypatch):
 
 
 def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
     monkeypatch.delenv("TESTING", raising=False)
@@ -465,6 +468,7 @@ def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
 
 
 def test_build_claude_resume_runtime_uses_anthropic_env(monkeypatch):
+    monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ANTHROPIC)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
     monkeypatch.delenv(session_chat.SESSION_CHAT_MODEL_ENV, raising=False)
@@ -487,6 +491,7 @@ def test_build_claude_resume_runtime_uses_anthropic_env(monkeypatch):
 
 
 def test_build_claude_resume_runtime_requires_anthropic_key(monkeypatch):
+    monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ANTHROPIC)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
