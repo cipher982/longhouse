@@ -777,23 +777,24 @@ def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurnReview
         return None
     if review.recommended_action != "continue_session":
         return None
+    try:
+        return approve_pending_turn_review(db=db, review=review, expected_execution_state="would_auto_continue")
+    except (ValueError, RuntimeError):
+        return None
+
+
+def _enqueue_same_session_continue_job(
+    *,
+    db: Session,
+    review: SessionTurnReview,
+    session: AgentSession,
+) -> CommisJob | None:
     if review.owner_id is None:
         _mark_review_outcome(
             db,
             review=review,
             status="failed",
             reason="missing_owner",
-            actual_outcome="failed",
-        )
-        return None
-
-    session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
-    if session is None:
-        _mark_review_outcome(
-            db,
-            review=review,
-            status="failed",
-            reason="missing_session",
             actual_outcome="failed",
         )
         return None
@@ -844,14 +845,62 @@ def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurnReview
             review.session_id,
         )
         db.rollback()
+        return None
+
+    return job
+
+
+def approve_pending_turn_review(
+    *,
+    db: Session,
+    review: SessionTurnReview,
+    expected_execution_state: str = "awaiting_user_approval",
+) -> CommisJob:
+    if review.status not in {"recorded", "enqueued"}:
+        raise ValueError("turn review is no longer actionable")
+    if review.execution_state != expected_execution_state:
+        raise ValueError("turn review is not in the expected actionable state")
+    if review.recommended_action != "continue_session":
+        raise ValueError("turn review does not support continue approval")
+
+    session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
+    if session is None:
         _mark_review_outcome(
             db,
             review=review,
             status="failed",
-            reason="enqueue_failed",
+            reason="missing_session",
             actual_outcome="failed",
         )
-        return None
+        raise RuntimeError("missing_session")
+
+    job = _enqueue_same_session_continue_job(db=db, review=review, session=session)
+    if job is None:
+        if review.status != "failed":
+            _mark_review_outcome(
+                db,
+                review=review,
+                status="failed",
+                reason="enqueue_failed",
+                actual_outcome="failed",
+            )
+        raise RuntimeError(str(review.reason or "enqueue_failed"))
+
+    if review.run_id is not None:
+        from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ACTED
+        from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
+
+        finalize_wakeups_for_run(
+            db,
+            run_id=review.run_id,
+            status=WAKEUP_STATUS_ACTED,
+            reason="continue_session",
+            payload_updates={
+                "outcome": _EXPECTED_CONTINUE_OUTCOME,
+                "job_ids": [int(job.id)],
+                "resume_session_ids": [str(session.id)],
+            },
+        )
 
     _mark_review_outcome(
         db,
@@ -861,6 +910,33 @@ def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurnReview
         actual_outcome=_EXPECTED_CONTINUE_OUTCOME,
     )
     return job
+
+
+def dismiss_pending_turn_review(*, db: Session, review: SessionTurnReview, reason: str = "not_now") -> None:
+    if review.status not in {"recorded", "enqueued"}:
+        raise ValueError("turn review is no longer actionable")
+    if review.execution_state not in {"awaiting_user_approval", "needs_human"}:
+        raise ValueError("turn review does not require user attention")
+
+    if review.run_id is not None:
+        from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_IGNORED
+        from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
+
+        finalize_wakeups_for_run(
+            db,
+            run_id=review.run_id,
+            status=WAKEUP_STATUS_IGNORED,
+            reason=reason,
+            payload_updates={"outcome": _EXPECTED_IGNORE_OUTCOME},
+        )
+
+    _mark_review_outcome(
+        db,
+        review=review,
+        status="acted",
+        reason=reason,
+        actual_outcome=_EXPECTED_IGNORE_OUTCOME,
+    )
 
 
 async def maybe_process_session_turn_loop(*, db: Session, session_id: str) -> SessionTurnReview | None:

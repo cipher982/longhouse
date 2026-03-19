@@ -22,6 +22,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.models import CommisJob
 from zerg.models import Fiche
 from zerg.models import Run
 from zerg.models import Thread
@@ -507,5 +508,134 @@ def test_loop_inbox_action_card_404s_when_latest_review_no_longer_needs_attentio
         try:
             response = client.get(f"/api/oikos/loop-inbox/{session.id}")
             assert response.status_code == 404
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_loop_inbox_approve_action_queues_same_session_continue_and_clears_item(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        owner = User(
+            email="owner@local",
+            role=UserRole.USER.value,
+            context={
+                "preferences": {
+                    "operator_mode": {
+                        "enabled": True,
+                        "allow_continue": True,
+                        "allow_notify": True,
+                    }
+                }
+            },
+        )
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Targeted Tests",
+            project="zerg",
+            device_id="cinder",
+        )
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="finish targeted verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+        review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 18, 9, 15, tzinfo=timezone.utc),
+            execution_state="awaiting_user_approval",
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            response = client.post(
+                f"/api/oikos/loop-inbox/{session.id}/actions",
+                json={"action": "approve_recommended_action"},
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+
+            assert payload["session_id"] == str(session.id)
+            assert payload["review_id"] == review.id
+            assert payload["action"] == "approve_recommended_action"
+            assert payload["status"] == "acted"
+            assert payload["reason"] == "continue_session"
+            assert payload["queued_job_id"] is not None
+
+            queued_jobs = db.query(CommisJob).all()
+            assert len(queued_jobs) == 1
+            assert queued_jobs[0].task == "Run the pending targeted tests."
+            assert queued_jobs[0].config["resume_session_id"] == str(session.id)
+
+            review_row = db.query(SessionTurnReview).filter(SessionTurnReview.id == review.id).one()
+            assert review_row.actual_outcome == "continue_session"
+            assert review_row.status == "acted"
+
+            inbox_after = client.get("/api/oikos/loop-inbox")
+            assert inbox_after.status_code == 200
+            assert inbox_after.json() == []
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_loop_inbox_not_now_action_hides_pending_item(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        owner = User(email="owner@local", role=UserRole.USER.value)
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = _create_session(db, loop_mode="assist", summary_title="Pause This")
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="check if we should continue",
+            assistant_text="This needs a quick product decision.",
+        )
+        review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 18, 9, 20, tzinfo=timezone.utc),
+            execution_state="needs_human",
+            decision="escalate",
+            summary="Choose whether to ship now or later.",
+            rationale="The turn needs a real decision.",
+            recommended_action="escalate",
+            follow_up_prompt=None,
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            response = client.post(
+                f"/api/oikos/loop-inbox/{session.id}/actions",
+                json={"action": "not_now"},
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+
+            assert payload["review_id"] == review.id
+            assert payload["status"] == "acted"
+            assert payload["reason"] == "not_now"
+            assert payload["queued_job_id"] is None
+
+            review_row = db.query(SessionTurnReview).filter(SessionTurnReview.id == review.id).one()
+            assert review_row.actual_outcome == "ignore"
+            assert review_row.status == "acted"
+
+            detail_after = client.get(f"/api/oikos/loop-inbox/{session.id}")
+            assert detail_after.status_code == 404
         finally:
             api_app_ref.dependency_overrides = {}

@@ -8,6 +8,7 @@ from datetime import timezone
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Literal
 from typing import Optional
 
 from fastapi import APIRouter
@@ -31,6 +32,8 @@ from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
 from zerg.models.run_event import RunEvent
 from zerg.models.work import OikosWakeup
+from zerg.services.session_turn_reviews import approve_pending_turn_review
+from zerg.services.session_turn_reviews import dismiss_pending_turn_review
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -130,6 +133,23 @@ class LoopActionCard(LoopInboxItem):
     last_user_text: Optional[str] = None
     last_assistant_text: Optional[str] = None
     available_actions: List[str] = []
+
+
+class LoopInboxActionRequest(UTCBaseModel):
+    """Bounded phone-first action request for one inbox item."""
+
+    action: Literal["approve_recommended_action", "not_now"]
+
+
+class LoopInboxActionResult(UTCBaseModel):
+    """Result of acting on one loop inbox item."""
+
+    session_id: str
+    review_id: int
+    action: str
+    status: str
+    reason: Optional[str] = None
+    queued_job_id: Optional[int] = None
 
 
 def _get_owned_run(db: Session, *, run_id: int, owner_id: int) -> Run | None:
@@ -258,6 +278,7 @@ def list_oikos_wakeups(
 
 
 _ATTENTION_EXECUTION_STATES = {"awaiting_user_approval", "needs_human"}
+_ACTIONABLE_REVIEW_STATUSES = {"recorded", "enqueued"}
 _TURN_CONTEXT_EVENT_LIMIT = 160
 
 
@@ -299,6 +320,7 @@ def _load_latest_attention_reviews(
         db.query(SessionTurnReview)
         .join(latest_review_ids, SessionTurnReview.id == latest_review_ids.c.review_id)
         .filter(SessionTurnReview.execution_state.in_(tuple(_ATTENTION_EXECUTION_STATES)))
+        .filter(SessionTurnReview.status.in_(tuple(_ACTIONABLE_REVIEW_STATUSES)))
         .order_by(SessionTurnReview.created_at.desc(), SessionTurnReview.id.desc())
         .limit(limit)
         .all()
@@ -321,6 +343,8 @@ def _load_latest_attention_review_for_session(
         .first()
     )
     if row is None:
+        return None
+    if str(row.status or "").strip() not in _ACTIONABLE_REVIEW_STATUSES:
         return None
     if str(row.execution_state or "").strip() not in _ATTENTION_EXECUTION_STATES:
         return None
@@ -526,6 +550,53 @@ def get_loop_inbox_action_card(
         last_user_text=last_user_text,
         last_assistant_text=last_assistant_text or review.turn_excerpt,
         available_actions=_available_loop_actions(review),
+    )
+
+
+@router.post("/loop-inbox/{session_id}/actions", response_model=LoopInboxActionResult)
+def act_on_loop_inbox_item(
+    session_id: str,
+    request: LoopInboxActionRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> LoopInboxActionResult:
+    """Apply one bounded phone-first action to the latest attention-worthy review."""
+
+    review = _load_latest_attention_review_for_session(db, owner_id=current_user.id, session_id=session_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="No attention-worthy turn review found for this session")
+
+    if request.action == "approve_recommended_action":
+        if review.execution_state != "awaiting_user_approval" or review.recommended_action != "continue_session":
+            raise HTTPException(status_code=409, detail="This turn review cannot be approved for continuation")
+        try:
+            job = approve_pending_turn_review(db=db, review=review)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        db.refresh(review)
+        return LoopInboxActionResult(
+            session_id=str(review.session_id),
+            review_id=int(review.id),
+            action=request.action,
+            status=review.status,
+            reason=review.reason,
+            queued_job_id=int(job.id),
+        )
+
+    try:
+        dismiss_pending_turn_review(db=db, review=review, reason="not_now")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.refresh(review)
+    return LoopInboxActionResult(
+        session_id=str(review.session_id),
+        review_id=int(review.id),
+        action=request.action,
+        status=review.status,
+        reason=review.reason,
+        queued_job_id=None,
     )
 
 
