@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -21,6 +22,8 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import get_db
 from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
@@ -97,6 +100,36 @@ class SessionTurnReviewSummary(UTCBaseModel):
     actual_outcome: Optional[str] = None
     shadow_alignment: Optional[str] = None
     created_at: datetime
+
+
+class LoopInboxItem(UTCBaseModel):
+    """Thin mobile-friendly summary of one session that needs attention."""
+
+    session_id: str
+    title: str
+    project: Optional[str] = None
+    machine: Optional[str] = None
+    provider: Optional[str] = None
+    loop_mode: str
+    decision: str
+    execution_state: Optional[str] = None
+    summary: str
+    recommended_action: Optional[str] = None
+    follow_up_prompt: Optional[str] = None
+    blocked_reasons: List[str] = []
+    last_turn_at: datetime
+    requires_attention: bool
+
+
+class LoopActionCard(LoopInboxItem):
+    """Action-card payload for a single phone-first session follow-up."""
+
+    rationale: Optional[str] = None
+    mode_capability: Optional[str] = None
+    mode_summary: Optional[str] = None
+    last_user_text: Optional[str] = None
+    last_assistant_text: Optional[str] = None
+    available_actions: List[str] = []
 
 
 def _get_owned_run(db: Session, *, run_id: int, owner_id: int) -> Run | None:
@@ -224,6 +257,186 @@ def list_oikos_wakeups(
     ]
 
 
+_ATTENTION_EXECUTION_STATES = {"awaiting_user_approval", "needs_human"}
+_TURN_CONTEXT_EVENT_LIMIT = 160
+
+
+def _clean_blocked_reasons(value: Any) -> List[str]:
+    return [str(reason).strip() for reason in (value or []) if str(reason).strip()]
+
+
+def _session_title(session: AgentSession | None, session_id: str) -> str:
+    if session is not None:
+        if session.summary_title and str(session.summary_title).strip():
+            return str(session.summary_title).strip()
+        if session.project and str(session.project).strip():
+            return str(session.project).strip()
+        if session.cwd and str(session.cwd).strip():
+            return os.path.basename(str(session.cwd).rstrip("/")) or str(session.cwd).strip()
+    return f"Session {session_id[:8]}"
+
+
+def _available_loop_actions(review: SessionTurnReview) -> List[str]:
+    actions = ["not_now", "open_full_session"]
+    if review.execution_state == "awaiting_user_approval" and review.recommended_action == "continue_session":
+        return ["approve_recommended_action", *actions]
+    return actions
+
+
+def _load_latest_attention_reviews(
+    db: Session,
+    *,
+    owner_id: int,
+    limit: int,
+) -> List[SessionTurnReview]:
+    latest_review_ids = (
+        db.query(func.max(SessionTurnReview.id).label("review_id"))
+        .filter(SessionTurnReview.owner_id == owner_id)
+        .group_by(SessionTurnReview.session_id)
+        .subquery()
+    )
+    return (
+        db.query(SessionTurnReview)
+        .join(latest_review_ids, SessionTurnReview.id == latest_review_ids.c.review_id)
+        .filter(SessionTurnReview.execution_state.in_(tuple(_ATTENTION_EXECUTION_STATES)))
+        .order_by(SessionTurnReview.created_at.desc(), SessionTurnReview.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def _load_latest_attention_review_for_session(
+    db: Session,
+    *,
+    owner_id: int,
+    session_id: str,
+) -> SessionTurnReview | None:
+    row = (
+        db.query(SessionTurnReview)
+        .filter(
+            SessionTurnReview.owner_id == owner_id,
+            SessionTurnReview.session_id == session_id,
+        )
+        .order_by(SessionTurnReview.id.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    if str(row.execution_state or "").strip() not in _ATTENTION_EXECUTION_STATES:
+        return None
+    return row
+
+
+def _load_session_map(db: Session, session_ids: List[Any]) -> Dict[str, AgentSession]:
+    if not session_ids:
+        return {}
+    rows = db.query(AgentSession).filter(AgentSession.id.in_(session_ids)).all()
+    return {str(row.id): row for row in rows}
+
+
+def _load_turn_context(
+    db: Session,
+    *,
+    session_id: str,
+    assistant_event_id: int,
+) -> tuple[Optional[str], Optional[str]]:
+    rows = (
+        db.query(AgentEvent.id, AgentEvent.role, AgentEvent.content_text)
+        .filter(
+            AgentEvent.session_id == session_id,
+            AgentEvent.id <= assistant_event_id,
+            AgentEvent.role.in_(("user", "assistant")),
+            AgentEvent.content_text.isnot(None),
+        )
+        .order_by(AgentEvent.id.desc())
+        .limit(_TURN_CONTEXT_EVENT_LIMIT)
+        .all()
+    )
+    if not rows:
+        return None, None
+
+    messages = [
+        {
+            "event_id": int(row.id),
+            "role": str(row.role),
+            "text": str(row.content_text or "").strip(),
+        }
+        for row in reversed(rows)
+        if str(row.content_text or "").strip()
+    ]
+    if not messages:
+        return None, None
+
+    turns: List[Dict[str, Any]] = []
+    current_role: Optional[str] = None
+    current_texts: List[str] = []
+    current_last_event_id: Optional[int] = None
+    last_user_text: Optional[str] = None
+
+    def _flush() -> None:
+        nonlocal current_role
+        nonlocal current_texts
+        nonlocal current_last_event_id
+        nonlocal last_user_text
+        if current_role is None or current_last_event_id is None:
+            return
+        turn_text = "\n".join(current_texts).strip()
+        turns.append(
+            {
+                "role": current_role,
+                "text": turn_text,
+                "assistant_event_id": current_last_event_id if current_role == "assistant" else None,
+                "last_user_text": last_user_text,
+            }
+        )
+        if current_role == "user" and turn_text:
+            last_user_text = turn_text
+        current_role = None
+        current_texts = []
+        current_last_event_id = None
+
+    for message in messages:
+        if message["role"] != current_role:
+            _flush()
+            current_role = str(message["role"])
+        current_texts.append(str(message["text"]))
+        current_last_event_id = int(message["event_id"])
+        if message["role"] == "user":
+            last_user_text = str(message["text"])
+    _flush()
+
+    for turn in reversed(turns):
+        if turn["role"] != "assistant":
+            continue
+        if int(turn["assistant_event_id"] or 0) != assistant_event_id:
+            continue
+        return (
+            str(turn.get("last_user_text") or "").strip() or None,
+            str(turn.get("text") or "").strip() or None,
+        )
+    return None, None
+
+
+def _build_loop_inbox_item(review: SessionTurnReview, session: AgentSession | None) -> LoopInboxItem:
+    session_id = str(review.session_id)
+    return LoopInboxItem(
+        session_id=session_id,
+        title=_session_title(session, session_id),
+        project=getattr(session, "project", None),
+        machine=getattr(session, "device_id", None),
+        provider=getattr(session, "provider", None),
+        loop_mode=review.loop_mode,
+        decision=review.decision,
+        execution_state=review.execution_state,
+        summary=review.summary,
+        recommended_action=review.recommended_action,
+        follow_up_prompt=review.follow_up_prompt,
+        blocked_reasons=_clean_blocked_reasons(review.blocked_reasons),
+        last_turn_at=review.created_at,
+        requires_attention=True,
+    )
+
+
 @router.get("/turn-reviews", response_model=List[SessionTurnReviewSummary])
 def list_session_turn_reviews(
     limit: int = 50,
@@ -268,6 +481,52 @@ def list_session_turn_reviews(
         )
         for row in rows
     ]
+
+
+@router.get("/loop-inbox", response_model=List[LoopInboxItem])
+def list_loop_inbox(
+    limit: int = 25,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> List[LoopInboxItem]:
+    """List latest per-session turn reviews that still need phone-friendly attention."""
+
+    rows = _load_latest_attention_reviews(db, owner_id=current_user.id, limit=limit)
+    session_map = _load_session_map(db, [row.session_id for row in rows])
+    return [_build_loop_inbox_item(row, session_map.get(str(row.session_id))) for row in rows]
+
+
+@router.get("/loop-inbox/{session_id}", response_model=LoopActionCard)
+def get_loop_inbox_action_card(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> LoopActionCard:
+    """Return a compact action-card payload for one session that needs attention."""
+
+    review = _load_latest_attention_review_for_session(db, owner_id=current_user.id, session_id=session_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="No attention-worthy turn review found for this session")
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    last_user_text, last_assistant_text = _load_turn_context(
+        db,
+        session_id=session_id,
+        assistant_event_id=review.assistant_event_id,
+    )
+    item = _build_loop_inbox_item(review, session)
+    return LoopActionCard(
+        **item.model_dump(),
+        rationale=review.rationale,
+        mode_capability=review.mode_capability,
+        mode_summary=review.mode_summary,
+        last_user_text=last_user_text,
+        last_assistant_text=last_assistant_text or review.turn_excerpt,
+        available_actions=_available_loop_actions(review),
+    )
 
 
 def _extract_text_from_message_content(content: Any) -> Optional[str]:
