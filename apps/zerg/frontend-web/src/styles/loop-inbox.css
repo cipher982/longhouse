@@ -1,0 +1,136 @@
+.loop-inbox-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.loop-inbox-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.loop-inbox-header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.75rem;
+}
+
+.loop-inbox-header p {
+  margin: 0;
+  color: var(--color-text-secondary, #8b7f72);
+  max-width: 40rem;
+}
+
+.loop-inbox-loading,
+.loop-inbox-card-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--color-text-secondary, #8b7f72);
+}
+
+.loop-inbox-layout {
+  display: grid;
+  grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.loop-inbox-list,
+.loop-inbox-card {
+  background: var(--surface-1, rgba(255, 255, 255, 0.72));
+  border: 1px solid var(--border-subtle, rgba(61, 52, 40, 0.12));
+  border-radius: 18px;
+  padding: 0.75rem;
+}
+
+.loop-inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.loop-inbox-row {
+  width: 100%;
+  border: 1px solid var(--border-subtle, rgba(61, 52, 40, 0.12));
+  background: transparent;
+  border-radius: 14px;
+  padding: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.loop-inbox-row.is-selected {
+  border-color: var(--accent, #5d9b4a);
+  background: rgba(93, 155, 74, 0.08);
+}
+
+.loop-inbox-row-top,
+.loop-inbox-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.loop-inbox-row p,
+.loop-inbox-card-section p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.loop-inbox-row-meta,
+.loop-inbox-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--color-text-secondary, #8b7f72);
+  font-size: 0.9rem;
+}
+
+.loop-inbox-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.loop-inbox-card h2,
+.loop-inbox-card h3 {
+  margin: 0 0 0.35rem;
+}
+
+.loop-inbox-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.loop-inbox-card-context {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.loop-inbox-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.loop-inbox-bullets {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+@media (max-width: 960px) {
+  .loop-inbox-header {
+    flex-direction: column;
+  }
+
+  .loop-inbox-layout {
+    grid-template-columns: 1fr;
+  }
+}

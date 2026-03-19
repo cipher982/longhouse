@@ -1,0 +1,135 @@
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import LoopInboxPage from "../LoopInboxPage";
+import {
+  applyLoopInboxAction,
+  fetchLoopActionCard,
+  fetchLoopInbox,
+  type LoopActionCard,
+  type LoopInboxItem,
+} from "../../services/api/oikos";
+import { TestRouter } from "../../test/test-utils";
+
+const mockNavigate = vi.fn();
+let mockSessionId = "sess-1";
+
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>();
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useParams: () => ({ sessionId: mockSessionId }),
+  };
+});
+
+vi.mock("../../services/api/oikos", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/api/oikos")>();
+  return {
+    ...actual,
+    fetchLoopInbox: vi.fn(),
+    fetchLoopActionCard: vi.fn(),
+    applyLoopInboxAction: vi.fn(),
+  };
+});
+
+const fetchLoopInboxMock = vi.mocked(fetchLoopInbox);
+const fetchLoopActionCardMock = vi.mocked(fetchLoopActionCard);
+const applyLoopInboxActionMock = vi.mocked(applyLoopInboxAction);
+
+function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
+  return {
+    sessionId: "sess-1",
+    title: "Session Detail Page",
+    project: "zerg",
+    machine: "cinder",
+    provider: "claude",
+    loopMode: "assist",
+    decision: "continue",
+    executionState: "awaiting_user_approval",
+    summary: "Only targeted verification remains.",
+    recommendedAction: "continue_session",
+    followUpPrompt: "Run the pending targeted tests.",
+    blockedReasons: [],
+    lastTurnAt: "2026-03-19T12:00:00Z",
+    requiresAttention: true,
+    ...overrides,
+  };
+}
+
+function makeActionCard(overrides: Partial<LoopActionCard> = {}): LoopActionCard {
+  return {
+    ...makeInboxItem(),
+    rationale: "This is the routine continue case.",
+    modeCapability: "notify_only",
+    modeSummary: "Suggest or escalate from completed turns, but wait for approval before continuing.",
+    lastUserText: "finish the session detail page",
+    lastAssistantText: "Only targeted verification remains. Run the pending targeted tests.",
+    availableActions: ["approve_recommended_action", "not_now"],
+    ...overrides,
+  };
+}
+
+function renderPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <TestRouter initialEntries={["/loop/sess-1"]}>
+        <LoopInboxPage />
+      </TestRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("LoopInboxPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSessionId = "sess-1";
+    fetchLoopInboxMock.mockResolvedValue([makeInboxItem()]);
+    fetchLoopActionCardMock.mockResolvedValue(makeActionCard());
+    applyLoopInboxActionMock.mockResolvedValue({
+      sessionId: "sess-1",
+      reviewId: 42,
+      action: "approve_recommended_action",
+      status: "acted",
+      reason: "continue_session",
+      queuedJobId: 7,
+    });
+  });
+
+  it("renders the inbox row and action card", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-inbox-row-sess-1")).toBeInTheDocument();
+    });
+
+    const card = screen.getByTestId("loop-inbox-card");
+    expect(screen.getAllByText("Session Detail Page")).toHaveLength(2);
+    expect(within(card).getByText(/^Only targeted verification remains\.$/i)).toBeInTheDocument();
+    expect(within(card).getByText(/^Run the pending targeted tests\.$/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open full session/i })).toHaveAttribute("href", "/timeline/sess-1");
+  });
+
+  it("sends the approve action for the selected session", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-approve-action")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("loop-approve-action"));
+
+    await waitFor(() => {
+      expect(applyLoopInboxActionMock).toHaveBeenCalledWith("sess-1", "approve_recommended_action");
+    });
+  });
+});

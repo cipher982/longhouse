@@ -93,6 +93,78 @@ export interface SessionTurnTelemetry {
   latestReview: SessionTurnReview | null;
 }
 
+interface LoopInboxItemSummaryRaw {
+  session_id: string;
+  title: string;
+  project: string | null;
+  machine: string | null;
+  provider: string | null;
+  loop_mode: string;
+  decision: string;
+  execution_state: string | null;
+  summary: string;
+  recommended_action: string | null;
+  follow_up_prompt: string | null;
+  blocked_reasons: string[] | null;
+  last_turn_at: string;
+  requires_attention: boolean;
+}
+
+interface LoopActionCardRaw extends LoopInboxItemSummaryRaw {
+  rationale: string | null;
+  mode_capability: string | null;
+  mode_summary: string | null;
+  last_user_text: string | null;
+  last_assistant_text: string | null;
+  available_actions: string[] | null;
+}
+
+interface LoopInboxActionResultRaw {
+  session_id: string;
+  review_id: number;
+  action: string;
+  status: string;
+  reason: string | null;
+  queued_job_id: number | null;
+}
+
+export type LoopInboxAction = "approve_recommended_action" | "not_now";
+
+export interface LoopInboxItem {
+  sessionId: string;
+  title: string;
+  project: string | null;
+  machine: string | null;
+  provider: string | null;
+  loopMode: SessionLoopMode;
+  decision: SessionTurnDecision;
+  executionState: SessionTurnExecutionState;
+  summary: string;
+  recommendedAction: string | null;
+  followUpPrompt: string | null;
+  blockedReasons: string[];
+  lastTurnAt: string;
+  requiresAttention: boolean;
+}
+
+export interface LoopActionCard extends LoopInboxItem {
+  rationale: string;
+  modeCapability: SessionLoopModeCapability;
+  modeSummary: string;
+  lastUserText: string | null;
+  lastAssistantText: string | null;
+  availableActions: LoopInboxAction[];
+}
+
+export interface LoopInboxActionResult {
+  sessionId: string;
+  reviewId: number;
+  action: LoopInboxAction;
+  status: string;
+  reason: string | null;
+  queuedJobId: number | null;
+}
+
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
@@ -135,6 +207,37 @@ function parseTurnReview(row: SessionTurnReviewSummary): SessionTurnReview {
   };
 }
 
+function parseLoopInboxItem(row: LoopInboxItemSummaryRaw): LoopInboxItem {
+  return {
+    sessionId: row.session_id,
+    title: asString(row.title) ?? "Untitled session",
+    project: asString(row.project),
+    machine: asString(row.machine),
+    provider: asString(row.provider),
+    loopMode: (asString(row.loop_mode) ?? "manual") as SessionLoopMode,
+    decision: (asString(row.decision) ?? "done") as SessionTurnDecision,
+    executionState: (asString(row.execution_state) ?? "no_action") as SessionTurnExecutionState,
+    summary: asString(row.summary) ?? "No action needed.",
+    recommendedAction: asString(row.recommended_action),
+    followUpPrompt: asString(row.follow_up_prompt),
+    blockedReasons: asStringArray(row.blocked_reasons),
+    lastTurnAt: row.last_turn_at,
+    requiresAttention: Boolean(row.requires_attention),
+  };
+}
+
+function parseLoopActionCard(row: LoopActionCardRaw): LoopActionCard {
+  return {
+    ...parseLoopInboxItem(row),
+    rationale: asString(row.rationale) ?? "",
+    modeCapability: (asString(row.mode_capability) ?? "observe_only") as SessionLoopModeCapability,
+    modeSummary: asString(row.mode_summary) ?? "",
+    lastUserText: asString(row.last_user_text),
+    lastAssistantText: asString(row.last_assistant_text),
+    availableActions: asStringArray(row.available_actions) as LoopInboxAction[],
+  };
+}
+
 export async function fetchSessionTurnTelemetry(sessionId: string): Promise<SessionTurnTelemetry> {
   const params = new URLSearchParams({
     session_id: sessionId,
@@ -144,5 +247,33 @@ export async function fetchSessionTurnTelemetry(sessionId: string): Promise<Sess
   const parsed = reviews.map(parseTurnReview);
   return {
     latestReview: parsed[0] ?? null,
+  };
+}
+
+export async function fetchLoopInbox(): Promise<LoopInboxItem[]> {
+  const rows = await request<LoopInboxItemSummaryRaw[]>("/oikos/loop-inbox");
+  return rows.map(parseLoopInboxItem);
+}
+
+export async function fetchLoopActionCard(sessionId: string): Promise<LoopActionCard> {
+  const row = await request<LoopActionCardRaw>(`/oikos/loop-inbox/${sessionId}`);
+  return parseLoopActionCard(row);
+}
+
+export async function applyLoopInboxAction(
+  sessionId: string,
+  action: LoopInboxAction,
+): Promise<LoopInboxActionResult> {
+  const row = await request<LoopInboxActionResultRaw>(`/oikos/loop-inbox/${sessionId}/actions`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
+  return {
+    sessionId: row.session_id,
+    reviewId: row.review_id,
+    action: row.action as LoopInboxAction,
+    status: asString(row.status) ?? "acted",
+    reason: asString(row.reason),
+    queuedJobId: asNumber(row.queued_job_id),
   };
 }
