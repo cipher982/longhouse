@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentSession, useAgentSessionEventsInfinite, useAgentSessionThread } from "./useAgentSessions";
 import {
   buildTimelineModel,
+  getSessionOriginLabel,
   getPreferredSelectionKey,
   timelineItemContainsSelection,
+  type ContinuationBoundary,
   type EventFilter,
 } from "../lib/sessionWorkspace";
 
@@ -102,6 +104,30 @@ export function useSessionWorkspace(
     !!currentThreadSession &&
     !!headThreadSession &&
     currentThreadSession.id === headThreadSession.id;
+
+  const continuationBoundary = useMemo<ContinuationBoundary | null>(() => {
+    if (!currentThreadSession?.continued_from_session_id) return null;
+    if (currentThreadSession.continuation_kind !== "cloud") return null;
+
+    const parentSession =
+      threadSessions.find((item) => item.id === currentThreadSession.continued_from_session_id) || null;
+    const parentOriginLabel = parentSession ? getSessionOriginLabel(parentSession) : "earlier sync";
+    const parentIsCloud = parentSession?.continuation_kind === "cloud";
+
+    if (parentIsCloud) {
+      return {
+        label: "Cloud branch begins",
+        description: "Everything below continues on this cloud branch from the saved split point.",
+        timestamp: currentThreadSession.started_at,
+      };
+    }
+
+    return {
+      label: "Cloud continuation begins",
+      description: `Synced ${parentOriginLabel} history above. Cloud-native messages below.`,
+      timestamp: currentThreadSession.started_at,
+    };
+  }, [currentThreadSession, threadSessions]);
 
   const filteredItems = useMemo(() => {
     let result = model.items;
@@ -291,6 +317,7 @@ export function useSessionWorkspace(
     currentThreadSession,
     headThreadSession,
     isViewingHead,
+    continuationBoundary,
     showAbandonedBranches,
     setShowAbandonedBranches,
     events,

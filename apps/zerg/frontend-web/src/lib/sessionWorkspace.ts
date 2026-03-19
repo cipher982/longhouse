@@ -20,6 +20,12 @@ export type ToolBatch = {
   anchorId: number;
 };
 
+export type ContinuationBoundary = {
+  label: string;
+  description: string;
+  timestamp: string;
+};
+
 export type TimelineItem =
   | { kind: "message"; event: AgentEvent }
   | { kind: "tool"; interaction: ToolInteraction }

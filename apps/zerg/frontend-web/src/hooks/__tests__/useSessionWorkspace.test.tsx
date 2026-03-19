@@ -184,4 +184,45 @@ describe("useSessionWorkspace", () => {
       cancelAnimationFrameSpy.mockRestore();
     }
   });
+
+  it("derives a continuation boundary for cloud child sessions", () => {
+    const parentSession = {
+      ...baseSession,
+      id: "session-parent",
+      thread_head_session_id: "session-child",
+      continuation_kind: "local",
+      continued_from_session_id: null,
+      origin_label: "Local",
+      started_at: "2026-03-19T16:40:00Z",
+    };
+    const childSession = {
+      ...baseSession,
+      id: "session-child",
+      thread_head_session_id: "session-child",
+      continuation_kind: "cloud",
+      continued_from_session_id: "session-parent",
+      origin_label: "Cloud",
+      started_at: "2026-03-19T16:45:00Z",
+    };
+
+    agentSessionMocks.useAgentSession.mockReturnValue({
+      data: childSession,
+      isLoading: false,
+      error: null,
+    });
+    agentSessionMocks.useAgentSessionThread.mockReturnValue({
+      data: {
+        sessions: [parentSession, childSession],
+        head_session_id: childSession.id,
+      },
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(childSession.id));
+
+    expect(result.current.continuationBoundary).toEqual({
+      label: "Cloud continuation begins",
+      description: "Synced Local history above. Cloud-native messages below.",
+      timestamp: "2026-03-19T16:45:00Z",
+    });
+  });
 });

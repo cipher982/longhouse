@@ -1,7 +1,14 @@
 import type { ReactNode } from "react";
 import { Button, EmptyState, Spinner } from "../ui";
-import type { TimelineItem, ToolBatch, ToolInteraction, EventFilter } from "../../lib/sessionWorkspace";
+import type {
+  ContinuationBoundary,
+  TimelineItem,
+  ToolBatch,
+  ToolInteraction,
+  EventFilter,
+} from "../../lib/sessionWorkspace";
 import {
+  formatContinuationStamp,
   formatTime,
   getPreferredSelectionKey,
   getTimelineMessagePreview,
@@ -14,6 +21,7 @@ import {
 } from "../../lib/sessionWorkspace";
 
 interface TimelinePaneProps {
+  continuationBoundary?: ContinuationBoundary | null;
   items: TimelineItem[];
   filteredItems: TimelineItem[];
   totalEvents: number;
@@ -38,6 +46,19 @@ interface TimelinePaneProps {
   onSelectKey: (key: string) => void;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
+}
+
+function ContinuationBoundaryRow({ boundary }: { boundary: ContinuationBoundary }) {
+  return (
+    <div className="timeline-boundary" data-testid="session-continuation-boundary">
+      <div className="timeline-boundary__rule" />
+      <div className="timeline-boundary__body">
+        <span className="timeline-boundary__label">{boundary.label}</span>
+        <span className="timeline-boundary__description">{boundary.description}</span>
+      </div>
+      <div className="timeline-boundary__stamp">{formatContinuationStamp(boundary.timestamp)}</div>
+    </div>
+  );
 }
 
 function MessageRow({
@@ -182,6 +203,7 @@ function ToolBatchRow({
 }
 
 export function TimelinePane({
+  continuationBoundary = null,
   items,
   filteredItems,
   totalEvents,
@@ -292,6 +314,7 @@ export function TimelinePane({
         className="timeline-pane__list timeline-events"
         data-testid="session-timeline-list"
       >
+        {continuationBoundary ? <ContinuationBoundaryRow boundary={continuationBoundary} /> : null}
         {showScopedLoading ? (
           <EmptyState
             icon={<Spinner size="lg" />}
