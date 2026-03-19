@@ -1,6 +1,6 @@
 import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
-import type { SessionShadowReview, SessionShadowRollup } from "../../services/api/oikos";
+import type { SessionTurnReview } from "../../services/api/oikos";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -25,10 +25,9 @@ interface SessionContextPaneProps {
   } | null;
   loopModePending?: boolean;
   onLoopModeChange?: (nextMode: SessionLoopMode) => void;
-  latestShadowReview?: SessionShadowReview | null;
-  shadowRollup?: SessionShadowRollup | null;
-  shadowReviewLoading?: boolean;
-  shadowReviewUnavailable?: boolean;
+  latestTurnReview?: SessionTurnReview | null;
+  turnReviewLoading?: boolean;
+  turnReviewUnavailable?: boolean;
 }
 
 const LOOP_MODE_OPTIONS: Array<{
@@ -37,94 +36,28 @@ const LOOP_MODE_OPTIONS: Array<{
   hint: string;
 }> = [
   { value: "manual", label: "Manual", hint: "Observe only" },
-  { value: "assist", label: "Assist", hint: "Suggest next steps" },
-  { value: "autopilot", label: "Autopilot", hint: "Bounded continues" },
+  { value: "assist", label: "Assist", hint: "Suggest and nudge" },
+  { value: "autopilot", label: "Autopilot", hint: "Continue bounded turns" },
 ];
+
+const TURN_DECISION_META: Record<string, { label: string; variant: "neutral" | "warning" | "success" }> = {
+  continue: { label: "Continue", variant: "success" },
+  ask_user: { label: "Ask You", variant: "warning" },
+  wait: { label: "Wait", variant: "neutral" },
+  done: { label: "Done", variant: "neutral" },
+  escalate: { label: "Escalate", variant: "warning" },
+};
 
 const EXECUTION_STATE_META: Record<
   string,
   { label: string; variant: "neutral" | "warning" | "success" }
 > = {
   observe_only: { label: "Observe Only", variant: "neutral" },
-  awaiting_user_approval: { label: "Awaiting Approval", variant: "warning" },
+  awaiting_user_approval: { label: "Ask You", variant: "warning" },
   would_auto_continue: { label: "Would Auto-Continue", variant: "success" },
-  needs_human: { label: "Needs Human", variant: "warning" },
+  needs_human: { label: "Needs You", variant: "warning" },
   no_action: { label: "No Action", variant: "neutral" },
 };
-
-const SHADOW_ALIGNMENT_META: Record<
-  string,
-  { label: string; variant: "neutral" | "warning" | "success" }
-> = {
-  matched: { label: "Matched Shadow", variant: "success" },
-  more_conservative: { label: "More Conservative", variant: "neutral" },
-  more_aggressive: { label: "More Aggressive", variant: "warning" },
-  different: { label: "Different Outcome", variant: "warning" },
-  failed: { label: "Run Failed", variant: "warning" },
-};
-
-const SHADOW_READINESS_META: Record<
-  string,
-  { label: string; variant: "neutral" | "warning" | "success" }
-> = {
-  no_signal: { label: "No Signal Yet", variant: "neutral" },
-  early: { label: "Early Signal", variant: "neutral" },
-  promising: { label: "Promising", variant: "success" },
-  caution: { label: "Needs Caution", variant: "warning" },
-};
-
-function getLoopModeGuidance(
-  loopMode: SessionLoopMode,
-  shadowRollup: SessionShadowRollup | null,
-): { tone: "neutral" | "warning" | "success"; title: string; body: string } | null {
-  if (!shadowRollup) return null;
-
-  if (shadowRollup.readiness === "no_signal") {
-    return {
-      tone: "neutral",
-      title: "No shadow signal yet",
-      body: "Leave this session on Manual until Oikos has seen a few comparable decision points.",
-    };
-  }
-
-  if (shadowRollup.readiness === "early") {
-    return {
-      tone: "neutral",
-      title: "Shadow signal is still early",
-      body: "Assist is reasonable for summaries and nudges, but keep Autopilot off until more wakeups match the shadow review.",
-    };
-  }
-
-  if (shadowRollup.readiness === "caution") {
-    return {
-      tone: "warning",
-      title: "Recent wakeups need caution",
-      body: "Oikos recently diverged or acted more aggressively than the shadow ceiling. Stay on Manual or Assist until the signal cleans up.",
-    };
-  }
-
-  if (loopMode === "manual") {
-    return {
-      tone: "success",
-      title: "Promising Assist candidate",
-      body: "Recent shadow reviews are lining up. This session looks safe to try in Assist before you consider bounded Autopilot.",
-    };
-  }
-
-  if (loopMode === "assist") {
-    return {
-      tone: "success",
-      title: "Promising Autopilot candidate",
-      body: "Assist looks stable so far. This session is a good bounded Autopilot candidate for obvious continue turns.",
-    };
-  }
-
-  return {
-    tone: "success",
-    title: "Autopilot signal looks healthy",
-    body: "Shadow reviews are matching so far. Keep watching the alignment strip as this session keeps running.",
-  };
-}
 
 function formatRecommendedAction(value: string | null): string | null {
   if (!value) return null;
@@ -132,10 +65,6 @@ function formatRecommendedAction(value: string | null): string | null {
     .split("_")
     .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
     .join(" ");
-}
-
-function formatOutcome(value: string | null): string | null {
-  return formatRecommendedAction(value);
 }
 
 function MetaRow({ label, value }: { label: string; value: string }) {
@@ -158,37 +87,26 @@ export function SessionContextPane({
   continuationNotice = null,
   loopModePending = false,
   onLoopModeChange,
-  latestShadowReview = null,
-  shadowRollup = null,
-  shadowReviewLoading = false,
-  shadowReviewUnavailable = false,
+  latestTurnReview = null,
+  turnReviewLoading = false,
+  turnReviewUnavailable = false,
 }: SessionContextPaneProps) {
   const turnCount = session.user_messages + session.assistant_messages;
-  const shadowState = latestShadowReview
-    ? EXECUTION_STATE_META[latestShadowReview.executionState] ?? {
-        label: latestShadowReview.executionState,
+  const decisionMeta = latestTurnReview
+    ? TURN_DECISION_META[latestTurnReview.decision] ?? {
+        label: latestTurnReview.decision,
         variant: "neutral" as const,
       }
     : null;
-  const shadowAlignment = latestShadowReview?.alignment
-    ? SHADOW_ALIGNMENT_META[latestShadowReview.alignment] ?? {
-        label: latestShadowReview.alignment,
+  const executionMeta = latestTurnReview
+    ? EXECUTION_STATE_META[latestTurnReview.executionState] ?? {
+        label: latestTurnReview.executionState,
         variant: "neutral" as const,
       }
     : null;
-  const recommendedAction = formatRecommendedAction(latestShadowReview?.recommendedAction ?? null);
-  const actualOutcome = formatOutcome(latestShadowReview?.actualOutcome ?? null);
-  const expectedOutcome = formatOutcome(latestShadowReview?.expectedOutcome ?? null);
-  const readinessMeta = shadowRollup
-    ? SHADOW_READINESS_META[shadowRollup.readiness] ?? {
-        label: shadowRollup.readiness,
-        variant: "neutral" as const,
-      }
-    : null;
-  const cautionCount = shadowRollup
-    ? shadowRollup.moreAggressive + shadowRollup.different + shadowRollup.failed
-    : 0;
-  const loopModeGuidance = getLoopModeGuidance(session.loop_mode, shadowRollup);
+  const recommendedAction = formatRecommendedAction(latestTurnReview?.recommendedAction ?? null);
+  const actualOutcome = formatRecommendedAction(latestTurnReview?.actualOutcome ?? null);
+  const followUpPrompt = latestTurnReview?.followUpPrompt?.trim() || null;
 
   return (
     <div className="session-context-pane">
@@ -268,65 +186,43 @@ export function SessionContextPane({
           })}
         </div>
         <div className="session-loop-mode__caption">
-          Stored session preference for Oikos supervision. Live autonomy remains shadow-only for now.
+          Stored session preference for what Oikos may do after each completed assistant turn.
         </div>
-        {loopModeGuidance ? (
-          <div className={`session-loop-mode__advisory session-loop-mode__advisory--${loopModeGuidance.tone}`}>
-            <div className="session-loop-mode__advisory-title">{loopModeGuidance.title}</div>
-            <div className="session-loop-mode__advisory-body">{loopModeGuidance.body}</div>
-          </div>
-        ) : null}
       </div>
 
       <div className="session-pane-section">
-        <div className="session-pane-section-title">Shadow Review</div>
-        {shadowReviewLoading ? (
-          <div className="session-shadow-review__empty">Loading latest shadow review...</div>
-        ) : latestShadowReview ? (
-          <div className="session-shadow-review" data-testid="session-shadow-review">
-            {shadowRollup ? (
-              <div className="session-shadow-review__rollup" data-testid="session-shadow-rollup">
-                <div className="session-shadow-review__header">
-                  {readinessMeta ? <Badge variant={readinessMeta.variant}>{readinessMeta.label}</Badge> : null}
-                  <span className="session-shadow-review__stamp">
-                    {shadowRollup.totalReviews} completed • {shadowRollup.pendingReviews} pending
-                  </span>
-                </div>
-                <div className="session-shadow-review__meta">
-                  Matched {shadowRollup.matched} • Conservative {shadowRollup.moreConservative} • Caution {cautionCount}
-                </div>
-              </div>
-            ) : null}
+        <div className="session-pane-section-title">Turn Loop</div>
+        {turnReviewLoading ? (
+          <div className="session-shadow-review__empty">Loading latest completed-turn review...</div>
+        ) : latestTurnReview ? (
+          <div className="session-shadow-review" data-testid="session-turn-review">
             <div className="session-shadow-review__header">
-              {shadowState ? <Badge variant={shadowState.variant}>{shadowState.label}</Badge> : null}
-              {shadowAlignment ? (
-                <Badge variant={shadowAlignment.variant}>{shadowAlignment.label}</Badge>
-              ) : null}
-              <span className="session-shadow-review__stamp">
-                {formatFullDate(latestShadowReview.generatedAt)}
-              </span>
+              {decisionMeta ? <Badge variant={decisionMeta.variant}>{decisionMeta.label}</Badge> : null}
+              {executionMeta ? <Badge variant={executionMeta.variant}>{executionMeta.label}</Badge> : null}
+              <span className="session-shadow-review__stamp">{formatFullDate(latestTurnReview.createdAt)}</span>
             </div>
-            <div className="session-shadow-review__summary">{latestShadowReview.summary}</div>
-            {latestShadowReview.modeSummary ? (
-              <div className="session-shadow-review__mode">{latestShadowReview.modeSummary}</div>
+            <div className="session-shadow-review__summary">{latestTurnReview.summary}</div>
+            {latestTurnReview.modeSummary ? (
+              <div className="session-shadow-review__mode">{latestTurnReview.modeSummary}</div>
             ) : null}
             <div className="session-shadow-review__meta">
-              Trigger: {latestShadowReview.triggerType}
+              Latest assistant turn #{latestTurnReview.turnIndex + 1}
             </div>
             {recommendedAction ? (
-              <div className="session-shadow-review__meta">
-                Recommended action: {recommendedAction}
-              </div>
+              <div className="session-shadow-review__meta">Recommended action: {recommendedAction}</div>
             ) : null}
-            {expectedOutcome ? (
-              <div className="session-shadow-review__meta">Shadow expected outcome: {expectedOutcome}</div>
+            {followUpPrompt ? (
+              <div className="session-shadow-review__meta">Suggested next prompt: {followUpPrompt}</div>
             ) : null}
             {actualOutcome ? (
-              <div className="session-shadow-review__meta">Actual outcome: {actualOutcome}</div>
+              <div className="session-shadow-review__meta">Live outcome: {actualOutcome}</div>
             ) : null}
-            {latestShadowReview.blockedReasons.length > 0 ? (
+            {latestTurnReview.turnExcerpt ? (
+              <div className="session-shadow-review__mode">{latestTurnReview.turnExcerpt}</div>
+            ) : null}
+            {latestTurnReview.blockedReasons.length > 0 ? (
               <div className="session-shadow-review__blockers">
-                {latestShadowReview.blockedReasons.map((reason) => (
+                {latestTurnReview.blockedReasons.map((reason) => (
                   <div key={reason} className="session-shadow-review__blocker">
                     {reason}
                   </div>
@@ -336,9 +232,9 @@ export function SessionContextPane({
           </div>
         ) : (
           <div className="session-shadow-review__empty">
-            {shadowReviewUnavailable
-              ? "Shadow review is unavailable right now."
-              : "No shadow review recorded for this session yet."}
+            {turnReviewUnavailable
+              ? "Turn-loop review is unavailable right now."
+              : "No completed-turn review has been recorded for this session yet."}
           </div>
         )}
       </div>

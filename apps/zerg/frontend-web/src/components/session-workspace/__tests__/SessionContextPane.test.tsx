@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SessionContextPane } from "../SessionContextPane";
 import type { AgentSession, SessionLoopMode } from "../../../services/api/agents";
-import type { SessionShadowReview, SessionShadowRollup } from "../../../services/api/oikos";
+import type { SessionTurnReview } from "../../../services/api/oikos";
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -42,18 +42,16 @@ function renderPane(
     session = makeSession(),
     onLoopModeChange = vi.fn(),
     loopModePending = false,
-    latestShadowReview = null,
-    shadowRollup = null,
-    shadowReviewLoading = false,
-    shadowReviewUnavailable = false,
+    latestTurnReview = null,
+    turnReviewLoading = false,
+    turnReviewUnavailable = false,
   }: {
     session?: AgentSession;
     onLoopModeChange?: (nextMode: SessionLoopMode) => void;
     loopModePending?: boolean;
-    latestShadowReview?: SessionShadowReview | null;
-    shadowRollup?: SessionShadowRollup | null;
-    shadowReviewLoading?: boolean;
-    shadowReviewUnavailable?: boolean;
+    latestTurnReview?: SessionTurnReview | null;
+    turnReviewLoading?: boolean;
+    turnReviewUnavailable?: boolean;
   } = {},
 ) {
   return render(
@@ -67,49 +65,37 @@ function renderPane(
       onOpenLatest={vi.fn()}
       onLoopModeChange={onLoopModeChange}
       loopModePending={loopModePending}
-      latestShadowReview={latestShadowReview}
-      shadowRollup={shadowRollup}
-      shadowReviewLoading={shadowReviewLoading}
-      shadowReviewUnavailable={shadowReviewUnavailable}
+      latestTurnReview={latestTurnReview}
+      turnReviewLoading={turnReviewLoading}
+      turnReviewUnavailable={turnReviewUnavailable}
     />,
   );
 }
 
-function makeShadowReview(overrides: Partial<SessionShadowReview> = {}): SessionShadowReview {
+function makeTurnReview(overrides: Partial<SessionTurnReview> = {}): SessionTurnReview {
   return {
-    generatedAt: "2026-03-17T11:00:00Z",
-    triggerType: "presence.blocked",
-    decision: "suggest_continue",
-    summary: "Ask the user whether Oikos should continue the bounded follow-up.",
-    rationale: "The session has one bounded next step but still needs approval.",
-    needsHuman: true,
+    id: 1,
+    sessionId: "sess-1",
+    assistantEventId: 77,
+    turnIndex: 6,
+    triggerType: "turn.completed",
     loopMode: "assist",
+    decision: "continue",
+    summary: "The turn left one obvious bounded next step ready to continue.",
+    rationale: "This looks like the routine continue case.",
+    turnExcerpt: "Only targeted verification remains. Run the pending targeted tests.",
     modeCapability: "notify_only",
-    modeSummary: "Suggest bounded next steps or escalations, but wait for user approval before continuing.",
+    modeSummary: "Suggest or escalate from completed turns, but wait for approval before continuing.",
     executionState: "awaiting_user_approval",
-    wouldNotifyUser: true,
-    wouldContinueSession: false,
-    blockedReasons: ["Waiting on direct approval before resuming the session."],
     recommendedAction: "continue_session",
-    wakeupStatus: "ignored",
-    wakeupReason: "no_action",
+    followUpPrompt: "Run the pending targeted tests.",
+    blockedReasons: ["Autonomous continue cap reached."],
+    status: "recorded",
+    reason: null,
+    runId: 123,
     actualOutcome: "ignore",
-    expectedOutcome: "notify_user",
     alignment: "more_conservative",
-    ...overrides,
-  };
-}
-
-function makeShadowRollup(overrides: Partial<SessionShadowRollup> = {}): SessionShadowRollup {
-  return {
-    totalReviews: 4,
-    pendingReviews: 1,
-    matched: 3,
-    moreConservative: 1,
-    moreAggressive: 0,
-    different: 0,
-    failed: 0,
-    readiness: "promising",
+    createdAt: "2026-03-17T11:00:00Z",
     ...overrides,
   };
 }
@@ -140,54 +126,24 @@ describe("SessionContextPane", () => {
     }
   });
 
-  it("renders the latest shadow review details", () => {
-    renderPane({ latestShadowReview: makeShadowReview(), shadowRollup: makeShadowRollup() });
+  it("renders the latest completed-turn review details", () => {
+    renderPane({ latestTurnReview: makeTurnReview() });
 
-    expect(screen.getByTestId("session-shadow-review")).toBeInTheDocument();
-    const shadowRollup = screen.getByTestId("session-shadow-rollup");
-    expect(shadowRollup).toBeInTheDocument();
-    expect(within(shadowRollup).getByText(/^Promising$/i)).toBeInTheDocument();
-    expect(within(shadowRollup).getByText(/4 completed • 1 pending/i)).toBeInTheDocument();
-    expect(within(shadowRollup).getByText(/Matched 3 • Conservative 1 • Caution 0/i)).toBeInTheDocument();
-    expect(screen.getByText(/Awaiting Approval/i)).toBeInTheDocument();
-    expect(screen.getByText(/More Conservative/i)).toBeInTheDocument();
-    expect(screen.getByText(/Trigger: presence.blocked/i)).toBeInTheDocument();
-    expect(screen.getByText(/Recommended action: Continue Session/i)).toBeInTheDocument();
-    expect(screen.getByText(/Shadow expected outcome: Notify User/i)).toBeInTheDocument();
-    expect(screen.getByText(/Actual outcome: Ignore/i)).toBeInTheDocument();
-    expect(screen.getByText(/Waiting on direct approval/i)).toBeInTheDocument();
+    const turnReview = screen.getByTestId("session-turn-review");
+    expect(turnReview).toBeInTheDocument();
+    expect(within(turnReview).getByText(/^Continue$/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/^Ask You$/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Latest assistant turn #7/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Recommended action: Continue Session/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Suggested next prompt: Run the pending targeted tests\./i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Live outcome: Ignore/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Only targeted verification remains\. Run the pending targeted tests\./i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Autonomous continue cap reached/i)).toBeInTheDocument();
   });
 
-  it("shows promising assist guidance for manual sessions with healthy shadow signal", () => {
-    renderPane({
-      session: makeSession({ loop_mode: "manual" }),
-      latestShadowReview: makeShadowReview(),
-      shadowRollup: makeShadowRollup(),
-    });
+  it("shows a graceful empty state when no turn review is available", () => {
+    renderPane({ turnReviewUnavailable: true });
 
-    expect(screen.getByText(/Promising Assist candidate/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/This session looks safe to try in Assist before you consider bounded Autopilot/i),
-    ).toBeInTheDocument();
-  });
-
-  it("shows caution guidance when shadow reviews diverge", () => {
-    renderPane({
-      session: makeSession({ loop_mode: "assist" }),
-      latestShadowReview: makeShadowReview(),
-      shadowRollup: makeShadowRollup({
-        readiness: "caution",
-        moreAggressive: 1,
-      }),
-    });
-
-    expect(screen.getByText(/Recent wakeups need caution/i)).toBeInTheDocument();
-    expect(screen.getByText(/Stay on Manual or Assist until the signal cleans up/i)).toBeInTheDocument();
-  });
-
-  it("shows a graceful empty state when no shadow review is available", () => {
-    renderPane({ shadowReviewUnavailable: true });
-
-    expect(screen.getByText(/Shadow review is unavailable right now/i)).toBeInTheDocument();
+    expect(screen.getByText(/Turn-loop review is unavailable right now/i)).toBeInTheDocument();
   });
 });

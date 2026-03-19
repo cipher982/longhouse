@@ -1,8 +1,8 @@
 """Durable task queue for post-ingest background work.
 
-Replaces FastAPI BackgroundTasks for summary and embedding generation so tasks
-survive process restarts. A single asyncio worker polls this table, retrying
-failures up to max_attempts.
+Replaces FastAPI BackgroundTasks for summary generation, embeddings, and
+turn-loop evaluation so tasks survive process restarts. A single asyncio
+worker polls this table, retrying failures up to max_attempts.
 
 Architecture:
 - Single-worker design: one asyncio task processes tasks sequentially.
@@ -27,24 +27,17 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from sqlalchemy import case
+
 from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
-from zerg.services.oikos_operator_policy import get_operator_policy
-from zerg.services.oikos_operator_policy import operator_master_switch_enabled
-from zerg.services.oikos_shadow_review import build_session_shadow_review
-from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
-from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
-from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
-from zerg.services.oikos_wakeup_ledger import append_wakeup
+from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 
 logger = logging.getLogger(__name__)
 
 WORKER_POLL_SECONDS = 2.0
 BATCH_SIZE = 5
 STALE_RUNNING_MINUTES = 30
-_OPERATOR_COMPLETION_FRESH_WINDOW = timedelta(minutes=10)
-_OPERATOR_COMPLETION_SKIP_STATES = {"thinking", "running", "needs_user", "blocked"}
-_OPERATOR_COMPLETION_CONVERSATION_ID = "operator:main"
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +46,8 @@ _OPERATOR_COMPLETION_CONVERSATION_ID = "operator:main"
 
 
 def enqueue_ingest_tasks(db, session_id: str) -> None:
-    """Insert summary + embedding tasks for session (deduped, no commit — caller commits)."""
-    for task_type in ("summary", "embedding"):
+    """Insert summary + embedding + turn-loop tasks for session (deduped, caller commits)."""
+    for task_type in ("summary", "embedding", "turn_loop"):
         _enqueue_if_not_active(db, session_id, task_type)
 
 
@@ -133,8 +126,13 @@ async def _process_batch() -> None:
 
 def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
     """Mark pending tasks as running; return (id, session_id, task_type) tuples."""
+    priority = case(
+        (SessionTask.task_type == "turn_loop", 0),
+        (SessionTask.task_type == "summary", 1),
+        else_=2,
+    )
     pending_query = db.query(SessionTask).filter(SessionTask.status == "pending")
-    pending = pending_query.order_by(SessionTask.created_at).limit(limit).all()
+    pending = pending_query.order_by(priority, SessionTask.created_at, SessionTask.id).limit(limit).all()
     if not pending:
         return []
 
@@ -149,306 +147,6 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
     return claimed
 
 
-def _normalize_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
-
-
-def _build_operator_completion_message(
-    *,
-    session_id: str,
-    provider: str | None,
-    project: str | None,
-    cwd: str | None,
-    ended_at: datetime,
-    summary_title: str | None,
-    summary: str | None,
-    presence_state: str | None,
-) -> str:
-    lines = [
-        "System/operator wakeup: a coding session completed a new ingested turn.",
-        "",
-        "Trigger: session_completed",
-        f"Session ID: {session_id}",
-        f"Ended At: {ended_at.isoformat()}",
-    ]
-    if provider:
-        lines.append(f"Provider: {provider}")
-    if project:
-        lines.append(f"Project: {project}")
-    if cwd:
-        lines.append(f"CWD: {cwd}")
-    if presence_state:
-        lines.append(f"Presence: {presence_state}")
-    if summary_title:
-        lines.append(f"Summary Title: {summary_title}")
-    if summary:
-        lines.append(f"Summary: {summary}")
-    lines.extend(
-        [
-            "",
-            "Inspect the latest session history, then decide whether to wait, continue, or escalate.",
-            "Do nothing if no action is warranted.",
-        ]
-    )
-    return "\n".join(lines)
-
-
-async def _maybe_invoke_operator_completion_wakeup(task_id: str, session_id: str) -> None:
-    from zerg.models.agents import AgentSession
-    from zerg.models.agents import SessionPresence
-    from zerg.models.user import User
-
-    if not operator_master_switch_enabled():
-        return
-
-    trigger_type = "session_completed"
-    wakeup_key = f"session_completed:{session_id}:{task_id}"
-    factory = get_session_factory()
-    db = factory()
-    try:
-        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-        if session is None:
-            append_wakeup(
-                db,
-                owner_id=None,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_SUPPRESSED,
-                reason="session_missing",
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                payload={
-                    "trigger_type": trigger_type,
-                    "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
-                    "session_id": session_id,
-                },
-            )
-            db.commit()
-            return
-        if session.user_state in {"archived", "snoozed"}:
-            append_wakeup(
-                db,
-                owner_id=None,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_SUPPRESSED,
-                reason=f"user_state_{session.user_state}",
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                payload={
-                    "trigger_type": trigger_type,
-                    "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
-                    "session_id": session_id,
-                    "user_state": session.user_state,
-                },
-            )
-            db.commit()
-            return
-
-        ended_at = _normalize_utc(session.ended_at)
-        if ended_at is None:
-            append_wakeup(
-                db,
-                owner_id=None,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_SUPPRESSED,
-                reason="missing_ended_at",
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                payload={
-                    "trigger_type": trigger_type,
-                    "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
-                    "session_id": session_id,
-                },
-            )
-            db.commit()
-            return
-
-        now = datetime.now(timezone.utc)
-        if now - ended_at > _OPERATOR_COMPLETION_FRESH_WINDOW:
-            append_wakeup(
-                db,
-                owner_id=None,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_SUPPRESSED,
-                reason="stale_completion",
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                payload={
-                    "trigger_type": trigger_type,
-                    "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
-                    "session_id": session_id,
-                    "ended_at": ended_at.isoformat(),
-                },
-            )
-            db.commit()
-            return
-
-        presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
-        presence_state: str | None = None
-        if presence is not None:
-            updated_at = _normalize_utc(presence.updated_at)
-            if updated_at is not None and (now - updated_at) < _OPERATOR_COMPLETION_FRESH_WINDOW:
-                presence_state = presence.state
-
-        provider = session.provider
-        project = session.project
-        cwd = session.cwd
-        summary_title = session.summary_title
-        summary = session.summary
-        surface_payload = {
-            "trigger_type": trigger_type,
-            "conversation_id": _OPERATOR_COMPLETION_CONVERSATION_ID,
-            "session_id": session_id,
-            "provider": provider,
-            "project": project,
-            "cwd": cwd,
-            "ended_at": ended_at.isoformat(),
-            "presence_state": presence_state,
-            "summary_title": summary_title,
-            "summary": summary,
-        }
-
-        if presence_state in _OPERATOR_COMPLETION_SKIP_STATES:
-            append_wakeup(
-                db,
-                owner_id=None,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_SUPPRESSED,
-                reason=f"fresh_presence_{presence_state}",
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                payload=surface_payload,
-            )
-            db.commit()
-            return
-
-        owner = db.query(User.id).order_by(User.id).first()
-        if owner is None:
-            append_wakeup(
-                db,
-                owner_id=None,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_SUPPRESSED,
-                reason="no_owner",
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                payload=surface_payload,
-            )
-            db.commit()
-            return
-        owner_id = int(owner[0])
-        policy = get_operator_policy(db, owner_id)
-        if not policy.enabled:
-            append_wakeup(
-                db,
-                owner_id=owner_id,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_SUPPRESSED,
-                reason="user_policy_disabled",
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                payload=surface_payload,
-            )
-            db.commit()
-            return
-
-        ledger_payload = dict(surface_payload)
-        if policy.shadow_mode:
-            try:
-                shadow_review = await build_session_shadow_review(
-                    db,
-                    trigger_type=trigger_type,
-                    session_id=session_id,
-                    trigger_summary=summary_title or summary or "Operator wakeup from session completion.",
-                    trigger_payload=surface_payload,
-                    policy=policy,
-                )
-                if shadow_review is not None:
-                    ledger_payload["shadow_review"] = shadow_review
-            except Exception:
-                logger.exception("Failed to build shadow review for completion wakeup on session %s", session_id)
-    finally:
-        db.close()
-
-    from zerg.services.oikos_service import invoke_oikos
-    from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
-
-    message = _build_operator_completion_message(
-        session_id=session_id,
-        provider=provider,
-        project=project,
-        cwd=cwd,
-        ended_at=ended_at,
-        summary_title=summary_title,
-        summary=summary,
-        presence_state=presence_state,
-    )
-    message_id = f"operator-session-completed-{session_id}-{task_id}"
-
-    try:
-        run_id = await invoke_oikos(
-            owner_id,
-            message,
-            message_id,
-            source="operator",
-            surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
-            surface_payload=ledger_payload,
-        )
-        log_db = factory()
-        try:
-            append_wakeup(
-                log_db,
-                owner_id=owner_id,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_ENQUEUED,
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                run_id=run_id,
-                payload=ledger_payload,
-            )
-            log_db.commit()
-        finally:
-            log_db.close()
-    except Exception:
-        log_db = factory()
-        try:
-            append_wakeup(
-                log_db,
-                owner_id=owner_id,
-                source="session_completed",
-                trigger_type=trigger_type,
-                status=WAKEUP_STATUS_FAILED,
-                reason="invoke_failed",
-                session_id=session_id,
-                conversation_id=_OPERATOR_COMPLETION_CONVERSATION_ID,
-                wakeup_key=wakeup_key,
-                payload=ledger_payload,
-            )
-            log_db.commit()
-        finally:
-            log_db.close()
-        logger.exception("Failed to invoke operator completion wakeup for session %s", session_id)
-
-
 async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
     try:
         if task_type == "summary":
@@ -459,12 +157,17 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
             from zerg.routers.agents import _generate_embeddings_impl
 
             await _generate_embeddings_impl(session_id)
+        elif task_type == "turn_loop":
+            factory = get_session_factory()
+            db = factory()
+            try:
+                await maybe_process_session_turn_loop(db=db, session_id=session_id)
+            finally:
+                db.close()
         else:
             logger.warning("Unknown task_type %r for task %s", task_type, task_id)
 
         _mark_status(task_id, "done", error=None, retry=False)
-        if task_type == "summary":
-            await _maybe_invoke_operator_completion_wakeup(task_id, session_id)
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
     except Exception as e:
         logger.exception("Ingest task %s (%s/%s) failed", task_id, task_type, session_id)

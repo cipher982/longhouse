@@ -157,9 +157,18 @@ def test_startup_migration_adds_insight_origin_and_backfills_system_rows(tmp_pat
                 INSERT INTO insights (id, insight_type, title, description, tags, created_at, updated_at)
                 VALUES
                     ('1', 'learning', 'Manual note', 'keep visible', '["docs"]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                    ('2', 'failure', 'Agent stale', 'system row by tag', '["engine","stale-agent"]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                    ('3', 'failure', 'Stale ingest detected', 'system row by title', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-                    ('4', 'learning', 'Ingest recovered', 'system row by title', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    (
+                        '2', 'failure', 'Agent stale', 'system row by tag',
+                        '["engine","stale-agent"]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    ),
+                    (
+                        '3', 'failure', 'Stale ingest detected', 'system row by title',
+                        NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    ),
+                    (
+                        '4', 'learning', 'Ingest recovered', 'system row by title',
+                        NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
                 """
             )
         )
@@ -263,10 +272,53 @@ def test_startup_migration_adds_session_loop_mode_and_backfills_manual(tmp_path)
 
     with engine.connect() as conn:
         columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
-        rows = conn.execute(text("SELECT id, loop_mode FROM sessions")).fetchall()
+        rows = conn.execute(text("SELECT id, loop_mode, loop_thread_id FROM sessions")).fetchall()
 
     assert "loop_mode" in columns
-    assert rows == [("00000000-0000-0000-0000-000000000123", "manual")]
+    assert "loop_thread_id" in columns
+    assert rows == [("00000000-0000-0000-0000-000000000123", "manual", None)]
+
+
+def test_startup_migration_adds_turn_review_follow_up_prompt(tmp_path):
+    db_path = tmp_path / "legacy_session_turn_reviews_follow_up.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_turn_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id VARCHAR(36) NOT NULL,
+                owner_id INTEGER,
+                assistant_event_id INTEGER NOT NULL,
+                turn_index INTEGER NOT NULL,
+                trigger_type VARCHAR(64) DEFAULT 'turn.completed',
+                loop_mode VARCHAR(20) NOT NULL,
+                decision VARCHAR(32) NOT NULL,
+                summary TEXT NOT NULL,
+                rationale TEXT,
+                turn_excerpt TEXT,
+                mode_capability VARCHAR(32),
+                mode_summary TEXT,
+                execution_state VARCHAR(32),
+                recommended_action VARCHAR(64),
+                blocked_reasons JSON,
+                status VARCHAR(32) DEFAULT 'recorded',
+                reason VARCHAR(100),
+                run_id INTEGER,
+                actual_outcome VARCHAR(32),
+                shadow_alignment VARCHAR(32),
+                created_at DATETIME
+            )
+            """
+        )
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turn_reviews)"))}
+
+    assert "follow_up_prompt" in columns
 
 
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):
@@ -290,8 +342,15 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     _migrate_agents_columns(engine)
 
     first_run = apply_heavy_migrations(engine)
-    assert any(item.name == "20260304_events_branch_backfill" and item.status == "applied" for item in first_run)
-    assert any(item.name == "20260304_source_lines_branch_revision_rebuild" and item.status == "applied" for item in first_run)
+    assert any(
+        item.name == "20260304_events_branch_backfill" and item.status == "applied"
+        for item in first_run
+    )
+    assert any(
+        item.name == "20260304_source_lines_branch_revision_rebuild"
+        and item.status == "applied"
+        for item in first_run
+    )
 
     pending_after_first = [item.name for item in plan_heavy_migrations(engine) if item.pending]
     assert pending_after_first == []
@@ -300,7 +359,9 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     assert all(item.status == "skipped" for item in second_run)
 
     with engine.connect() as conn:
-        null_branch_rows = int(conn.execute(text("SELECT COUNT(*) FROM events WHERE branch_id IS NULL")).scalar() or 0)
+        null_branch_rows = int(
+            conn.execute(text("SELECT COUNT(*) FROM events WHERE branch_id IS NULL")).scalar() or 0
+        )
         ledger_rows = conn.execute(
             text("SELECT migration_name, status FROM migration_runs ORDER BY migration_name")
         ).fetchall()

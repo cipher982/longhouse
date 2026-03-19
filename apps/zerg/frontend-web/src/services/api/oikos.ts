@@ -1,19 +1,13 @@
 import { request } from "./base";
 import type { SessionLoopMode } from "./agents";
 
-interface OikosWakeupSummary {
-  id: number;
-  source: string;
-  trigger_type: string;
-  status: string;
-  reason: string | null;
-  session_id: string | null;
-  conversation_id: string | null;
-  wakeup_key: string | null;
-  run_id: number | null;
-  payload: Record<string, unknown> | null;
-  created_at: string;
-}
+export type SessionTurnDecision =
+  | "continue"
+  | "ask_user"
+  | "wait"
+  | "done"
+  | "escalate"
+  | (string & {});
 
 export type SessionLoopModeCapability =
   | "observe_only"
@@ -21,7 +15,7 @@ export type SessionLoopModeCapability =
   | "bounded_autonomy"
   | (string & {});
 
-export type SessionLoopExecutionState =
+export type SessionTurnExecutionState =
   | "observe_only"
   | "awaiting_user_approval"
   | "would_auto_continue"
@@ -29,7 +23,7 @@ export type SessionLoopExecutionState =
   | "no_action"
   | (string & {});
 
-export type SessionShadowOutcome =
+export type SessionTurnOutcome =
   | "ignore"
   | "notify_user"
   | "continue_session"
@@ -37,7 +31,7 @@ export type SessionShadowOutcome =
   | "failed"
   | (string & {});
 
-export type SessionShadowAlignment =
+export type SessionTurnAlignment =
   | "matched"
   | "more_conservative"
   | "more_aggressive"
@@ -45,61 +39,66 @@ export type SessionShadowAlignment =
   | "failed"
   | (string & {});
 
-export type SessionShadowReadiness =
-  | "no_signal"
-  | "early"
-  | "promising"
-  | "caution"
-  | (string & {});
-
-export interface SessionShadowReview {
-  generatedAt: string;
-  triggerType: string;
+interface SessionTurnReviewSummary {
+  id: number;
+  session_id: string;
+  assistant_event_id: number;
+  turn_index: number;
+  trigger_type: string;
+  loop_mode: string;
   decision: string;
   summary: string;
-  rationale: string;
-  needsHuman: boolean;
+  rationale: string | null;
+  turn_excerpt: string | null;
+  mode_capability: string | null;
+  mode_summary: string | null;
+  execution_state: string | null;
+  recommended_action: string | null;
+  follow_up_prompt: string | null;
+  blocked_reasons: string[] | null;
+  status: string;
+  reason: string | null;
+  run_id: number | null;
+  actual_outcome: string | null;
+  shadow_alignment: string | null;
+  created_at: string;
+}
+
+export interface SessionTurnReview {
+  id: number;
+  sessionId: string;
+  assistantEventId: number;
+  turnIndex: number;
+  triggerType: string;
   loopMode: SessionLoopMode;
+  decision: SessionTurnDecision;
+  summary: string;
+  rationale: string;
+  turnExcerpt: string | null;
   modeCapability: SessionLoopModeCapability;
   modeSummary: string;
-  executionState: SessionLoopExecutionState;
-  wouldNotifyUser: boolean;
-  wouldContinueSession: boolean;
-  blockedReasons: string[];
+  executionState: SessionTurnExecutionState;
   recommendedAction: string | null;
-  wakeupStatus: string;
-  wakeupReason: string | null;
-  actualOutcome: SessionShadowOutcome | null;
-  expectedOutcome: SessionShadowOutcome | null;
-  alignment: SessionShadowAlignment | null;
+  followUpPrompt: string | null;
+  blockedReasons: string[];
+  status: string;
+  reason: string | null;
+  runId: number | null;
+  actualOutcome: SessionTurnOutcome | null;
+  alignment: SessionTurnAlignment | null;
+  createdAt: string;
 }
 
-export interface SessionShadowRollup {
-  totalReviews: number;
-  pendingReviews: number;
-  matched: number;
-  moreConservative: number;
-  moreAggressive: number;
-  different: number;
-  failed: number;
-  readiness: SessionShadowReadiness;
-}
-
-export interface SessionShadowTelemetry {
-  latestReview: SessionShadowReview | null;
-  rollup: SessionShadowRollup | null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+export interface SessionTurnTelemetry {
+  latestReview: SessionTurnReview | null;
 }
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -109,107 +108,41 @@ function asStringArray(value: unknown): string[] {
     .filter((item) => item.length > 0);
 }
 
-function parseShadowReview(wakeup: OikosWakeupSummary): SessionShadowReview | null {
-  if (!isRecord(wakeup.payload)) return null;
-  const shadowReview = wakeup.payload.shadow_review;
-  if (!isRecord(shadowReview)) return null;
-
-  const decision = isRecord(shadowReview.decision) ? shadowReview.decision : null;
-  const loopReview = isRecord(shadowReview.loop_review) ? shadowReview.loop_review : null;
-  const context = isRecord(shadowReview.context) ? shadowReview.context : null;
-  const trigger = context && isRecord(context.trigger) ? context.trigger : null;
-
-  if (!decision || !loopReview) return null;
-
-  const generatedAt = asString(shadowReview.generated_at) ?? wakeup.created_at;
-  const loopMode = (asString(loopReview.loop_mode) ?? "manual") as SessionLoopMode;
-
+function parseTurnReview(row: SessionTurnReviewSummary): SessionTurnReview {
   return {
-    generatedAt,
-    triggerType: asString(trigger?.type) ?? wakeup.trigger_type,
-    decision: asString(decision.decision) ?? "ignore",
-    summary: asString(decision.summary) ?? "No follow-up action needed.",
-    rationale: asString(decision.rationale) ?? "",
-    needsHuman: asBoolean(decision.needs_human),
-    loopMode,
-    modeCapability: (asString(loopReview.mode_capability) ?? "observe_only") as SessionLoopModeCapability,
-    modeSummary: asString(loopReview.mode_summary) ?? "",
-    executionState: (asString(loopReview.execution_state) ?? "no_action") as SessionLoopExecutionState,
-    wouldNotifyUser: asBoolean(loopReview.would_notify_user),
-    wouldContinueSession: asBoolean(loopReview.would_continue_session),
-    blockedReasons: asStringArray(loopReview.blocked_reasons),
-    recommendedAction: asString(loopReview.recommended_action),
-    wakeupStatus: wakeup.status,
-    wakeupReason: wakeup.reason,
-    actualOutcome: (asString(wakeup.payload.outcome) ?? null) as SessionShadowOutcome | null,
-    expectedOutcome: (asString(wakeup.payload.shadow_expected_outcome) ?? null) as SessionShadowOutcome | null,
-    alignment: (asString(wakeup.payload.shadow_alignment) ?? null) as SessionShadowAlignment | null,
+    id: row.id,
+    sessionId: row.session_id,
+    assistantEventId: row.assistant_event_id,
+    turnIndex: row.turn_index,
+    triggerType: row.trigger_type,
+    loopMode: (asString(row.loop_mode) ?? "manual") as SessionLoopMode,
+    decision: (asString(row.decision) ?? "done") as SessionTurnDecision,
+    summary: asString(row.summary) ?? "No follow-up action needed.",
+    rationale: asString(row.rationale) ?? "",
+    turnExcerpt: asString(row.turn_excerpt),
+    modeCapability: (asString(row.mode_capability) ?? "observe_only") as SessionLoopModeCapability,
+    modeSummary: asString(row.mode_summary) ?? "",
+    executionState: (asString(row.execution_state) ?? "no_action") as SessionTurnExecutionState,
+    recommendedAction: asString(row.recommended_action),
+    followUpPrompt: asString(row.follow_up_prompt),
+    blockedReasons: asStringArray(row.blocked_reasons),
+    status: asString(row.status) ?? "recorded",
+    reason: asString(row.reason),
+    runId: asNumber(row.run_id),
+    actualOutcome: (asString(row.actual_outcome) ?? null) as SessionTurnOutcome | null,
+    alignment: (asString(row.shadow_alignment) ?? null) as SessionTurnAlignment | null,
+    createdAt: row.created_at,
   };
 }
 
-function buildSessionShadowRollup(reviews: SessionShadowReview[]): SessionShadowRollup | null {
-  if (reviews.length === 0) return null;
-
-  const rollup: SessionShadowRollup = {
-    totalReviews: 0,
-    pendingReviews: 0,
-    matched: 0,
-    moreConservative: 0,
-    moreAggressive: 0,
-    different: 0,
-    failed: 0,
-    readiness: "no_signal",
-  };
-
-  for (const review of reviews) {
-    if (!review.alignment) {
-      rollup.pendingReviews += 1;
-      continue;
-    }
-
-    rollup.totalReviews += 1;
-    if (review.alignment === "matched") rollup.matched += 1;
-    if (review.alignment === "more_conservative") rollup.moreConservative += 1;
-    if (review.alignment === "more_aggressive") rollup.moreAggressive += 1;
-    if (review.alignment === "different") rollup.different += 1;
-    if (review.alignment === "failed") rollup.failed += 1;
-  }
-
-  const cautionCount = rollup.moreAggressive + rollup.different + rollup.failed;
-  if (rollup.totalReviews === 0) {
-    rollup.readiness = "no_signal";
-  } else if (cautionCount > 0) {
-    rollup.readiness = "caution";
-  } else if (rollup.matched >= 3) {
-    rollup.readiness = "promising";
-  } else {
-    rollup.readiness = "early";
-  }
-
-  return rollup;
-}
-
-export async function fetchSessionShadowTelemetry(
-  sessionId: string,
-): Promise<SessionShadowTelemetry> {
+export async function fetchSessionTurnTelemetry(sessionId: string): Promise<SessionTurnTelemetry> {
   const params = new URLSearchParams({
     session_id: sessionId,
     limit: "25",
   });
-  const wakeups = await request<OikosWakeupSummary[]>(`/oikos/wakeups?${params.toString()}`);
-  const reviews = wakeups
-    .map(parseShadowReview)
-    .filter((review): review is SessionShadowReview => review !== null);
-
+  const reviews = await request<SessionTurnReviewSummary[]>(`/oikos/turn-reviews?${params.toString()}`);
+  const parsed = reviews.map(parseTurnReview);
   return {
-    latestReview: reviews[0] ?? null,
-    rollup: buildSessionShadowRollup(reviews),
+    latestReview: parsed[0] ?? null,
   };
-}
-
-export async function fetchLatestSessionShadowReview(
-  sessionId: string,
-): Promise<SessionShadowReview | null> {
-  const telemetry = await fetchSessionShadowTelemetry(sessionId);
-  return telemetry.latestReview;
 }

@@ -502,6 +502,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
+            if "loop_thread_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_thread_id INTEGER"))
             if "is_sidechain" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"))
             if "thread_root_session_id" not in columns:
@@ -525,6 +527,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
+
+    # session_turn_reviews table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turn_reviews)"))}
+            if columns and "follow_up_prompt" not in columns:
+                conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN follow_up_prompt TEXT"))
+            conn.commit()
+    except Exception:
+        logger.debug("session_turn_reviews table migration skipped (table may not exist yet)", exc_info=True)
 
     # insights table migrations
     try:

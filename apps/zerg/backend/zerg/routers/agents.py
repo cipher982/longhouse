@@ -781,7 +781,7 @@ async def ingest_session(
 
     Features:
     - Accepts gzip-compressed payloads (Content-Encoding: gzip)
-    - Triggers async background summary generation after successful ingest
+    - Triggers async background summary/embedding/turn-loop work after successful ingest
     """
     try:
         # Decompress if gzip-encoded

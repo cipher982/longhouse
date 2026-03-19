@@ -40,20 +40,22 @@ def operator_resume_permission_error(
     if has_shadow_ceiling:
         if capability != "bounded_autonomy":
             return (
-                "This operator wakeup is capped below autonomous continuation. "
-                "Do not start cloud work from this wakeup; notify the user or ignore it instead."
+                "This turn-loop message is capped below autonomous continuation. "
+                "Do not start cloud work from this message; notify the user or ignore it instead."
             )
         if not resume_session_id:
-            return "Bounded autonomy only allows resuming the same session from this operator wakeup. " "Do not start a new cloud session."
+            explanation = "Bounded autonomy only allows resuming the same session from this turn-loop message."
+            return f"{explanation} Do not start a new cloud session."
         if target_session_id and str(resume_session_id).strip() != target_session_id:
-            return "Bounded autonomy only allows resuming the exact session named in the operator wakeup."
+            return "Bounded autonomy only allows resuming the exact session named in the turn-loop message."
 
     if not resume_session_id:
         return None
     if policy.enabled and policy.allow_continue:
         return None
 
-    return "Operator-mode session continuation is disabled by policy. " "Ignore the wakeup or escalate to the user instead."
+    policy_message = "Operator-mode session continuation is disabled by policy."
+    return f"{policy_message} Ignore the message or escalate to the user instead."
 
 
 async def _spawn_workspace_commis_core_async(

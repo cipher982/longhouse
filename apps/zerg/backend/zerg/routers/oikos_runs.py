@@ -21,6 +21,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import get_db
 from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
@@ -68,6 +69,33 @@ class OikosWakeupSummary(UTCBaseModel):
     wakeup_key: Optional[str] = None
     run_id: Optional[int] = None
     payload: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+
+class SessionTurnReviewSummary(UTCBaseModel):
+    """Deterministic review of one completed assistant turn."""
+
+    id: int
+    session_id: str
+    assistant_event_id: int
+    turn_index: int
+    trigger_type: str
+    loop_mode: str
+    decision: str
+    summary: str
+    rationale: Optional[str] = None
+    turn_excerpt: Optional[str] = None
+    mode_capability: Optional[str] = None
+    mode_summary: Optional[str] = None
+    execution_state: Optional[str] = None
+    recommended_action: Optional[str] = None
+    follow_up_prompt: Optional[str] = None
+    blocked_reasons: List[str] = []
+    status: str
+    reason: Optional[str] = None
+    run_id: Optional[int] = None
+    actual_outcome: Optional[str] = None
+    shadow_alignment: Optional[str] = None
     created_at: datetime
 
 
@@ -190,6 +218,52 @@ def list_oikos_wakeups(
             wakeup_key=row.wakeup_key,
             run_id=row.run_id,
             payload=row.payload,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/turn-reviews", response_model=List[SessionTurnReviewSummary])
+def list_session_turn_reviews(
+    limit: int = 50,
+    session_id: Optional[str] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> List[SessionTurnReviewSummary]:
+    """List recent completed-turn reviews for the authenticated owner."""
+
+    query = db.query(SessionTurnReview).filter(SessionTurnReview.owner_id == current_user.id)
+    if session_id:
+        query = query.filter(SessionTurnReview.session_id == session_id)
+    if status:
+        query = query.filter(SessionTurnReview.status == status)
+
+    rows = query.order_by(SessionTurnReview.created_at.desc(), SessionTurnReview.id.desc()).limit(limit).all()
+    return [
+        SessionTurnReviewSummary(
+            id=row.id,
+            session_id=str(row.session_id),
+            assistant_event_id=row.assistant_event_id,
+            turn_index=row.turn_index,
+            trigger_type=row.trigger_type,
+            loop_mode=row.loop_mode,
+            decision=row.decision,
+            summary=row.summary,
+            rationale=row.rationale,
+            turn_excerpt=row.turn_excerpt,
+            mode_capability=row.mode_capability,
+            mode_summary=row.mode_summary,
+            execution_state=row.execution_state,
+            recommended_action=row.recommended_action,
+            follow_up_prompt=row.follow_up_prompt,
+            blocked_reasons=[str(reason).strip() for reason in (row.blocked_reasons or []) if str(reason).strip()],
+            status=row.status,
+            reason=row.reason,
+            run_id=row.run_id,
+            actual_outcome=row.actual_outcome,
+            shadow_alignment=row.shadow_alignment,
             created_at=row.created_at,
         )
         for row in rows

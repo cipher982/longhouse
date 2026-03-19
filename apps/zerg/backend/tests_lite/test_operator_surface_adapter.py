@@ -14,7 +14,7 @@ async def test_operator_adapter_normalize_inbound_builds_event():
     event = await adapter.normalize_inbound(
         {
             "owner_id": 7,
-            "message": "operator wakeup",
+            "message": "operator interrupt",
             "message_id": "msg-1",
             "conversation_id": "operator:main",
             "run_id": 100,
@@ -26,7 +26,7 @@ async def test_operator_adapter_normalize_inbound_builds_event():
     assert event.conversation_id == "operator:main"
     assert event.dedupe_key == "operator:7:msg-1"
     assert event.source_message_id == "msg-1"
-    assert event.text == "operator wakeup"
+    assert event.text == "operator interrupt"
 
 
 @pytest.mark.asyncio
@@ -36,13 +36,14 @@ async def test_operator_adapter_appends_shadow_loop_review_guidance():
     event = await adapter.normalize_inbound(
         {
             "owner_id": 7,
-            "message": "operator wakeup",
+            "message": "System/turn loop",
             "message_id": "msg-2",
             "conversation_id": "operator:main",
             "run_id": 100,
-            "shadow_review": {
+            "turn_review": {
                 "decision": {
                     "summary": "The next step is explicit and bounded.",
+                    "follow_up_prompt": "Run the pending targeted tests.",
                 },
                 "loop_review": {
                     "loop_mode": "autopilot",
@@ -57,11 +58,12 @@ async def test_operator_adapter_appends_shadow_loop_review_guidance():
     )
 
     assert event is not None
-    assert "operator wakeup" in event.text
-    assert "Deterministic loop review (shadow-only hard bound):" in event.text
+    assert "System/turn loop" in event.text
+    assert "Deterministic turn-loop review (hard bound):" in event.text
     assert "- Loop mode: autopilot" in event.text
     assert "- Capability ceiling: bounded_autonomy" in event.text
-    assert "- Shadow execution state: would_auto_continue" in event.text
+    assert "- Execution state: would_auto_continue" in event.text
+    assert "- Suggested follow-up prompt: Run the pending targeted tests." in event.text
     assert "- Recommended action: continue_session" in event.text
     assert "Stay within this ceiling." in event.text
 
@@ -74,7 +76,7 @@ async def test_operator_adapter_normalize_requires_message_id():
         await adapter.normalize_inbound(
             {
                 "owner_id": 7,
-                "message": "operator wakeup",
+                "message": "operator interrupt",
                 "conversation_id": "operator:main",
                 "run_id": 100,
             }
@@ -87,7 +89,7 @@ async def test_operator_adapter_resolve_owner_id_rejects_owner_mismatch():
     event = await adapter.normalize_inbound(
         {
             "owner_id": 8,
-            "message": "operator wakeup",
+            "message": "operator interrupt",
             "message_id": "msg-1",
             "conversation_id": "operator:main",
             "run_id": 100,
@@ -105,7 +107,7 @@ async def test_operator_adapter_build_run_kwargs_requires_run_id():
     event = await adapter.normalize_inbound(
         {
             "owner_id": 7,
-            "message": "operator wakeup",
+            "message": "operator interrupt",
             "message_id": "msg-1",
             "conversation_id": "operator:main",
         }
@@ -122,7 +124,7 @@ async def test_operator_adapter_build_run_kwargs_includes_optional_fields():
     event = await adapter.normalize_inbound(
         {
             "owner_id": 7,
-            "message": "operator wakeup",
+            "message": "operator interrupt",
             "message_id": "msg-1",
             "conversation_id": "operator:main",
             "run_id": 100,
