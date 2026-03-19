@@ -1115,6 +1115,12 @@
       min-height: min(32svh, 260px);
     }
 
+    .timeline-pane--with-dock .timeline-pane__list {
+      /* Cap list height on mobile so the chat dock stays visible without scrolling
+         past hundreds of events. The list scrolls internally instead. */
+      max-height: min(52svh, 420px);
+    }
+
     .timeline-row--message {
       max-width: 100%;
     }
