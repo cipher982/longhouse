@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import patch
+from uuid import UUID
 
 import pytest
 
@@ -179,7 +180,10 @@ async def test_reconcile_resolves_non_proactive_incident_for_on_demand_runner(tm
             ),
             patch("zerg.services.runner_health_reconciler._send_telegram_alert", send_telegram),
             patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=True),
-            patch("zerg.services.runner_health_reconciler.get_operator_policy", return_value=SimpleNamespace(enabled=True)),
+            patch(
+                "zerg.services.runner_health_reconciler.get_operator_policy",
+                return_value=SimpleNamespace(enabled=True),
+            ),
             patch("zerg.services.oikos_service.invoke_oikos", invoke_oikos),
         ):
             result = await reconcile_runner_health(db, now=now)
@@ -282,7 +286,10 @@ async def test_reconcile_enqueues_one_oikos_wakeup_for_prolonged_offline_runner(
             ),
             patch("zerg.services.runner_health_reconciler._send_telegram_alert", AsyncMock(return_value=False)),
             patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=False),
-            patch("zerg.services.runner_health_reconciler.get_operator_policy", return_value=SimpleNamespace(enabled=True)),
+            patch(
+                "zerg.services.runner_health_reconciler.get_operator_policy",
+                return_value=SimpleNamespace(enabled=True),
+            ),
             patch("zerg.services.oikos_service.invoke_oikos", invoke_oikos),
         ):
             result_first = await reconcile_runner_health(db, now=now)
@@ -298,6 +305,8 @@ async def test_reconcile_enqueues_one_oikos_wakeup_for_prolonged_offline_runner(
         assert len(wakeups) == 1
         assert wakeups[0].status == "enqueued"
         invoke_oikos.assert_awaited_once()
+        message_id = invoke_oikos.await_args.args[2]
+        assert str(UUID(str(message_id))) == str(message_id)
     finally:
         db.close()
 

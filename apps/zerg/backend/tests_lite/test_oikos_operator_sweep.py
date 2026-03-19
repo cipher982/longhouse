@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from uuid import UUID
 
 import pytest
 
@@ -141,6 +142,7 @@ async def test_operator_sweep_invokes_oikos_when_enabled(monkeypatch, tmp_path):
     }
     assert len(calls) == 1
     assert calls[0]["owner_id"] == 7
+    assert str(UUID(str(calls[0]["message_id"]))) == str(calls[0]["message_id"])
     assert calls[0]["source"] == "operator"
     assert calls[0]["surface_adapter"].surface_id == "operator"
     assert calls[0]["surface_payload"]["trigger_type"] == "periodic_sweep"

@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -222,6 +223,7 @@ async def test_turn_review_assist_enqueues_operator_wakeup(monkeypatch, tmp_path
     assert calls[0]["owner_id"] == user.id
     assert "System/turn loop" in str(calls[0]["message"])
     assert "Suggested follow-up prompt: Run the pending targeted tests." in str(calls[0]["message"])
+    assert str(UUID(str(calls[0]["message_id"]))) == str(calls[0]["message_id"])
     assert calls[0]["source"] == "operator"
     assert getattr(calls[0]["surface_adapter"], "surface_id", None) == "operator"
     assert (

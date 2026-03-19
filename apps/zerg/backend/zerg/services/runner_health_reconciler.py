@@ -200,7 +200,15 @@ def _send_email_alert(user: User, subject: str, body: str) -> bool:
     email = str(getattr(user, "email", "") or "").strip()
     if not email:
         return False
-    return bool(send_email(subject, body, to_email=email, alert_type="runner_offline", job_id="runner-health-reconcile"))
+    return bool(
+        send_email(
+            subject,
+            body,
+            to_email=email,
+            alert_type="runner_offline",
+            job_id="runner-health-reconcile",
+        )
+    )
 
 
 def _build_external_alert_copy(
@@ -219,7 +227,8 @@ def _build_external_alert_copy(
     telegram_text = (
         f"Runner <b>{runner.name}</b> on <b>{host_label}</b> has been offline for <b>{offline_for}</b>.\n"
         f"{health.status_summary}\n"
-        "Next step: restart the runner service. If it does not reconnect, generate a repair command in Longhouse and re-run the installer."
+        "Next step: restart the runner service. If it does not reconnect, generate a repair command in "
+        "Longhouse and re-run the installer."
     )
     body = (
         "Longhouse detected a runner outage.\n\n"
@@ -312,8 +321,11 @@ def _build_oikos_wakeup_message(
             f"Reason code: {health.status_reason}",
             f"Longhouse summary: {health.status_summary}",
             "",
-            "Inspect the runner situation, decide whether the user needs attention, and explain the likely repair path clearly.",
-            "Use runner_list to inspect the fleet and suggest restarting the runner service or re-running the repair command if needed.",
+            ("Inspect the runner situation, decide whether the user needs attention, and explain the " "likely repair path clearly."),
+            (
+                "Use runner_list to inspect the fleet and suggest restarting the runner service or "
+                "re-running the repair command if needed."
+            ),
         ]
     )
 
@@ -376,7 +388,7 @@ async def _maybe_enqueue_oikos_wakeup(
         run_id = await invoke_oikos(
             runner.owner_id,
             _build_oikos_wakeup_message(runner=runner, health=health, incident=incident, now=now),
-            f"runner-offline-{incident.id}-{uuid4()}",
+            str(uuid4()),
             source="operator",
             surface_adapter=OperatorSurfaceAdapter(owner_id=runner.owner_id, conversation_id=conversation_id),
             surface_payload=wakeup_payload,

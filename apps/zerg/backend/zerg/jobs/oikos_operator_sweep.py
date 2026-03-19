@@ -85,7 +85,7 @@ async def run() -> dict[str, Any]:
             logger.info("Skipping operator sweep: operator mode disabled for owner %s", owner_id)
             return {"status": "skipped", "reason": "operator mode disabled"}
 
-    message_id = f"operator-sweep-{uuid4()}"
+    message_id = str(uuid4())
     try:
         run_id = await invoke_oikos(
             owner_id,
