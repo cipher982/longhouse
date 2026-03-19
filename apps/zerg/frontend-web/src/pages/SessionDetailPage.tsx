@@ -224,32 +224,27 @@ export default function SessionDetailPage() {
       ? "Branch in Cloud"
       : continuationMode === "promote"
         ? "Start in Cloud"
-        : "Send";
+        : "Reply";
 
   const continuationTitle =
     continuationMode === "head"
-      ? "Continue on the current cloud branch"
+      ? "Cloud continuation began here"
       : continuationMode === "promote"
-        ? "Start a cloud continuation for this thread"
+        ? "Cloud continuation starts here"
         : continuationMode === "branch"
-          ? "Branch from this point in cloud"
+          ? "New cloud branch starts here"
           : `This ${providerLabel} transcript is synced, but not resumable from the web yet`;
 
   const continuationDescription =
     continuationMode === "head"
-      ? "Messages you send here keep extending the current cloud continuation."
+      ? `Earlier turns were synced from ${sourceOriginLabel}. New messages below keep extending this cloud session.`
       : continuationMode === "promote"
-        ? `This is the latest synced head from ${sourceOriginLabel}. Your first message starts the cloud continuation for the thread.`
+        ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts the cloud continuation.`
         : continuationMode === "branch"
-          ? `You are viewing an older continuation from ${sourceOriginLabel}. Your first message starts a new cloud continuation from this history instead of mutating the latest head${headOriginLabel ? ` (${headOriginLabel})` : ""}.`
+          ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts a new cloud branch from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
           : `Direct cloud continuation is currently wired for Claude sessions only. This ${providerLabel} transcript is still searchable and auditable here while we close that provider gap.`;
 
-  const continuationHint =
-    continuationMode === "branch"
-      ? "First send branches from this history and leaves the current transcript immutable."
-      : continuationMode === "promote"
-        ? "First send starts a cloud Claude session and keeps the current transcript as the source snapshot."
-        : "Context from previous turns is preserved via --resume.";
+  const continuationHint = undefined;
 
   const continuationPlaceholder =
     continuationMode === "branch"
@@ -392,6 +387,7 @@ export default function SessionDetailPage() {
                   key={`${activeSessionForChat.id}:${continuationMode}`}
                   session={activeSessionForChat}
                   layout="dock"
+                  dockHeaderStyle="divider"
                   introEyebrow={
                     continuationMode === "branch" ? "Cloud branch" : "Cloud continuation"
                   }
