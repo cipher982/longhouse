@@ -831,6 +831,90 @@ class TestInstancesAPI:
             "OPENAI_BASE_URL": None,
         }
 
+    def test_update_instance_custom_env_merges_with_existing_keys(self, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session,
+            user,
+            custom_env_json='{"TELEGRAM_BOT_TOKEN":"token-1","TELEGRAM_WEBHOOK_SECRET":"secret-1"}',
+        )
+
+        resp = client.put(
+            f"/api/instances/{inst.id}/custom-env",
+            headers=ADMIN_HEADERS,
+            json={"custom_env": {"SESSION_CHAT_BACKEND": "zai", "ZAI_API_KEY": "zai-key"}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["custom_env"] == {
+            "SESSION_CHAT_BACKEND": "zai",
+            "TELEGRAM_BOT_TOKEN": "token-1",
+            "TELEGRAM_WEBHOOK_SECRET": "secret-1",
+            "ZAI_API_KEY": "zai-key",
+        }
+
+        db_session.refresh(inst)
+        persisted = parse_custom_env_json(inst.custom_env_json)
+        assert persisted == {
+            "SESSION_CHAT_BACKEND": "zai",
+            "TELEGRAM_BOT_TOKEN": "token-1",
+            "TELEGRAM_WEBHOOK_SECRET": "secret-1",
+            "ZAI_API_KEY": "zai-key",
+        }
+
+    def test_update_instance_custom_env_allows_null_to_remove_single_key(self, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session,
+            user,
+            custom_env_json='{"SESSION_CHAT_BACKEND":"zai","TELEGRAM_BOT_TOKEN":"token-1","ZAI_API_KEY":"zai-key"}',
+        )
+
+        resp = client.put(
+            f"/api/instances/{inst.id}/custom-env",
+            headers=ADMIN_HEADERS,
+            json={"custom_env": {"TELEGRAM_BOT_TOKEN": None}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["custom_env"] == {
+            "SESSION_CHAT_BACKEND": "zai",
+            "TELEGRAM_BOT_TOKEN": None,
+            "ZAI_API_KEY": "zai-key",
+        }
+
+        db_session.refresh(inst)
+        persisted = parse_custom_env_json(inst.custom_env_json)
+        assert persisted == {
+            "SESSION_CHAT_BACKEND": "zai",
+            "TELEGRAM_BOT_TOKEN": None,
+            "ZAI_API_KEY": "zai-key",
+        }
+
+    def test_update_instance_custom_env_empty_payload_preserves_existing_keys(self, client, db_session):
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session,
+            user,
+            custom_env_json='{"TELEGRAM_BOT_TOKEN":"token-1","TELEGRAM_WEBHOOK_SECRET":"secret-1"}',
+        )
+
+        resp = client.put(
+            f"/api/instances/{inst.id}/custom-env",
+            headers=ADMIN_HEADERS,
+            json={"custom_env": {}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["custom_env"] == {
+            "TELEGRAM_BOT_TOKEN": "token-1",
+            "TELEGRAM_WEBHOOK_SECRET": "secret-1",
+        }
+
+        db_session.refresh(inst)
+        persisted = parse_custom_env_json(inst.custom_env_json)
+        assert persisted == {
+            "TELEGRAM_BOT_TOKEN": "token-1",
+            "TELEGRAM_WEBHOOK_SECRET": "secret-1",
+        }
+
     def test_update_instance_custom_env_rejects_core_key(self, client, db_session):
         user = _make_user(db_session)
         inst = _make_instance(db_session, user)

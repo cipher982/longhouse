@@ -400,13 +400,18 @@ def update_instance_custom_env(instance_id: int, payload: InstanceCustomEnvPaylo
         raise HTTPException(status_code=404, detail="instance not found")
 
     try:
+        current = parse_custom_env_json(inst.custom_env_json)
         normalized = normalize_custom_env_overrides(payload.custom_env)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    inst.custom_env_json = json.dumps(normalized, separators=(",", ":"), sort_keys=True) if normalized else None
+    merged = dict(current)
+    for key, value in normalized.items():
+        merged[key] = value
+
+    inst.custom_env_json = json.dumps(merged, separators=(",", ":"), sort_keys=True) if merged else None
     db.commit()
-    return {"ok": True, "custom_env": normalized}
+    return {"ok": True, "custom_env": merged}
 
 
 @router.post("/{instance_id}/deprovision", dependencies=[Depends(require_admin)])
@@ -443,7 +448,7 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     provisioner = Provisioner()
-    result = _recreate_instance(inst, user, provisioner, password=password)
+    _recreate_instance(inst, user, provisioner, password=password)
     db.commit()
     db.refresh(inst)
 
