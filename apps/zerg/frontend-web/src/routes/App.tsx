@@ -23,6 +23,7 @@ import TraceExplorerPage from "../pages/TraceExplorerPage";
 import ReliabilityPage from "../pages/ReliabilityPage";
 import SessionsPage from "../pages/SessionsPage";
 import SessionDetailPage from "../pages/SessionDetailPage";
+import LoopInboxPage from "../pages/LoopInboxPage";
 import { BriefingsPage } from "../pages/BriefingsPage";
 import { InsightsPage } from "../pages/InsightsPage";
 import DemoBanner from "../components/DemoBanner";
@@ -74,6 +75,14 @@ function DemoApp() {
         <Outlet />
       </Layout>
     </ShelfProvider>
+  );
+}
+
+function AuthenticatedLoopApp() {
+  return (
+    <AuthGuard clientId={config.googleClientId}>
+      <Outlet />
+    </AuthGuard>
   );
 }
 
@@ -260,6 +269,27 @@ export default function App() {
       ? demoRoutes
       : [
           ...marketingRoutes,
+          {
+            element: <AuthenticatedLoopApp />,
+            children: [
+              {
+                path: "/loop",
+                element: (
+                  <ErrorBoundary>
+                    <LoopInboxPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/loop/:sessionId",
+                element: (
+                  <ErrorBoundary>
+                    <LoopInboxPage />
+                  </ErrorBoundary>
+                ),
+              },
+            ],
+          },
           // Authenticated routes - nested under a single AuthenticatedApp wrapper
           {
             element: <AuthenticatedApp />,
