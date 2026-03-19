@@ -84,11 +84,12 @@ describe("SwarmOpsPage", () => {
     const user = userEvent.setup();
     renderSwarmOps();
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Priority Inbox").length).toBeGreaterThan(0);
+    const runRow = await screen.findByRole("button", {
+      name: /Priority Inbox running Need your input Signal: Summary Needs You/i,
     });
+    await user.click(runRow);
 
-    await user.click(screen.getByRole("button", { name: "Open thread" }));
+    await user.click(await screen.findByRole("button", { name: "Open thread" }));
 
     expect(mockNavigate).toHaveBeenCalledWith("/automations/101/thread/501");
   });
