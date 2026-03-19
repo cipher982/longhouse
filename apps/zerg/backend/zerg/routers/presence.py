@@ -66,7 +66,9 @@ _STATES_WITH_TOOL = {"running", "blocked"}
 _AUTO_RESUME_STATES = {"thinking", "running"}
 
 # States worth waking proactive Oikos for immediately.
-_OPERATOR_WAKE_STATES = {"blocked", "needs_user"}
+# Completed-turn handling now runs off transcript ingest; keep presence wakeups
+# only for true live interrupts such as permission blocks.
+_OPERATOR_WAKE_STATES = {"blocked"}
 _OPERATOR_CONVERSATION_ID = "operator:main"
 
 

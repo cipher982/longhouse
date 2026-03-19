@@ -74,7 +74,7 @@ def _get_turn_reviews(factory):
     return reviews
 
 
-def _seed_completion_summary_task(
+def _seed_completion_task(
     factory,
     *,
     ended_at: datetime,
@@ -84,6 +84,7 @@ def _seed_completion_summary_task(
     summary: str = "Code landed and a targeted next step may still exist.",
     loop_mode: SessionLoopMode = SessionLoopMode.MANUAL,
     assistant_text: str = "Only targeted verification remains. Run the pending targeted tests.",
+    task_type: str = "turn_loop",
 ):
     db = factory()
     user = User(email="owner@example.com", context=user_context or {})
@@ -133,7 +134,7 @@ def _seed_completion_summary_task(
         )
 
     task_id = f"task-{session_id}"
-    db.add(SessionTask(id=task_id, session_id=session_id, task_type="summary", status="running"))
+    db.add(SessionTask(id=task_id, session_id=session_id, task_type=task_type, status="running"))
     db.commit()
     db.close()
     return session_id, task_id, user.id, assistant_event.id
@@ -158,8 +159,8 @@ def _continue_decision() -> LoopControllerDecision:
 # ---------------------------------------------------------------------------
 
 
-def test_enqueue_creates_summary_and_embedding_tasks(tmp_path):
-    """enqueue_ingest_tasks inserts one summary + one embedding task."""
+def test_enqueue_creates_summary_embedding_and_turn_loop_tasks(tmp_path):
+    """enqueue_ingest_tasks inserts one summary + one embedding + one turn_loop task."""
     factory = _make_db(tmp_path, "enq_basic.db")
     db = factory()
     enqueue_ingest_tasks(db, "session-1")
@@ -168,7 +169,7 @@ def test_enqueue_creates_summary_and_embedding_tasks(tmp_path):
 
     tasks = _get_tasks(factory)
     types = {t.task_type for t in tasks}
-    assert types == {"summary", "embedding"}
+    assert types == {"summary", "embedding", "turn_loop"}
     assert all(t.status == "pending" for t in tasks)
     assert all(t.session_id == "session-1" for t in tasks)
 
@@ -184,7 +185,7 @@ def test_enqueue_deduplicates_pending_tasks(tmp_path):
     db.close()
 
     tasks = _get_tasks(factory)
-    assert len(tasks) == 2  # still just 2, not 4
+    assert len(tasks) == 3  # still just 3, not 6
 
 
 def test_enqueue_deduplicates_running_tasks(tmp_path):
@@ -200,9 +201,9 @@ def test_enqueue_deduplicates_running_tasks(tmp_path):
     db.close()
 
     tasks = _get_tasks(factory, status="pending")
-    # Only embedding should be pending; summary is running
-    assert len(tasks) == 1
-    assert tasks[0].task_type == "embedding"
+    # Only embedding + turn_loop should be pending; summary is running
+    assert len(tasks) == 2
+    assert {task.task_type for task in tasks} == {"embedding", "turn_loop"}
 
 
 def test_enqueue_allows_requeue_after_done(tmp_path):
@@ -283,9 +284,9 @@ def test_claim_pending_marks_running(tmp_path):
     claimed = _claim_pending(db, limit=10)
     db.close()
 
-    assert len(claimed) == 2
+    assert len(claimed) == 3
     tasks = _get_tasks(factory, status="running")
-    assert len(tasks) == 2
+    assert len(tasks) == 3
     assert all(t.attempts == 1 for t in tasks)
 
 
@@ -323,14 +324,43 @@ async def test_worker_marks_done_on_success(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp_path, monkeypatch):
-    """Recent completed turns record an AI loop review after summary succeeds."""
+async def test_summary_task_does_not_run_turn_loop_anymore(tmp_path, monkeypatch):
+    """Summary work should not be the trigger for turn-loop evaluation."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    factory = _make_db(tmp_path, "worker_summary_no_turn_loop.db")
+    ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
+        factory,
+        ended_at=ended_at,
+        presence_state="idle",
+        task_type="summary",
+    )
+
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new_callable=AsyncMock,
+            ) as evaluate:
+                await _execute_task(task_id, session_id, "summary")
+
+    evaluate.assert_not_awaited()
+    tasks = _get_tasks(factory, status="done")
+    reviews = _get_turn_reviews(factory)
+    assert len(tasks) == 1
+    assert reviews == []
+
+
+@pytest.mark.asyncio
+async def test_turn_loop_task_wakes_operator_for_recent_completed_idle_session(tmp_path, monkeypatch):
+    """Recent completed turns record an AI loop review when the turn_loop task runs."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, "worker_operator_completion.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session_id, task_id, owner_id, assistant_event_id = _seed_completion_summary_task(
+    session_id, task_id, owner_id, assistant_event_id = _seed_completion_task(
         factory,
         ended_at=ended_at,
         presence_state="idle",
@@ -350,13 +380,12 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
     )
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch(
-                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-                new=AsyncMock(return_value=_continue_decision()),
-            ):
-                with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=321)) as invoke_oikos:
-                    await _execute_task(task_id, session_id, "summary")
+        with patch(
+            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+            new=AsyncMock(return_value=_continue_decision()),
+        ):
+            with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=321)) as invoke_oikos:
+                await _execute_task(task_id, session_id, "turn_loop")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -388,14 +417,14 @@ async def test_summary_task_wakes_operator_for_recent_completed_idle_session(tmp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("presence_state", ["thinking", "running"])
-async def test_summary_task_skips_operator_when_session_is_still_active(tmp_path, monkeypatch, presence_state):
+async def test_turn_loop_task_skips_operator_when_session_is_still_active(tmp_path, monkeypatch, presence_state):
     """Fresh active presence suppresses completed-turn evaluation."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, f"worker_operator_skip_{presence_state}.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_summary_task(
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
         factory,
         ended_at=ended_at,
         presence_state=presence_state,
@@ -403,9 +432,8 @@ async def test_summary_task_skips_operator_when_session_is_still_active(tmp_path
     )
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
-                await _execute_task(task_id, session_id, "summary")
+        with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
+            await _execute_task(task_id, session_id, "turn_loop")
 
     invoke_oikos.assert_not_awaited()
 
@@ -417,14 +445,14 @@ async def test_summary_task_skips_operator_when_session_is_still_active(tmp_path
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("presence_state", ["needs_user", "blocked"])
-async def test_summary_task_reviews_completed_turn_even_when_session_is_paused(tmp_path, monkeypatch, presence_state):
+async def test_turn_loop_task_reviews_completed_turn_even_when_session_is_paused(tmp_path, monkeypatch, presence_state):
     """Pause states still represent a finished turn and should be reviewed."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, f"worker_operator_pause_{presence_state}.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_summary_task(
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
         factory,
         ended_at=ended_at,
         presence_state=presence_state,
@@ -443,13 +471,12 @@ async def test_summary_task_reviews_completed_turn_even_when_session_is_paused(t
     )
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch(
-                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-                new=AsyncMock(return_value=_continue_decision()),
-            ):
-                with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=654)) as invoke_oikos:
-                    await _execute_task(task_id, session_id, "summary")
+        with patch(
+            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+            new=AsyncMock(return_value=_continue_decision()),
+        ):
+            with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=654)) as invoke_oikos:
+                await _execute_task(task_id, session_id, "turn_loop")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -463,14 +490,14 @@ async def test_summary_task_reviews_completed_turn_even_when_session_is_paused(t
 
 
 @pytest.mark.asyncio
-async def test_summary_task_autopilot_enqueues_same_session_resume_job(tmp_path, monkeypatch):
-    """Autopilot sessions enqueue a bounded same-session continue job after summary."""
+async def test_turn_loop_task_autopilot_enqueues_same_session_resume_job(tmp_path, monkeypatch):
+    """Autopilot sessions enqueue a bounded same-session continue job from turn_loop."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, "worker_operator_autopilot.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session_id, task_id, owner_id, assistant_event_id = _seed_completion_summary_task(
+    session_id, task_id, owner_id, assistant_event_id = _seed_completion_task(
         factory,
         ended_at=ended_at,
         presence_state="idle",
@@ -489,12 +516,11 @@ async def test_summary_task_autopilot_enqueues_same_session_resume_job(tmp_path,
     )
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch(
-                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-                new=AsyncMock(return_value=_continue_decision()),
-            ):
-                await _execute_task(task_id, session_id, "summary")
+        with patch(
+            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+            new=AsyncMock(return_value=_continue_decision()),
+        ):
+            await _execute_task(task_id, session_id, "turn_loop")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -524,23 +550,22 @@ async def test_summary_task_autopilot_enqueues_same_session_resume_job(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_summary_task_skips_operator_for_historical_completed_session(tmp_path, monkeypatch):
+async def test_turn_loop_task_skips_operator_for_historical_completed_session(tmp_path, monkeypatch):
     """Historical backfill should not wake operator mode."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, "worker_operator_skip_historical.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=45)
-    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_summary_task(
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
         factory,
         ended_at=ended_at,
         presence_state=None,
     )
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
-                await _execute_task(task_id, session_id, "summary")
+        with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
+            await _execute_task(task_id, session_id, "turn_loop")
 
     invoke_oikos.assert_not_awaited()
 
@@ -551,14 +576,14 @@ async def test_summary_task_skips_operator_for_historical_completed_session(tmp_
 
 
 @pytest.mark.asyncio
-async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path, monkeypatch):
+async def test_turn_loop_task_skips_operator_when_user_policy_disables_it(tmp_path, monkeypatch):
     """User-backed operator prefs still allow review recording, but keep execution observe-only."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, "worker_operator_skip_policy.db")
     ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_summary_task(
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
         factory,
         ended_at=ended_at,
         presence_state="idle",
@@ -567,12 +592,11 @@ async def test_summary_task_skips_operator_when_user_policy_disables_it(tmp_path
     )
 
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch(
-                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-                new=AsyncMock(return_value=_continue_decision()),
-            ):
-                await _execute_task(task_id, session_id, "summary")
+        with patch(
+            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+            new=AsyncMock(return_value=_continue_decision()),
+        ):
+            await _execute_task(task_id, session_id, "turn_loop")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -680,7 +704,7 @@ def test_ingest_endpoint_enqueues_tasks(tmp_path):
 
         # Verify tasks were enqueued
         tasks = _get_tasks(factory)
-        assert len(tasks) == 2
-        assert {t.task_type for t in tasks} == {"summary", "embedding"}
+        assert len(tasks) == 3
+        assert {t.task_type for t in tasks} == {"summary", "embedding", "turn_loop"}
     finally:
         api_app.dependency_overrides.clear()
