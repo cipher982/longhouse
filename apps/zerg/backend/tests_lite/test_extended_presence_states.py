@@ -450,7 +450,7 @@ def test_blocked_notification_then_permission_request_sets_tool_name(client, tmp
 
 
 # ---------------------------------------------------------------------------
-# 5. Backend: operator-mode wakeups for actionable pause states
+# 5. Backend: operator-mode wakeups for live interrupt states
 # ---------------------------------------------------------------------------
 
 
@@ -624,6 +624,60 @@ def test_needs_user_does_not_wake_operator_when_disabled(monkeypatch, tmp_path):
 
     monkeypatch.delenv("OIKOS_OPERATOR_MODE_ENABLED", raising=False)
     monkeypatch.setattr("zerg.routers.presence.invoke_oikos", fake_invoke_oikos)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    with TestClient(api_app) as c:
+        sid = str(uuid4())
+        response = c.post(
+            "/agents/presence",
+            json={"session_id": sid, "state": "needs_user", "cwd": "/tmp/test"},
+            headers=_auth_headers(),
+        )
+        assert response.status_code == 204
+
+    api_app.dependency_overrides.clear()
+
+    with SessionLocal() as db:
+        wakeups = db.query(OikosWakeup).all()
+
+    engine.dispose()
+
+    assert calls == []
+    assert wakeups == []
+
+
+def test_needs_user_does_not_wake_operator_even_when_enabled(monkeypatch, tmp_path):
+    """Completed-turn needs_user is handled by turn-loop review, not direct presence wakeups."""
+    engine, SessionLocal = _make_db(tmp_path, "operator_needs_user_no_direct_wake.db")
+    calls = []
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(owner_id=42)
+
+    async def fake_invoke_oikos(owner_id, message, message_id, **kwargs):
+        calls.append((owner_id, message, message_id, kwargs))
+        return 123
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    monkeypatch.setattr("zerg.routers.presence.invoke_oikos", fake_invoke_oikos)
+
+    with SessionLocal() as db:
+        db.add(
+            User(
+                id=42,
+                email="owner@example.com",
+                context={"preferences": {"operator_mode": {"enabled": True}}},
+            )
+        )
+        db.commit()
 
     api_app.dependency_overrides[get_db] = override_db
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token

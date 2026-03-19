@@ -446,12 +446,13 @@ class SessionPresence(AgentsBase):
 
 
 class SessionTask(AgentsBase):
-    """Durable task queue for post-ingest background work (summary + embeddings).
+    """Durable task queue for post-ingest background work.
 
-    Replaces FastAPI BackgroundTasks for summary/embedding generation so tasks
+    Replaces FastAPI BackgroundTasks for summary generation, embeddings, and
+    turn-loop evaluation so tasks
     survive process restarts. Worker polls this table and retries failures.
 
-    task_type: 'summary' | 'embedding'
+    task_type: 'summary' | 'embedding' | 'turn_loop'
     status:    'pending' | 'running' | 'done' | 'failed'
     """
 
@@ -459,7 +460,7 @@ class SessionTask(AgentsBase):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     session_id = Column(String(36), nullable=False)
-    task_type = Column(String(32), nullable=False)  # summary | embedding
+    task_type = Column(String(32), nullable=False)  # summary | embedding | turn_loop
     status = Column(String(16), nullable=False, default="pending")
     attempts = Column(Integer, nullable=False, server_default=text("0"))
     max_attempts = Column(Integer, nullable=False, server_default=text("3"))

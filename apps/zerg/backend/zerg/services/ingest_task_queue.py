@@ -1,8 +1,8 @@
 """Durable task queue for post-ingest background work.
 
-Replaces FastAPI BackgroundTasks for summary and embedding generation so tasks
-survive process restarts. A single asyncio worker polls this table, retrying
-failures up to max_attempts.
+Replaces FastAPI BackgroundTasks for summary generation, embeddings, and
+turn-loop evaluation so tasks survive process restarts. A single asyncio
+worker polls this table, retrying failures up to max_attempts.
 
 Architecture:
 - Single-worker design: one asyncio task processes tasks sequentially.
@@ -44,8 +44,8 @@ STALE_RUNNING_MINUTES = 30
 
 
 def enqueue_ingest_tasks(db, session_id: str) -> None:
-    """Insert summary + embedding tasks for session (deduped, no commit — caller commits)."""
-    for task_type in ("summary", "embedding"):
+    """Insert summary + embedding + turn-loop tasks for session (deduped, caller commits)."""
+    for task_type in ("summary", "embedding", "turn_loop"):
         _enqueue_if_not_active(db, session_id, task_type)
 
 
@@ -140,16 +140,6 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
     return claimed
 
 
-async def _maybe_process_completed_turn_loop(task_id: str, session_id: str) -> None:
-    factory = get_session_factory()
-    db = factory()
-    try:
-        del task_id
-        await maybe_process_session_turn_loop(db=db, session_id=session_id)
-    finally:
-        db.close()
-
-
 async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
     try:
         if task_type == "summary":
@@ -160,12 +150,17 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
             from zerg.routers.agents import _generate_embeddings_impl
 
             await _generate_embeddings_impl(session_id)
+        elif task_type == "turn_loop":
+            factory = get_session_factory()
+            db = factory()
+            try:
+                await maybe_process_session_turn_loop(db=db, session_id=session_id)
+            finally:
+                db.close()
         else:
             logger.warning("Unknown task_type %r for task %s", task_type, task_id)
 
         _mark_status(task_id, "done", error=None, retry=False)
-        if task_type == "summary":
-            await _maybe_process_completed_turn_loop(task_id, session_id)
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
     except Exception as e:
         logger.exception("Ingest task %s (%s/%s) failed", task_id, task_type, session_id)
