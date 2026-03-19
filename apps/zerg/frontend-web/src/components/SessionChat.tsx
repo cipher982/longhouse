@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useRef, useState, type FormEvent, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { buildUrl } from "../services/api/base";
 import { fetchWithRefresh } from "../lib/auth-refresh";
 import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
@@ -99,6 +100,7 @@ export function SessionChat({
   keyboardHintText,
 }: SessionChatProps) {
   const isDock = layout === "dock";
+  const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -133,6 +135,16 @@ export function SessionChat({
     if (draft.trim()) return;
     setBlockedKeyboardSubmit(false);
   }, [draft]);
+
+  const refreshCurrentSessionWorkspace = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] }),
+      queryClient.invalidateQueries({ queryKey: ["agent-session-thread", session.id] }),
+      queryClient.invalidateQueries({ queryKey: ["agent-session-events", session.id] }),
+      queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", session.id] }),
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),
+    ]);
+  }, [queryClient, session.id]);
 
   // Check lock status on mount
   useEffect(() => {
@@ -331,7 +343,13 @@ export function SessionChat({
           const nextSessionId = done.shipped_session_id;
           const persistedEvents = done.persisted_events ?? 0;
           if (nextSessionId && persistedEvents > 0 && !done.persistence_error) {
-            onSessionChanged?.(nextSessionId, Boolean(done.created_continuation));
+            if (nextSessionId === session.id) {
+              void refreshCurrentSessionWorkspace().finally(() => {
+                setMessages([]);
+              });
+            } else {
+              onSessionChanged?.(nextSessionId, Boolean(done.created_continuation));
+            }
           }
           break;
         }
@@ -340,7 +358,7 @@ export function SessionChat({
           break;
       }
     },
-    [onSessionChanged],
+    [onSessionChanged, refreshCurrentSessionWorkspace, session.id],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
