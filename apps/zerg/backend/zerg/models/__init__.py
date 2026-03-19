@@ -4,6 +4,7 @@
 from .agents import AgentEvent
 from .agents import AgentsBase
 from .agents import AgentSession
+from .agents import SessionTurnReview
 from .commis_barrier import CommisBarrier
 from .commis_barrier import CommisBarrierJob
 from .connector import Connector
@@ -52,6 +53,7 @@ __all__ = [
     "AgentSession",
     "AgentEvent",
     "AgentsBase",
+    "SessionTurnReview",
     # Core models (split into separate files)
     "DeviceToken",
     "Fiche",

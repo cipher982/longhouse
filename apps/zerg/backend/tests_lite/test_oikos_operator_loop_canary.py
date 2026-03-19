@@ -1,4 +1,4 @@
-"""Synthetic end-to-end canaries for operator wakeup loop ceilings."""
+"""Synthetic end-to-end canaries for turn-loop capability ceilings."""
 
 from __future__ import annotations
 
@@ -172,7 +172,7 @@ async def _run_operator_canary(
         {
             "owner_id": owner_id,
             "message": (
-                f"System/operator wakeup: Continue session {prompt_session_id} "
+                f"System/turn loop: Continue session {prompt_session_id} "
                 "by running the pending targeted tests."
             ),
             "message_id": str(uuid4()),
@@ -302,7 +302,7 @@ async def test_operator_loop_canary_blocks_bounded_resume_for_wrong_session(monk
 
     assert result.status == SurfaceHandleStatus.PROCESSED
     assert result.run_status == "success"
-    assert "exact session named in the operator wakeup" in (result.response_text or "").lower()
+    assert "exact session named in the turn-loop message" in (result.response_text or "").lower()
 
     with SessionLocal() as db:
         assert db.query(CommisJob).filter(CommisJob.oikos_run_id == run_id).count() == 0

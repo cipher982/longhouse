@@ -226,6 +226,7 @@ def get_model_for_use_case(use_case: str) -> str:
 
     Use cases (defined in config/models.json):
     - fiche_conversation: TIER_1 (quality critical)
+    - loop_controller: dedicated per-session turn-end judge
     - routing_decision: TIER_1 (small output but high-stakes decision)
     - tool_selection: TIER_1 (quality critical)
     - commis_task: TIER_2 (cost-sensitive batch work)

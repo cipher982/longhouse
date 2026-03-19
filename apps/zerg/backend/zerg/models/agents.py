@@ -92,8 +92,10 @@ class AgentSession(AgentsBase):
     # Pre-computed summary (generated async after ingest)
     summary = Column(Text, nullable=True)  # 2-4 sentence quick summary
     summary_title = Column(String(200), nullable=True)  # Short title for briefing
-    summary_event_count = Column(Integer, server_default=text("0"))  # Events covered by current summary (legacy count-based cursor)
-    last_summarized_event_id = Column(Integer, nullable=True)  # ID of last AgentEvent included in summary (efficient cursor)
+    # Events covered by current summary (legacy count-based cursor)
+    summary_event_count = Column(Integer, server_default=text("0"))
+    # ID of last AgentEvent included in summary (efficient cursor)
+    last_summarized_event_id = Column(Integer, nullable=True)
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -107,6 +109,9 @@ class AgentSession(AgentsBase):
     user_state = Column(String(20), nullable=False, server_default=text("'active'"))
     user_state_at = Column(DateTime(timezone=True), nullable=True)
     loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.MANUAL.value}'"))
+    # App-level reference to the per-session loop-controller thread.
+    # This intentionally avoids a cross-metadata SQL FK to the main Thread table.
+    loop_thread_id = Column(Integer, nullable=True, index=True)
 
     # Reflection tracking — stamped when session has been analyzed by reflection service
     reflected_at = Column(DateTime(timezone=True), nullable=True)
@@ -276,8 +281,22 @@ class AgentSourceLine(AgentsBase):
     session = relationship("AgentSession", back_populates="source_lines")
 
     __table_args__ = (
-        UniqueConstraint("session_id", "branch_id", "source_path", "source_offset", "revision", name="uq_source_line_revision"),
-        UniqueConstraint("session_id", "branch_id", "source_path", "source_offset", "line_hash", name="uq_source_line_hash"),
+        UniqueConstraint(
+            "session_id",
+            "branch_id",
+            "source_path",
+            "source_offset",
+            "revision",
+            name="uq_source_line_revision",
+        ),
+        UniqueConstraint(
+            "session_id",
+            "branch_id",
+            "source_path",
+            "source_offset",
+            "line_hash",
+            name="uq_source_line_hash",
+        ),
         Index("ix_source_lines_session_offset", "session_id", "branch_id", "source_offset"),
     )
 
@@ -352,6 +371,48 @@ class SessionEmbedding(AgentsBase):
     )
 
 
+class SessionTurnReview(AgentsBase):
+    """Deterministic turn-end loop review for one completed assistant turn."""
+
+    __tablename__ = "session_turn_reviews"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _fk_ref = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    session_id = Column(
+        GUID(),
+        ForeignKey(_fk_ref, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    owner_id = Column(Integer, nullable=True, index=True)
+    assistant_event_id = Column(Integer, nullable=False, index=True)
+    turn_index = Column(Integer, nullable=False)
+    trigger_type = Column(String(64), nullable=False, server_default=text("'turn.completed'"), index=True)
+    loop_mode = Column(String(20), nullable=False)
+    decision = Column(String(32), nullable=False, index=True)  # continue | ask_user | wait | done | escalate
+    summary = Column(Text, nullable=False)
+    rationale = Column(Text, nullable=True)
+    turn_excerpt = Column(Text, nullable=True)
+    mode_capability = Column(String(32), nullable=True)
+    mode_summary = Column(Text, nullable=True)
+    execution_state = Column(String(32), nullable=True)
+    recommended_action = Column(String(64), nullable=True)
+    follow_up_prompt = Column(Text, nullable=True)
+    blocked_reasons = Column(JSON(), nullable=True)
+    status = Column(String(32), nullable=False, server_default=text("'recorded'"), index=True)
+    reason = Column(String(100), nullable=True)
+    run_id = Column(Integer, nullable=True, index=True)
+    actual_outcome = Column(String(32), nullable=True)
+    shadow_alignment = Column(String(32), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "assistant_event_id", name="uq_session_turn_review_assistant_event"),
+        Index("ix_session_turn_reviews_session_created", "session_id", "created_at"),
+        Index("ix_session_turn_reviews_run_status", "run_id", "status"),
+    )
+
+
 class SessionPresence(AgentsBase):
     """Real-time presence state for an active Claude Code session.
 
@@ -385,12 +446,13 @@ class SessionPresence(AgentsBase):
 
 
 class SessionTask(AgentsBase):
-    """Durable task queue for post-ingest background work (summary + embeddings).
+    """Durable task queue for post-ingest background work.
 
-    Replaces FastAPI BackgroundTasks for summary/embedding generation so tasks
+    Replaces FastAPI BackgroundTasks for summary generation, embeddings, and
+    turn-loop evaluation so tasks
     survive process restarts. Worker polls this table and retries failures.
 
-    task_type: 'summary' | 'embedding'
+    task_type: 'summary' | 'embedding' | 'turn_loop'
     status:    'pending' | 'running' | 'done' | 'failed'
     """
 
@@ -398,7 +460,7 @@ class SessionTask(AgentsBase):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     session_id = Column(String(36), nullable=False)
-    task_type = Column(String(32), nullable=False)  # summary | embedding
+    task_type = Column(String(32), nullable=False)  # summary | embedding | turn_loop
     status = Column(String(16), nullable=False, default="pending")
     attempts = Column(Integer, nullable=False, server_default=text("0"))
     max_attempts = Column(Integer, nullable=False, server_default=text("3"))

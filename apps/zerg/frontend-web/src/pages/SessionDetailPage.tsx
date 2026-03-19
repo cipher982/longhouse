@@ -21,9 +21,8 @@ import type { ActiveSession } from "../hooks/useActiveSessions";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
 import {
-  fetchSessionShadowTelemetry,
-  type SessionShadowReview,
-  type SessionShadowRollup,
+  fetchSessionTurnTelemetry,
+  type SessionTurnReview,
 } from "../services/api/oikos";
 import {
   formatProviderLabel,
@@ -50,10 +49,9 @@ export default function SessionDetailPage() {
   const workspace = useSessionWorkspace(sessionId || null, { highlightEventId });
   const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
   const [loopModePending, setLoopModePending] = useState(false);
-  const [latestShadowReview, setLatestShadowReview] = useState<SessionShadowReview | null>(null);
-  const [shadowRollup, setShadowRollup] = useState<SessionShadowRollup | null>(null);
-  const [shadowReviewLoading, setShadowReviewLoading] = useState(false);
-  const [shadowReviewUnavailable, setShadowReviewUnavailable] = useState(false);
+  const [latestTurnReview, setLatestTurnReview] = useState<SessionTurnReview | null>(null);
+  const [turnReviewLoading, setTurnReviewLoading] = useState(false);
+  const [turnReviewUnavailable, setTurnReviewUnavailable] = useState(false);
 
   const {
     session,
@@ -134,32 +132,29 @@ export default function SessionDetailPage() {
 
   useEffect(() => {
     if (!session?.id) {
-      setLatestShadowReview(null);
-      setShadowRollup(null);
-      setShadowReviewLoading(false);
-      setShadowReviewUnavailable(false);
+      setLatestTurnReview(null);
+      setTurnReviewLoading(false);
+      setTurnReviewUnavailable(false);
       return;
     }
 
     let cancelled = false;
-    setShadowReviewLoading(true);
-    setShadowReviewUnavailable(false);
+    setTurnReviewLoading(true);
+    setTurnReviewUnavailable(false);
 
-    void fetchSessionShadowTelemetry(session.id)
+    void fetchSessionTurnTelemetry(session.id)
       .then((telemetry) => {
         if (cancelled) return;
-        setLatestShadowReview(telemetry.latestReview);
-        setShadowRollup(telemetry.rollup);
+        setLatestTurnReview(telemetry.latestReview);
       })
       .catch(() => {
         if (cancelled) return;
-        setLatestShadowReview(null);
-        setShadowRollup(null);
-        setShadowReviewUnavailable(true);
+        setLatestTurnReview(null);
+        setTurnReviewUnavailable(true);
       })
       .finally(() => {
         if (cancelled) return;
-        setShadowReviewLoading(false);
+        setTurnReviewLoading(false);
       });
 
     return () => {
@@ -361,10 +356,9 @@ export default function SessionDetailPage() {
             continuationNotice={continuationNotice}
             loopModePending={loopModePending}
             onLoopModeChange={handleLoopModeChange}
-            latestShadowReview={latestShadowReview}
-            shadowRollup={shadowRollup}
-            shadowReviewLoading={shadowReviewLoading}
-            shadowReviewUnavailable={shadowReviewUnavailable}
+            latestTurnReview={latestTurnReview}
+            turnReviewLoading={turnReviewLoading}
+            turnReviewUnavailable={turnReviewUnavailable}
           />
         }
         main={

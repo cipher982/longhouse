@@ -50,7 +50,7 @@ def test_dispatch_operator_follow_up_uses_bounded_resume_shape():
     llm = ScriptedChatLLM()
     session_id = "11111111-1111-1111-1111-111111111111"
     response = llm._generate_native(
-        _oikos_messages(f"System/operator wakeup: Continue session {session_id} by running the pending targeted tests.")
+        _oikos_messages(f"System/turn loop: Continue session {session_id} by running the pending targeted tests.")
     )
 
     assert response.tool_calls is not None

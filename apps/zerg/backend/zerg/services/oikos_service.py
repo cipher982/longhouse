@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import threading
 import uuid
+import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -56,6 +58,8 @@ from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import classify_wakeup_outcome_for_run
 from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
+from zerg.services.session_turn_reviews import classify_turn_review_outcome_for_run
+from zerg.services.session_turn_reviews import finalize_turn_reviews_for_run
 from zerg.services.thread_service import ThreadService
 from zerg.tools.builtin.oikos_tools import get_oikos_allowed_tools
 
@@ -66,17 +70,25 @@ logger = logging.getLogger(__name__)
 
 # Thread type for oikos threads - distinguishes from regular automation threads
 OIKOS_THREAD_TYPE = ThreadType.SUPER
-_OWNER_RUN_LOCKS: dict[int, asyncio.Lock] = {}
-_OWNER_RUN_LOCKS_GUARD = asyncio.Lock()
+_OWNER_RUN_LOCKS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    dict[int, asyncio.Lock],
+] = weakref.WeakKeyDictionary()
+_OWNER_RUN_LOCKS_GUARD = threading.Lock()
 
 
 async def _get_owner_run_lock(owner_id: int) -> asyncio.Lock:
-    """Return (and lazily create) a process-local per-owner lock."""
-    async with _OWNER_RUN_LOCKS_GUARD:
-        lock = _OWNER_RUN_LOCKS.get(owner_id)
+    """Return a per-owner lock scoped to the current event loop."""
+    loop = asyncio.get_running_loop()
+    with _OWNER_RUN_LOCKS_GUARD:
+        loop_locks = _OWNER_RUN_LOCKS.get(loop)
+        if loop_locks is None:
+            loop_locks = {}
+            _OWNER_RUN_LOCKS[loop] = loop_locks
+        lock = loop_locks.get(owner_id)
         if lock is None:
             lock = asyncio.Lock()
-            _OWNER_RUN_LOCKS[owner_id] = lock
+            loop_locks[owner_id] = lock
         return lock
 
 
@@ -1150,6 +1162,8 @@ class OikosService:
 
                 if classify_wakeup_outcome_for_run(self.db, run_id=run.id):
                     self.db.commit()
+                if classify_turn_review_outcome_for_run(self.db, run_id=run.id):
+                    self.db.commit()
 
                 await emit_oikos_waiting_and_run_updated(
                     db=self.db,
@@ -1207,6 +1221,8 @@ class OikosService:
             self.db.commit()
 
             if classify_wakeup_outcome_for_run(self.db, run_id=run.id):
+                self.db.commit()
+            if classify_turn_review_outcome_for_run(self.db, run_id=run.id):
                 self.db.commit()
 
             # Emit completion event with OikosResult-aligned schema
@@ -1328,6 +1344,14 @@ class OikosService:
                 payload_updates={"outcome": "failed"},
             ):
                 self.db.commit()
+            if finalize_turn_reviews_for_run(
+                self.db,
+                run_id=run.id,
+                status="failed",
+                reason="run_cancelled",
+                actual_outcome="failed",
+            ):
+                self.db.commit()
 
         except Exception as e:
             # Calculate duration
@@ -1355,6 +1379,14 @@ class OikosService:
                 status=WAKEUP_STATUS_FAILED,
                 reason="run_failed",
                 payload_updates={"outcome": "failed", "error": str(e)},
+            ):
+                self.db.commit()
+            if finalize_turn_reviews_for_run(
+                self.db,
+                run_id=run.id,
+                status="failed",
+                reason="run_failed",
+                actual_outcome="failed",
             ):
                 self.db.commit()
 
