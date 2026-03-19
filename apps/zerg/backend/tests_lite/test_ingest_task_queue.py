@@ -290,6 +290,21 @@ def test_claim_pending_marks_running(tmp_path):
     assert all(t.attempts == 1 for t in tasks)
 
 
+def test_claim_pending_prioritizes_turn_loop_before_summary_and_embedding(tmp_path):
+    """Turn-loop work should run before slower post-ingest tasks."""
+    factory = _make_db(tmp_path, "claim_priority.db")
+    db = factory()
+    enqueue_ingest_tasks(db, "session-1")
+    db.commit()
+    db.close()
+
+    db = factory()
+    claimed = _claim_pending(db, limit=10)
+    db.close()
+
+    assert [task_type for _, _, task_type in claimed] == ["turn_loop", "summary", "embedding"]
+
+
 def test_claim_pending_empty_returns_empty(tmp_path):
     """_claim_pending returns empty list when no pending tasks."""
     factory = _make_db(tmp_path, "claim_empty.db")
