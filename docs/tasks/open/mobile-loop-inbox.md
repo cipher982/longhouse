@@ -22,7 +22,8 @@ Ship a tiny phone-first Loop Inbox so away-from-keyboard session follow-up does 
 - [x] Add focused tests for inbox filtering, ordering, and payload shape
 - [x] Add bounded action endpoints for the common mobile cases
 - [x] Build the first tiny mobile shell for inbox + action card
-- [ ] Add notification delivery for attention-worthy finished turns
+- [x] Add notification delivery for attention-worthy finished turns
+  Initial slice: Telegram deep link into `/loop/:sessionId`
 - [ ] Dogfood the traveling / away-from-keyboard flow end to end
 
 ## Notes

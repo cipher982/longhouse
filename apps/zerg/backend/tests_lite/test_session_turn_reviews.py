@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -36,19 +37,22 @@ def _now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _create_user(db, *, allow_continue: bool = False) -> User:
+def _create_user(db, *, allow_continue: bool = False, telegram_chat_id: str | None = None) -> User:
+    context = {
+        "preferences": {
+            "operator_mode": {
+                "enabled": True,
+                "allow_continue": allow_continue,
+                "allow_notify": True,
+            }
+        }
+    }
+    if telegram_chat_id:
+        context["telegram_chat_id"] = telegram_chat_id
     user = User(
         email=f"user-{uuid4()}@example.com",
         role=UserRole.USER.value,
-        context={
-            "preferences": {
-                "operator_mode": {
-                    "enabled": True,
-                    "allow_continue": allow_continue,
-                    "allow_notify": True,
-                }
-            }
-        },
+        context=context,
     )
     db.add(user)
     db.commit()
@@ -224,6 +228,69 @@ async def test_turn_review_assist_enqueues_operator_wakeup(monkeypatch, tmp_path
         calls[0]["surface_payload"]["turn_review"]["decision"]["follow_up_prompt"]
         == "Run the pending targeted tests."
     )
+
+
+@pytest.mark.asyncio
+async def test_turn_review_assist_sends_telegram_loop_link_once(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_assist_notification.db")
+    sent_messages: list[dict[str, object]] = []
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Only targeted verification remains.",
+            rationale="This is the routine continue case after a completed assistant turn.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=31,
+        )
+
+    async def _fake_invoke(*_args, **_kwargs):
+        return 654
+
+    class _FakeTelegramChannel:
+        async def send_message(self, message):
+            sent_messages.append(dict(message))
+            return {"success": True}
+
+    class _FakeRegistry:
+        def get(self, channel_id):
+            if channel_id == "telegram":
+                return _FakeTelegramChannel()
+            return None
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+    monkeypatch.setattr(
+        "zerg.services.session_turn_reviews.get_settings",
+        lambda: SimpleNamespace(app_public_url="https://longhouse.example", public_site_url=None),
+    )
+    monkeypatch.setattr("zerg.channels.registry.get_registry", lambda: _FakeRegistry())
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False, telegram_chat_id="1234")
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="finish the verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+
+        first = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        second = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+
+        assert first is not None
+        assert second is not None
+        assert first.id == second.id
+
+    assert len(sent_messages) == 1
+    assert sent_messages[0]["to"] == "1234"
+    assert "Only targeted verification remains." in str(sent_messages[0]["text"])
+    assert "Run the pending targeted tests." in str(sent_messages[0]["text"])
+    assert f"https://longhouse.example/loop/{session_id}" in str(sent_messages[0]["text"])
 
 
 @pytest.mark.asyncio

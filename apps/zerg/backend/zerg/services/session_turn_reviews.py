@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -14,6 +15,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from zerg.config import get_settings
 from zerg.models import CommisJob
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
@@ -481,20 +483,95 @@ def _load_policy(db: Session, owner_id: int | None) -> OikosOperatorPolicy:
     return get_operator_policy(db, owner_id)
 
 
-async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> SessionTurnReview | None:
-    if not _has_turn_review_table(db):
+def _session_title(session: AgentSession) -> str:
+    if session.summary_title and str(session.summary_title).strip():
+        return str(session.summary_title).strip()
+    if session.project and str(session.project).strip():
+        return str(session.project).strip()
+    if session.cwd and str(session.cwd).strip():
+        return os.path.basename(str(session.cwd).rstrip("/")) or str(session.cwd).strip()
+    return f"Session {str(session.id)[:8]}"
+
+
+def _public_loop_url(session_id: str) -> str | None:
+    settings = get_settings()
+    base_url = str(settings.app_public_url or settings.public_site_url or "").strip().rstrip("/")
+    if not base_url:
         return None
+    return f"{base_url}/loop/{session_id}"
+
+
+def _build_turn_review_notification_text(*, review: SessionTurnReview, session: AgentSession) -> str:
+    title = _session_title(session)
+    attention_label = "Needs approval" if review.execution_state == "awaiting_user_approval" else "Needs attention"
+    lines = [
+        f"**{title}**",
+        attention_label,
+        review.summary,
+    ]
+    if review.follow_up_prompt:
+        lines.append(f"Suggested next step: {review.follow_up_prompt}")
+    loop_url = _public_loop_url(str(review.session_id))
+    if loop_url:
+        lines.append(f"Open: {loop_url}")
+    return "\n".join(line.strip() for line in lines if str(line).strip())
+
+
+async def _send_turn_review_telegram_notification(
+    *,
+    db: Session,
+    review: SessionTurnReview,
+    session: AgentSession,
+) -> bool:
+    if review.owner_id is None:
+        return False
+    if review.execution_state not in {"awaiting_user_approval", "needs_human"}:
+        return False
+    if review.status not in {"recorded", "enqueued"}:
+        return False
+
+    user = db.query(User).filter(User.id == review.owner_id).first()
+    if user is None:
+        return False
+
+    chat_id = str((user.context or {}).get("telegram_chat_id", "")).strip()
+    if not chat_id:
+        return False
+
+    from zerg.channels.registry import get_registry
+    from zerg.channels.types import ChannelMessage
+    from zerg.services.telegram_bridge import _format_for_telegram
+
+    channel = get_registry().get("telegram")
+    if not channel:
+        return False
+
+    message = _build_turn_review_notification_text(review=review, session=session)
+    result = await channel.send_message(
+        ChannelMessage(
+            channel_id="telegram",
+            to=chat_id,
+            text=_format_for_telegram(message),
+            parse_mode="html",
+        )
+    )
+    return bool(result.get("success"))
+
+
+async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[SessionTurnReview | None, bool]:
+    if not _has_turn_review_table(db):
+        return None, False
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
-        return None
+        return None, False
     if session.user_state in {"archived", "snoozed"}:
-        return None
+        return None, False
     ended_at = _normalize_utc(session.ended_at)
     if ended_at is None:
-        return None
+        return None, False
     now = datetime.now(timezone.utc)
     if (now - ended_at).total_seconds() > (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60):
-        return None
+        return None, False
 
     presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
     if presence is not None:
@@ -504,11 +581,11 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
             and (now - updated_at).total_seconds() <= (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60)
             and presence.state in _ACTIVE_PRESENCE_STATES
         ):
-            return None
+            return None, False
 
     turn = load_latest_completed_assistant_turn(db, session_id)
     if turn is None:
-        return None
+        return None, False
 
     existing = (
         db.query(SessionTurnReview)
@@ -519,7 +596,7 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
         .first()
     )
     if existing is not None:
-        return existing
+        return existing, False
 
     owner_id = _resolve_owner_id(db)
     policy = _load_policy(db, owner_id)
@@ -574,7 +651,7 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
             )
             outcome = _failure_outcome(
                 "Loop controller could not decide this completed turn.",
-                "The AI loop controller failed, so this session should stay " "conservative until the next explicit review.",
+                ("The AI loop controller failed, so this session should stay " "conservative until the next explicit review."),
                 blocked_reason="Loop controller evaluation failed.",
             )
             review_status = "failed"
@@ -605,6 +682,11 @@ async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> S
     db.add(review)
     db.commit()
     db.refresh(review)
+    return review, True
+
+
+async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> SessionTurnReview | None:
+    review, _created = await _record_session_turn_review(db=db, session_id=session_id)
     return review
 
 
@@ -940,11 +1022,22 @@ def dismiss_pending_turn_review(*, db: Session, review: SessionTurnReview, reaso
 
 
 async def maybe_process_session_turn_loop(*, db: Session, session_id: str) -> SessionTurnReview | None:
-    review = await maybe_record_session_turn_review(db=db, session_id=session_id)
+    review, created = await _record_session_turn_review(db=db, session_id=session_id)
     if review is None:
         return None
     maybe_execute_recorded_turn_review(db=db, review=review)
     await maybe_enqueue_turn_review_operator_wakeup(db=db, review=review)
+    if created:
+        session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
+        if session is not None:
+            try:
+                await _send_turn_review_telegram_notification(db=db, review=review, session=session)
+            except Exception:
+                logger.exception(
+                    "Failed to send turn-loop Telegram notification for review %s session %s",
+                    review.id,
+                    review.session_id,
+                )
     return review
 
 

@@ -259,6 +259,7 @@ Done when:
 
 - notify when a session finishes a turn that needs attention
 - deep-link into the relevant action card
+- start with existing Telegram delivery instead of building web push first
 
 Done when:
 
