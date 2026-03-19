@@ -31,6 +31,7 @@ import os
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -526,6 +527,7 @@ def test_blocked_wakes_operator_once_when_enabled(monkeypatch, tmp_path):
 
     assert len(calls) == 1
     assert calls[0]["owner_id"] == 42
+    assert str(UUID(str(calls[0]["message_id"]))) == str(calls[0]["message_id"])
     assert calls[0]["source"] == "operator"
     assert "System/operator interrupt" in calls[0]["message"]
     assert f"Session ID: {sid}" in calls[0]["message"]

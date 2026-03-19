@@ -238,7 +238,7 @@ async def _maybe_invoke_operator_wakeup(
             logger.exception("Failed to build shadow review for presence wakeup on session %s", payload.session_id)
 
     message = _build_operator_message(payload=payload, project=project, tool_name=tool_name)
-    message_id = f"operator-presence-{payload.session_id}-{payload.state}-{uuid4()}"
+    message_id = str(uuid4())
 
     try:
         run_id = await invoke_oikos(

@@ -651,7 +651,7 @@ async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[
             )
             outcome = _failure_outcome(
                 "Loop controller could not decide this completed turn.",
-                ("The AI loop controller failed, so this session should stay " "conservative until the next explicit review."),
+                ("The AI loop controller failed, so this session should stay conservative until the " "next explicit review."),
                 blocked_reason="Loop controller evaluation failed.",
             )
             review_status = "failed"
@@ -742,7 +742,7 @@ async def maybe_enqueue_turn_review_operator_wakeup(*, db: Session, review: Sess
 
     wakeup_payload = _serialize_recorded_turn_review_payload(session=session, review=review)
     wakeup_key = f"{_TURN_OPERATOR_SOURCE}:{review.session_id}:{review.assistant_event_id}"
-    message_id = f"operator-turn-loop-{review.session_id}-{review.assistant_event_id}-{uuid4()}"
+    message_id = str(uuid4())
 
     try:
         run_id = await invoke_oikos(
