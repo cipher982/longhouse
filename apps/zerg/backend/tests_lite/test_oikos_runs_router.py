@@ -1,5 +1,6 @@
 """Tests for Oikos run history endpoint."""
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -36,6 +37,8 @@ from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
 from zerg.models.enums import UserRole
+from zerg.services.session_loop_controller import LoopControllerDecision
+from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 
 
 def _make_db(tmp_path):
@@ -637,5 +640,113 @@ def test_loop_inbox_not_now_action_hides_pending_item(tmp_path):
 
             detail_after = client.get(f"/api/oikos/loop-inbox/{session.id}")
             assert detail_after.status_code == 404
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Only targeted verification remains.",
+            rationale="The assistant left one obvious bounded next step.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=41,
+        )
+
+    async def _fake_invoke(*_args, **_kwargs):
+        return 777
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+
+    with session_local() as db:
+        owner = User(
+            email="owner@local",
+            role=UserRole.USER.value,
+            context={
+                "preferences": {
+                    "operator_mode": {
+                        "enabled": True,
+                        "allow_continue": True,
+                        "allow_notify": True,
+                    }
+                }
+            },
+        )
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Phone Approve Flow",
+            project="zerg",
+            device_id="cinder",
+        )
+        fresh_time = datetime.now(timezone.utc)
+        session.started_at = fresh_time
+        session.ended_at = fresh_time
+        db.commit()
+        db.refresh(session)
+        _add_turn(
+            db,
+            session_id=session.id,
+            user_text="finish targeted verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+
+        asyncio.run(maybe_process_session_turn_loop(db=db, session_id=str(session.id)))
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            inbox_before = client.get("/api/oikos/loop-inbox")
+            assert inbox_before.status_code == 200, inbox_before.text
+            inbox_payload = inbox_before.json()
+            assert len(inbox_payload) == 1
+            assert inbox_payload[0]["session_id"] == str(session.id)
+            assert inbox_payload[0]["decision"] == "continue"
+            assert inbox_payload[0]["recommended_action"] == "continue_session"
+
+            card_response = client.get(f"/api/oikos/loop-inbox/{session.id}")
+            assert card_response.status_code == 200, card_response.text
+            card_payload = card_response.json()
+            assert card_payload["follow_up_prompt"] == "Run the pending targeted tests."
+            assert card_payload["available_actions"] == [
+                "approve_recommended_action",
+                "not_now",
+                "open_full_session",
+            ]
+
+            action_response = client.post(
+                f"/api/oikos/loop-inbox/{session.id}/actions",
+                json={"action": "approve_recommended_action"},
+            )
+            assert action_response.status_code == 200, action_response.text
+            action_payload = action_response.json()
+            assert action_payload["status"] == "acted"
+            assert action_payload["reason"] == "continue_session"
+            assert action_payload["queued_job_id"] is not None
+
+            queued_jobs = db.query(CommisJob).all()
+            assert len(queued_jobs) == 1
+            assert queued_jobs[0].task == "Run the pending targeted tests."
+            assert queued_jobs[0].config["resume_session_id"] == str(session.id)
+
+            review_row = db.query(SessionTurnReview).filter(SessionTurnReview.session_id == session.id).one()
+            assert review_row.execution_state == "awaiting_user_approval"
+            assert review_row.status == "acted"
+            assert review_row.actual_outcome == "continue_session"
+
+            inbox_after = client.get("/api/oikos/loop-inbox")
+            assert inbox_after.status_code == 200, inbox_after.text
+            assert inbox_after.json() == []
         finally:
             api_app_ref.dependency_overrides = {}

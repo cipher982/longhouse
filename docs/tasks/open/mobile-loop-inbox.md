@@ -31,3 +31,4 @@ Ship a tiny phone-first Loop Inbox so away-from-keyboard session follow-up does 
 - Keep the phone surface derived and action-oriented.
 - Do not turn the mobile work into “responsive desktop Longhouse.”
 - Buttons first, freeform input second.
+- Automated guardrail now covers: completed turn -> loop inbox item -> approve action -> same-session resume job.
