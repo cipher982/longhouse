@@ -1,10 +1,21 @@
 """Tests for Oikos run history endpoint."""
 
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from uuid import uuid4
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 from zerg.database import Base
 from zerg.database import get_db
@@ -15,6 +26,10 @@ from zerg.models import Fiche
 from zerg.models import Run
 from zerg.models import Thread
 from zerg.models import User
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import FicheStatus
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
@@ -27,6 +42,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_oikos_runs.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
+    AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 
@@ -166,5 +182,330 @@ def test_oikos_runs_are_automation_first_and_support_automation_filter(tmp_path)
             automation_filtered = client.get(f"/api/oikos/runs?automation_id={owner_secondary.id}")
             assert automation_filtered.status_code == 200, automation_filtered.text
             assert [row["id"] for row in automation_filtered.json()] == [owner_secondary_run.id]
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def _create_session(
+    db,
+    *,
+    loop_mode: str = "assist",
+    summary_title: str | None = None,
+    project: str = "zerg",
+    device_id: str | None = "cinder",
+    provider: str = "claude",
+):
+    started_at = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
+    session = AgentSession(
+        id=uuid4(),
+        provider=provider,
+        environment="development",
+        project=project,
+        device_id=device_id,
+        cwd=f"/tmp/{project}",
+        started_at=started_at,
+        ended_at=started_at,
+        summary_title=summary_title,
+        loop_mode=loop_mode,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def _add_turn(db, *, session_id, user_text: str, assistant_text: str):
+    timestamp = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
+    user_event = AgentEvent(
+        session_id=session_id,
+        role="user",
+        content_text=user_text,
+        timestamp=timestamp,
+    )
+    assistant_event = AgentEvent(
+        session_id=session_id,
+        role="assistant",
+        content_text=assistant_text,
+        timestamp=timestamp + timedelta(seconds=1),
+    )
+    db.add_all([user_event, assistant_event])
+    db.commit()
+    db.refresh(user_event)
+    db.refresh(assistant_event)
+    return user_event, assistant_event
+
+
+def _add_review(
+    db,
+    *,
+    owner_id: int,
+    session: AgentSession,
+    assistant_event_id: int,
+    created_at: datetime,
+    execution_state: str,
+    decision: str = "continue",
+    summary: str = "Run the pending targeted tests.",
+    rationale: str = "The session has one obvious next step.",
+    recommended_action: str | None = "continue_session",
+    follow_up_prompt: str | None = "Run the pending targeted tests.",
+    status: str = "enqueued",
+    reason: str | None = "notify_user",
+):
+    review = SessionTurnReview(
+        session_id=session.id,
+        owner_id=owner_id,
+        assistant_event_id=assistant_event_id,
+        turn_index=1,
+        trigger_type="turn.completed",
+        loop_mode=session.loop_mode,
+        decision=decision,
+        summary=summary,
+        rationale=rationale,
+        turn_excerpt="Only targeted verification remains.",
+        mode_capability="notify_only",
+        mode_summary="Suggest or escalate from completed turns, but wait for user approval before continuing.",
+        execution_state=execution_state,
+        recommended_action=recommended_action,
+        follow_up_prompt=follow_up_prompt,
+        blocked_reasons=[],
+        status=status,
+        reason=reason,
+        created_at=created_at,
+    )
+    db.add(review)
+    db.commit()
+    db.refresh(review)
+    return review
+
+
+def test_loop_inbox_returns_latest_attention_reviews_only(tmp_path):
+    session_local = _make_db(tmp_path)
+    base_time = datetime(2026, 3, 18, 9, 0, tzinfo=timezone.utc)
+
+    with session_local() as db:
+        owner = User(email="owner@local", role=UserRole.USER.value)
+        other = User(email="other@local", role=UserRole.USER.value)
+        db.add_all([owner, other])
+        db.commit()
+        db.refresh(owner)
+        db.refresh(other)
+
+        session_a = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Auth Refresh",
+            project="zerg",
+            device_id="cinder",
+        )
+        _, assistant_a = _add_turn(
+            db,
+            session_id=session_a.id,
+            user_text="finish auth refresh",
+            assistant_text="Run the pending targeted tests next.",
+        )
+        _add_review(
+            db,
+            owner_id=owner.id,
+            session=session_a,
+            assistant_event_id=assistant_a.id,
+            created_at=base_time + timedelta(minutes=1),
+            execution_state="awaiting_user_approval",
+        )
+
+        session_b = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Infra Decision",
+            project="sauron",
+            device_id="clifford",
+        )
+        _, assistant_b = _add_turn(
+            db,
+            session_id=session_b.id,
+            user_text="investigate ci runner issue",
+            assistant_text="This needs a product decision about rollout order.",
+        )
+        _add_review(
+            db,
+            owner_id=owner.id,
+            session=session_b,
+            assistant_event_id=assistant_b.id,
+            created_at=base_time + timedelta(minutes=2),
+            execution_state="needs_human",
+            decision="escalate",
+            summary="Choose the rollout order before continuing.",
+            rationale="The turn requires a human priority call.",
+            recommended_action="escalate",
+            follow_up_prompt=None,
+        )
+
+        session_c = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Quiet Session",
+            project="hdr",
+            device_id="cube",
+        )
+        _, assistant_c = _add_turn(
+            db,
+            session_id=session_c.id,
+            user_text="finish upload fix",
+            assistant_text="Looks done.",
+        )
+        _add_review(
+            db,
+            owner_id=owner.id,
+            session=session_c,
+            assistant_event_id=assistant_c.id,
+            created_at=base_time,
+            execution_state="awaiting_user_approval",
+        )
+        _, assistant_c_done = _add_turn(
+            db,
+            session_id=session_c.id,
+            user_text="confirm if anything else remains",
+            assistant_text="Looks done.",
+        )
+        _add_review(
+            db,
+            owner_id=owner.id,
+            session=session_c,
+            assistant_event_id=assistant_c_done.id,
+            created_at=base_time + timedelta(minutes=3),
+            execution_state="no_action",
+            decision="done",
+            summary="No meaningful follow-up is needed.",
+            rationale="The task appears complete.",
+            recommended_action="done",
+            follow_up_prompt=None,
+            status="recorded",
+            reason=None,
+        )
+
+        other_session = _create_session(db, summary_title="Other Owner", project="private")
+        _, assistant_other = _add_turn(
+            db,
+            session_id=other_session.id,
+            user_text="do private thing",
+            assistant_text="Continue the same session.",
+        )
+        _add_review(
+            db,
+            owner_id=other.id,
+            session=other_session,
+            assistant_event_id=assistant_other.id,
+            created_at=base_time + timedelta(minutes=4),
+            execution_state="awaiting_user_approval",
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            response = client.get("/api/oikos/loop-inbox?limit=10")
+            assert response.status_code == 200, response.text
+            payload = response.json()
+
+            assert [row["title"] for row in payload] == ["Infra Decision", "Auth Refresh"]
+            assert [row["decision"] for row in payload] == ["escalate", "continue"]
+            assert payload[0]["requires_attention"] is True
+            assert payload[0]["machine"] == "clifford"
+            assert payload[1]["project"] == "zerg"
+            assert payload[1]["recommended_action"] == "continue_session"
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_loop_inbox_action_card_returns_compact_turn_context(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        owner = User(email="owner@local", role=UserRole.USER.value)
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Session Detail Page",
+            project="zerg",
+            device_id="cinder",
+        )
+        user_event, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="finish the session detail page",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+        _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 18, 9, 5, tzinfo=timezone.utc),
+            execution_state="awaiting_user_approval",
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            response = client.get(f"/api/oikos/loop-inbox/{session.id}")
+            assert response.status_code == 200, response.text
+            payload = response.json()
+
+            assert payload["session_id"] == str(session.id)
+            assert payload["title"] == "Session Detail Page"
+            assert payload["last_user_text"] == "finish the session detail page"
+            assert (
+                payload["last_assistant_text"]
+                == "Only targeted verification remains. Run the pending targeted tests."
+            )
+            assert payload["mode_capability"] == "notify_only"
+            assert payload["available_actions"] == [
+                "approve_recommended_action",
+                "not_now",
+                "open_full_session",
+            ]
+            assert payload["follow_up_prompt"] == "Run the pending targeted tests."
+            assert payload["requires_attention"] is True
+            assert user_event.id < assistant_event.id
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_loop_inbox_action_card_404s_when_latest_review_no_longer_needs_attention(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        owner = User(email="owner@local", role=UserRole.USER.value)
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = _create_session(db, loop_mode="assist", summary_title="Done Session")
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="finish it",
+            assistant_text="Everything is done.",
+        )
+        _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 18, 9, 10, tzinfo=timezone.utc),
+            execution_state="no_action",
+            decision="done",
+            summary="No meaningful follow-up is needed.",
+            rationale="The task appears complete.",
+            recommended_action="done",
+            follow_up_prompt=None,
+            status="recorded",
+            reason=None,
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            response = client.get(f"/api/oikos/loop-inbox/{session.id}")
+            assert response.status_code == 404
         finally:
             api_app_ref.dependency_overrides = {}
