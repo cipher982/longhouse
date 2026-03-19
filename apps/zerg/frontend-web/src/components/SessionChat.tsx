@@ -76,6 +76,7 @@ interface SessionChatProps {
   composerPlaceholder?: string;
   onSessionChanged?: (nextSessionId: string, createdContinuation: boolean) => void;
   layout?: "panel" | "dock";
+  dockHeaderStyle?: "callout" | "divider";
   introEyebrow?: string;
   introTitle?: string;
   introDescription?: string;
@@ -92,6 +93,7 @@ export function SessionChat({
   composerPlaceholder,
   onSessionChanged,
   layout = "panel",
+  dockHeaderStyle = "callout",
   introEyebrow,
   introTitle,
   introDescription,
@@ -390,23 +392,44 @@ export function SessionChat({
       data-testid={isDock ? "session-continuation-panel" : undefined}
     >
       {isDock ? (
-        <div
-          className={`session-chat-callout${requireClickForFirstSend ? " session-chat-callout--branching" : ""}`}
-        >
-          <div className="session-chat-callout__copy">
-            {introEyebrow ? (
-              <div className="session-chat-callout__eyebrow">{introEyebrow}</div>
-            ) : null}
-            {introTitle ? <div className="session-chat-callout__title">{introTitle}</div> : null}
-            {introDescription ? (
-              <p className="session-chat-callout__description">{introDescription}</p>
-            ) : null}
-            {hintText ? <p className="session-chat-callout__hint">{hintText}</p> : null}
+        dockHeaderStyle === "divider" ? (
+          <div className="session-chat-divider" data-testid="session-chat-divider">
+            <div className="session-chat-divider__copy">
+              <div className="session-chat-divider__rule" />
+              <div className="session-chat-divider__body">
+                {introEyebrow ? (
+                  <div className="session-chat-divider__eyebrow">{introEyebrow}</div>
+                ) : null}
+                {introTitle ? <div className="session-chat-divider__title">{introTitle}</div> : null}
+                {introDescription ? (
+                  <p className="session-chat-divider__description">{introDescription}</p>
+                ) : null}
+                {hintText ? <p className="session-chat-divider__hint">{hintText}</p> : null}
+              </div>
+            </div>
+            <div className="session-chat-status">
+              <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+            </div>
           </div>
-          <div className="session-chat-status">
-            <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+        ) : (
+          <div
+            className={`session-chat-callout${requireClickForFirstSend ? " session-chat-callout--branching" : ""}`}
+          >
+            <div className="session-chat-callout__copy">
+              {introEyebrow ? (
+                <div className="session-chat-callout__eyebrow">{introEyebrow}</div>
+              ) : null}
+              {introTitle ? <div className="session-chat-callout__title">{introTitle}</div> : null}
+              {introDescription ? (
+                <p className="session-chat-callout__description">{introDescription}</p>
+              ) : null}
+              {hintText ? <p className="session-chat-callout__hint">{hintText}</p> : null}
+            </div>
+            <div className="session-chat-status">
+              <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+            </div>
           </div>
-        </div>
+        )
       ) : (
         <div className="session-chat-header">
           <div className="session-chat-info">

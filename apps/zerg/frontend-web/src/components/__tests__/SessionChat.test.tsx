@@ -108,6 +108,22 @@ describe("SessionChat", () => {
     });
   });
 
+  it("renders a divider seam for the inline continuation dock", () => {
+    const { container } = renderSessionChat({
+      dockHeaderStyle: "divider",
+      introEyebrow: "Cloud continuation",
+      introTitle: "Cloud continuation began here",
+      introDescription: "Earlier turns were synced from Local.",
+      submitLabel: "Reply",
+    });
+
+    expect(screen.getByTestId("session-chat-divider")).toBeInTheDocument();
+    expect(screen.getByText("Cloud continuation began here")).toBeInTheDocument();
+    expect(screen.getByText("Earlier turns were synced from Local.")).toBeInTheDocument();
+    expect(container.querySelector(".session-chat-callout")).toBeNull();
+    expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
+  });
+
   it("navigates only after persisted continuation events land", async () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();
