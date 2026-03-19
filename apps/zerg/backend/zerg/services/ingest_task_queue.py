@@ -27,6 +27,8 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from sqlalchemy import case
+
 from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
@@ -124,8 +126,13 @@ async def _process_batch() -> None:
 
 def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
     """Mark pending tasks as running; return (id, session_id, task_type) tuples."""
+    priority = case(
+        (SessionTask.task_type == "turn_loop", 0),
+        (SessionTask.task_type == "summary", 1),
+        else_=2,
+    )
     pending_query = db.query(SessionTask).filter(SessionTask.status == "pending")
-    pending = pending_query.order_by(SessionTask.created_at).limit(limit).all()
+    pending = pending_query.order_by(priority, SessionTask.created_at, SessionTask.id).limit(limit).all()
     if not pending:
         return []
 
