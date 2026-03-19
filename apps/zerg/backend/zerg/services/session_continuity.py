@@ -47,6 +47,16 @@ LONGHOUSE_API_URL = os.getenv("LONGHOUSE_API_URL", "http://localhost:8080")
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+@dataclass(frozen=True)
+class ShipSessionResult:
+    """Structured result from shipping a Claude session back into Longhouse."""
+
+    session_id: str
+    events_inserted: int
+    events_skipped: int
+    session_created: bool
+
+
 def get_managed_workspace_base() -> Path:
     """Return the base path for Longhouse-managed workspaces."""
     return Path(os.getenv("OIKOS_WORKSPACE_PATH", str(Path.home() / ".longhouse" / "workspaces")))
@@ -224,13 +234,14 @@ async def ship_session_to_zerg(
     commis_id: str,
     claude_config_dir: Path | None = None,
     *,
+    db: Session | None = None,
     session_id: str | None = None,
     thread_root_session_id: str | None = None,
     continued_from_session_id: str | None = None,
     continuation_kind: str | None = None,
     origin_label: str | None = None,
     branched_from_event_id: int | None = None,
-) -> str | None:
+) -> ShipSessionResult | None:
     """Ship a Claude Code session from workspace to Zerg.
 
     Finds the most recent session file in the workspace's Claude config
@@ -346,10 +357,28 @@ async def ship_session_to_zerg(
     if branched_from_event_id is not None:
         payload["branched_from_event_id"] = branched_from_event_id
 
-    # Ship to Zerg ingest endpoint
-    url = f"{LONGHOUSE_API_URL}/api/agents/ingest"
-
     try:
+        if db is not None:
+            from zerg.services.agents_store import AgentsStore
+            from zerg.services.agents_store import SessionIngest
+
+            result = AgentsStore(db).ingest_session(SessionIngest.model_validate(payload))
+            logger.info(
+                "Locally ingested shipped session %s as %s (events inserted=%s skipped=%s)",
+                provider_session_id,
+                result.session_id,
+                result.events_inserted,
+                result.events_skipped,
+            )
+            return ShipSessionResult(
+                session_id=str(result.session_id),
+                events_inserted=result.events_inserted,
+                events_skipped=result.events_skipped,
+                session_created=result.session_created,
+            )
+
+        # Ship to Zerg ingest endpoint
+        url = f"{LONGHOUSE_API_URL}/api/agents/ingest"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 url,
@@ -357,11 +386,18 @@ async def ship_session_to_zerg(
                 json=payload,
             )
             response.raise_for_status()
-
             result = response.json()
-            session_id = result.get("session_id")
-            logger.info(f"Shipped session {provider_session_id} to Zerg as {session_id}")
-            return session_id
+            ingested_session_id = result.get("session_id")
+            if not ingested_session_id:
+                logger.warning("Ship response missing session_id for provider session %s", provider_session_id)
+                return None
+            logger.info(f"Shipped session {provider_session_id} to Zerg as {ingested_session_id}")
+            return ShipSessionResult(
+                session_id=str(ingested_session_id),
+                events_inserted=int(result.get("events_inserted", 0) or 0),
+                events_skipped=int(result.get("events_skipped", 0) or 0),
+                session_created=bool(result.get("session_created", False)),
+            )
 
     except Exception as e:
         logger.warning(f"Failed to ship session {provider_session_id}: {e}")
@@ -373,6 +409,7 @@ __all__ = [
     "fetch_session_from_zerg",
     "prepare_session_for_resume",
     "ship_session_to_zerg",
+    "ShipSessionResult",
     "SessionLockManager",
     "SessionLock",
     "WorkspaceResolver",

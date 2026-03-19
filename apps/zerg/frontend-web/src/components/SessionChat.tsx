@@ -47,11 +47,13 @@ interface SSEError {
 interface SSEDone {
   session_id?: string;
   source_session_id?: string;
-  shipped_session_id?: string;
+  shipped_session_id?: string | null;
   created_continuation?: boolean;
   branched_from_event_id?: number | null;
   exit_code: number;
   total_text_length: number;
+  persisted_events?: number;
+  persistence_error?: string | null;
   timestamp: string;
 }
 
@@ -322,8 +324,13 @@ export function SessionChat({
         }
         case "done": {
           const done = data as SSEDone;
-          const nextSessionId = done.shipped_session_id || done.session_id;
-          if (nextSessionId) {
+          if (done.persistence_error) {
+            setError(done.persistence_error);
+          }
+
+          const nextSessionId = done.shipped_session_id;
+          const persistedEvents = done.persisted_events ?? 0;
+          if (nextSessionId && persistedEvents > 0 && !done.persistence_error) {
             onSessionChanged?.(nextSessionId, Boolean(done.created_continuation));
           }
           break;
