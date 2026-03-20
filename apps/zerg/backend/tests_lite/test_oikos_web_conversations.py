@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from zerg.crud import create_thread_message
+from zerg.models.agents import AgentsBase
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -24,6 +25,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_oikos_web_conversations.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
+    AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 
