@@ -15,7 +15,7 @@
   }
 
   .workspace-shell {
-    --workspace-sidebar-width: 248px;
+    --workspace-sidebar-width: 288px;
     --workspace-inspector-width: 336px;
     flex: 1;
     min-height: 0;
@@ -183,6 +183,7 @@
   }
 
   .session-context-pane {
+    container-type: inline-size;
     padding: var(--space-4);
     gap: var(--space-4);
     overflow-y: auto;
@@ -432,6 +433,18 @@
     font-size: var(--font-size-xs);
     line-height: 1.5;
     color: var(--color-text-muted);
+  }
+
+  @container (max-width: 250px) {
+    .session-loop-mode {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @container (max-width: 190px) {
+    .session-loop-mode {
+      grid-template-columns: 1fr;
+    }
   }
 
   .session-loop-mode__advisory {
