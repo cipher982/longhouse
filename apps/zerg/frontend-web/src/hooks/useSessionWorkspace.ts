@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAgentSession, useAgentSessionEventsInfinite, useAgentSessionThread } from "./useAgentSessions";
+import { useAgentSession, useAgentSessionProjectionInfinite, useAgentSessionThread } from "./useAgentSessions";
 import {
   buildTimelineModel,
-  getSessionOriginLabel,
   getPreferredSelectionKey,
   timelineItemContainsSelection,
-  type ContinuationBoundary,
   type EventFilter,
 } from "../lib/sessionWorkspace";
 
@@ -28,13 +26,13 @@ export function useSessionWorkspace(
 
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
   const {
-    data: eventsPagesData,
-    isLoading: eventsLoading,
-    error: eventsError,
+    data: projectionPagesData,
+    isLoading: projectionLoading,
+    error: projectionError,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useAgentSessionEventsInfinite(sessionId, {
+  } = useAgentSessionProjectionInfinite(sessionId, {
     limit: EVENTS_PAGE_SIZE,
     branch_mode: showAbandonedBranches ? "all" : "head",
   });
@@ -66,22 +64,23 @@ export function useSessionWorkspace(
     autoScrolledSelectionRef.current = false;
   }, [sessionId]);
 
-  const events = useMemo(
-    () => eventsPagesData?.pages.flatMap((page) => page.events) || [],
-    [eventsPagesData],
+  const projectionItems = useMemo(
+    () => projectionPagesData?.pages.flatMap((page) => page.items) || [],
+    [projectionPagesData],
   );
 
-  const totalEvents = useMemo(
-    () => eventsPagesData?.pages[0]?.total ?? events.length,
-    [eventsPagesData, events.length],
+  const totalEntries = useMemo(
+    () => projectionPagesData?.pages[0]?.total ?? projectionItems.length,
+    [projectionItems.length, projectionPagesData],
   );
 
   const abandonedEvents = useMemo(
-    () => eventsPagesData?.pages[0]?.abandoned_events ?? 0,
-    [eventsPagesData],
+    () => projectionPagesData?.pages[0]?.abandoned_events ?? 0,
+    [projectionPagesData],
   );
 
-  const model = useMemo(() => buildTimelineModel(events), [events]);
+  const model = useMemo(() => buildTimelineModel(projectionItems), [projectionItems]);
+  const events = model.events;
 
   const threadSessions = useMemo(
     () => threadData?.sessions || (session ? [session] : []),
@@ -105,30 +104,6 @@ export function useSessionWorkspace(
     !!headThreadSession &&
     currentThreadSession.id === headThreadSession.id;
 
-  const continuationBoundary = useMemo<ContinuationBoundary | null>(() => {
-    if (!currentThreadSession?.continued_from_session_id) return null;
-    if (currentThreadSession.continuation_kind !== "cloud") return null;
-
-    const parentSession =
-      threadSessions.find((item) => item.id === currentThreadSession.continued_from_session_id) || null;
-    const parentOriginLabel = parentSession ? getSessionOriginLabel(parentSession) : "earlier sync";
-    const parentIsCloud = parentSession?.continuation_kind === "cloud";
-
-    if (parentIsCloud) {
-      return {
-        label: "Cloud branch begins",
-        description: "Everything below continues on this cloud branch from the saved split point.",
-        timestamp: currentThreadSession.started_at,
-      };
-    }
-
-    return {
-      label: "Cloud continuation begins",
-      description: `Synced ${parentOriginLabel} history above. Cloud-native messages below.`,
-      timestamp: currentThreadSession.started_at,
-    };
-  }, [currentThreadSession, threadSessions]);
-
   const filteredItems = useMemo(() => {
     let result = model.items;
 
@@ -142,6 +117,13 @@ export function useSessionWorkspace(
 
     const query = debouncedSearch.toLowerCase();
     return result.filter((item) => {
+      if (item.kind === "seam") {
+        return (
+          item.seam.label.toLowerCase().includes(query) ||
+          item.seam.description.toLowerCase().includes(query)
+        );
+      }
+
       if (item.kind === "message") {
         return item.event.content_text?.toLowerCase().includes(query);
       }
@@ -241,15 +223,14 @@ export function useSessionWorkspace(
 
   useEffect(() => {
     if (highlightEventId != null) return;
-    if (eventsLoading) return;
+    if (projectionLoading) return;
     if (autoScrolledSelectionRef.current) return;
     if (filteredItems.length === 0) return;
-    const targetKey =
-      selectedKey || (filteredItems.length > 0 ? getPreferredSelectionKey(filteredItems[filteredItems.length - 1]) : null);
-    if (!targetKey) return;
+    const fallbackItem = [...filteredItems].reverse().find((item) => getPreferredSelectionKey(item)) ?? null;
+    const targetKey = selectedKey || (fallbackItem ? getPreferredSelectionKey(fallbackItem) : null);
+    const selection = targetKey ? model.selectionMap.get(targetKey) ?? null : null;
 
-    const selection = model.selectionMap.get(targetKey);
-    if (!selection) return;
+    if (selectedKey && !selection) return;
 
     let frameId: number | null = null;
     let attempts = 0;
@@ -275,6 +256,7 @@ export function useSessionWorkspace(
           }
         }
       } else {
+        if (!selection) return;
         const target = document.getElementById(selection.rowId);
         if (target) {
           target.scrollIntoView({ behavior: "auto", block: "center" });
@@ -297,7 +279,7 @@ export function useSessionWorkspace(
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [highlightEventId, eventsLoading, selectedKey, filteredItems, model.selectionMap, timelineListElement]);
+  }, [highlightEventId, projectionLoading, selectedKey, filteredItems, model.selectionMap, timelineListElement]);
 
   const selectedSelection = useMemo(
     () => (selectedKey ? model.selectionMap.get(selectedKey) ?? null : null),
@@ -317,14 +299,14 @@ export function useSessionWorkspace(
     currentThreadSession,
     headThreadSession,
     isViewingHead,
-    continuationBoundary,
     showAbandonedBranches,
     setShowAbandonedBranches,
     events,
-    totalEvents,
+    totalEntries,
+    loadedEntryCount: projectionItems.length,
     abandonedEvents,
-    eventsLoading,
-    eventsError,
+    eventsLoading: projectionLoading,
+    eventsError: projectionError,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,

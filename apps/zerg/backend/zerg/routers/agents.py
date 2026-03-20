@@ -330,6 +330,7 @@ class SessionProjectionItemResponse(UTCBaseModel):
     continuation_kind: Optional[str] = Field(None, description="Continuation kind for seam items")
     origin_label: Optional[str] = Field(None, description="Origin label for seam items")
     parent_origin_label: Optional[str] = Field(None, description="Origin label for the parent segment")
+    parent_continuation_kind: Optional[str] = Field(None, description="Continuation kind for the parent segment")
     branched_from_event_id: Optional[int] = Field(None, description="Event id where the child continuation branched")
 
 
@@ -2632,6 +2633,7 @@ async def get_session_projection(
                 continuation_kind=item.session.continuation_kind,
                 origin_label=item.session.origin_label,
                 parent_origin_label=(item.parent_session.origin_label if item.parent_session else None),
+                parent_continuation_kind=(item.parent_session.continuation_kind if item.parent_session else None),
                 branched_from_event_id=item.session.branched_from_event_id,
             )
         )

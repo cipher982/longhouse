@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Button, EmptyState, Spinner } from "../ui";
 import type {
-  ContinuationBoundary,
+  TimelineSeam,
   TimelineItem,
   ToolBatch,
   ToolInteraction,
@@ -10,7 +10,6 @@ import type {
 import {
   formatContinuationStamp,
   formatTime,
-  getPreferredSelectionKey,
   getTimelineMessagePreview,
   getToolDisplayInfo,
   getToolDuration,
@@ -21,11 +20,10 @@ import {
 } from "../../lib/sessionWorkspace";
 
 interface TimelinePaneProps {
-  continuationBoundary?: ContinuationBoundary | null;
   items: TimelineItem[];
   filteredItems: TimelineItem[];
-  totalEvents: number;
-  loadedEvents: number;
+  totalEntries: number;
+  loadedEntries: number;
   eventFilter: EventFilter;
   onEventFilterChange: (filter: EventFilter) => void;
   searchQuery: string;
@@ -48,15 +46,15 @@ interface TimelinePaneProps {
   listRef?: (node: HTMLDivElement | null) => void;
 }
 
-function ContinuationBoundaryRow({ boundary }: { boundary: ContinuationBoundary }) {
+function SeamRow({ seam }: { seam: TimelineSeam }) {
   return (
-    <div className="timeline-boundary" data-testid="session-continuation-boundary">
+    <div className="timeline-boundary" data-testid="session-timeline-seam">
       <div className="timeline-boundary__rule" />
       <div className="timeline-boundary__body">
-        <span className="timeline-boundary__label">{boundary.label}</span>
-        <span className="timeline-boundary__description">{boundary.description}</span>
+        <span className="timeline-boundary__label">{seam.label}</span>
+        <span className="timeline-boundary__description">{seam.description}</span>
       </div>
-      <div className="timeline-boundary__stamp">{formatContinuationStamp(boundary.timestamp)}</div>
+      <div className="timeline-boundary__stamp">{formatContinuationStamp(seam.timestamp)}</div>
     </div>
   );
 }
@@ -203,11 +201,10 @@ function ToolBatchRow({
 }
 
 export function TimelinePane({
-  continuationBoundary = null,
   items,
   filteredItems,
-  totalEvents,
-  loadedEvents,
+  totalEntries,
+  loadedEntries,
   eventFilter,
   onEventFilterChange,
   searchQuery,
@@ -243,9 +240,9 @@ export function TimelinePane({
           <div className="timeline-pane__title-group">
             <div className="timeline-pane__title">Event Timeline</div>
             <div className="timeline-pane__summary">
-              {loadedEvents >= totalEvents
-                ? `${totalEvents} events`
-                : `${loadedEvents}/${totalEvents} events loaded`}
+              {loadedEntries >= totalEntries
+                ? `${totalEntries} entries`
+                : `${loadedEntries}/${totalEntries} entries loaded`}
             </div>
           </div>
           <div className="timeline-pane__filters">
@@ -314,12 +311,11 @@ export function TimelinePane({
         className="timeline-pane__list timeline-events"
         data-testid="session-timeline-list"
       >
-        {continuationBoundary ? <ContinuationBoundaryRow boundary={continuationBoundary} /> : null}
         {showScopedLoading ? (
           <EmptyState
             icon={<Spinner size="lg" />}
             title="Loading timeline..."
-            description="Fetching events for this session."
+            description="Fetching the stitched thread timeline."
           />
         ) : showScopedError ? (
           <EmptyState
@@ -328,7 +324,7 @@ export function TimelinePane({
             description={
               error instanceof Error
                 ? error.message
-                : "Events failed to load for this session."
+                : "The stitched timeline failed to load for this session."
             }
           />
         ) : filteredItems.length === 0 ? (
@@ -338,19 +334,23 @@ export function TimelinePane({
               debouncedSearch.trim()
                 ? `No events match "${debouncedSearch}".`
                 : eventFilter !== "all"
-                  ? "No events match the selected filter."
-                  : "This session has no recorded events."
+                  ? "No timeline entries match the selected filter."
+                  : "This session has no recorded timeline entries."
             }
           />
         ) : (
           filteredItems.map((item) => {
+            if (item.kind === "seam") {
+              return <SeamRow key={item.seam.key} seam={item.seam} />;
+            }
+
             if (item.kind === "message") {
               return (
                 <MessageRow
                   key={item.event.id}
                   item={item}
                   isSelected={timelineItemContainsSelection(item, selectedKey)}
-                  onSelect={() => onSelectKey(getPreferredSelectionKey(item))}
+                  onSelect={() => onSelectKey(`message:${item.event.id}`)}
                 />
               );
             }

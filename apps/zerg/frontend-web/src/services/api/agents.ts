@@ -59,6 +59,30 @@ export interface AgentSessionThreadResponse {
   sessions: AgentSession[];
 }
 
+export interface AgentSessionProjectionItem {
+  kind: "event" | "seam";
+  session_id: string;
+  timestamp: string;
+  event?: AgentEvent | null;
+  continued_from_session_id?: string | null;
+  continuation_kind?: string | null;
+  origin_label?: string | null;
+  parent_origin_label?: string | null;
+  parent_continuation_kind?: string | null;
+  branched_from_event_id?: number | null;
+}
+
+export interface AgentSessionProjectionResponse {
+  root_session_id: string;
+  focus_session_id: string;
+  head_session_id: string;
+  path_session_ids: string[];
+  items: AgentSessionProjectionItem[];
+  total: number;
+  branch_mode?: "head" | "all";
+  abandoned_events?: number;
+}
+
 export interface AgentSessionSummary {
   id: string;
   project: string | null;
@@ -297,6 +321,26 @@ export async function fetchAgentSessionThread(
     `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/thread`,
     { method: "GET" },
   );
+}
+
+export async function fetchAgentSessionProjection(
+  sessionId: string,
+  options: {
+    limit?: number;
+    offset?: number;
+    branch_mode?: "head" | "all";
+  } = {},
+): Promise<AgentSessionProjectionResponse> {
+  const params = new URLSearchParams();
+
+  if (options.limit) params.set("limit", String(options.limit));
+  if (options.offset) params.set("offset", String(options.offset));
+  if (options.branch_mode) params.set("branch_mode", options.branch_mode);
+
+  const queryString = params.toString();
+  const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/projection${queryString ? `?${queryString}` : ""}`;
+
+  return request<AgentSessionProjectionResponse>(path, { method: "GET" });
 }
 
 /**

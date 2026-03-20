@@ -9,6 +9,7 @@ import {
   fetchAgentSessions,
   fetchAgentSession,
   fetchAgentSessionThread,
+  fetchAgentSessionProjection,
   fetchAgentSessionEvents,
   fetchAgentSessionSummaries,
   fetchAgentSessionPreview,
@@ -20,6 +21,7 @@ import {
   type AgentSessionsListResponse,
   type AgentSession,
   type AgentSessionThreadResponse,
+  type AgentSessionProjectionResponse,
   type AgentEventsListResponse,
   type AgentSessionSummaryFilters,
   type AgentSessionSummaryListResponse,
@@ -66,6 +68,31 @@ export function useAgentSessionThread(sessionId: string | null) {
     queryFn: () => fetchAgentSessionThread(sessionId!),
     enabled: !!sessionId,
     staleTime: 30_000,
+    gcTime: 5 * 60_000,
+  });
+}
+
+export function useAgentSessionProjectionInfinite(
+  sessionId: string | null,
+  options: { limit?: number; enabled?: boolean; branch_mode?: "head" | "all" } = {}
+) {
+  const { limit = 1000, enabled = true, branch_mode = "head" } = options;
+
+  return useInfiniteQuery<AgentSessionProjectionResponse>({
+    queryKey: ["agent-session-projection-infinite", sessionId, { limit, branch_mode }],
+    queryFn: ({ pageParam = 0 }) =>
+      fetchAgentSessionProjection(sessionId!, {
+        limit,
+        offset: Number(pageParam),
+        branch_mode,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, pages) => {
+      const loaded = pages.reduce((sum, page) => sum + page.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    enabled: !!sessionId && enabled,
+    staleTime: 10_000,
     gcTime: 5 * 60_000,
   });
 }
