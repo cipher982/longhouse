@@ -1144,15 +1144,32 @@ def finalize_turn_reviews_for_run(
 
 
 def classify_turn_review_outcome_for_run(db: Session, *, run_id: int) -> int:
+    rows = (
+        db.query(SessionTurnReview)
+        .filter(
+            SessionTurnReview.run_id == run_id,
+            SessionTurnReview.status == "enqueued",
+        )
+        .all()
+    )
+    if not rows:
+        return 0
+
     jobs = db.query(CommisJob).filter(CommisJob.oikos_run_id == run_id).all()
     if not jobs:
-        return finalize_turn_reviews_for_run(
-            db,
-            run_id=run_id,
-            status="ignored",
-            reason="no_action",
-            actual_outcome=_EXPECTED_IGNORE_OUTCOME,
-        )
+        for row in rows:
+            expected_outcome = _expected_outcome(row)
+            if expected_outcome == _EXPECTED_NOTIFY_OUTCOME:
+                row.status = "enqueued"
+                row.reason = "notify_user"
+                row.actual_outcome = _EXPECTED_NOTIFY_OUTCOME
+                row.shadow_alignment = _classify_alignment(expected_outcome, _EXPECTED_NOTIFY_OUTCOME)
+                continue
+            row.status = "ignored"
+            row.reason = "no_action"
+            row.actual_outcome = _EXPECTED_IGNORE_OUTCOME
+            row.shadow_alignment = _classify_alignment(expected_outcome, _EXPECTED_IGNORE_OUTCOME)
+        return len(rows)
 
     resumed_session_ids: list[str] = []
     for job in jobs:

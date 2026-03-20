@@ -24,6 +24,7 @@ from zerg.models.enums import UserRole
 from zerg.models.user import User
 from zerg.models.work import OikosWakeup
 from zerg.services.session_loop_controller import LoopControllerDecision
+from zerg.services.session_turn_reviews import classify_turn_review_outcome_for_run
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
 
@@ -230,6 +231,52 @@ async def test_turn_review_assist_enqueues_operator_wakeup(monkeypatch, tmp_path
         calls[0]["surface_payload"]["turn_review"]["decision"]["follow_up_prompt"]
         == "Run the pending targeted tests."
     )
+
+
+def test_classify_turn_review_outcome_keeps_notify_reviews_actionable_without_jobs(tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_notify_without_jobs.db")
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="what should we do next?",
+            assistant_text="I answered the question and now need your direction on the next hiring step.",
+        )
+        review = SessionTurnReview(
+            session_id=session_id,
+            owner_id=1,
+            assistant_event_id=2,
+            turn_index=1,
+            trigger_type="turn.completed",
+            loop_mode="assist",
+            decision="wait",
+            summary="Awaiting your direction on the next hiring step.",
+            rationale="The finished turn does not have one obvious bounded follow-up.",
+            turn_excerpt="I answered the question and now need your direction on the next hiring step.",
+            mode_capability="notify_only",
+            mode_summary="Suggest or escalate from completed turns, but wait for user approval before continuing.",
+            execution_state="needs_human",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=[],
+            status="enqueued",
+            reason="notify_user",
+            run_id=999,
+        )
+        db.add(review)
+        db.commit()
+
+        changed = classify_turn_review_outcome_for_run(db, run_id=999)
+        assert changed == 1
+
+        db.flush()
+        db.refresh(review)
+        assert review.status == "enqueued"
+        assert review.reason == "notify_user"
+        assert review.actual_outcome == "notify_user"
+        assert review.shadow_alignment == "matched"
 
 
 @pytest.mark.asyncio
