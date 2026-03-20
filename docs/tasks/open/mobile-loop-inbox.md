@@ -25,6 +25,7 @@ The canonical approval surface is `/loop`. Telegram is notification/fallback onl
 - [x] Switch Telegram deep links from `session_id` to `card_id`
 - [x] Disable Telegram page previews for loop nudges
 - [x] Keep `/loop` card-centric and lightweight on phone
+- [x] Make `/loop` installable as a thin standalone PWA surface
 - [ ] Dogfood the traveling / away-from-keyboard flow end to end
 
 ## Notes

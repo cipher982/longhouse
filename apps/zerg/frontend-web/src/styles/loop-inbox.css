@@ -22,6 +22,42 @@
   max-width: 40rem;
 }
 
+.loop-install-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  background:
+    linear-gradient(135deg, rgba(93, 155, 74, 0.12), rgba(18, 11, 9, 0.02)),
+    var(--surface-1, rgba(255, 255, 255, 0.72));
+  border: 1px solid rgba(93, 155, 74, 0.22);
+  border-radius: 18px;
+  padding: 0.9rem 1rem;
+}
+
+.loop-install-banner strong {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.loop-install-banner p {
+  margin: 0;
+  color: var(--color-text-secondary, #8b7f72);
+  line-height: 1.45;
+}
+
+.loop-install-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.loop-install-hint {
+  max-width: 18rem;
+  font-size: 0.95rem;
+}
+
 .loop-inbox-loading,
 .loop-inbox-card-loading {
   display: flex;
@@ -97,6 +133,13 @@
   gap: 1rem;
 }
 
+.loop-inbox-card-top-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
 .loop-inbox-card h2,
 .loop-inbox-card h3 {
   margin: 0 0 0.35rem;
@@ -128,6 +171,17 @@
 @media (max-width: 960px) {
   .loop-inbox-header {
     flex-direction: column;
+  }
+
+  .loop-install-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .loop-install-banner-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .loop-inbox-layout {
