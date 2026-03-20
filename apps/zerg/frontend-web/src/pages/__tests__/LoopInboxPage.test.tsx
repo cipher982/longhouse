@@ -12,6 +12,7 @@ import {
   type LoopInboxItem,
 } from "../../services/api/oikos";
 import { useLoopInstallPrompt } from "../../hooks/useLoopInstallPrompt";
+import { useLoopPushNotifications } from "../../hooks/useLoopPushNotifications";
 import { TestRouter } from "../../test/test-utils";
 
 const mockNavigate = vi.fn();
@@ -42,11 +43,16 @@ vi.mock("../../hooks/useLoopInstallPrompt", () => ({
   useLoopInstallPrompt: vi.fn(),
 }));
 
+vi.mock("../../hooks/useLoopPushNotifications", () => ({
+  useLoopPushNotifications: vi.fn(),
+}));
+
 const fetchLoopInboxMock = vi.mocked(fetchLoopInbox);
 const fetchLoopActionCardMock = vi.mocked(fetchLoopActionCard);
 const fetchLoopActionCardForSessionMock = vi.mocked(fetchLoopActionCardForSession);
 const applyLoopInboxActionMock = vi.mocked(applyLoopInboxAction);
 const useLoopInstallPromptMock = vi.mocked(useLoopInstallPrompt);
+const useLoopPushNotificationsMock = vi.mocked(useLoopPushNotifications);
 
 function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
   return {
@@ -124,6 +130,18 @@ describe("LoopInboxPage", () => {
       isInstalled: false,
       install: vi.fn(),
     });
+    useLoopPushNotificationsMock.mockReturnValue({
+      supported: false,
+      enabledInBackend: false,
+      permission: "default",
+      isEnabled: false,
+      isBusy: false,
+      error: null,
+      canEnable: false,
+      canDisable: false,
+      enable: vi.fn(),
+      disable: vi.fn(),
+    });
   });
 
   it("renders the inbox row and action card", async () => {
@@ -195,5 +213,32 @@ describe("LoopInboxPage", () => {
     await user.click(screen.getByTestId("loop-install-action"));
 
     expect(installMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the push notification CTA when loop push is available", async () => {
+    const user = userEvent.setup();
+    const enableMock = vi.fn().mockResolvedValue(true);
+    useLoopPushNotificationsMock.mockReturnValue({
+      supported: true,
+      enabledInBackend: true,
+      permission: "default",
+      isEnabled: false,
+      isBusy: false,
+      error: null,
+      canEnable: true,
+      canDisable: false,
+      enable: enableMock,
+      disable: vi.fn(),
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-push-banner")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("loop-push-enable-action"));
+
+    expect(enableMock).toHaveBeenCalledTimes(1);
   });
 });

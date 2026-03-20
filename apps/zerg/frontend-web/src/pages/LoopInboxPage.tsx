@@ -12,6 +12,7 @@ import {
   type LoopInboxItem,
 } from "../services/api/oikos";
 import { useLoopInstallPrompt } from "../hooks/useLoopInstallPrompt";
+import { useLoopPushNotifications } from "../hooks/useLoopPushNotifications";
 import "../styles/loop-inbox.css";
 
 type DecisionBadgeVariant = "neutral" | "success" | "warning" | "error";
@@ -162,6 +163,7 @@ export default function LoopInboxPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { canInstall, showIosHint, isInstalled, install } = useLoopInstallPrompt();
+  const loopPush = useLoopPushNotifications({ isInstalled });
 
   const selectedCardId = cardId ? Number(cardId) : null;
   const selectedSessionId = !selectedCardId && sessionId ? sessionId : null;
@@ -242,6 +244,49 @@ export default function LoopInboxPage() {
                 <p className="loop-install-hint">
                   On iPhone: tap Share, then <strong>Add to Home Screen</strong>.
                 </p>
+              )}
+            </div>
+          </section>
+        )}
+
+        {(loopPush.error || (loopPush.enabledInBackend && loopPush.supported) || loopPush.isEnabled) && (
+          <section className="loop-push-banner" data-testid="loop-push-banner">
+            <div>
+              <strong>Loop notifications</strong>
+              <p>
+                Get a direct nudge to the exact action card when a coding turn needs approval, instead of checking the
+                desktop app.
+              </p>
+              {loopPush.isEnabled && (
+                <p className="loop-push-status" data-testid="loop-push-enabled-copy">
+                  Notifications are on for this install.
+                </p>
+              )}
+              {loopPush.error && (
+                <p className="loop-push-error" data-testid="loop-push-error">
+                  {loopPush.error}
+                </p>
+              )}
+            </div>
+            <div className="loop-push-banner-actions">
+              {loopPush.canEnable && (
+                <Button
+                  onClick={() => void loopPush.enable()}
+                  disabled={loopPush.isBusy}
+                  data-testid="loop-push-enable-action"
+                >
+                  {loopPush.isBusy ? "Enabling…" : "Enable notifications"}
+                </Button>
+              )}
+              {loopPush.canDisable && (
+                <Button
+                  variant="ghost"
+                  onClick={() => void loopPush.disable()}
+                  disabled={loopPush.isBusy}
+                  data-testid="loop-push-disable-action"
+                >
+                  {loopPush.isBusy ? "Updating…" : "Disable notifications"}
+                </Button>
               )}
             </div>
           </section>
