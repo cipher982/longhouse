@@ -20,11 +20,18 @@ WAKEUP_STATUS_FAILED = "failed"
 def _derive_shadow_expected_outcome(payload: dict[str, Any] | None) -> str | None:
     if not isinstance(payload, dict):
         return None
+    loop_review = None
     shadow_review = payload.get("shadow_review")
-    if not isinstance(shadow_review, dict):
-        return None
-
-    loop_review = shadow_review.get("loop_review")
+    if isinstance(shadow_review, dict):
+        candidate = shadow_review.get("loop_review")
+        if isinstance(candidate, dict):
+            loop_review = candidate
+    if loop_review is None:
+        turn_review = payload.get("turn_review")
+        if isinstance(turn_review, dict):
+            candidate = turn_review.get("loop_review")
+            if isinstance(candidate, dict):
+                loop_review = candidate
     if not isinstance(loop_review, dict):
         return None
 
@@ -139,15 +146,37 @@ def classify_wakeup_outcome_for_run(db: Session, *, run_id: int) -> int:
     """Mark an enqueued wakeup as acted or ignored based on launched follow-up work."""
     from zerg.models.models import CommisJob
 
+    rows = (
+        db.query(OikosWakeup)
+        .filter(
+            OikosWakeup.run_id == run_id,
+            OikosWakeup.status == WAKEUP_STATUS_ENQUEUED,
+        )
+        .all()
+    )
+    if not rows:
+        return 0
+
     jobs = db.query(CommisJob).filter(CommisJob.oikos_run_id == run_id).all()
     if not jobs:
-        return finalize_wakeups_for_run(
-            db,
-            run_id=run_id,
-            status=WAKEUP_STATUS_IGNORED,
-            reason="no_action",
-            payload_updates={"outcome": "ignore"},
-        )
+        for row in rows:
+            payload = dict(row.payload or {})
+            expected_outcome = _derive_shadow_expected_outcome(payload)
+            if expected_outcome == "notify_user":
+                row.status = WAKEUP_STATUS_ACTED
+                row.reason = "notify_user"
+                payload["outcome"] = "notify_user"
+            else:
+                row.status = WAKEUP_STATUS_IGNORED
+                row.reason = "no_action"
+                payload["outcome"] = "ignore"
+            if expected_outcome and "shadow_expected_outcome" not in payload:
+                payload["shadow_expected_outcome"] = expected_outcome
+            alignment = _classify_shadow_alignment(expected_outcome, str(payload.get("outcome")))
+            if alignment:
+                payload["shadow_alignment"] = alignment
+            row.payload = payload
+        return len(rows)
 
     job_ids: list[int] = []
     resumed_session_ids: list[str] = []

@@ -252,11 +252,77 @@ async def test_run_oikos_marks_shadow_alignment_more_conservative_when_notify_on
 
         assert result.status == "success"
         wakeup = db.query(OikosWakeup).one()
-        assert wakeup.status == "ignored"
-        assert wakeup.reason == "no_action"
-        assert wakeup.payload["outcome"] == "ignore"
+        assert wakeup.status == "acted"
+        assert wakeup.reason == "notify_user"
+        assert wakeup.payload["outcome"] == "notify_user"
         assert wakeup.payload["shadow_expected_outcome"] == "notify_user"
-        assert wakeup.payload["shadow_alignment"] == "more_conservative"
+        assert wakeup.payload["shadow_alignment"] == "matched"
+
+
+@pytest.mark.asyncio
+async def test_run_oikos_marks_turn_review_notify_wakeup_as_notified(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "wakeup_turn_review_notify.db")
+
+    with SessionLocal() as db:
+        user = _create_user(db, "wakeup-turn-review@example.com")
+        _patch_oikos_side_effects(monkeypatch)
+
+        class FakeRunner:
+            def __init__(self, *_args, **_kwargs):
+                self.usage_prompt_tokens = None
+                self.usage_completion_tokens = None
+                self.usage_total_tokens = None
+                self.usage_reasoning_tokens = None
+
+            async def run_thread(self, inner_db, thread):
+                from zerg.services.oikos_context import get_oikos_context
+
+                ctx = get_oikos_context()
+                assert ctx is not None
+                _append_enqueued_wakeup(
+                    inner_db,
+                    owner_id=user.id,
+                    run_id=ctx.run_id,
+                    payload={
+                        "trigger_type": "turn.completed",
+                        "session_id": "session-123",
+                        "turn_review": {
+                            "loop_review": {
+                                "would_continue_session": False,
+                                "would_notify_user": True,
+                                "execution_state": "needs_human",
+                                "recommended_action": "wait",
+                            }
+                        },
+                    },
+                )
+                assistant = create_thread_message(
+                    db=inner_db,
+                    thread_id=thread.id,
+                    role="assistant",
+                    content="The turn needs your decision, but I did not launch any follow-up work.",
+                    processed=True,
+                )
+                return [assistant]
+
+        monkeypatch.setattr("zerg.services.oikos_service.RuntimeRunner", FakeRunner)
+
+        service = OikosService(db)
+        result = await service.run_oikos(
+            owner_id=user.id,
+            task="Operator wakeup",
+            timeout=10,
+            source_surface_id="operator",
+            source_conversation_id="operator:main",
+        )
+
+        assert result.status == "success"
+        wakeup = db.query(OikosWakeup).one()
+        assert wakeup.status == "acted"
+        assert wakeup.reason == "notify_user"
+        assert wakeup.payload["outcome"] == "notify_user"
+        assert wakeup.payload["shadow_expected_outcome"] == "notify_user"
+        assert wakeup.payload["shadow_alignment"] == "matched"
 
 
 @pytest.mark.asyncio

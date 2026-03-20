@@ -266,11 +266,11 @@ async def test_operator_loop_canary_blocks_notify_only_resume_attempt(monkeypatc
         assert db.query(CommisJob).filter(CommisJob.oikos_run_id == run_id).count() == 0
 
         wakeup = db.query(OikosWakeup).filter(OikosWakeup.run_id == run_id).one()
-        assert wakeup.status == "ignored"
-        assert wakeup.reason == "no_action"
-        assert wakeup.payload["outcome"] == "ignore"
+        assert wakeup.status == "acted"
+        assert wakeup.reason == "notify_user"
+        assert wakeup.payload["outcome"] == "notify_user"
         assert wakeup.payload["shadow_expected_outcome"] == "notify_user"
-        assert wakeup.payload["shadow_alignment"] == "more_conservative"
+        assert wakeup.payload["shadow_alignment"] == "matched"
 
 
 @pytest.mark.asyncio
