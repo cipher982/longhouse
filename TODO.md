@@ -13,6 +13,7 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 
 - [Mobile Loop Inbox](docs/tasks/open/mobile-loop-inbox.md) — ship the tiny phone-first approve/continue surface instead of forcing the desktop session UI onto mobile.
 - [Memory system consolidation](docs/tasks/open/memory-system-consolidation.md) — ship the Memory Files cleanup, reprovision, and verify hosted behavior.
+- [Thread projection](docs/tasks/open/thread-projection.md) — make session detail read as one continued thread with inline seam markers and one composer.
 - [Runtime story simplification](docs/tasks/open/launch-runtime-simplification.md) — finish the deletion path for the current Oikos harness so the product story matches the code.
 - [Oikos conversations + Gmail launch](docs/tasks/open/oikos-conversations-email.md) — finish the remaining Gmail canaries and retire the last compatibility-only conversation/history path.
 - [Proactive Oikos operator mode](docs/tasks/open/oikos-proactive-operator.md) — ship one bounded autonomy slice without building a giant automation engine.
