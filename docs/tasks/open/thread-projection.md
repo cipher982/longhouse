@@ -21,7 +21,7 @@ Make `/timeline/:sessionId` behave like one continued conversation instead of a 
 - [x] Commit the phase-0 spec/task slice
 - [x] Implement backend projection API and tests
 - [x] Implement frontend projection consumer and tests
-- [ ] Add or update robust E2E coverage
+- [x] Add or update robust E2E coverage
 - [ ] Merge to `main`
 - [ ] Deploy and reprovision hosted runtime
 - [ ] Re-run hosted QA and continuation smoke
@@ -35,3 +35,5 @@ Make `/timeline/:sessionId` behave like one continued conversation instead of a 
   - Focused verification passed with `./run_backend_tests_lite.sh tests_lite/test_session_projection_api.py tests_lite/test_browser_machine_auth_boundary.py tests_lite/test_timeline_api_auth_boundary.py`.
 - Frontend phase verification:
   - `make test-frontend-unit MINIMAL=1` passed after installing worktree JS deps with `make ensure-js-deps`.
+- E2E phase verification:
+  - Local continuation smoke now uses the fake session-chat backend with real DB persistence, so redirect/projection assertions match the production save path instead of a placeholder SSE-only stub.

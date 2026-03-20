@@ -18,6 +18,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import AsyncIterator
@@ -35,6 +36,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_continuity import ship_session_to_zerg
@@ -235,6 +237,7 @@ async def _stream_fake_claude_output(
     provider_session_id: str,
     workspace_path: Path,
     message: str,
+    db: Session | None = None,
 ) -> AsyncIterator[str]:
     timestamp = datetime.now(timezone.utc).isoformat()
     assistant_text = f"Test continuation reply to: {message}"
@@ -259,21 +262,173 @@ async def _stream_fake_claude_output(
         event="assistant_delta",
         data=json.dumps({"text": assistant_text, "accumulated": assistant_text}),
     ).encode()
+
+    ship_result: ShipSessionResult | None
+    persistence_error: str | None = None
+    try:
+        ship_result = _persist_fake_continuation_turn(
+            db=db,
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            thread_root_session_id=thread_root_session_id,
+            continued_from_session_id=continued_from_session_id,
+            branched_from_event_id=branched_from_event_id,
+            provider_session_id=provider_session_id,
+            workspace_path=workspace_path,
+            message=message,
+            assistant_text=assistant_text,
+        )
+    except Exception as exc:
+        logger.warning("Failed to persist fake continuation turn for %s: %s", target_session_id, exc)
+        ship_result = None
+        persistence_error = "Response completed, but Longhouse could not save the continuation transcript to the timeline."
+
+    if ship_result is not None and ship_result.events_inserted <= 0 and persistence_error is None:
+        persistence_error = (
+            "Response completed, but Longhouse could not extract any new timeline events " "from the continuation transcript."
+        )
+
     yield SSEEvent(
         event="done",
         data=json.dumps(
             {
                 "session_id": target_session_id,
                 "source_session_id": source_session_id,
-                "shipped_session_id": target_session_id,
+                "shipped_session_id": ship_result.session_id if ship_result else None,
                 "created_continuation": created_continuation,
                 "branched_from_event_id": branched_from_event_id,
                 "exit_code": 0,
                 "total_text_length": len(assistant_text),
+                "persisted_events": ship_result.events_inserted if ship_result else 0,
+                "persistence_error": persistence_error,
                 "timestamp": timestamp,
             }
         ),
     ).encode()
+
+
+def _persist_fake_continuation_turn(
+    *,
+    db: Session | None,
+    source_session_id: str,
+    target_session_id: str,
+    thread_root_session_id: str,
+    continued_from_session_id: str | None,
+    branched_from_event_id: int | None,
+    provider_session_id: str,
+    workspace_path: Path,
+    message: str,
+    assistant_text: str,
+) -> ShipSessionResult:
+    if db is None:
+        return ShipSessionResult(
+            session_id=target_session_id,
+            events_inserted=2,
+            events_skipped=0,
+            session_created=False,
+        )
+
+    from zerg.services.agents_store import AgentsStore
+    from zerg.services.agents_store import EventIngest
+    from zerg.services.agents_store import SessionIngest
+    from zerg.services.agents_store import SourceLineIngest
+
+    store = AgentsStore(db)
+    target_uuid = UUID(target_session_id)
+    source_uuid = UUID(source_session_id)
+    target_session = store.get_session(target_uuid)
+    source_session = store.get_session(source_uuid)
+
+    user_timestamp = datetime.now(timezone.utc)
+    assistant_timestamp = user_timestamp + timedelta(milliseconds=1)
+    source_path = f"/tmp/fake-continuation-{target_session_id}-{int(user_timestamp.timestamp() * 1000)}.jsonl"
+    user_raw = json.dumps(
+        {
+            "type": "user",
+            "message": {"content": [{"type": "text", "text": message}]},
+            "timestamp": user_timestamp.isoformat(),
+        }
+    )
+    assistant_raw = json.dumps(
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": assistant_text}]},
+            "timestamp": assistant_timestamp.isoformat(),
+        }
+    )
+
+    payload = SessionIngest(
+        id=target_uuid,
+        provider=(target_session.provider if target_session else "claude"),
+        environment=(
+            target_session.environment
+            if target_session and target_session.environment
+            else (source_session.environment if source_session and source_session.environment else "Cloud")
+        ),
+        project=target_session.project if target_session else (source_session.project if source_session else None),
+        device_id=(
+            target_session.device_id
+            if target_session and target_session.device_id
+            else (source_session.device_id if source_session else "zerg-commis-cloud")
+        ),
+        cwd=target_session.cwd if target_session else str(workspace_path.absolute()),
+        git_repo=target_session.git_repo if target_session else (source_session.git_repo if source_session else None),
+        git_branch=target_session.git_branch if target_session else (source_session.git_branch if source_session else None),
+        started_at=target_session.started_at if target_session else user_timestamp,
+        ended_at=assistant_timestamp,
+        provider_session_id=provider_session_id,
+        thread_root_session_id=(target_session.thread_root_session_id if target_session else UUID(thread_root_session_id)),
+        continued_from_session_id=(
+            target_session.continued_from_session_id
+            if target_session and target_session.continued_from_session_id
+            else (UUID(continued_from_session_id) if continued_from_session_id else None)
+        ),
+        continuation_kind="cloud",
+        origin_label="Cloud",
+        branched_from_event_id=(
+            target_session.branched_from_event_id
+            if target_session and target_session.branched_from_event_id is not None
+            else branched_from_event_id
+        ),
+        is_sidechain=bool(target_session.is_sidechain) if target_session else False,
+        events=[
+            EventIngest(
+                role="user",
+                content_text=message,
+                timestamp=user_timestamp,
+                source_path=source_path,
+                source_offset=0,
+                raw_json=user_raw,
+            ),
+            EventIngest(
+                role="assistant",
+                content_text=assistant_text,
+                timestamp=assistant_timestamp,
+                source_path=source_path,
+                source_offset=1,
+                raw_json=assistant_raw,
+            ),
+        ],
+        source_lines=[
+            SourceLineIngest(
+                source_path=source_path,
+                source_offset=0,
+                raw_json=user_raw,
+            ),
+            SourceLineIngest(
+                source_path=source_path,
+                source_offset=1,
+                raw_json=assistant_raw,
+            ),
+        ],
+    )
+    result = store.ingest_session(payload)
+    return ShipSessionResult(
+        session_id=str(result.session_id),
+        events_inserted=result.events_inserted,
+        events_skipped=result.events_skipped,
+        session_created=result.session_created,
+    )
 
 
 async def stream_claude_output(
@@ -312,6 +467,7 @@ async def stream_claude_output(
                 provider_session_id=provider_session_id,
                 workspace_path=workspace_path,
                 message=message,
+                db=db,
             ):
                 yield event
             return
