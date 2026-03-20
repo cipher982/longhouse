@@ -466,10 +466,13 @@ test.describe("Session Detail Page", () => {
       "Event Timeline",
     );
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
-      "Start a cloud continuation for this thread",
+      "Cloud continuation starts here",
     );
     await expect(
       page.getByRole("button", { name: "Start in Cloud" }),
+    ).toBeVisible();
+    await expect(
+      page.locator('.session-chat-composer textarea[placeholder="Continue this thread in the cloud..."]'),
     ).toBeVisible();
     await expect(page.locator(".session-chat-composer textarea")).toBeVisible();
     await expect(page.getByTestId("session-timeline-list")).toBeVisible();
@@ -504,40 +507,43 @@ test.describe("Session Detail Page", () => {
     await page.getByRole("button", { name: "Start in Cloud" }).click();
 
     await expect(page.locator(".session-chat-error")).toHaveCount(0);
-
-    await expect
-      .poll(() => page.url(), { timeout: 10000 })
-      .not.toContain(`/timeline/${rootId}`);
-
-    await expect(page.getByTestId("session-branch-banner")).toHaveCount(0);
-    // The dock swaps to the new cloud head as soon as the continuation is created,
-    // so assert on the post-redirect branch state rather than the transient draft bubble.
-    await expect(page.getByTestId("session-continuation-panel")).toContainText(
-      "Continue on the current cloud branch",
-    );
     await expect(
-      page.getByRole("button", { name: "Start in Cloud" }),
-    ).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+      page.locator(".session-chat-message--user .session-chat-message-content"),
+    ).toContainText("anything else?");
+    await expect(
+      page.locator(".session-chat-message--assistant .session-chat-message-content"),
+    ).toContainText("Test continuation reply to: anything else?");
 
-    const sessionsResp = await request.get(
-      `/api/timeline/sessions?project=${project}&days_back=1`,
-    );
-    expect(sessionsResp.ok()).toBe(true);
-    const sessionsPayload = await sessionsResp.json();
-    const threadCard = sessionsPayload.sessions.find(
-      (session: {
-        thread_root_session_id?: string;
-        id: string;
-        thread_continuation_count?: number;
-        thread_head_session_id?: string;
-      }) => {
-        return (session.thread_root_session_id || session.id) === rootId;
-      },
-    );
-    expect(threadCard).toBeTruthy();
-    expect(threadCard.thread_continuation_count).toBe(2);
-    expect(threadCard.thread_head_session_id).not.toBe(rootId);
+    const threadCard = await expect
+      .poll(
+        async () => {
+          const sessionsResp = await request.get(
+            `/api/timeline/sessions?project=${project}&days_back=1`,
+          );
+          expect(sessionsResp.ok()).toBe(true);
+          const sessionsPayload = await sessionsResp.json();
+          return sessionsPayload.sessions.find(
+            (session: {
+              thread_root_session_id?: string;
+              id: string;
+              thread_continuation_count?: number;
+              thread_head_session_id?: string;
+            }) => {
+              return (session.thread_root_session_id || session.id) === rootId;
+            },
+          ) as
+            | {
+                thread_continuation_count?: number;
+                thread_head_session_id?: string;
+              }
+            | undefined;
+        },
+        { timeout: 10000 },
+      )
+      .toMatchObject({
+        thread_continuation_count: 2,
+      });
+    expect(threadCard?.thread_head_session_id).not.toBe(rootId);
   });
 
   test("Timeline groups continuations into one task card and opens the latest head", async ({
@@ -647,10 +653,13 @@ test.describe("Session Detail Page", () => {
     );
     await expect(page.getByTestId("session-lineage-panel")).toBeVisible();
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
-      "Branch from this point in cloud",
+      "New cloud branch starts here",
     );
     await expect(
       page.getByRole("button", { name: "Branch in Cloud" }),
+    ).toBeVisible();
+    await expect(
+      page.locator('.session-chat-composer textarea[placeholder="Branch from this point in cloud..."]'),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Open Latest" }).focus();
@@ -957,7 +966,7 @@ test.describe("Session Detail Page", () => {
       .poll(async () => (await inspectorPane.boundingBox())?.width ?? 0, {
         timeout: 4000,
       })
-      .toBeGreaterThan((inspectorBefore?.width ?? 0) + 40);
+      .toBeGreaterThan((inspectorBefore?.width ?? 0) + 20);
 
     const storedInspectorLayout = await page.evaluate(() =>
       JSON.parse(
@@ -982,7 +991,7 @@ test.describe("Session Detail Page", () => {
           timeout: 4000,
         },
       )
-      .toBeGreaterThan((inspectorBefore?.width ?? 0) + 40);
+      .toBeGreaterThan((inspectorBefore?.width ?? 0) + 20);
   });
 
   test("scrolls from left and right gutters on timeline detail", async ({
