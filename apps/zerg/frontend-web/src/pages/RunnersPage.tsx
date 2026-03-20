@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRunners } from "../hooks/useRunners";
 import type { Runner } from "../services/api";
 import AddRunnerModal from "../components/AddRunnerModal";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   Button,
   Badge,
@@ -221,12 +222,7 @@ export default function RunnersPage() {
   const [showAddModal, setShowAddModal] = useState(false);
 
   // Ready signal - indicates page is interactive (even if empty)
-  useEffect(() => {
-    if (!isLoading) {
-      document.body.setAttribute('data-ready', 'true');
-    }
-    return () => document.body.removeAttribute('data-ready');
-  }, [isLoading]);
+  useReadinessFlag({ ready: !isLoading });
 
   if (isLoading) {
     return (

@@ -6,13 +6,14 @@
  * with this Longhouse instance.
  */
 
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import {
   useDeviceTokens,
   useCreateDeviceToken,
   useRevokeDeviceToken,
 } from "../hooks/useDeviceTokens";
 import type { DeviceTokenCreated } from "../services/api/devices";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import { SectionHeader, EmptyState, Button, Badge, PageShell, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { parseUTC } from "../lib/dateUtils";
@@ -45,12 +46,7 @@ export default function DevicesPage() {
   const confirm = useConfirm();
 
   // Ready signal for tests
-  useEffect(() => {
-    if (!isLoading) {
-      document.body.setAttribute("data-ready", "true");
-    }
-    return () => document.body.removeAttribute("data-ready");
-  }, [isLoading]);
+  useReadinessFlag({ ready: !isLoading });
 
   const handleCreate = (e: FormEvent) => {
     e.preventDefault();

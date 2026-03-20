@@ -5,7 +5,7 @@
  * These credentials are shared across all automations owned by the user.
  */
 
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import {
   useAccountConnectors,
   useConfigureAccountConnector,
@@ -17,6 +17,7 @@ import type { AccountConnectorStatus } from "../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "../components/automation-settings/ConnectorConfigModal";
 import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
 import { useOAuthFlow } from "../hooks/useOAuthFlow";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import { SectionHeader, EmptyState, Spinner, PageShell } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 
@@ -118,13 +119,7 @@ export default function IntegrationsPage() {
   const personal = connectors?.filter((c) => c.category === "personal") ?? [];
   const advanced = connectors?.filter((c) => c.category === "advanced") ?? [];
 
-  // Ready signal - indicates page is interactive (even if empty)
-  useEffect(() => {
-    if (!isLoading) {
-      document.body.setAttribute('data-ready', 'true');
-    }
-    return () => document.body.removeAttribute('data-ready');
-  }, [isLoading]);
+  useReadinessFlag({ ready: !isLoading });
 
   if (error) {
     return (

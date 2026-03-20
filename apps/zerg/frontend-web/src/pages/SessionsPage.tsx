@@ -16,6 +16,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import { useActiveSessions, type ActiveSession } from "../hooks/useActiveSessions";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSession,
   type AgentSessionFilters,
@@ -884,16 +885,7 @@ export default function SessionsPage() {
   ].filter(Boolean).length;
 
   // Ready signal for E2E
-  useEffect(() => {
-    if (!isLoading) {
-      document.body.setAttribute("data-ready", "true");
-      document.body.setAttribute("data-screenshot-ready", "true");
-    }
-    return () => {
-      document.body.removeAttribute("data-ready");
-      document.body.removeAttribute("data-screenshot-ready");
-    };
-  }, [isLoading]);
+  useReadinessFlag({ ready: !isLoading, screenshotReady: !isLoading });
 
   // Loading state
   if (isLoading && sessions.length === 0) {

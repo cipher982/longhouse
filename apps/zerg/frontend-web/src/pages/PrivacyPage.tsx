@@ -1,6 +1,6 @@
-import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
+import { usePageMeta } from "../hooks/usePageMeta";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -8,14 +8,11 @@ export default function PrivacyPage() {
   const currentYear = new Date().getFullYear();
 
   usePublicPageScroll();
-
-  useEffect(() => {
-    document.title = "Privacy Policy - Longhouse";
-    const metaDescription = document.querySelector('meta[name="description"]');
-    if (metaDescription) {
-      metaDescription.setAttribute('content', 'How Longhouse handles your data. We don\'t train AI on your conversations, don\'t sell your data, and give you full control over your information.');
-    }
-  }, []);
+  usePageMeta({
+    title: "Privacy Policy - Longhouse",
+    description:
+      "How Longhouse handles your data. We don't train AI on your conversations, don't sell your data, and give you full control over your information.",
+  });
 
   return (
     <div className="info-page">

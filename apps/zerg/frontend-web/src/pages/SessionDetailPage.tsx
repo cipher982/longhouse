@@ -19,6 +19,7 @@ import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
 import type { ActiveSession } from "../hooks/useActiveSessions";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
 import {
   fetchSessionTurnTelemetry,
@@ -114,16 +115,10 @@ export default function SessionDetailPage() {
     );
   }, [shouldAutoResume, searchParams, navigate, location.pathname, returnTo]);
 
-  useEffect(() => {
-    if (!sessionLoading && !eventsLoading) {
-      document.body.setAttribute("data-ready", "true");
-      document.body.setAttribute("data-screenshot-ready", "true");
-    }
-    return () => {
-      document.body.removeAttribute("data-ready");
-      document.body.removeAttribute("data-screenshot-ready");
-    };
-  }, [sessionLoading, eventsLoading]);
+  useReadinessFlag({
+    ready: !sessionLoading && !eventsLoading,
+    screenshotReady: !sessionLoading && !eventsLoading,
+  });
 
   useEffect(() => {
     setLoopModeOverride(null);

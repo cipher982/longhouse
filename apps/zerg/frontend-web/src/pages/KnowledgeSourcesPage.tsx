@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   useKnowledgeSources,
   useDeleteKnowledgeSource,
@@ -9,6 +9,7 @@ import { KnowledgeSourceCard } from "../components/KnowledgeSourceCard";
 import { AddKnowledgeSourceModal } from "../components/AddKnowledgeSourceModal";
 import { AddContextModal } from "../components/AddContextModal";
 import { KnowledgeSearchPanel } from "../components/KnowledgeSearchPanel";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   Button,
   SectionHeader,
@@ -66,12 +67,7 @@ export default function KnowledgeSourcesPage() {
   };
 
   // Ready signal - indicates page is interactive (even if empty)
-  useEffect(() => {
-    if (!isLoading) {
-      document.body.setAttribute('data-ready', 'true');
-    }
-    return () => document.body.removeAttribute('data-ready');
-  }, [isLoading]);
+  useReadinessFlag({ ready: !isLoading });
 
   if (isLoading) {
     return (

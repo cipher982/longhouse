@@ -1,7 +1,8 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   Button,
   Card,
@@ -208,18 +209,7 @@ export default function ReliabilityPage() {
     enabled: !!user,
   });
 
-  useEffect(() => {
-    if (!user || healthLoading) {
-      document.body.removeAttribute("data-ready");
-      return;
-    }
-
-    document.body.setAttribute("data-ready", "true");
-
-    return () => {
-      document.body.removeAttribute("data-ready");
-    };
-  }, [user, healthLoading]);
+  useReadinessFlag({ ready: Boolean(user) && !healthLoading });
 
   if (!user) {
     return <div>Loading...</div>;

@@ -7,6 +7,7 @@ import { useShelf } from "../lib/useShelfState";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SettingsIcon, SidebarIcon } from "../components/icons";
 import AutomationSettingsDrawer from "../components/automation-settings/AutomationSettingsDrawer";
+import { usePageMeta } from "../hooks/usePageMeta";
 import { ChatThreadList } from "../components/chat/ChatThreadList";
 import { ChatMessageList } from "../components/chat/ChatMessageList";
 import { ChatComposer } from "../components/chat/ChatComposer";
@@ -55,6 +56,9 @@ export default function ChatPage() {
   // Strict URL model: effectiveThreadId is just selectedThreadId
   // If no thread is selected, we handle it explicitly below
   const effectiveThreadId = selectedThreadId;
+  usePageMeta({
+    title: automation ? `${automation.name} - Longhouse` : "Longhouse",
+  });
 
   // Handle navigation reload
   useEffect(() => {
@@ -244,16 +248,6 @@ export default function ChatPage() {
 
     toast.success("Chat history exported");
   };
-
-  // Update document title with the automation name for better context.
-  useEffect(() => {
-    if (automation) {
-      document.title = `${automation.name} - Longhouse`;
-    }
-    return () => {
-      document.title = "Longhouse";
-    };
-  }, [automation]);
 
   if (automationId == null) {
     return (

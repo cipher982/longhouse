@@ -1,7 +1,7 @@
-import { useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { Button } from "../components/ui";
+import { usePageMeta } from "../hooks/usePageMeta";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -10,14 +10,11 @@ export default function PricingPage() {
   const currentYear = new Date().getFullYear();
 
   usePublicPageScroll();
-
-  useEffect(() => {
-    document.title = "Pricing - Longhouse";
-    const metaDescription = document.querySelector('meta[name="description"]');
-    if (metaDescription) {
-      metaDescription.setAttribute('content', 'Self-host free forever. Hosted beta coming soon at $5/month. Search and browse all your AI coding sessions.');
-    }
-  }, []);
+  usePageMeta({
+    title: "Pricing - Longhouse",
+    description:
+      "Self-host free forever. Hosted beta coming soon at $5/month. Search and browse all your AI coding sessions.",
+  });
 
   const handleGetStarted = () => {
     navigate("/");

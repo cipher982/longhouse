@@ -322,13 +322,22 @@ export interface AuthMethods {
   gmail_setup_message?: string | null;
 }
 
+export function useAuthMethods() {
+  return useQuery<AuthMethods>({
+    queryKey: ['auth-methods'],
+    queryFn: getAuthMethods,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export interface PasswordLoginResult {
   ok: boolean;
   error?: string;
 }
 
-// Fetch available authentication methods from the backend
-export async function getAuthMethods(): Promise<AuthMethods> {
+// Fetch available authentication methods from the backend.
+// Keep this internal to prevent components from bypassing the shared query hook.
+async function getAuthMethods(): Promise<AuthMethods> {
   try {
     const response = await fetch(`${config.apiBaseUrl}/auth/methods`);
     if (!response.ok) {
@@ -423,17 +432,12 @@ function buildHostedLoginRedirectUrl(baseUrl: string | null | undefined): string
 }
 
 function LoginOverlay({ clientId }: LoginOverlayProps) {
-  const [authMethods, setAuthMethods] = useState<AuthMethods | null>(null);
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [isPasswordLoading, setIsPasswordLoading] = useState(false);
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
-
   const [ssoRedirecting, setSsoRedirecting] = useState(false);
-
-  useEffect(() => {
-    getAuthMethods().then(setAuthMethods);
-  }, []);
+  const { data: authMethods } = useAuthMethods();
 
   // SSO-only: no local Google or password, redirect to control plane
   useEffect(() => {

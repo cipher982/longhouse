@@ -1,7 +1,7 @@
-import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { ShieldIcon, LockIcon, TrashIcon, KeyIcon } from "../components/icons";
+import { usePageMeta } from "../hooks/usePageMeta";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -9,14 +9,11 @@ export default function SecurityPage() {
   const currentYear = new Date().getFullYear();
 
   usePublicPageScroll();
-
-  useEffect(() => {
-    document.title = "Security - Longhouse";
-    const metaDescription = document.querySelector('meta[name="description"]');
-    if (metaDescription) {
-      metaDescription.setAttribute('content', 'How Longhouse protects your data. HTTPS-only connections, secure authentication, encrypted credentials, and responsible disclosure policy.');
-    }
-  }, []);
+  usePageMeta({
+    title: "Security - Longhouse",
+    description:
+      "How Longhouse protects your data. HTTPS-only connections, secure authentication, encrypted credentials, and responsible disclosure policy.",
+  });
 
   return (
     <div className="info-page">

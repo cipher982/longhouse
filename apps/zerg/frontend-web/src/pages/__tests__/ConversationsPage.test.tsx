@@ -18,7 +18,7 @@ const apiMocks = vi.hoisted(() => ({
 const authMocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
   refreshAuth: vi.fn(),
-  getAuthMethods: vi.fn(),
+  useAuthMethods: vi.fn(),
 }));
 
 const googleCodeClientMocks = vi.hoisted(() => ({
@@ -39,7 +39,7 @@ vi.mock("../../services/api", async (importOriginal) => {
 
 vi.mock("../../lib/auth", () => ({
   useAuth: authMocks.useAuth,
-  getAuthMethods: authMocks.getAuthMethods,
+  useAuthMethods: authMocks.useAuthMethods,
 }));
 
 vi.mock("../../lib/config", () => ({
@@ -65,7 +65,7 @@ const {
   replyToConversation: mockReplyToConversation,
 } = apiMocks;
 
-const { useAuth: mockUseAuth, refreshAuth: mockRefreshAuth, getAuthMethods: mockGetAuthMethods } = authMocks;
+const { useAuth: mockUseAuth, refreshAuth: mockRefreshAuth, useAuthMethods: mockUseAuthMethods } = authMocks;
 const { requestGoogleAuthorizationCode: mockRequestGoogleAuthorizationCode } = googleCodeClientMocks;
 const { startHostedGmailConnect: mockStartHostedGmailConnect } = authApiMocks;
 
@@ -92,13 +92,15 @@ describe("ConversationsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRefreshAuth.mockResolvedValue(undefined);
-    mockGetAuthMethods.mockResolvedValue({
-      google: true,
-      password: false,
-      sso: false,
-      sso_url: null,
-      gmail_ready: true,
-      gmail_setup_message: null,
+    mockUseAuthMethods.mockReturnValue({
+      data: {
+        google: true,
+        password: false,
+        sso: false,
+        sso_url: null,
+        gmail_ready: true,
+        gmail_setup_message: null,
+      },
     });
     mockStartHostedGmailConnect.mockResolvedValue({
       url: "https://control.longhouse.ai/auth/google/gmail/start?token=test-token",
@@ -330,13 +332,15 @@ describe("ConversationsPage", () => {
   });
 
   it("redirects hosted users through the control plane instead of tenant GIS", async () => {
-    mockGetAuthMethods.mockResolvedValue({
-      google: false,
-      password: true,
-      sso: true,
-      sso_url: "https://control.longhouse.ai",
-      gmail_ready: true,
-      gmail_setup_message: null,
+    mockUseAuthMethods.mockReturnValue({
+      data: {
+        google: false,
+        password: true,
+        sso: true,
+        sso_url: "https://control.longhouse.ai",
+        gmail_ready: true,
+        gmail_setup_message: null,
+      },
     });
     mockUseAuth.mockReturnValue({
       user: {
@@ -381,14 +385,16 @@ describe("ConversationsPage", () => {
   });
 
   it("shows honest OSS setup guidance when Gmail is not configured", async () => {
-    mockGetAuthMethods.mockResolvedValue({
-      google: true,
-      password: false,
-      sso: false,
-      sso_url: null,
-      gmail_ready: false,
-      gmail_setup_message:
-        "This instance still needs BYO Google config before anyone can connect Gmail. Missing: GOOGLE_CLIENT_SECRET, GMAIL_PUBSUB_TOPIC.",
+    mockUseAuthMethods.mockReturnValue({
+      data: {
+        google: true,
+        password: false,
+        sso: false,
+        sso_url: null,
+        gmail_ready: false,
+        gmail_setup_message:
+          "This instance still needs BYO Google config before anyone can connect Gmail. Missing: GOOGLE_CLIENT_SECRET, GMAIL_PUBSUB_TOPIC.",
+      },
     });
     mockUseAuth.mockReturnValue({
       user: {

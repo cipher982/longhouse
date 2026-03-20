@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 // Performance monitoring hook
 export function usePerformanceMonitoring(componentName: string) {
@@ -65,19 +66,7 @@ const memoize = React.memo;
 
 // Debounce hook for performance optimization
 export function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = React.useState<T>(value);
-
-  React.useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
+  return useDebouncedValue(value, delay);
 }
 
 // Memory usage monitoring (development only)

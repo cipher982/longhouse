@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { getUserContext, updateUserContext, type UserContext } from "../services/api";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   Button,
   Card,
@@ -32,18 +33,7 @@ export default function SettingsPage() {
     queryFn: getUserContext,
   });
 
-  useEffect(() => {
-    if (isLoading) {
-      document.body.removeAttribute("data-ready");
-      return;
-    }
-
-    document.body.setAttribute("data-ready", "true");
-
-    return () => {
-      document.body.removeAttribute("data-ready");
-    };
-  }, [isLoading]);
+  useReadinessFlag({ ready: !isLoading });
 
   // Form state
   const [displayName, setDisplayName] = useState("");

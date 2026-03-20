@@ -13,6 +13,7 @@ import {
   type AutomationOverviewSnapshot,
   type ModelConfig,
 } from "../services/api";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import { ConnectionStatus, createEnvelope, useWebSocket } from "../lib/useWebSocket";
 import { DEFAULT_TEXT_MODEL } from "../oikos/core/model-config";
 import { useAuth } from "../lib/auth";
@@ -209,18 +210,12 @@ export default function AutomationsPage() {
   // Readiness Contract (see src/lib/readiness-contract.ts):
   // - data-ready="true": Page is INTERACTIVE (can click, type)
   // - data-screenshot-ready="true": Content loaded for marketing captures
-  useEffect(() => {
-    if (!isLoading) {
-      document.body.setAttribute('data-ready', 'true');
-      // Automations overview is screenshot-ready as soon as it's interactive.
-      // The automations table is visible even if empty.
-      document.body.setAttribute('data-screenshot-ready', 'true');
-    }
-    return () => {
-      document.body.removeAttribute('data-ready');
-      document.body.removeAttribute('data-screenshot-ready');
-    };
-  }, [isLoading]);
+  useReadinessFlag({
+    ready: !isLoading,
+    // The automations table is visible even if empty, so screenshot readiness
+    // matches interactive readiness here.
+    screenshotReady: !isLoading,
+  });
 
   // Keep sendMessage ref up-to-date for stable cleanup
   useEffect(() => {

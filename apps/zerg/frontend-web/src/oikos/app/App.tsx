@@ -17,6 +17,7 @@ import { oikosToolStore } from '../lib/oikos-tool-store'
 import { eventBus } from '../lib/event-bus'
 import config from '../../lib/config'
 import { useAuth } from '../../lib/auth'
+import { useReadinessFlag } from '../../lib/readiness-contract'
 import { getQuotaUiState } from './lib/quota-ui'
 import { fetchUserUsage } from './lib/usage'
 
@@ -130,10 +131,14 @@ export default function App({ embedded = false }: AppProps) {
   // - data-screenshot-ready="true": Content loaded for marketing captures
   //
   // Chat uses window.__oikos.ready.chatReady as the authoritative interactive signal.
-  // We sync data-ready to this flag to match dashboard behavior.
+  // The shared readiness hook mirrors the browser-facing flags.
+  useReadinessFlag({
+    ready: true,
+    screenshotReady: state.messages.length > 0,
+  })
+
   useEffect(() => {
-    // Set up the chatReady flag and data-ready attribute together
-    // This ensures consistent behavior with dashboard pages
+    // Set up the chatReady flag for tests and external observers.
     type OikosWindow = Window & { __oikos?: { ready?: { chatReady?: boolean; chatReadyTimestamp?: number }; eventBus?: unknown } }
     const w = window as OikosWindow
     w.__oikos = w.__oikos || {}
@@ -141,32 +146,18 @@ export default function App({ embedded = false }: AppProps) {
     w.__oikos.ready.chatReady = true
     w.__oikos.ready.chatReadyTimestamp = Date.now()
 
-    // Set data-ready when chat is interactive (matches dashboard contract)
-    document.body.setAttribute('data-ready', 'true')
-
     // Emit event for backwards compatibility (DEV mode only)
     if (config.isDevelopment) {
       eventBus.emit('test:chat_ready', { timestamp: Date.now() })
     }
 
     return () => {
-      document.body.removeAttribute('data-ready')
       const w2 = window as OikosWindow
       if (w2.__oikos?.ready) {
         w2.__oikos.ready.chatReady = false
       }
     }
   }, []) // Empty deps = set once on mount, clear on unmount
-
-  // Screenshot ready signal - indicates content is loaded for marketing captures
-  // This is separate from data-ready because screenshots need visible content,
-  // while interactive readiness just needs the UI to be mounted and responsive.
-  useEffect(() => {
-    if (state.messages.length > 0) {
-      document.body.setAttribute('data-screenshot-ready', 'true')
-    }
-    return () => document.body.removeAttribute('data-screenshot-ready')
-  }, [state.messages.length])
 
   return (
     <>

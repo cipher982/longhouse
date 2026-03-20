@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   Button,
   Card,
@@ -63,12 +64,7 @@ export default function ProfilePage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  useEffect(() => {
-    document.body.setAttribute("data-ready", "true");
-    return () => {
-      document.body.removeAttribute("data-ready");
-    };
-  }, []);
+  useReadinessFlag({ ready: true });
 
   // Form state
   const [displayName, setDisplayName] = useState(user?.display_name || "");
