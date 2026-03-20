@@ -10,9 +10,9 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 
 ## Current focus
 
-- Land the boundary and migration plan in writing.
-- Start with the highest-churn pages: sessions, chat, auth, and settings.
-- Add shared primitives so later slices delete patterns instead of copying them.
+- Rewrite auth/config consumers around shared query ownership.
+- Start the route-owned page cleanup on `ChatPage` and `SessionsPage`.
+- Keep pushing shared primitives so later slices delete patterns instead of copying them.
 
 ## Done when
 
@@ -25,7 +25,7 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 ## Checklist
 
 - [x] Create persistent spec and tracking doc
-- [ ] Slice 1: add shared frontend primitives (`useAuthMethods`, metadata/readiness helpers, sanctioned debounce path)
+- [x] Slice 1: add shared frontend primitives (`useAuthMethods`, metadata/readiness helpers, sanctioned debounce path)
 - [ ] Slice 2: rewrite auth/config consumers around shared query ownership
 - [ ] Slice 3: rewrite route-owned pages (`ChatPage`, `SessionsPage`, conversation/trace/swarm/loop selection)
 - [ ] Slice 4: move manual page fetch effects into React Query hooks
@@ -37,3 +37,4 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - Audit snapshot on 2026-03-20: `160` direct `useEffect` calls across `66` frontend files; the largest concentration is in `pages/`.
 - This task is not a vanity “fewer hooks” pass. Legitimate browser-sync effects stay; state-sync and fetch-sync effects are the target.
 - Oikos voice/media hooks are explicitly not phase-one rewrite targets unless they block the simpler page/state cleanup.
+- Slice 1 landed shared `useAuthMethods`, `usePageMeta`, `useReadinessFlag`, and `useDebouncedValue` primitives, plus first migrations and lint guardrails against direct page metadata/readiness writes.

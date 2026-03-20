@@ -1,7 +1,7 @@
-import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { ZapIcon, SearchIcon, SettingsIcon, MessageCircleIcon } from "../components/icons";
+import { usePageMeta } from "../hooks/usePageMeta";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -9,14 +9,11 @@ export default function DocsPage() {
   const currentYear = new Date().getFullYear();
 
   usePublicPageScroll();
-
-  useEffect(() => {
-    document.title = "Documentation - Longhouse";
-    const metaDescription = document.querySelector('meta[name="description"]');
-    if (metaDescription) {
-      metaDescription.setAttribute('content', 'Learn how to use Longhouse. Quick start guides, timeline search tips, and integration setup instructions.');
-    }
-  }, []);
+  usePageMeta({
+    title: "Documentation - Longhouse",
+    description:
+      "Learn how to use Longhouse. Quick start guides, timeline search tips, and integration setup instructions.",
+  });
 
   return (
     <div className="info-page">

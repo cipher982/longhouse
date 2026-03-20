@@ -5,10 +5,11 @@
  * surrounding context. Results link directly to the session in the Timeline.
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import "../styles/recall-panel.css";
 import { Link } from "react-router-dom";
 import { useRecall } from "../hooks/useAgentSessions";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import type { RecallMatch, RecallContextTurn, RecallFilters } from "../services/api/agents";
 import { Badge, Input, Spinner, EmptyState } from "./ui";
 
@@ -69,12 +70,7 @@ function RecallCard({ match }: { match: RecallMatch }) {
 
 export function RecallPanel({ project }: RecallPanelProps) {
   const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  // Debounce
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(query), 400);
-    return () => clearTimeout(t);
-  }, [query]);
+  const debouncedQuery = useDebouncedValue(query, 400);
 
   const filters: RecallFilters = {
     query: debouncedQuery,

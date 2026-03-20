@@ -1,19 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useKnowledgeSearch } from "../hooks/useKnowledgeSources";
-
-/**
- * Custom hook for debouncing a value with a timed delay.
- */
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-
-  return debouncedValue;
-}
 
 /**
  * KnowledgeSearchPanel - V1.1 search UI for verifying synced content
@@ -24,7 +11,7 @@ function useDebounce<T>(value: T, delay: number): T {
 export function KnowledgeSearchPanel() {
   const [query, setQuery] = useState("");
   // V1.1: Debounce search queries to throttle API requests (300ms delay)
-  const debouncedQuery = useDebounce(query, 300);
+  const debouncedQuery = useDebouncedValue(query, 300);
   const { data: results, isLoading, error } = useKnowledgeSearch(debouncedQuery);
 
   return (

@@ -5,7 +5,7 @@
  * Automations can only send to contacts in this list (or the user's own email).
  */
 
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import {
   useEmailContacts,
   useCreateEmailContact,
@@ -17,6 +17,7 @@ import {
   useDeletePhoneContact,
 } from "../hooks/useContacts";
 import type { EmailContact, PhoneContact } from "../services/api/contacts";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import { SectionHeader, EmptyState, Button, PageShell, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import "./ContactsPage.css";
@@ -152,12 +153,7 @@ export default function ContactsPage() {
   };
 
   // Ready signal for tests
-  useEffect(() => {
-    if (!isLoading) {
-      document.body.setAttribute("data-ready", "true");
-    }
-    return () => document.body.removeAttribute("data-ready");
-  }, [isLoading]);
+  useReadinessFlag({ ready: !isLoading });
 
   if (error) {
     return (

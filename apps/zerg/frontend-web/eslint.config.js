@@ -59,6 +59,45 @@ export default [
     },
   },
   {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/hooks/usePageMeta.ts", "src/lib/readiness-contract.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "AssignmentExpression[left.type='MemberExpression'][left.object.name='document'][left.property.name='title']",
+          message: "Use usePageMeta() instead of assigning document.title directly.",
+        },
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.object.name='document'][callee.property.name='querySelector'] Literal[value='meta[name=\"description\"]']",
+          message: "Use usePageMeta() instead of mutating the meta description directly.",
+        },
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name='setAttribute'] Literal[value='data-ready']",
+          message: "Use useReadinessFlag() instead of mutating data-ready directly.",
+        },
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name='removeAttribute'] Literal[value='data-ready']",
+          message: "Use useReadinessFlag() instead of mutating data-ready directly.",
+        },
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name='setAttribute'] Literal[value='data-screenshot-ready']",
+          message: "Use useReadinessFlag() instead of mutating data-screenshot-ready directly.",
+        },
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name='removeAttribute'] Literal[value='data-screenshot-ready']",
+          message: "Use useReadinessFlag() instead of mutating data-screenshot-ready directly.",
+        },
+      ],
+    },
+  },
+  {
     files: ["**/*.test.ts", "**/*.test.tsx", "src/test/**/*.ts"],
     rules: {
       "no-prototype-builtins": "off",

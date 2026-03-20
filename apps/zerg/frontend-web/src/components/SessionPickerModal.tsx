@@ -10,6 +10,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { getProviderIcon } from "../lib/providers";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { Button } from "./ui";
 import {
   useAgentSessionSummaries,
@@ -211,7 +212,7 @@ export function SessionPickerModal({
 
   // Search and filter state
   const [searchQuery, setSearchQuery] = useState(safeInitialFilters.query || "");
-  const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
+  const debouncedQuery = useDebouncedValue(searchQuery, 300);
   const [project, setProject] = useState(safeInitialFilters.project || "");
   const [provider, setProvider] = useState(safeInitialFilters.provider || "");
 
@@ -223,14 +224,6 @@ export function SessionPickerModal({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const wasOpenRef = useRef(false);
-
-  // Debounce search query
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedQuery(searchQuery);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
 
   // Build filters
   const filters: AgentSessionSummaryFilters = useMemo(() => ({

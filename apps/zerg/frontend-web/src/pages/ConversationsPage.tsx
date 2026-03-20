@@ -9,9 +9,10 @@ import {
   SectionHeader,
   Spinner,
 } from "../components/ui";
-import { getAuthMethods, useAuth } from "../lib/auth";
+import { useAuth, useAuthMethods } from "../lib/auth";
 import { config } from "../lib/config";
 import { requestGoogleAuthorizationCode } from "../lib/googleCodeClient";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   connectGmailInbox,
   fetchConversation,
@@ -80,11 +81,7 @@ export default function ConversationsPage() {
   const [replyAll, setReplyAll] = useState(false);
   const gmailErrorParam = searchParams.get("gmail_error");
 
-  const authMethodsQuery = useQuery({
-    queryKey: ["auth-methods"],
-    queryFn: getAuthMethods,
-    staleTime: 5 * 60 * 1000,
-  });
+  const authMethodsQuery = useAuthMethods();
 
   const usesHostedGmailConnect = Boolean(authMethodsQuery.data?.sso_url);
   const gmailReady = authMethodsQuery.data?.gmail_ready ?? (usesHostedGmailConnect || Boolean(config.googleClientId));
@@ -110,13 +107,7 @@ export default function ConversationsPage() {
     [listQuery.data?.conversations],
   );
 
-  useEffect(() => {
-    const isReady = !listQuery.isLoading;
-    if (isReady) {
-      document.body.setAttribute("data-ready", "true");
-    }
-    return () => document.body.removeAttribute("data-ready");
-  }, [listQuery.isLoading]);
+  useReadinessFlag({ ready: !listQuery.isLoading });
 
   useEffect(() => {
     if (conversations.length === 0) {

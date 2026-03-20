@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   Button,
   Card,
@@ -375,18 +376,7 @@ export default function TraceExplorerPage() {
     enabled: !!user,
   });
 
-  useEffect(() => {
-    if (!user || isLoading) {
-      document.body.removeAttribute("data-ready");
-      return;
-    }
-
-    document.body.setAttribute("data-ready", "true");
-
-    return () => {
-      document.body.removeAttribute("data-ready");
-    };
-  }, [user, isLoading]);
+  useReadinessFlag({ ready: Boolean(user) && !isLoading });
 
   if (!user) {
     return <div>Loading...</div>;

@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { useState, useEffect, useCallback, useRef, type PropsWithChildren } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { useAuth, getAuthMethods, type AuthMethods } from "../lib/auth";
+import { useAuth, useAuthMethods } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
 import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
@@ -20,8 +20,8 @@ function WelcomeHeader() {
   const confirm = useConfirm();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [authMethods, setAuthMethods] = useState<AuthMethods | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const { data: authMethods } = useAuthMethods();
 
   // Close mobile nav on route change
   useEffect(() => {
@@ -59,10 +59,6 @@ function WelcomeHeader() {
     closeUserMenu();
     navigate("/settings");
   }, [closeUserMenu, navigate]);
-
-  useEffect(() => {
-    getAuthMethods().then(setAuthMethods).catch(() => {});
-  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {

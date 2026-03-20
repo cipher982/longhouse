@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   Button,
   Card,
@@ -753,18 +754,7 @@ function AdminPage() {
     }
   }, [demoUsers, selectedDemoUserId]);
 
-  useEffect(() => {
-    if (summaryLoading || usersLoading) {
-      document.body.removeAttribute("data-ready");
-      return;
-    }
-
-    document.body.setAttribute("data-ready", "true");
-
-    return () => {
-      document.body.removeAttribute("data-ready");
-    };
-  }, [summaryLoading, usersLoading]);
+  useReadinessFlag({ ready: !summaryLoading && !usersLoading });
 
   // Database reset mutation
   const resetMutation = useMutation({

@@ -1,6 +1,6 @@
-import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
+import { usePageMeta } from "../hooks/usePageMeta";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
@@ -8,14 +8,11 @@ export default function ChangelogPage() {
   const currentYear = new Date().getFullYear();
 
   usePublicPageScroll();
-
-  useEffect(() => {
-    document.title = "Changelog - Longhouse";
-    const metaDescription = document.querySelector('meta[name="description"]');
-    if (metaDescription) {
-      metaDescription.setAttribute('content', 'Track Longhouse\'s development progress. See new features, improvements, and fixes as we build the platform.');
-    }
-  }, []);
+  usePageMeta({
+    title: "Changelog - Longhouse",
+    description:
+      "Track Longhouse's development progress. See new features, improvements, and fixes as we build the platform.",
+  });
 
   return (
     <div className="info-page">
