@@ -39,6 +39,15 @@ export type SessionTurnAlignment =
   | "failed"
   | (string & {});
 
+export type LoopCardState =
+  | "active"
+  | "acted"
+  | "dismissed"
+  | "superseded"
+  | "expired"
+  | "failed"
+  | (string & {});
+
 interface SessionTurnReviewSummary {
   id: number;
   session_id: string;
@@ -94,6 +103,7 @@ export interface SessionTurnTelemetry {
 }
 
 interface LoopInboxItemSummaryRaw {
+  card_id: number;
   session_id: string;
   title: string;
   project: string | null;
@@ -107,6 +117,9 @@ interface LoopInboxItemSummaryRaw {
   follow_up_prompt: string | null;
   blocked_reasons: string[] | null;
   last_turn_at: string;
+  card_state: string | null;
+  card_state_reason: string | null;
+  superseded_by_card_id: number | null;
   requires_attention: boolean;
 }
 
@@ -131,6 +144,7 @@ interface LoopInboxActionResultRaw {
 export type LoopInboxAction = "approve_recommended_action" | "not_now";
 
 export interface LoopInboxItem {
+  cardId: number;
   sessionId: string;
   title: string;
   project: string | null;
@@ -144,6 +158,9 @@ export interface LoopInboxItem {
   followUpPrompt: string | null;
   blockedReasons: string[];
   lastTurnAt: string;
+  cardState: LoopCardState;
+  cardStateReason: string | null;
+  supersededByCardId: number | null;
   requiresAttention: boolean;
 }
 
@@ -209,6 +226,7 @@ function parseTurnReview(row: SessionTurnReviewSummary): SessionTurnReview {
 
 function parseLoopInboxItem(row: LoopInboxItemSummaryRaw): LoopInboxItem {
   return {
+    cardId: row.card_id,
     sessionId: row.session_id,
     title: asString(row.title) ?? "Untitled session",
     project: asString(row.project),
@@ -222,6 +240,9 @@ function parseLoopInboxItem(row: LoopInboxItemSummaryRaw): LoopInboxItem {
     followUpPrompt: asString(row.follow_up_prompt),
     blockedReasons: asStringArray(row.blocked_reasons),
     lastTurnAt: row.last_turn_at,
+    cardState: (asString(row.card_state) ?? "active") as LoopCardState,
+    cardStateReason: asString(row.card_state_reason),
+    supersededByCardId: asNumber(row.superseded_by_card_id),
     requiresAttention: Boolean(row.requires_attention),
   };
 }
@@ -255,16 +276,21 @@ export async function fetchLoopInbox(): Promise<LoopInboxItem[]> {
   return rows.map(parseLoopInboxItem);
 }
 
-export async function fetchLoopActionCard(sessionId: string): Promise<LoopActionCard> {
+export async function fetchLoopActionCard(cardId: number | string): Promise<LoopActionCard> {
+  const row = await request<LoopActionCardRaw>(`/oikos/loop-inbox/cards/${cardId}`);
+  return parseLoopActionCard(row);
+}
+
+export async function fetchLoopActionCardForSession(sessionId: string): Promise<LoopActionCard> {
   const row = await request<LoopActionCardRaw>(`/oikos/loop-inbox/${sessionId}`);
   return parseLoopActionCard(row);
 }
 
 export async function applyLoopInboxAction(
-  sessionId: string,
+  cardId: number,
   action: LoopInboxAction,
 ): Promise<LoopInboxActionResult> {
-  const row = await request<LoopInboxActionResultRaw>(`/oikos/loop-inbox/${sessionId}/actions`, {
+  const row = await request<LoopInboxActionResultRaw>(`/oikos/loop-inbox/cards/${cardId}/actions`, {
     method: "POST",
     body: JSON.stringify({ action }),
   });

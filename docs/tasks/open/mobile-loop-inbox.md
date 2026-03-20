@@ -20,11 +20,11 @@ The canonical approval surface is `/loop`. Telegram is notification/fallback onl
 ## Checklist
 
 - [x] Pivot the product spec toward PWA-first approvals and Telegram-as-fallback
-- [ ] Re-key inbox/card/action APIs around stable `card_id`
-- [ ] Make stale or superseded cards resolve cleanly in `/loop`
-- [ ] Switch Telegram deep links from `session_id` to `card_id`
-- [ ] Disable Telegram page previews for loop nudges
-- [ ] Keep `/loop` card-centric and lightweight on phone
+- [x] Re-key inbox/card/action APIs around stable `card_id`
+- [x] Make stale or superseded cards resolve cleanly in `/loop`
+- [x] Switch Telegram deep links from `session_id` to `card_id`
+- [x] Disable Telegram page previews for loop nudges
+- [x] Keep `/loop` card-centric and lightweight on phone
 - [ ] Dogfood the traveling / away-from-keyboard flow end to end
 
 ## Notes

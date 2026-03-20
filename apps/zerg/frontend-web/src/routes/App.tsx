@@ -281,6 +281,14 @@ export default function App() {
                 ),
               },
               {
+                path: "/loop/card/:cardId",
+                element: (
+                  <ErrorBoundary>
+                    <LoopInboxPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
                 path: "/loop/:sessionId",
                 element: (
                   <ErrorBoundary>

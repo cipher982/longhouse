@@ -6,6 +6,7 @@ import LoopInboxPage from "../LoopInboxPage";
 import {
   applyLoopInboxAction,
   fetchLoopActionCard,
+  fetchLoopActionCardForSession,
   fetchLoopInbox,
   type LoopActionCard,
   type LoopInboxItem,
@@ -13,14 +14,15 @@ import {
 import { TestRouter } from "../../test/test-utils";
 
 const mockNavigate = vi.fn();
-let mockSessionId = "sess-1";
+let mockSessionId: string | undefined;
+let mockCardId = "42";
 
 vi.mock("react-router-dom", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-router-dom")>();
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    useParams: () => ({ sessionId: mockSessionId }),
+    useParams: () => ({ sessionId: mockSessionId, cardId: mockCardId }),
   };
 });
 
@@ -30,16 +32,19 @@ vi.mock("../../services/api/oikos", async (importOriginal) => {
     ...actual,
     fetchLoopInbox: vi.fn(),
     fetchLoopActionCard: vi.fn(),
+    fetchLoopActionCardForSession: vi.fn(),
     applyLoopInboxAction: vi.fn(),
   };
 });
 
 const fetchLoopInboxMock = vi.mocked(fetchLoopInbox);
 const fetchLoopActionCardMock = vi.mocked(fetchLoopActionCard);
+const fetchLoopActionCardForSessionMock = vi.mocked(fetchLoopActionCardForSession);
 const applyLoopInboxActionMock = vi.mocked(applyLoopInboxAction);
 
 function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
   return {
+    cardId: 42,
     sessionId: "sess-1",
     title: "Session Detail Page",
     project: "zerg",
@@ -53,6 +58,9 @@ function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
     followUpPrompt: "Run the pending targeted tests.",
     blockedReasons: [],
     lastTurnAt: "2026-03-19T12:00:00Z",
+    cardState: "active",
+    cardStateReason: null,
+    supersededByCardId: null,
     requiresAttention: true,
     ...overrides,
   };
@@ -81,7 +89,7 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <TestRouter initialEntries={["/loop/sess-1"]}>
+      <TestRouter initialEntries={["/loop/card/42"]}>
         <LoopInboxPage />
       </TestRouter>
     </QueryClientProvider>,
@@ -91,9 +99,11 @@ function renderPage() {
 describe("LoopInboxPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionId = "sess-1";
+    mockSessionId = undefined;
+    mockCardId = "42";
     fetchLoopInboxMock.mockResolvedValue([makeInboxItem()]);
     fetchLoopActionCardMock.mockResolvedValue(makeActionCard());
+    fetchLoopActionCardForSessionMock.mockResolvedValue(makeActionCard());
     applyLoopInboxActionMock.mockResolvedValue({
       sessionId: "sess-1",
       reviewId: 42,
@@ -108,7 +118,7 @@ describe("LoopInboxPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-inbox-row-sess-1")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-inbox-row-42")).toBeInTheDocument();
     });
 
     const card = screen.getByTestId("loop-inbox-card");
@@ -129,7 +139,28 @@ describe("LoopInboxPage", () => {
     await user.click(screen.getByTestId("loop-approve-action"));
 
     await waitFor(() => {
-      expect(applyLoopInboxActionMock).toHaveBeenCalledWith("sess-1", "approve_recommended_action");
+      expect(applyLoopInboxActionMock).toHaveBeenCalledWith(42, "approve_recommended_action");
     });
+  });
+
+  it("renders a stale card even when the inbox is empty", async () => {
+    fetchLoopInboxMock.mockResolvedValue([]);
+    fetchLoopActionCardMock.mockResolvedValue(
+      makeActionCard({
+        cardState: "superseded",
+        cardStateReason: "A newer turn replaced this follow-up.",
+        supersededByCardId: 99,
+        availableActions: [],
+      }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Superseded")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("A newer turn replaced this follow-up.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open latest/i })).toHaveAttribute("href", "/loop/card/99");
   });
 });

@@ -1531,6 +1531,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Session
+         * @description Exchange a valid refresh token for a new access token + rotated refresh token.
+         *
+         *     This is the silent-refresh endpoint called by the frontend on 401.
+         */
+        post: operations["refresh_session_auth_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/methods": {
         parameters: {
             query?: never;
@@ -2238,6 +2260,88 @@ export interface paths {
         get: operations["list_session_turn_reviews_oikos_turn_reviews_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/loop-inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Loop Inbox
+         * @description List latest per-session turn reviews that still need phone-friendly attention.
+         */
+        get: operations["list_loop_inbox_oikos_loop_inbox_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/loop-inbox/cards/{card_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Loop Inbox Action Card By Card Id
+         * @description Return a compact action-card payload for one stable follow-up card.
+         */
+        get: operations["get_loop_inbox_action_card_by_card_id_oikos_loop_inbox_cards__card_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/loop-inbox/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Loop Inbox Action Card For Session
+         * @description Compatibility lookup for older session-keyed links.
+         *
+         *     Returns the latest review for the session, even when it is stale or no longer actionable.
+         */
+        get: operations["get_loop_inbox_action_card_for_session_oikos_loop_inbox__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/loop-inbox/cards/{card_id}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Act On Loop Inbox Item
+         * @description Apply one bounded phone-first action to one exact follow-up card.
+         */
+        post: operations["act_on_loop_inbox_item_oikos_loop_inbox_cards__card_id__actions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4038,6 +4142,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/continuation-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Continuation Readiness
+         * @description Pre-flight check: can this instance run session continuations?
+         *
+         *     Returns backend config and whether the required binary/keys are present.
+         *     Used by QA and the frontend to show actionable errors.
+         */
+        get: operations["continuation_readiness_sessions_continuation_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/briefing": {
         parameters: {
             query?: never;
@@ -4314,7 +4441,7 @@ export interface paths {
          *
          *     Features:
          *     - Accepts gzip-compressed payloads (Content-Encoding: gzip)
-         *     - Triggers async background summary generation after successful ingest
+         *     - Triggers async background summary/embedding/turn-loop work after successful ingest
          */
         post: operations["ingest_session_agents_ingest_post"];
         delete?: never;
@@ -7448,6 +7575,152 @@ export interface components {
             api_key: string;
             /** Base Url */
             base_url?: string | null;
+        };
+        /**
+         * LoopActionCard
+         * @description Action-card payload for a single phone-first session follow-up.
+         */
+        LoopActionCard: {
+            /** Card Id */
+            card_id: number;
+            /** Session Id */
+            session_id: string;
+            /** Title */
+            title: string;
+            /** Project */
+            project?: string | null;
+            /** Machine */
+            machine?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Loop Mode */
+            loop_mode: string;
+            /** Decision */
+            decision: string;
+            /** Execution State */
+            execution_state?: string | null;
+            /** Summary */
+            summary: string;
+            /** Recommended Action */
+            recommended_action?: string | null;
+            /** Follow Up Prompt */
+            follow_up_prompt?: string | null;
+            /**
+             * Blocked Reasons
+             * @default []
+             */
+            blocked_reasons: string[];
+            /**
+             * Last Turn At
+             * Format: date-time
+             */
+            last_turn_at: string;
+            /**
+             * Card State
+             * @default active
+             */
+            card_state: string;
+            /** Card State Reason */
+            card_state_reason?: string | null;
+            /** Superseded By Card Id */
+            superseded_by_card_id?: number | null;
+            /** Requires Attention */
+            requires_attention: boolean;
+            /** Rationale */
+            rationale?: string | null;
+            /** Mode Capability */
+            mode_capability?: string | null;
+            /** Mode Summary */
+            mode_summary?: string | null;
+            /** Last User Text */
+            last_user_text?: string | null;
+            /** Last Assistant Text */
+            last_assistant_text?: string | null;
+            /**
+             * Available Actions
+             * @default []
+             */
+            available_actions: string[];
+        };
+        /**
+         * LoopInboxActionRequest
+         * @description Bounded phone-first action request for one inbox item.
+         */
+        LoopInboxActionRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "approve_recommended_action" | "not_now";
+        };
+        /**
+         * LoopInboxActionResult
+         * @description Result of acting on one loop inbox item.
+         */
+        LoopInboxActionResult: {
+            /** Session Id */
+            session_id: string;
+            /** Review Id */
+            review_id: number;
+            /** Action */
+            action: string;
+            /** Status */
+            status: string;
+            /** Reason */
+            reason?: string | null;
+            /** Queued Job Id */
+            queued_job_id?: number | null;
+        };
+        /**
+         * LoopInboxItem
+         * @description Thin mobile-friendly summary of one session that needs attention.
+         */
+        LoopInboxItem: {
+            /** Card Id */
+            card_id: number;
+            /** Session Id */
+            session_id: string;
+            /** Title */
+            title: string;
+            /** Project */
+            project?: string | null;
+            /** Machine */
+            machine?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Loop Mode */
+            loop_mode: string;
+            /** Decision */
+            decision: string;
+            /** Execution State */
+            execution_state?: string | null;
+            /** Summary */
+            summary: string;
+            /** Recommended Action */
+            recommended_action?: string | null;
+            /** Follow Up Prompt */
+            follow_up_prompt?: string | null;
+            /**
+             * Blocked Reasons
+             * @default []
+             */
+            blocked_reasons: string[];
+            /**
+             * Last Turn At
+             * Format: date-time
+             */
+            last_turn_at: string;
+            /**
+             * Card State
+             * @default active
+             */
+            card_state: string;
+            /** Card State Reason */
+            card_state_reason?: string | null;
+            /** Superseded By Card Id */
+            superseded_by_card_id?: number | null;
+            /** Requires Attention */
+            requires_attention: boolean;
         };
         /**
          * MCPServerAddRequest
@@ -13115,7 +13388,9 @@ export interface operations {
     };
     logout_auth_logout_post: {
         parameters: {
-            query?: never;
+            query?: {
+                session_factory?: unknown;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -13128,6 +13403,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_session_auth_refresh_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
@@ -14544,6 +14859,149 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionTurnReviewSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_loop_inbox_oikos_loop_inbox_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopInboxItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_loop_inbox_action_card_by_card_id_oikos_loop_inbox_cards__card_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                card_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopActionCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_loop_inbox_action_card_for_session_oikos_loop_inbox__session_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopActionCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    act_on_loop_inbox_item_oikos_loop_inbox_cards__card_id__actions_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                card_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopInboxActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopInboxActionResult"];
                 };
             };
             /** @description Validation Error */
@@ -17447,6 +17905,41 @@ export interface operations {
             path: {
                 session_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continuation_readiness_sessions_continuation_readiness_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

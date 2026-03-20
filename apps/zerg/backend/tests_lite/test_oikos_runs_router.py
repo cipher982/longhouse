@@ -307,7 +307,7 @@ def test_loop_inbox_returns_latest_attention_reviews_only(tmp_path):
             user_text="finish auth refresh",
             assistant_text="Run the pending targeted tests next.",
         )
-        _add_review(
+        review_continue = _add_review(
             db,
             owner_id=owner.id,
             session=session_a,
@@ -329,7 +329,7 @@ def test_loop_inbox_returns_latest_attention_reviews_only(tmp_path):
             user_text="investigate ci runner issue",
             assistant_text="This needs a product decision about rollout order.",
         )
-        _add_review(
+        review_decision = _add_review(
             db,
             owner_id=owner.id,
             session=session_b,
@@ -410,10 +410,12 @@ def test_loop_inbox_returns_latest_attention_reviews_only(tmp_path):
 
             assert [row["title"] for row in payload] == ["Infra Decision", "Auth Refresh"]
             assert [row["decision"] for row in payload] == ["escalate", "continue"]
+            assert [row["card_id"] for row in payload] == [review_decision.id, review_continue.id]
             assert payload[0]["requires_attention"] is True
             assert payload[0]["machine"] == "clifford"
             assert payload[1]["project"] == "zerg"
             assert payload[1]["recommended_action"] == "continue_session"
+            assert payload[1]["card_state"] == "active"
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -440,7 +442,7 @@ def test_loop_inbox_action_card_returns_compact_turn_context(tmp_path):
             user_text="finish the session detail page",
             assistant_text="Only targeted verification remains. Run the pending targeted tests.",
         )
-        _add_review(
+        review = _add_review(
             db,
             owner_id=owner.id,
             session=session,
@@ -451,10 +453,11 @@ def test_loop_inbox_action_card_returns_compact_turn_context(tmp_path):
 
         client, api_app_ref = _make_client(db, owner)
         try:
-            response = client.get(f"/api/oikos/loop-inbox/{session.id}")
+            response = client.get(f"/api/oikos/loop-inbox/cards/{review.id}")
             assert response.status_code == 200, response.text
             payload = response.json()
 
+            assert payload["card_id"] == review.id
             assert payload["session_id"] == str(session.id)
             assert payload["title"] == "Session Detail Page"
             assert payload["last_user_text"] == "finish the session detail page"
@@ -470,12 +473,13 @@ def test_loop_inbox_action_card_returns_compact_turn_context(tmp_path):
             ]
             assert payload["follow_up_prompt"] == "Run the pending targeted tests."
             assert payload["requires_attention"] is True
+            assert payload["card_state"] == "active"
             assert user_event.id < assistant_event.id
         finally:
             api_app_ref.dependency_overrides = {}
 
 
-def test_loop_inbox_action_card_404s_when_latest_review_no_longer_needs_attention(tmp_path):
+def test_loop_inbox_action_card_returns_expired_card_when_latest_review_no_longer_needs_attention(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -491,7 +495,7 @@ def test_loop_inbox_action_card_404s_when_latest_review_no_longer_needs_attentio
             user_text="finish it",
             assistant_text="Everything is done.",
         )
-        _add_review(
+        review = _add_review(
             db,
             owner_id=owner.id,
             session=session,
@@ -510,7 +514,11 @@ def test_loop_inbox_action_card_404s_when_latest_review_no_longer_needs_attentio
         client, api_app_ref = _make_client(db, owner)
         try:
             response = client.get(f"/api/oikos/loop-inbox/{session.id}")
-            assert response.status_code == 404
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["card_id"] == review.id
+            assert payload["card_state"] == "expired"
+            assert payload["requires_attention"] is False
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -561,7 +569,7 @@ def test_loop_inbox_approve_action_queues_same_session_continue_and_clears_item(
         client, api_app_ref = _make_client(db, owner)
         try:
             response = client.post(
-                f"/api/oikos/loop-inbox/{session.id}/actions",
+                f"/api/oikos/loop-inbox/cards/{review.id}/actions",
                 json={"action": "approve_recommended_action"},
             )
             assert response.status_code == 200, response.text
@@ -623,7 +631,7 @@ def test_loop_inbox_not_now_action_hides_pending_item(tmp_path):
         client, api_app_ref = _make_client(db, owner)
         try:
             response = client.post(
-                f"/api/oikos/loop-inbox/{session.id}/actions",
+                f"/api/oikos/loop-inbox/cards/{review.id}/actions",
                 json={"action": "not_now"},
             )
             assert response.status_code == 200, response.text
@@ -638,8 +646,9 @@ def test_loop_inbox_not_now_action_hides_pending_item(tmp_path):
             assert review_row.actual_outcome == "ignore"
             assert review_row.status == "acted"
 
-            detail_after = client.get(f"/api/oikos/loop-inbox/{session.id}")
-            assert detail_after.status_code == 404
+            detail_after = client.get(f"/api/oikos/loop-inbox/cards/{review.id}")
+            assert detail_after.status_code == 200
+            assert detail_after.json()["card_state"] == "dismissed"
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -714,8 +723,9 @@ def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
             assert inbox_payload[0]["session_id"] == str(session.id)
             assert inbox_payload[0]["decision"] == "continue"
             assert inbox_payload[0]["recommended_action"] == "continue_session"
+            card_id = inbox_payload[0]["card_id"]
 
-            card_response = client.get(f"/api/oikos/loop-inbox/{session.id}")
+            card_response = client.get(f"/api/oikos/loop-inbox/cards/{card_id}")
             assert card_response.status_code == 200, card_response.text
             card_payload = card_response.json()
             assert card_payload["follow_up_prompt"] == "Run the pending targeted tests."
@@ -726,7 +736,7 @@ def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
             ]
 
             action_response = client.post(
-                f"/api/oikos/loop-inbox/{session.id}/actions",
+                f"/api/oikos/loop-inbox/cards/{card_id}/actions",
                 json={"action": "approve_recommended_action"},
             )
             assert action_response.status_code == 200, action_response.text
@@ -748,5 +758,57 @@ def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
             inbox_after = client.get("/api/oikos/loop-inbox")
             assert inbox_after.status_code == 200, inbox_after.text
             assert inbox_after.json() == []
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_loop_inbox_card_marks_older_actionable_review_as_superseded(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        owner = User(email="owner@local", role=UserRole.USER.value)
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = _create_session(db, loop_mode="assist", summary_title="Hiring")
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="keep moving",
+            assistant_text="Ready for the next candidate pass.",
+        )
+        old_review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 18, 9, 25, tzinfo=timezone.utc),
+            execution_state="awaiting_user_approval",
+        )
+        newer_review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id + 1,
+            created_at=datetime(2026, 3, 18, 9, 30, tzinfo=timezone.utc),
+            execution_state="needs_human",
+            decision="wait",
+            summary="Waiting for direction on the next candidate pass.",
+            rationale="The latest turn no longer has a bounded continue path.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            status="ignored",
+            reason="superseded",
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            response = client.get(f"/api/oikos/loop-inbox/cards/{old_review.id}")
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["card_state"] == "superseded"
+            assert payload["superseded_by_card_id"] == newer_review.id
+            assert payload["requires_attention"] is False
         finally:
             api_app_ref.dependency_overrides = {}
