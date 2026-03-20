@@ -20,8 +20,10 @@ class Settings(BaseSettings):
     # Stripe
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
+    stripe_test_webhook_secret: str | None = None
     stripe_price_id: str | None = None
     stripe_publishable_key: str | None = None
+    stripe_process_test_events: bool = False
 
     # Docker/provisioning
     docker_host: str = "unix:///var/run/docker.sock"

@@ -158,11 +158,12 @@ def _mock_provisioner():
     return prov
 
 
-def _setup_stripe_webhook(event_type, event_data):
+def _setup_stripe_webhook(event_type, event_data, *, livemode=True):
     """Configure the stripe mock to return a specific webhook event."""
     _mock_stripe_module.Webhook.construct_event.return_value = {
         "id": "evt_test",
         "type": event_type,
+        "livemode": livemode,
         "data": {"object": event_data},
     }
 
@@ -1207,9 +1208,41 @@ class TestStripeWebhookProvisioning:
         with (
             patch.object(settings, "stripe_secret_key", None),
             patch.object(settings, "stripe_webhook_secret", None),
+            patch.object(settings, "stripe_test_webhook_secret", None),
         ):
             resp = client.post("/webhooks/stripe", content=b"{}")
             assert resp.status_code == 503
+
+    def test_verified_test_webhook_is_ignored_by_default(self, client, db_session):
+        user = _make_user(db_session, email="testmode@test.com")
+
+        with (
+            patch.object(settings, "stripe_secret_key", "sk_live"),
+            patch.object(settings, "stripe_webhook_secret", "whsec_live"),
+            patch.object(settings, "stripe_test_webhook_secret", "whsec_test"),
+        ):
+            _setup_stripe_webhook(
+                "checkout.session.completed",
+                {
+                    "client_reference_id": str(user.id),
+                    "subscription": "sub_testmode",
+                    "customer": "cus_testmode",
+                },
+                livemode=False,
+            )
+            _mock_stripe_module.Webhook.construct_event.side_effect = [
+                _mock_stripe_module.error.SignatureVerificationError(),
+                _mock_stripe_module.Webhook.construct_event.return_value,
+            ]
+            resp = _post_webhook(client)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "ignored": "test_mode"}
+
+        db_session.refresh(user)
+        assert user.subscription_status != "active"
+        inst = db_session.query(Instance).filter(Instance.user_id == user.id).first()
+        assert inst is None
 
     @patch("control_plane.services.provisioner.Provisioner")
     def test_checkout_completed_provisions_instance(self, MockProv, client, db_session):

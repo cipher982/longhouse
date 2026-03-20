@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -19,6 +20,37 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 logger = logging.getLogger(__name__)
 
 
+def _stripe_webhook_secrets() -> list[tuple[str, str]]:
+    secrets: list[tuple[str, str]] = []
+    if settings.stripe_webhook_secret:
+        secrets.append(("live", settings.stripe_webhook_secret))
+    if settings.stripe_test_webhook_secret:
+        secrets.append(("test", settings.stripe_test_webhook_secret))
+    return secrets
+
+
+def _construct_stripe_event(payload: bytes, sig_header: str) -> tuple[str, dict[str, Any]]:
+    import stripe
+
+    had_signature_error = False
+    for secret_kind, secret in _stripe_webhook_secrets():
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, secret)
+            return secret_kind, event
+        except stripe.error.SignatureVerificationError:
+            had_signature_error = True
+            continue
+        except Exception as exc:
+            logger.error("Stripe webhook error: %s", exc)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Webhook parsing error") from exc
+
+    if had_signature_error:
+        logger.warning("Stripe webhook signature verification failed")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")
+
+    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe not configured")
+
+
 @router.post("/stripe")
 async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     """Handle Stripe webhook events with signature verification.
@@ -30,7 +62,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     - invoice.paid           -> recover from past_due
     - invoice.payment_failed -> mark past_due
     """
-    if not settings.stripe_secret_key or not settings.stripe_webhook_secret:
+    if not settings.stripe_secret_key or not _stripe_webhook_secrets():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe not configured")
 
     import stripe
@@ -43,19 +75,31 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     if not sig_header:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing stripe-signature header")
 
-    try:
-        event = stripe.Webhook.construct_event(payload, sig_header, settings.stripe_webhook_secret)
-    except stripe.error.SignatureVerificationError:
-        logger.warning("Stripe webhook signature verification failed")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")
-    except Exception as e:
-        logger.error(f"Stripe webhook error: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Webhook parsing error")
+    secret_kind, event = _construct_stripe_event(payload, sig_header)
+    livemode = bool(event.get("livemode", True))
+    if livemode != (secret_kind == "live"):
+        logger.warning(
+            "Stripe webhook livemode mismatch: event_livemode=%s secret_kind=%s id=%s",
+            livemode,
+            secret_kind,
+            event.get("id", "unknown"),
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Webhook mode mismatch")
 
     event_type = event["type"]
     data = event["data"]["object"]
 
-    logger.info(f"Stripe webhook: {event_type} (id={event.get('id', 'unknown')})")
+    logger.info(
+        "Stripe webhook: %s (id=%s, livemode=%s, secret_kind=%s)",
+        event_type,
+        event.get("id", "unknown"),
+        livemode,
+        secret_kind,
+    )
+
+    if not livemode and not settings.stripe_process_test_events:
+        logger.info("Ignoring verified Stripe test webhook: %s (id=%s)", event_type, event.get("id", "unknown"))
+        return {"ok": True, "ignored": "test_mode"}
 
     if event_type == "checkout.session.completed":
         _handle_checkout_completed(data, db)
