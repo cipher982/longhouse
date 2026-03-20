@@ -146,14 +146,17 @@ def classify_wakeup_outcome_for_run(db: Session, *, run_id: int) -> int:
     """Mark an enqueued wakeup as acted or ignored based on launched follow-up work."""
     from zerg.models.models import CommisJob
 
-    rows = (
-        db.query(OikosWakeup)
-        .filter(
-            OikosWakeup.run_id == run_id,
-            OikosWakeup.status == WAKEUP_STATUS_ENQUEUED,
+    try:
+        rows = (
+            db.query(OikosWakeup)
+            .filter(
+                OikosWakeup.run_id == run_id,
+                OikosWakeup.status == WAKEUP_STATUS_ENQUEUED,
+            )
+            .all()
         )
-        .all()
-    )
+    except (OperationalError, ProgrammingError):
+        return 0
     if not rows:
         return 0
 

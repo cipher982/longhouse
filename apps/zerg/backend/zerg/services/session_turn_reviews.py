@@ -1173,14 +1173,20 @@ def finalize_turn_reviews_for_run(
 
 
 def classify_turn_review_outcome_for_run(db: Session, *, run_id: int) -> int:
-    rows = (
-        db.query(SessionTurnReview)
-        .filter(
-            SessionTurnReview.run_id == run_id,
-            SessionTurnReview.status == "enqueued",
+    if not _has_turn_review_table(db):
+        return 0
+    try:
+        rows = (
+            db.query(SessionTurnReview)
+            .filter(
+                SessionTurnReview.run_id == run_id,
+                SessionTurnReview.status == "enqueued",
+            )
+            .all()
         )
-        .all()
-    )
+    except OperationalError:
+        logger.debug("Skipping turn review classification because the table is unavailable", exc_info=True)
+        return 0
     if not rows:
         return 0
 
