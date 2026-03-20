@@ -11,11 +11,14 @@ Tests cover:
 
 from __future__ import annotations
 
+import hashlib
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
 import pytest
+import zerg.services.session_processing.tokens as tokens_mod
 
 from zerg.services.session_processing import (
     SessionMessage,
@@ -246,6 +249,45 @@ class TestIsToolResult:
 # =====================================================================
 
 class TestCountTokens:
+    def test_uses_bundled_tiktoken_cache_when_available(self, monkeypatch, tmp_path):
+        bundled = tmp_path / "tiktoken-cache"
+        bundled.mkdir()
+        (bundled / hashlib.sha1(tokens_mod._ENCODING_URLS["cl100k_base"].encode()).hexdigest()).write_bytes(b"cached")
+
+        monkeypatch.delenv("TIKTOKEN_CACHE_DIR", raising=False)
+        monkeypatch.delenv("DATA_GYM_CACHE_DIR", raising=False)
+        monkeypatch.setattr(tokens_mod, "_BUNDLED_TIKTOKEN_CACHE_DIR", bundled)
+
+        resolved = tokens_mod._use_bundled_cache_if_available()
+
+        assert resolved == bundled
+        assert os.environ["TIKTOKEN_CACHE_DIR"] == str(bundled)
+
+    def test_testing_falls_back_to_cl100k_when_o200k_cache_missing(self, monkeypatch, tmp_path):
+        bundled = tmp_path / "tiktoken-cache"
+        bundled.mkdir()
+        monkeypatch.setenv("TESTING", "1")
+        monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(bundled))
+        monkeypatch.delenv("DATA_GYM_CACHE_DIR", raising=False)
+        tokens_mod._get_encoding.cache_clear()
+        calls: list[str] = []
+
+        def fake_get_encoding(name: str):
+            calls.append(name)
+            if name == "o200k_base":
+                raise AssertionError("o200k_base should have fallen back before tiktoken lookup")
+            return name
+
+        monkeypatch.setattr(tokens_mod.tiktoken, "get_encoding", fake_get_encoding)
+
+        cache_blob = tokens_mod._cache_blob_path("o200k_base")
+
+        assert cache_blob is not None
+        assert not cache_blob.exists()
+        assert tokens_mod._get_encoding("o200k_base") == "cl100k_base"
+        assert calls == ["cl100k_base"]
+        tokens_mod._get_encoding.cache_clear()
+
     def test_known_string(self):
         # "hello world" is 2 tokens in cl100k_base
         result = count_tokens("hello world", encoding="cl100k_base")
