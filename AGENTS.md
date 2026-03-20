@@ -139,6 +139,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 19. **`~/.claude/longhouse-machine-name` is read at engine startup** — changing the file does nothing for the already-running `com.longhouse.shipper` daemon. Restart/reinstall the LaunchAgent (and re-sign via `make install-engine` first if launchd reports a codesigning exit) or new sessions may keep the stale label.
 20. **Hosted Gmail now depends on control-plane Pub/Sub config** — hosted Gmail connect runs through `control.longhouse.ai`, and the control plane now creates or repairs per-instance `gmail-push-<subdomain>` subscriptions before handoff. The required operator-side config is `CONTROL_PLANE_INSTANCE_GMAIL_PUBSUB_TOPIC`, `CONTROL_PLANE_INSTANCE_PUBSUB_SA_EMAIL`, and working GCP credentials on the control plane (ADC or `CONTROL_PLANE_GOOGLE_CLOUD_CREDENTIALS_JSON`). Existing hosted instances may still need reprovisioning once to pick up the injected runtime env.
 21. **Do not write handoff notes into this repo** — session handoffs belong in `~/git/obsidian_vault/AI-Sessions/`, not under `docs/` or other repo-local paths.
+22. **Hosted Longhouse data path is an explicit exception on `zerg`** — do not assume the generic VPS `/var/lib/docker/data/...` layout here. Hosted tenant data lives at `/var/app-data/longhouse/<subdomain>` on the host, mounts to `/data` in the tenant container, and the live DB is `/data/longhouse.db`. Use `scripts/hosted-loop-debug.sh <subdomain>` before improvising nested `ssh` + SQLite commands.
 
 ## Pushing Changes
 
@@ -206,6 +207,8 @@ ssh zerg 'docker logs longhouse-david010 --tail 50'    # User instance
 coolify app logs longhouse-demo                        # Marketing site
 coolify app logs longhouse-control-plane               # Control plane
 ```
+
+For hosted loop / turn-review debugging on a live tenant, start with `scripts/hosted-loop-debug.sh <subdomain>`. It resolves the instance through the control plane, authenticates a browser cookie, hits `/api/oikos/loop-inbox` + `/api/oikos/turn-reviews`, and only then falls back to a container-side SQLite probe.
 
 ### Checklist for Agents
 1. `make test` pass locally
