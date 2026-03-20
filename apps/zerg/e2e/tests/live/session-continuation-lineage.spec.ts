@@ -163,7 +163,7 @@ test('live thread card groups continuations and stale branch stays explicit', as
   await page.goto(`/timeline/${rootId}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('session-branch-banner')).toContainText('not the latest continuation');
   await expect(page.getByTestId('session-continuation-panel')).toContainText(
-    'Branch from this point in cloud',
+    'New cloud branch starts here',
   );
   await expect(page.getByRole('button', { name: 'Branch in Cloud' })).toBeVisible();
 
