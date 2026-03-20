@@ -2,7 +2,7 @@
 
 Status: in progress
 Owner: David / Longhouse product direction
-Updated: 2026-03-19
+Updated: 2026-03-20
 
 ## Executive Summary
 
@@ -19,9 +19,11 @@ The goal is not “mobile-responsive Longhouse.” The goal is “away-from-keyb
 
 The key pivot in this spec is:
 
+- `/loop` must be reachable from the main authenticated app without a deep link
 - Telegram is not the approval surface
 - `/loop` is the canonical mobile app
 - notifications must point at a stable follow-up card, not at a session-level inbox row that can disappear
+- installed Loop should receive web push directly when available; Telegram is fallback only
 
 ## Problem
 
@@ -85,6 +87,16 @@ Telegram, web push, or any future nudge channel should only tell the user that a
 
 The actual approval path should live in `/loop`, where actions are scoped to one exact follow-up card.
 
+### 6. Discoverability matters more than purity
+
+`/loop` can remain a dedicated mobile surface without being hidden.
+
+Users should be able to reach it from the normal authenticated app, even on desktop, because:
+
+- it reduces product confusion
+- it makes setup and dogfooding much faster
+- it avoids requiring an old notification or memorized URL
+
 ### 6. One completed turn equals one follow-up card
 
 The unit of phone action is not “a session.”
@@ -138,12 +150,15 @@ instead of dropping me into a dead link.
 
 ### Included
 
+- Clear entry point to `/loop` from the authenticated app
 - Dedicated backend/mobile contract for a loop inbox
 - Dedicated backend/mobile contract for one follow-up card
 - Session summaries driven by `SessionTurnReview`
 - Recommended action + optional follow-up prompt
 - One-tap same-session action path
 - Lightweight phone shell at `/loop`
+- Web push registration for installed Loop
+- Web push as the primary notification path when available
 - Telegram as optional notification/fallback only
 
 ### Excluded
@@ -219,6 +234,11 @@ Notifications should not:
 - open stale or disappearing URLs
 - show noisy link previews
 
+Primary notification channel order:
+
+1. installed Loop PWA via web push
+2. Telegram fallback when no active Loop push subscription exists
+
 ## Data Contract
 
 The mobile inbox should work from a thin purpose-built contract, not by scraping wakeups or desktop pages.
@@ -280,12 +300,14 @@ If a card is superseded, the phone UI should explain that and offer `Open latest
 
 - The user can keep a session moving from a phone without opening the desktop Longhouse UI in the common case.
 - The common mobile interaction path requires taps, not typed text.
+- `/loop` is reachable from the authenticated app without relying on a prior notification.
 
 ### UX
 
 - Inbox loads quickly and shows only active cards that need action.
 - Opening one card reveals a compact action card, not the full desktop layout.
 - Notification links never drop the user onto a 404 or empty state without explanation.
+- Installed Loop can request push permission and register without requiring desktop-only setup.
 
 ### Safety
 
@@ -297,7 +319,7 @@ If a card is superseded, the phone UI should explain that and offer `Open latest
 
 - At least one real traveling / away-from-keyboard workflow works end-to-end:
   - session finishes a turn
-  - phone sees a notification
+  - phone sees a Loop notification
   - user opens the exact card in `/loop`
   - user taps `Continue`
   - same session resumes
@@ -322,19 +344,22 @@ Done when:
 - make `/loop` card-centric instead of session-centric
 - keep the shell tiny and fast
 - optimize for installable phone use, not desktop parity
+- add an obvious entry point from the authenticated app
 
 Done when:
 
 - the phone surface feels like a dedicated action app
 - action card flow works well on iPhone Safari / installed Home Screen app
+- a logged-in user can reach `/loop` from the normal app nav
 
 ### Phase 3: Real phone nudges
 
-- use notifications as nudges into `/loop`
-- keep Telegram as fallback only
-- add web push later if PWA dogfooding proves worthwhile
+- register installed Loop for web push
+- send web push nudges into `/loop` when subscriptions exist
+- keep Telegram as fallback only when no Loop subscription exists or push delivery fails hard
 
 Done when:
 
 - the user does not need to poll the desktop site to know a turn is ready
 - the approval surface is `/loop`, not Telegram chat
+- an installed Loop PWA receives the nudge before Telegram in the common case
