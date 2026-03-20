@@ -67,4 +67,55 @@ if [[ "$parsed" != $'7\thttps://demo.longhouse.ai\tdemo\tactive\tlonghouse-demo\
   exit 1
 fi
 
+redirect_url="$(_lh_hosted_build_accept_token_redirect_url 'tok+/=' '/loop/card/demo?view=compact' 'https://demo.longhouse.ai')"
+if [[ "$redirect_url" != 'https://demo.longhouse.ai/api/auth/accept-token?token=tok%2B%2F%3D&return_to=%2Floop%2Fcard%2Fdemo%3Fview%3Dcompact' ]]; then
+  echo "Expected redirect URL builder to encode token and return_to safely"
+  exit 1
+fi
+
+curl() {
+  local headers_file=""
+  local cookie_jar=""
+  local request_url=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -D)
+        headers_file="$2"
+        shift 2
+        ;;
+      -c)
+        cookie_jar="$2"
+        shift 2
+        ;;
+      -o|-w)
+        shift 2
+        ;;
+      *)
+        request_url="$1"
+        shift
+        ;;
+    esac
+  done
+
+  printf '%s' "$request_url" >"$temp_json.request"
+  printf 'HTTP/2 302\r\nlocation: /loop/card/123\r\nset-cookie: longhouse_session=test\r\n\r\n' >"$headers_file"
+  : >"$cookie_jar"
+  printf '302'
+}
+
+cookie_jar="$(mktemp)"
+trap 'rm -f "$temp_json" "$cookie_jar" "$temp_json.request"' EXIT
+
+redirect_location="$(lh_hosted_accept_login_token_redirect 'tok+/=' "$cookie_jar" '/loop?view=compact' 'https://demo.longhouse.ai')"
+if [[ "$redirect_location" != '/loop/card/123' ]]; then
+  echo "Expected redirect helper to return the Location header"
+  exit 1
+fi
+
+if [[ "$(cat "$temp_json.request")" != 'https://demo.longhouse.ai/api/auth/accept-token?token=tok%2B%2F%3D&return_to=%2Floop%3Fview%3Dcompact' ]]; then
+  echo "Expected redirect helper to call accept-token with encoded return_to"
+  exit 1
+fi
+
 echo "hosted-instance auth tests passed"
