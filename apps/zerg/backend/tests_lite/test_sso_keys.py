@@ -370,6 +370,35 @@ def test_accept_token_get_redirect_sets_cookie_and_redirects(tmp_path):
     cleanup()
 
 
+def test_accept_token_get_redirect_respects_return_to(tmp_path):
+    """GET /auth/accept-token should preserve a validated tenant-local return target."""
+    from fastapi.testclient import TestClient
+
+    app, cleanup = _setup_test_db(tmp_path)
+    secret = "test-secret"
+
+    token = _make_jwt(
+        {"sub": "99", "email": "alice@example.com", "instance": "alice", "exp": int(time.time()) + 300},
+        secret,
+    )
+
+    with (
+        patch("zerg.services.sso_keys.get_sso_keys", return_value=[secret]),
+        patch.dict("os.environ", {"INSTANCE_ID": "alice"}),
+    ):
+        client = TestClient(app)
+        resp = client.get(
+            "/auth/accept-token",
+            params={"token": token, "return_to": "/loop/card/demo?view=compact"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/loop/card/demo?view=compact"
+    assert "longhouse_session=" in resp.headers.get("set-cookie", "")
+    cleanup()
+
+
 def test_accept_token_accepts_no_instance_claim(tmp_path):
     """Token without instance claim should be accepted (backward compat)."""
     from fastapi.testclient import TestClient

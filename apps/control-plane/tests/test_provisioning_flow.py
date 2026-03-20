@@ -205,6 +205,28 @@ def test_open_instance_redirects_to_accept_token_for_authenticated_user(client, 
     assert "token" in query
 
 
+def test_open_instance_preserves_tenant_return_to(client, db_session):
+    user = _make_user(db_session, email="owner@test.com")
+    _make_instance(db_session, user, subdomain="testuser")
+    client.cookies.update(_login_cookie(user))
+
+    response = client.get("/dashboard/open-instance?return_to=%2Floop%2Fcard%2Fabc%3Fview%3Dcompact", follow_redirects=False)
+
+    assert response.status_code == 302
+    redirect_url = response.headers["location"]
+    parsed = urllib.parse.urlparse(redirect_url)
+    query = urllib.parse.parse_qs(parsed.query)
+    assert parsed.path == "/api/auth/accept-token"
+    assert query["return_to"] == ["/loop/card/abc?view=compact"]
+
+
+def test_open_instance_redirects_anonymous_user_back_through_login_with_full_query(client):
+    response = client.get("/dashboard/open-instance?return_to=%2Floop", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?return_to=%2Fdashboard%2Fopen-instance%3Freturn_to%3D%252Floop"
+
+
 def test_email_login_respects_return_to(client, db_session):
     _make_user(db_session, email="owner@test.com", password="testpass123")
 

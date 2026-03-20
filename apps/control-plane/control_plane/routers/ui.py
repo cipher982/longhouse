@@ -21,6 +21,7 @@ from control_plane.models import User
 from control_plane.routers.auth import SESSION_COOKIE_NAME
 from control_plane.routers.auth import _append_return_to
 from control_plane.routers.auth import _decode_jwt
+from control_plane.routers.auth import _normalize_local_return_to
 from control_plane.routers.instances import _build_migration_status
 from control_plane.services.provisioner import Provisioner
 
@@ -448,11 +449,14 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/dashboard/open-instance", response_class=HTMLResponse)
-def open_instance(request: Request, db: Session = Depends(get_db)):
+def open_instance(request: Request, return_to: str | None = Query(default=None), db: Session = Depends(get_db)):
     """Issue a tenant login token and redirect the browser back to the instance."""
     user = _get_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse(_append_return_to("/", "/dashboard/open-instance"), status_code=302)
+        current_path = request.url.path
+        if request.url.query:
+            current_path = f"{current_path}?{request.url.query}"
+        return RedirectResponse(_append_return_to("/", current_path), status_code=302)
 
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
     if not instance:
@@ -471,6 +475,9 @@ def open_instance(request: Request, db: Session = Depends(get_db)):
     )
 
     handoff_url = f"{instance_url}/api/auth/accept-token?token={urllib.parse.quote(token, safe='')}"
+    safe_return_to = _normalize_local_return_to(return_to)
+    if safe_return_to:
+        handoff_url = f"{handoff_url}&return_to={urllib.parse.quote(safe_return_to, safe='')}"
     return RedirectResponse(handoff_url, status_code=302)
 
 

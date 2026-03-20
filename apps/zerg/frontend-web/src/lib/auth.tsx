@@ -405,6 +405,23 @@ interface LoginOverlayProps {
   clientId: string;
 }
 
+function buildHostedLoginRedirectUrl(baseUrl: string | null | undefined): string | null {
+  if (!baseUrl) {
+    return null;
+  }
+
+  try {
+    const url = new URL(baseUrl);
+    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}` || "/";
+    if (returnTo.startsWith("/")) {
+      url.searchParams.set("return_to", returnTo);
+    }
+    return url.toString();
+  } catch {
+    return baseUrl;
+  }
+}
+
 function LoginOverlay({ clientId }: LoginOverlayProps) {
   const [authMethods, setAuthMethods] = useState<AuthMethods | null>(null);
   const [password, setPassword] = useState('');
@@ -420,7 +437,7 @@ function LoginOverlay({ clientId }: LoginOverlayProps) {
 
   // SSO-only: no local Google or password, redirect to control plane
   useEffect(() => {
-    const hostedLoginUrl = authMethods?.sso_login_url || authMethods?.sso_url;
+    const hostedLoginUrl = buildHostedLoginRedirectUrl(authMethods?.sso_login_url || authMethods?.sso_url);
     if (authMethods && authMethods.sso && !authMethods.google && !authMethods.password && hostedLoginUrl) {
       setSsoRedirecting(true);
       window.location.href = hostedLoginUrl;
@@ -481,7 +498,7 @@ function LoginOverlay({ clientId }: LoginOverlayProps) {
   const showGoogle = authMethods?.google ?? false;
   const showPassword = authMethods?.password ?? false;
   const showSso = authMethods?.sso && authMethods?.sso_url;
-  const hostedLoginUrl = authMethods?.sso_login_url || authMethods?.sso_url || null;
+  const hostedLoginUrl = buildHostedLoginRedirectUrl(authMethods?.sso_login_url || authMethods?.sso_url);
   const ssoBase = authMethods?.sso_url ? authMethods.sso_url.replace(/\/+$/, '') : null;
   const ssoHost = (() => {
     if (!ssoBase) return null;
