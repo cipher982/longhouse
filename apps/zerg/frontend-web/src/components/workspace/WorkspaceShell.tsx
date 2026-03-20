@@ -10,7 +10,8 @@ import {
 } from "react";
 
 const WORKSPACE_LAYOUT_STORAGE_KEY = "zerg:session-workspace-layout:v1";
-const SIDEBAR_DEFAULT_WIDTH = 248;
+const LEGACY_SIDEBAR_DEFAULT_WIDTH = 248;
+const SIDEBAR_DEFAULT_WIDTH = 288;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 420;
 const INSPECTOR_DEFAULT_WIDTH = 336;
@@ -54,7 +55,7 @@ function readStoredLayout(): WorkspaceLayout {
     if (!raw) return defaults;
 
     const parsed = JSON.parse(raw) as Partial<WorkspaceLayout> | null;
-    return {
+    const storedLayout = {
       sidebarWidth:
         typeof parsed?.sidebarWidth === "number"
           ? clamp(parsed.sidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
@@ -64,6 +65,17 @@ function readStoredLayout(): WorkspaceLayout {
           ? clamp(parsed.inspectorWidth, INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH)
           : defaults.inspectorWidth,
     };
+
+    // Existing users may already have the original untouched defaults persisted.
+    // Upgrade that case so the wider sidebar lands without blowing away deliberate custom widths.
+    if (
+      storedLayout.sidebarWidth === LEGACY_SIDEBAR_DEFAULT_WIDTH &&
+      storedLayout.inspectorWidth === INSPECTOR_DEFAULT_WIDTH
+    ) {
+      return defaults;
+    }
+
+    return storedLayout;
   } catch {
     return defaults;
   }
