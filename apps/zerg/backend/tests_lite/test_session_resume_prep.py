@@ -608,6 +608,50 @@ def test_stream_claude_output_reports_persistence_failure(monkeypatch, tmp_path)
     assert "could not save the continuation transcript" in done_event
 
 
+def test_stream_claude_output_fake_mode_persists_turn_for_e2e(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    monkeypatch.setenv("TESTING", "1")
+    monkeypatch.setenv("E2E_FAKE_SESSION_CHAT", "1")
+
+    with SessionLocal() as db:
+        source_session_id = _seed_session(db)
+        store = AgentsStore(db)
+        target_session, created = store.ensure_cloud_continuation_target(source_session_id)
+        db.commit()
+        assert created is True
+
+        async def collect_events():
+            return [
+                event
+                async for event in session_chat.stream_claude_output(
+                    source_session_id=str(source_session_id),
+                    target_session_id=str(target_session.id),
+                    thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
+                    continued_from_session_id=str(target_session.continued_from_session_id),
+                    created_continuation=True,
+                    branched_from_event_id=target_session.branched_from_event_id,
+                    provider_session_id="resume-root",
+                    workspace_path=tmp_path / "workspace",
+                    message="anything else?",
+                    request_id="req-fake-e2e",
+                    db=db,
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        done_event = next(event for event in events if event.startswith("event: done"))
+        assert f'"shipped_session_id": "{target_session.id}"' in done_event
+        assert '"persisted_events": 2' in done_event
+        assert '"persistence_error": null' in done_event
+
+        persisted_events = store.get_session_events(target_session.id, limit=10, offset=0)
+        persisted_texts = [event.content_text for event in persisted_events if event.content_text]
+        assert persisted_texts == [
+            "anything else?",
+            "Test continuation reply to: anything else?",
+        ]
+
+
 def test_build_claude_resume_runtime_uses_anthropic_env(monkeypatch):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ANTHROPIC)

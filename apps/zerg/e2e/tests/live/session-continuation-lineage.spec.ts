@@ -159,9 +159,14 @@ test('live thread card groups continuations and stale branch stays explicit', as
   await expect(page).toHaveURL(`/timeline/${childId}`);
   await expect(page.getByTestId('session-lineage-panel')).toBeVisible();
   await expect(page.getByTestId('session-branch-banner')).toHaveCount(0);
+  await expect(page.getByTestId('session-timeline-seam')).toHaveCount(1);
+  await expect(page.getByTestId('session-timeline-list')).toContainText('Started on laptop for live lineage proof');
+  await expect(page.getByTestId('session-timeline-list')).toContainText('Continued in cloud for live lineage proof');
+  await expect(page.getByTestId('session-chat-divider')).toHaveCount(0);
 
   await page.goto(`/timeline/${rootId}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('session-branch-banner')).toContainText('not the latest continuation');
+  await expect(page.getByTestId('session-timeline-seam')).toHaveCount(0);
   await expect(page.getByTestId('session-continuation-panel')).toContainText(
     'New cloud branch starts here',
   );

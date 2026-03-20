@@ -468,6 +468,7 @@ test.describe("Session Detail Page", () => {
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
       "Cloud continuation starts here",
     );
+    await expect(page.getByTestId("session-chat-divider")).toHaveCount(1);
     await expect(
       page.getByRole("button", { name: "Start in Cloud" }),
     ).toBeVisible();
@@ -507,12 +508,24 @@ test.describe("Session Detail Page", () => {
     await page.getByRole("button", { name: "Start in Cloud" }).click();
 
     await expect(page.locator(".session-chat-error")).toHaveCount(0);
+
+    await expect
+      .poll(() => page.url(), { timeout: 10000 })
+      .not.toContain(`/timeline/${rootId}`);
+
+    await expect(page.getByTestId("session-branch-banner")).toHaveCount(0);
+    await expect(page.getByTestId("session-timeline-seam")).toHaveCount(1);
+    await expect(page.getByTestId("session-timeline-list")).toContainText("anything else?");
+    await expect(page.getByTestId("session-timeline-list")).toContainText(
+      "Test continuation reply to: anything else?",
+    );
+    await expect(page.getByTestId("session-chat-divider")).toHaveCount(0);
     await expect(
-      page.locator(".session-chat-message--user .session-chat-message-content"),
-    ).toContainText("anything else?");
+      page.getByRole("button", { name: "Start in Cloud" }),
+    ).toHaveCount(0);
     await expect(
-      page.locator(".session-chat-message--assistant .session-chat-message-content"),
-    ).toContainText("Test continuation reply to: anything else?");
+      page.getByTestId("session-continuation-panel").getByRole("button", { name: "Reply", exact: true }),
+    ).toBeVisible();
 
     const threadCard = await expect
       .poll(
@@ -601,6 +614,14 @@ test.describe("Session Detail Page", () => {
     await expect(page).toHaveURL(`/timeline/${childId}`);
     await expect(page.getByTestId("session-lineage-panel")).toBeVisible();
     await expect(page.getByTestId("session-branch-banner")).toHaveCount(0);
+    await expect(page.getByTestId("session-timeline-seam")).toHaveCount(1);
+    await expect(page.getByTestId("session-timeline-list")).toContainText(
+      "Started on laptop",
+    );
+    await expect(page.getByTestId("session-timeline-list")).toContainText(
+      "Continued in cloud",
+    );
+    await expect(page.getByTestId("session-chat-divider")).toHaveCount(0);
   });
 
   test("Older branches show a stale banner and branch-from-here continuation copy", async ({
@@ -651,6 +672,7 @@ test.describe("Session Detail Page", () => {
     await expect(page.getByTestId("session-branch-banner")).toContainText(
       "not the latest continuation",
     );
+    await expect(page.getByTestId("session-timeline-seam")).toHaveCount(0);
     await expect(page.getByTestId("session-lineage-panel")).toBeVisible();
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
       "New cloud branch starts here",
@@ -666,6 +688,7 @@ test.describe("Session Detail Page", () => {
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(`/timeline/${childId}`);
     await expect(page.getByTestId("session-branch-banner")).toHaveCount(0);
+    await expect(page.getByTestId("session-timeline-seam")).toHaveCount(1);
   });
 
   test("Search keeps one thread card but opens the matching older continuation", async ({
