@@ -18,8 +18,8 @@ Make `/timeline/:sessionId` behave like one continued conversation instead of a 
 
 ## Checklist
 
-- [ ] Commit the phase-0 spec/task slice
-- [ ] Implement backend projection API and tests
+- [x] Commit the phase-0 spec/task slice
+- [x] Implement backend projection API and tests
 - [ ] Implement frontend projection consumer and tests
 - [ ] Add or update robust E2E coverage
 - [ ] Merge to `main`
@@ -30,3 +30,6 @@ Make `/timeline/:sessionId` behave like one continued conversation instead of a 
 
 - Reuse the existing lineage fields on `AgentSession`; do not add new persistence unless the implementation proves it is necessary.
 - Keep raw session event APIs intact for audit/debug/MCP workflows.
+- Backend phase verification:
+  - `make test` is still red on this branch, but the same five browser-cookie auth-boundary failures also reproduce on untouched `origin/main`.
+  - Focused verification passed with `./run_backend_tests_lite.sh tests_lite/test_session_projection_api.py tests_lite/test_browser_machine_auth_boundary.py tests_lite/test_timeline_api_auth_boundary.py`.

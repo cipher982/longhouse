@@ -276,6 +276,25 @@ async def get_timeline_session_events(
     )
 
 
+@router.get("/sessions/{session_id}/projection", response_model=agents_router.SessionProjectionResponse)
+async def get_timeline_session_projection(
+    session_id: UUID,
+    branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
+    offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
+    db: Session = Depends(get_db),
+):
+    return await agents_router.get_session_projection(
+        session_id=session_id,
+        branch_mode=branch_mode,
+        limit=limit,
+        offset=offset,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
+
+
 @router.get("/sessions/{session_id}/export")
 async def export_timeline_session(
     session_id: UUID,

@@ -201,6 +201,23 @@ class IngestResult(BaseModel):
     session_created: bool
 
 
+@dataclass(frozen=True)
+class SessionProjectionItem:
+    kind: str  # "event" | "seam"
+    session: AgentSession
+    event: AgentEvent | None = None
+    parent_session: AgentSession | None = None
+
+
+@dataclass(frozen=True)
+class SessionProjectionPage:
+    path_sessions: list[AgentSession]
+    items: list[SessionProjectionItem]
+    total: int
+    abandoned_events: int
+    branch_mode: str
+
+
 # ---------------------------------------------------------------------------
 # Store class
 # ---------------------------------------------------------------------------
@@ -311,6 +328,127 @@ class AgentsStore:
 
     def list_thread_sessions(self, session_or_id: UUID | AgentSession) -> list[AgentSession]:
         return self._get_thread_sessions(session_or_id)
+
+    def get_session_lineage_path(self, session_or_id: UUID | AgentSession) -> list[AgentSession]:
+        session = session_or_id if isinstance(session_or_id, AgentSession) else self.get_session(session_or_id)
+        if session is None:
+            return []
+
+        thread_sessions = self._get_thread_sessions(session)
+        if not thread_sessions:
+            return []
+
+        by_id = {item.id: item for item in thread_sessions}
+        path: list[AgentSession] = []
+        seen: set[UUID] = set()
+        current: AgentSession | None = by_id.get(session.id, session)
+
+        while current is not None and current.id not in seen:
+            self._coerce_session_lineage_defaults(current)
+            path.append(current)
+            seen.add(current.id)
+            if current.continued_from_session_id is None:
+                break
+            current = by_id.get(current.continued_from_session_id)
+
+        path.reverse()
+        return path
+
+    def get_session_projection_page(
+        self,
+        session_or_id: UUID | AgentSession,
+        *,
+        branch_mode: str = "head",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> SessionProjectionPage:
+        path_sessions = self.get_session_lineage_path(session_or_id)
+        if not path_sessions:
+            return SessionProjectionPage(
+                path_sessions=[],
+                items=[],
+                total=0,
+                abandoned_events=0,
+                branch_mode=branch_mode,
+            )
+
+        event_counts: list[int] = []
+        total = 0
+        abandoned_events = 0
+
+        for index, path_session in enumerate(path_sessions):
+            visible_count = self.count_session_events(path_session.id, branch_mode=branch_mode)
+            event_counts.append(visible_count)
+            total += visible_count
+            if index > 0:
+                total += 1
+            if branch_mode == "head":
+                forensic_total = self.count_session_events(path_session.id, branch_mode="all")
+                abandoned_events += max(0, forensic_total - visible_count)
+
+        items: list[SessionProjectionItem] = []
+        remaining_offset = offset
+        remaining_limit = limit
+
+        for index, path_session in enumerate(path_sessions):
+            parent_session = path_sessions[index - 1] if index > 0 else None
+
+            if parent_session is not None:
+                if remaining_offset > 0:
+                    remaining_offset -= 1
+                elif remaining_limit > 0:
+                    items.append(
+                        SessionProjectionItem(
+                            kind="seam",
+                            session=path_session,
+                            parent_session=parent_session,
+                        )
+                    )
+                    remaining_limit -= 1
+
+            session_event_count = event_counts[index]
+            if session_event_count <= 0:
+                if remaining_limit <= 0:
+                    break
+                continue
+
+            if remaining_offset >= session_event_count:
+                remaining_offset -= session_event_count
+                if remaining_limit <= 0:
+                    break
+                continue
+
+            local_offset = remaining_offset
+            fetch_count = min(remaining_limit, session_event_count - local_offset)
+            if fetch_count > 0:
+                events = self.get_session_events(
+                    path_session.id,
+                    branch_mode=branch_mode,
+                    limit=fetch_count,
+                    offset=local_offset,
+                )
+                items.extend(
+                    SessionProjectionItem(
+                        kind="event",
+                        session=path_session,
+                        event=event,
+                        parent_session=parent_session,
+                    )
+                    for event in events
+                )
+                remaining_limit -= len(events)
+            remaining_offset = 0
+
+            if remaining_limit <= 0:
+                break
+
+        return SessionProjectionPage(
+            path_sessions=path_sessions,
+            items=items,
+            total=total,
+            abandoned_events=abandoned_events,
+            branch_mode=branch_mode,
+        )
 
     def create_continuation_session(
         self,

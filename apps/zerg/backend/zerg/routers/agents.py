@@ -218,6 +218,28 @@ def _build_session_response(
     )
 
 
+def _build_event_response(
+    store: AgentsStore,
+    event: AgentEvent,
+    *,
+    boundary: int | None,
+    head_branch_id: int | None,
+) -> "EventResponse":
+    return EventResponse(
+        id=event.id,
+        role=event.role,
+        content_text=event.content_text,
+        tool_name=event.tool_name,
+        tool_input_json=event.tool_input_json,
+        tool_output_text=event.tool_output_text,
+        tool_call_id=event.tool_call_id,
+        timestamp=event.timestamp,
+        in_active_context=store.is_event_in_active_context(event, boundary) if boundary is not None else True,
+        branch_id=event.branch_id,
+        is_head_branch=(head_branch_id is None or event.branch_id in {None, head_branch_id}),
+    )
+
+
 class SessionPreviewMessage(UTCBaseModel):
     """Preview message entry for session picker."""
 
@@ -292,6 +314,33 @@ class EventsListResponse(BaseModel):
     """Response for events list."""
 
     events: List[EventResponse]
+    total: int
+    branch_mode: str = Field("head", description="Branch projection mode: head|all")
+    abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
+
+
+class SessionProjectionItemResponse(UTCBaseModel):
+    """One stitched item in a selected session's projected lineage path."""
+
+    kind: str = Field(..., description="Projection item kind: event|seam")
+    session_id: str = Field(..., description="Concrete session UUID for this item")
+    timestamp: datetime = Field(..., description="Timestamp used for item ordering and display")
+    event: Optional[EventResponse] = Field(None, description="Present when kind=event")
+    continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID for seams")
+    continuation_kind: Optional[str] = Field(None, description="Continuation kind for seam items")
+    origin_label: Optional[str] = Field(None, description="Origin label for seam items")
+    parent_origin_label: Optional[str] = Field(None, description="Origin label for the parent segment")
+    branched_from_event_id: Optional[int] = Field(None, description="Event id where the child continuation branched")
+
+
+class SessionProjectionResponse(BaseModel):
+    """Response for a stitched lineage-path projection."""
+
+    root_session_id: str
+    focus_session_id: str
+    head_session_id: str
+    path_session_ids: List[str]
+    items: List[SessionProjectionItemResponse]
     total: int
     branch_mode: str = Field("head", description="Branch projection mode: head|all")
     abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
@@ -2493,24 +2542,109 @@ async def get_session_events(
 
     return EventsListResponse(
         events=[
-            EventResponse(
-                id=e.id,
-                role=e.role,
-                content_text=e.content_text,
-                tool_name=e.tool_name,
-                tool_input_json=e.tool_input_json,
-                tool_output_text=e.tool_output_text,
-                tool_call_id=e.tool_call_id,
-                timestamp=e.timestamp,
-                in_active_context=store.is_event_in_active_context(e, boundary) if boundary is not None else True,
-                branch_id=e.branch_id,
-                is_head_branch=(head_branch_id is None or e.branch_id in {None, head_branch_id}),
+            _build_event_response(
+                store,
+                e,
+                boundary=boundary,
+                head_branch_id=head_branch_id,
             )
             for e in events
         ],
         total=total,
         branch_mode=branch_mode,
         abandoned_events=abandoned_events,
+    )
+
+
+@router.get("/sessions/{session_id}/projection", response_model=SessionProjectionResponse)
+async def get_session_projection(
+    session_id: UUID,
+    branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
+    offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionProjectionResponse:
+    """Get the stitched lineage-path projection for a focused session."""
+    store = AgentsStore(db)
+
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    if branch_mode not in {"head", "all"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="branch_mode must be one of: head, all",
+        )
+
+    projection = store.get_session_projection_page(
+        session,
+        branch_mode=branch_mode,
+        limit=limit,
+        offset=offset,
+    )
+    head = store.get_thread_head(session)
+    active_context_boundary_cache: dict[UUID, int | None] = {}
+    head_branch_id_cache: dict[UUID, int | None] = {}
+
+    def get_boundary(current_session_id: UUID) -> int | None:
+        if current_session_id not in active_context_boundary_cache:
+            active_context_boundary_cache[current_session_id] = store.get_active_context_boundary(
+                current_session_id,
+                branch_mode=branch_mode,
+            )
+        return active_context_boundary_cache[current_session_id]
+
+    def get_head_branch_id(current_session_id: UUID) -> int | None:
+        if current_session_id not in head_branch_id_cache:
+            head_branch_id_cache[current_session_id] = store.get_head_branch_id(current_session_id)
+        return head_branch_id_cache[current_session_id]
+
+    items: list[SessionProjectionItemResponse] = []
+    for item in projection.items:
+        if item.kind == "event" and item.event is not None:
+            items.append(
+                SessionProjectionItemResponse(
+                    kind="event",
+                    session_id=str(item.session.id),
+                    timestamp=item.event.timestamp,
+                    event=_build_event_response(
+                        store,
+                        item.event,
+                        boundary=get_boundary(item.session.id),
+                        head_branch_id=get_head_branch_id(item.session.id),
+                    ),
+                )
+            )
+            continue
+
+        items.append(
+            SessionProjectionItemResponse(
+                kind="seam",
+                session_id=str(item.session.id),
+                timestamp=item.session.started_at,
+                continued_from_session_id=(str(item.session.continued_from_session_id) if item.session.continued_from_session_id else None),
+                continuation_kind=item.session.continuation_kind,
+                origin_label=item.session.origin_label,
+                parent_origin_label=(item.parent_session.origin_label if item.parent_session else None),
+                branched_from_event_id=item.session.branched_from_event_id,
+            )
+        )
+
+    return SessionProjectionResponse(
+        root_session_id=str(session.thread_root_session_id or session.id),
+        focus_session_id=str(session.id),
+        head_session_id=str(head.id if head else session.id),
+        path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
+        items=items,
+        total=projection.total,
+        branch_mode=projection.branch_mode,
+        abandoned_events=projection.abandoned_events,
     )
 
 
