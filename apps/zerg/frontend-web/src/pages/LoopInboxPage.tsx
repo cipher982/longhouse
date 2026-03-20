@@ -14,6 +14,8 @@ import {
 import { useLoopInstallPrompt } from "../hooks/useLoopInstallPrompt";
 import "../styles/loop-inbox.css";
 
+type DecisionBadgeVariant = "neutral" | "success" | "warning" | "error";
+
 function formatDecision(decision: string): string {
   switch (decision) {
     case "continue":
@@ -47,6 +49,21 @@ function formatCardState(state: string): string {
       return "Failed";
     default:
       return state.replace(/_/g, " ");
+  }
+}
+
+function decisionBadgeVariant(decision: string): DecisionBadgeVariant {
+  switch (decision) {
+    case "continue":
+    case "done":
+      return "success";
+    case "ask_user":
+    case "wait":
+      return "warning";
+    case "escalate":
+      return "error";
+    default:
+      return "neutral";
   }
 }
 
@@ -122,13 +139,13 @@ function LoopInboxRow({
   return (
     <button
       type="button"
-      className={`loop-inbox-row${selected ? " is-selected" : ""}`}
+      className={`loop-inbox-row loop-inbox-row--${item.decision.replace(/_/g, "-")}${selected ? " is-selected" : ""}`}
       onClick={onSelect}
       data-testid={`loop-inbox-row-${item.cardId}`}
     >
       <div className="loop-inbox-row-top">
         <strong>{item.title}</strong>
-        <Badge variant="neutral">{formatDecision(item.decision)}</Badge>
+        <Badge variant={decisionBadgeVariant(item.decision)}>{formatDecision(item.decision)}</Badge>
       </div>
       <div className="loop-inbox-row-meta">
         <span>{item.project || "No project"}</span>
@@ -196,10 +213,11 @@ export default function LoopInboxPage() {
   const hasInboxItems = (inboxQuery.data?.length ?? 0) > 0;
 
   return (
-    <PageShell size="normal">
+    <PageShell size="wide" className="loop-inbox-shell">
       <div className="loop-inbox-page">
         <header className="loop-inbox-header">
-          <div>
+          <div className="loop-inbox-header-copy">
+            <span className="loop-inbox-eyebrow">Mobile approvals</span>
             <h1>Loop Inbox</h1>
             <p>Handle finished coding turns without opening the full desktop workspace.</p>
           </div>
@@ -246,15 +264,31 @@ export default function LoopInboxPage() {
         {(!inboxQuery.isLoading || currentCard || isLoadingCard) && (hasInboxItems || currentCard || isLoadingCard) && (
           <div className="loop-inbox-layout">
             <section className="loop-inbox-list" aria-label="Sessions needing attention">
+              <div className="loop-inbox-list-header">
+                <div>
+                  <div className="loop-inbox-list-label">Attention queue</div>
+                  <div className="loop-inbox-list-title">
+                    {hasInboxItems ? "Open follow-ups" : "Nothing actionable right now"}
+                  </div>
+                </div>
+                {hasInboxItems && (
+                  <span className="loop-inbox-list-count">
+                    {inboxQuery.data?.length ?? 0}
+                  </span>
+                )}
+              </div>
+
               {hasInboxItems ? (
-                inboxQuery.data?.map((item) => (
-                  <LoopInboxRow
-                    key={item.cardId}
-                    item={item}
-                    selected={item.cardId === selectedCardId}
-                    onSelect={() => navigate(`/loop/card/${item.cardId}`)}
-                  />
-                ))
+                <div className="loop-inbox-list-body">
+                  {inboxQuery.data?.map((item) => (
+                    <LoopInboxRow
+                      key={item.cardId}
+                      item={item}
+                      selected={item.cardId === selectedCardId}
+                      onSelect={() => navigate(`/loop/card/${item.cardId}`)}
+                    />
+                  ))}
+                </div>
               ) : (
                 <EmptyState
                   title="No active cards"
@@ -290,7 +324,9 @@ export default function LoopInboxPage() {
                       </div>
                     </div>
                     <div className="loop-inbox-card-top-badges">
-                      <Badge variant="neutral">{formatDecision(currentCard.decision)}</Badge>
+                      <Badge variant={decisionBadgeVariant(currentCard.decision)}>
+                        {formatDecision(currentCard.decision)}
+                      </Badge>
                       {currentCard.cardState !== "active" && (
                         <Badge variant="warning">{formatCardState(currentCard.cardState)}</Badge>
                       )}
