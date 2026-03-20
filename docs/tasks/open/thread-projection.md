@@ -20,7 +20,7 @@ Make `/timeline/:sessionId` behave like one continued conversation instead of a 
 
 - [x] Commit the phase-0 spec/task slice
 - [x] Implement backend projection API and tests
-- [ ] Implement frontend projection consumer and tests
+- [x] Implement frontend projection consumer and tests
 - [ ] Add or update robust E2E coverage
 - [ ] Merge to `main`
 - [ ] Deploy and reprovision hosted runtime
@@ -33,3 +33,5 @@ Make `/timeline/:sessionId` behave like one continued conversation instead of a 
 - Backend phase verification:
   - `make test` is still red on this branch, but the same five browser-cookie auth-boundary failures also reproduce on untouched `origin/main`.
   - Focused verification passed with `./run_backend_tests_lite.sh tests_lite/test_session_projection_api.py tests_lite/test_browser_machine_auth_boundary.py tests_lite/test_timeline_api_auth_boundary.py`.
+- Frontend phase verification:
+  - `make test-frontend-unit MINIMAL=1` passed after installing worktree JS deps with `make ensure-js-deps`.

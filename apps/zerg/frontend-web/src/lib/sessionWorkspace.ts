@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentSession } from "../services/api/agents";
+import type { AgentEvent, AgentSession, AgentSessionProjectionItem } from "../services/api/agents";
 import { parseUTC } from "./dateUtils";
 
 export type EventFilter = "all" | "messages" | "tools";
@@ -20,13 +20,16 @@ export type ToolBatch = {
   anchorId: number;
 };
 
-export type ContinuationBoundary = {
+export type TimelineSeam = {
+  key: string;
+  sessionId: string;
   label: string;
   description: string;
   timestamp: string;
 };
 
 export type TimelineItem =
+  | { kind: "seam"; seam: TimelineSeam }
   | { kind: "message"; event: AgentEvent }
   | { kind: "tool"; interaction: ToolInteraction }
   | { kind: "tool_batch"; batch: ToolBatch };
@@ -53,6 +56,7 @@ export type TimelineSelection =
     };
 
 type TimelineModel = {
+  events: AgentEvent[];
   items: TimelineItem[];
   toolItems: ToolInteraction[];
   toolBatches: ToolBatch[];
@@ -120,6 +124,39 @@ export function getSessionOriginLabel(session: Pick<AgentSession, "origin_label"
 
 export function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
   return event?.in_active_context === false;
+}
+
+function buildTimelineSeam(item: AgentSessionProjectionItem): TimelineSeam {
+  const childOrigin = item.origin_label || "Local";
+  const parentOrigin = item.parent_origin_label || "earlier sync";
+
+  if (item.continuation_kind === "cloud" && item.parent_continuation_kind === "cloud") {
+    return {
+      key: `seam:${item.session_id}:${item.timestamp}`,
+      sessionId: item.session_id,
+      label: "Cloud branch begins",
+      description: "Everything below continues on this cloud branch from the saved split point.",
+      timestamp: item.timestamp,
+    };
+  }
+
+  if (item.continuation_kind === "cloud") {
+    return {
+      key: `seam:${item.session_id}:${item.timestamp}`,
+      sessionId: item.session_id,
+      label: "Cloud continuation begins",
+      description: `Synced ${parentOrigin} history above. Cloud-native messages below.`,
+      timestamp: item.timestamp,
+    };
+  }
+
+  return {
+    key: `seam:${item.session_id}:${item.timestamp}`,
+    sessionId: item.session_id,
+    label: `${childOrigin} branch begins`,
+    description: `Everything below continues on ${childOrigin} from the saved split point in ${parentOrigin}.`,
+    timestamp: item.timestamp,
+  };
 }
 
 function parseMcpTool(name: string): { namespace: string; method: string } | null {
@@ -294,14 +331,19 @@ export function getToolSummary(interaction: ToolInteraction): string {
   return "";
 }
 
-export function buildTimelineModel(events: AgentEvent[]): TimelineModel {
+export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]): TimelineModel {
   const byCallId = new Map<string, ToolInteraction>();
   const byCallEventId = new Map<number, ToolInteraction>();
   const fifoQueue: ToolInteraction[] = [];
   const absorbedResultIds = new Set<number>();
   const eventIdToSelectionKey = new Map<number, string>();
+  const events: AgentEvent[] = [];
 
-  for (const event of events) {
+  for (const projectionItem of projectionItems) {
+    if (projectionItem.kind !== "event" || !projectionItem.event) continue;
+    const event = projectionItem.event;
+    events.push(event);
+
     if (event.role === "assistant" && event.tool_name) {
       const key = event.tool_call_id ? `id:${event.tool_call_id}` : `call:${event.id}`;
       const interaction: ToolInteraction = {
@@ -348,7 +390,15 @@ export function buildTimelineModel(events: AgentEvent[]): TimelineModel {
   const items: TimelineItem[] = [];
   const toolItems: ToolInteraction[] = [];
 
-  for (const event of events) {
+  for (const projectionItem of projectionItems) {
+    if (projectionItem.kind === "seam") {
+      items.push({ kind: "seam", seam: buildTimelineSeam(projectionItem) });
+      continue;
+    }
+
+    const event = projectionItem.event;
+    if (!event) continue;
+
     if (event.role === "tool" && absorbedResultIds.has(event.id)) continue;
 
     if (event.role === "user") {
@@ -431,6 +481,10 @@ export function buildTimelineModel(events: AgentEvent[]): TimelineModel {
   const eventIdToRowId = new Map<number, string>();
 
   for (const item of groupedItems) {
+    if (item.kind === "seam") {
+      continue;
+    }
+
     if (item.kind === "message") {
       const key = `message:${item.event.id}`;
       const rowId = `event-${item.event.id}`;
@@ -509,6 +563,7 @@ export function buildTimelineModel(events: AgentEvent[]): TimelineModel {
   }
 
   return {
+    events,
     items: groupedItems,
     toolItems,
     toolBatches,
@@ -518,7 +573,8 @@ export function buildTimelineModel(events: AgentEvent[]): TimelineModel {
   };
 }
 
-export function getPreferredSelectionKey(item: TimelineItem): string {
+export function getPreferredSelectionKey(item: TimelineItem): string | null {
+  if (item.kind === "seam") return null;
   if (item.kind === "message") return `message:${item.event.id}`;
   if (item.kind === "tool") return `tool:${item.interaction.key}`;
   return `batch:${item.batch.key}`;
@@ -526,6 +582,7 @@ export function getPreferredSelectionKey(item: TimelineItem): string {
 
 export function timelineItemContainsSelection(item: TimelineItem, selectionKey: string | null): boolean {
   if (!selectionKey) return false;
+  if (item.kind === "seam") return false;
 
   if (item.kind === "message") {
     return selectionKey === `message:${item.event.id}`;

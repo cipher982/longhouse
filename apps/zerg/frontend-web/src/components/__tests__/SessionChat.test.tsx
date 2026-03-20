@@ -246,13 +246,16 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "tesT: whats 2+2");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(5));
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(6));
     await waitFor(() => {
       expect(screen.queryByText("tesT: whats 2+2")).not.toBeInTheDocument();
       expect(screen.queryByText("4")).not.toBeInTheDocument();
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session", "sess-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-thread", "sess-1"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["agent-session-projection-infinite", "sess-1"],
+    });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-events", "sess-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: ["agent-session-events-infinite", "sess-1"],

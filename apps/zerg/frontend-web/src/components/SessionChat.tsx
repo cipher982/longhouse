@@ -142,6 +142,7 @@ export function SessionChat({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session-thread", session.id] }),
+      queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session-events", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),

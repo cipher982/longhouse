@@ -5,7 +5,7 @@ import { useSessionWorkspace } from "../useSessionWorkspace";
 const agentSessionMocks = vi.hoisted(() => ({
   useAgentSession: vi.fn(),
   useAgentSessionThread: vi.fn(),
-  useAgentSessionEventsInfinite: vi.fn(),
+  useAgentSessionProjectionInfinite: vi.fn(),
 }));
 
 vi.mock("../useAgentSessions", () => agentSessionMocks);
@@ -45,11 +45,16 @@ function seedHookMocks(eventCount: number = 80) {
       head_session_id: baseSession.id,
     },
   });
-  agentSessionMocks.useAgentSessionEventsInfinite.mockReturnValue({
+  agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
     data: {
       pages: [
         {
-          events,
+          items: events.map((event) => ({
+            kind: "event",
+            session_id: baseSession.id,
+            timestamp: event.timestamp,
+            event,
+          })),
           total: events.length,
           abandoned_events: 0,
         },
@@ -185,7 +190,7 @@ describe("useSessionWorkspace", () => {
     }
   });
 
-  it("derives a continuation boundary for cloud child sessions", () => {
+  it("builds a stitched seam row for cloud child sessions", () => {
     const parentSession = {
       ...baseSession,
       id: "session-parent",
@@ -216,13 +221,52 @@ describe("useSessionWorkspace", () => {
         head_session_id: childSession.id,
       },
     });
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
+      data: {
+        pages: [
+          {
+            items: [
+              {
+                kind: "event",
+                session_id: parentSession.id,
+                timestamp: "2026-03-19T16:40:00Z",
+                event: makeEvents(1)[0],
+              },
+              {
+                kind: "seam",
+                session_id: childSession.id,
+                timestamp: "2026-03-19T16:45:00Z",
+                continued_from_session_id: parentSession.id,
+                continuation_kind: "cloud",
+                origin_label: "Cloud",
+                parent_origin_label: "Local",
+                parent_continuation_kind: "local",
+                branched_from_event_id: 12,
+              },
+            ],
+            total: 2,
+            abandoned_events: 0,
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    });
 
     const { result } = renderHook(() => useSessionWorkspace(childSession.id));
 
-    expect(result.current.continuationBoundary).toEqual({
-      label: "Cloud continuation begins",
-      description: "Synced Local history above. Cloud-native messages below.",
-      timestamp: "2026-03-19T16:45:00Z",
+    expect(result.current.items[1]).toEqual({
+      kind: "seam",
+      seam: {
+        key: "seam:session-child:2026-03-19T16:45:00Z",
+        sessionId: "session-child",
+        label: "Cloud continuation begins",
+        description: "Synced Local history above. Cloud-native messages below.",
+        timestamp: "2026-03-19T16:45:00Z",
+      },
     });
   });
 });

@@ -61,9 +61,8 @@ export default function SessionDetailPage() {
     currentThreadSession,
     headThreadSession,
     isViewingHead,
-    continuationBoundary,
-    totalEvents,
-    events,
+    totalEntries,
+    loadedEntryCount,
     items,
     filteredItems,
     eventsLoading,
@@ -359,11 +358,10 @@ export default function SessionDetailPage() {
         }
         main={
           <TimelinePane
-            continuationBoundary={continuationBoundary}
             items={items}
             filteredItems={filteredItems}
-            totalEvents={totalEvents}
-            loadedEvents={events.length}
+            totalEntries={totalEntries}
+            loadedEntries={loadedEntryCount}
             eventFilter={eventFilter}
             onEventFilterChange={setEventFilter}
             searchQuery={searchQuery}
