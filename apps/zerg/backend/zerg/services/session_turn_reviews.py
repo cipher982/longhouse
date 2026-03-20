@@ -595,6 +595,35 @@ async def _send_turn_review_telegram_notification(
     return bool(result.get("success"))
 
 
+def _send_turn_review_push_notification(
+    *,
+    db: Session,
+    review: SessionTurnReview,
+    session: AgentSession,
+) -> bool:
+    if review.owner_id is None:
+        return False
+    from zerg.services.loop_push import send_loop_push_nudge
+
+    return send_loop_push_nudge(
+        db=db,
+        owner_id=int(review.owner_id),
+        review=review,
+        session=session,
+    )
+
+
+async def _send_turn_review_mobile_notification(
+    *,
+    db: Session,
+    review: SessionTurnReview,
+    session: AgentSession,
+) -> bool:
+    if _send_turn_review_push_notification(db=db, review=review, session=session):
+        return True
+    return await _send_turn_review_telegram_notification(db=db, review=review, session=session)
+
+
 async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[SessionTurnReview | None, bool]:
     if not _has_turn_review_table(db):
         return None, False
@@ -688,7 +717,7 @@ async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[
             )
             outcome = _failure_outcome(
                 "Loop controller could not decide this completed turn.",
-                ("The AI loop controller failed, so this session should stay conservative " "until the next explicit review."),
+                ("The AI loop controller failed, so this session should stay conservative until the next " "explicit review."),
                 blocked_reason="Loop controller evaluation failed.",
             )
             review_status = "failed"
@@ -1069,10 +1098,10 @@ async def maybe_process_session_turn_loop(*, db: Session, session_id: str) -> Se
         session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
         if session is not None:
             try:
-                await _send_turn_review_telegram_notification(db=db, review=review, session=session)
+                await _send_turn_review_mobile_notification(db=db, review=review, session=session)
             except Exception:
                 logger.exception(
-                    "Failed to send turn-loop Telegram notification for review %s session %s",
+                    "Failed to send turn-loop mobile notification for review %s session %s",
                     review.id,
                     review.session_id,
                 )
