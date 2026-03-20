@@ -107,6 +107,7 @@ WORKDIR /app
 
 # Copy backend with virtual environment
 COPY --from=backend-builder --chown=longhouse:longhouse /repo/apps/zerg/backend /app
+COPY --from=backend-builder --chown=longhouse:longhouse /app/longhouse_shared /app/longhouse_shared
 
 # Copy frontend dist to where backend expects it
 COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/frontend-web/dist
