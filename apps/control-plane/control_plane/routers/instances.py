@@ -198,6 +198,7 @@ def _instance_out(inst: Instance, email: str, *, password: str | None = None) ->
         subdomain=inst.subdomain,
         url=_instance_url(inst.subdomain),
         container_name=inst.container_name,
+        data_path=resolve_instance_data_path(inst.subdomain, data_path=inst.data_path),
         status=inst.status,
         password=password,
         created_at=inst.created_at,

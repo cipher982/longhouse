@@ -57,4 +57,14 @@ if [[ "$(_lh_hosted_parse_device_token_payload "$temp_json")" != $'device-token-
   exit 1
 fi
 
+cat >"$temp_json" <<'JSON'
+{"id":7,"url":"https://demo.longhouse.ai","subdomain":"demo","status":"active","container_name":"longhouse-demo","data_path":"/var/app-data/longhouse/demo","password":"pw-123"}
+JSON
+
+parsed="$(_lh_hosted_parse_instance_payload "$temp_json")"
+if [[ "$parsed" != $'7\thttps://demo.longhouse.ai\tdemo\tactive\tlonghouse-demo\t/var/app-data/longhouse/demo\tpw-123' ]]; then
+  echo "Expected instance payload parser to include data_path"
+  exit 1
+fi
+
 echo "hosted-instance auth tests passed"

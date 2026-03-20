@@ -401,6 +401,7 @@ test-install-runner: ## @internal Run install-runner script tests
 test-hosted-instance: ## @internal Run hosted-instance helper script tests
 	@echo "🧪 Running hosted-instance helper tests..."
 	bash scripts/tests/hosted-instance-auth.test.sh
+	bash scripts/tests/hosted-loop-debug.test.sh
 
 test-runner-vm-canary: ## Run disposable VM runner canary against a hosted instance
 	@echo "🧪 Running disposable VM runner canary..."

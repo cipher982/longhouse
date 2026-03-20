@@ -77,6 +77,7 @@ print("\t".join(
         clean(payload.get("subdomain")),
         clean(payload.get("status")),
         clean(payload.get("container_name")),
+        clean(payload.get("data_path")),
         clean(payload.get("password")),
     ]
 ))
@@ -87,11 +88,11 @@ _lh_hosted_export_instance_payload() {
   local parsed="$1"
   local fallback_subdomain="${2:-}"
 
-  IFS=$'\t' read -r LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN LH_INSTANCE_STATUS LH_INSTANCE_CONTAINER_NAME LH_INSTANCE_PASSWORD <<< "$parsed"
+  IFS=$'\t' read -r LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN LH_INSTANCE_STATUS LH_INSTANCE_CONTAINER_NAME LH_INSTANCE_DATA_PATH LH_INSTANCE_PASSWORD <<< "$parsed"
   if [[ -z "$LH_INSTANCE_SUBDOMAIN" && -n "$fallback_subdomain" ]]; then
     LH_INSTANCE_SUBDOMAIN="$fallback_subdomain"
   fi
-  export LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN LH_INSTANCE_STATUS LH_INSTANCE_CONTAINER_NAME LH_INSTANCE_PASSWORD
+  export LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN LH_INSTANCE_STATUS LH_INSTANCE_CONTAINER_NAME LH_INSTANCE_DATA_PATH LH_INSTANCE_PASSWORD
 }
 
 _lh_hosted_parse_instance_row() {
@@ -115,7 +116,25 @@ for instance in payload.get("instances", []):
     url = instance.get("url")
     if not instance_id or not url:
         sys.exit(3)
-    print(f"{instance_id}\t{url}\t{subdomain}")
+    status = instance.get("status")
+    container_name = instance.get("container_name")
+    data_path = instance.get("data_path")
+
+    def clean(value):
+        return str("" if value is None else value).replace("\t", " ").replace("\n", " ")
+
+    print(
+        "\t".join(
+            [
+                clean(instance_id),
+                clean(url),
+                clean(subdomain),
+                clean(status),
+                clean(container_name),
+                clean(data_path),
+            ]
+        )
+    )
     sys.exit(0)
 
 sys.exit(2)
@@ -164,8 +183,8 @@ lh_hosted_resolve_instance() {
   fi
 
   rm -f "$response_file"
-  IFS=$'\t' read -r LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN <<< "$parsed"
-  export LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN
+  IFS=$'\t' read -r LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN LH_INSTANCE_STATUS LH_INSTANCE_CONTAINER_NAME LH_INSTANCE_DATA_PATH <<< "$parsed"
+  export LH_INSTANCE_ID LH_INSTANCE_URL LH_INSTANCE_SUBDOMAIN LH_INSTANCE_STATUS LH_INSTANCE_CONTAINER_NAME LH_INSTANCE_DATA_PATH
 }
 
 lh_hosted_default_control_plane_url() {

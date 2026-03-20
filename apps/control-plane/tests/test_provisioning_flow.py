@@ -712,6 +712,7 @@ class TestInstancesAPI:
         data = resp.json()
         assert data["subdomain"] == "newuser"
         assert data["url"] == _expected_instance_url("newuser")
+        assert data["data_path"] == "/tmp/test-data/newuser"
         assert data["status"] == "provisioning"
         assert data["password"] == "generated-pass-123"
         assert data["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
@@ -750,6 +751,7 @@ class TestInstancesAPI:
         assert len(data["instances"]) == 1
         assert data["instances"][0]["email"] == "owner@test.com"
         assert data["instances"][0]["url"] == _expected_instance_url("inst1")
+        assert data["instances"][0]["data_path"] == "/tmp/test-data/inst1"
         assert data["instances"][0]["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
 
     @patch("control_plane.routers.instances.httpx")
@@ -796,6 +798,7 @@ class TestInstancesAPI:
         assert resp.status_code == 200
         assert resp.json()["subdomain"] == "inst1"
         assert resp.json()["url"] == _expected_instance_url("inst1")
+        assert resp.json()["data_path"] == "/tmp/test-data/inst1"
         assert "migration" in resp.json()
 
     def test_get_instance_not_found(self, client, db_session):
