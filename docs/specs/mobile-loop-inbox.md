@@ -6,23 +6,22 @@ Updated: 2026-03-19
 
 ## Executive Summary
 
-Longhouse should not try to make the full desktop session workspace usable on a phone.
+Longhouse should not try to make the desktop session workspace usable on a phone.
 
 The phone product is a separate, tiny surface for one job:
 
 - a coding session finishes a turn
-- Longhouse summarizes what happened
+- Longhouse creates a follow-up card for that exact turn
 - the phone shows the recommended next action
 - the user taps a button instead of opening VNC or typing into a terminal text box
 
-This spec keeps the first mobile slice deliberately narrow:
-
-- one lightweight inbox of sessions that need attention
-- one action card per session
-- one-tap actions for the common case
-- full transcript only as an escape hatch
-
 The goal is not “mobile-responsive Longhouse.” The goal is “away-from-keyboard loop control.”
+
+The key pivot in this spec is:
+
+- Telegram is not the approval surface
+- `/loop` is the canonical mobile app
+- notifications must point at a stable follow-up card, not at a session-level inbox row that can disappear
 
 ## Problem
 
@@ -37,6 +36,15 @@ Today, when a coding session finishes a turn while the user is away:
 - type the obvious next response
 
 That is acceptable on a laptop and terrible on a phone.
+
+The current Telegram-based notification path also has a product bug:
+
+- notifications are durable chat messages
+- links point at `/loop/{session_id}`
+- `/loop` only keeps the latest actionable item per session
+- old notifications go stale and can fall into empty state / 404 behavior
+
+That makes Telegram a poor approval surface.
 
 ## Product Principles
 
@@ -71,6 +79,20 @@ The most important initial win is a lightweight approve/deny path.
 
 Full autonomy should stay bounded and rare until the phone flow is proven.
 
+### 5. Notifications are separate from approvals
+
+Telegram, web push, or any future nudge channel should only tell the user that a turn needs attention.
+
+The actual approval path should live in `/loop`, where actions are scoped to one exact follow-up card.
+
+### 6. One completed turn equals one follow-up card
+
+The unit of phone action is not “a session.”
+
+It is one exact assistant turn that produced a recommended next step.
+
+That follow-up card should remain inspectable even after it becomes stale, acted, or superseded.
+
 ## User Stories
 
 ### 1. Approve the obvious next step
@@ -102,16 +124,27 @@ When the session needs real inspection, I want the phone to show:
 
 so risky work does not get flattened into fake convenience.
 
+### 4. Open an old notification and still get a sensible result
+
+When I tap a Telegram or push notification hours later, I want the mobile app to explain whether that follow-up card is:
+
+- still active
+- already handled
+- superseded by a newer turn
+
+instead of dropping me into a dead link.
+
 ## V1 Scope
 
 ### Included
 
 - Dedicated backend/mobile contract for a loop inbox
-- Dedicated backend/mobile contract for one session action card
+- Dedicated backend/mobile contract for one follow-up card
 - Session summaries driven by `SessionTurnReview`
 - Recommended action + optional follow-up prompt
 - One-tap same-session action path
-- PWA-specific mobile shell later in a separate phase
+- Lightweight phone shell at `/loop`
+- Telegram as optional notification/fallback only
 
 ### Excluded
 
@@ -119,13 +152,14 @@ so risky work does not get flattened into fake convenience.
 - Rich lock-screen action support
 - Broad arbitrary phone chat composition
 - General runner management from the phone
-- Swift/native app work
+- Native iOS work
+- Using Telegram chat replies as the canonical approval flow
 
 ## V1 Mobile UX
 
 ### Surface 1: Inbox
 
-List only sessions that need attention.
+List only active follow-up cards that need attention.
 
 Each row should include:
 
@@ -137,12 +171,13 @@ Each row should include:
 
 ### Surface 2: Action Card
 
-The main phone screen for one session should include:
+The main phone screen for one follow-up card should include:
 
 - session title
 - project / machine
 - latest turn summary (2–4 lines)
 - recommended action
+- explicit card status
 - buttons
 
 Default button patterns:
@@ -169,12 +204,34 @@ Optional expanded context:
 
 Full transcript remains a secondary escape hatch.
 
+### Notification Surface
+
+Notifications should be short and ephemeral:
+
+- title
+- short summary
+- one deep link into the exact follow-up card
+
+Notifications should not:
+
+- carry the full approval UX
+- rely on free-text replies
+- open stale or disappearing URLs
+- show noisy link previews
+
 ## Data Contract
 
 The mobile inbox should work from a thin purpose-built contract, not by scraping wakeups or desktop pages.
 
+### Follow-up card identity
+
+Each mobile item must have a stable id that points to one exact reviewed turn.
+
+V1 may reuse `SessionTurnReview.id` as the card id instead of introducing a separate table.
+
 ### Inbox item fields
 
+- `card_id`
 - `session_id`
 - `title`
 - `project`
@@ -188,6 +245,7 @@ The mobile inbox should work from a thin purpose-built contract, not by scraping
 - `follow_up_prompt`
 - `blocked_reasons`
 - `last_turn_at`
+- `card_state`
 - `requires_attention`
 
 ### Action card fields
@@ -198,6 +256,23 @@ The mobile inbox should work from a thin purpose-built contract, not by scraping
 - `mode_summary`
 - `mode_capability`
 - `available_actions`
+- `superseded_by_card_id`
+- `card_state_reason`
+
+### Card states
+
+Each card should resolve to one of:
+
+- `active`
+- `acted`
+- `dismissed`
+- `superseded`
+- `expired`
+- `failed`
+
+Old links should keep working even when a card is no longer active.
+
+If a card is superseded, the phone UI should explain that and offer `Open latest`.
 
 ## Success Criteria
 
@@ -208,59 +283,58 @@ The mobile inbox should work from a thin purpose-built contract, not by scraping
 
 ### UX
 
-- Inbox loads quickly and shows only sessions that need action.
-- Opening one session reveals a compact action card, not the full desktop layout.
+- Inbox loads quickly and shows only active cards that need action.
+- Opening one card reveals a compact action card, not the full desktop layout.
+- Notification links never drop the user onto a 404 or empty state without explanation.
 
 ### Safety
 
 - The default phone action scope is same-session only.
 - Risky or ambiguous turns do not present as blind one-tap continue actions.
+- Telegram free-text replies are not required for the core flow.
 
 ### Dogfood
 
 - At least one real traveling / away-from-keyboard workflow works end-to-end:
   - session finishes a turn
-  - phone sees it
+  - phone sees a notification
+  - user opens the exact card in `/loop`
   - user taps `Continue`
   - same session resumes
 
 ## Phases
 
-### Phase 1: Thin Loop Inbox read contract
+### Phase 1: Stable follow-up card identity
 
-- add dedicated inbox/card backend endpoints on top of `SessionTurnReview`
-- return concise action-ready data only
-
-Done when:
-
-- backend exposes a clean list of sessions needing mobile attention
-- backend exposes a single action-card response for one session
-- focused tests cover filtering, sorting, and payload shape
-
-### Phase 2: One-tap action contract
-
-- add backend mutation endpoints for `Continue`, `Not now`, and simple approval
+- reuse `SessionTurnReview.id` as `card_id`
+- move deep links from session ids to card ids
+- keep old card links resolvable with explicit stale/superseded state
+- stop Telegram from showing noisy previews
 
 Done when:
 
-- same-session continue can be triggered without the full desktop session page
-- action endpoints are bounded and test-covered
+- backend exposes inbox/card/action APIs keyed by `card_id`
+- `/loop` can open a stale or superseded card without 404
+- Telegram links target exact cards
 
-### Phase 3: Tiny mobile PWA shell
+### Phase 2: PWA-first mobile shell
 
-- build a separate phone-first shell for inbox + card + details
+- make `/loop` card-centric instead of session-centric
+- keep the shell tiny and fast
+- optimize for installable phone use, not desktop parity
 
 Done when:
 
-- the phone surface no longer depends on the desktop session layout
+- the phone surface feels like a dedicated action app
 - action card flow works well on iPhone Safari / installed Home Screen app
 
-### Phase 4: Push notifications
+### Phase 3: Real phone nudges
 
-- notify when a session finishes a turn that needs attention
-- deep-link into the relevant action card
-- start with existing Telegram delivery instead of building web push first
+- use notifications as nudges into `/loop`
+- keep Telegram as fallback only
+- add web push later if PWA dogfooding proves worthwhile
 
 Done when:
 
 - the user does not need to poll the desktop site to know a turn is ready
+- the approval surface is `/loop`, not Telegram chat
