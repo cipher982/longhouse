@@ -11,6 +11,7 @@ import {
   type LoopActionCard,
   type LoopInboxItem,
 } from "../../services/api/oikos";
+import { useLoopInstallPrompt } from "../../hooks/useLoopInstallPrompt";
 import { TestRouter } from "../../test/test-utils";
 
 const mockNavigate = vi.fn();
@@ -37,10 +38,15 @@ vi.mock("../../services/api/oikos", async (importOriginal) => {
   };
 });
 
+vi.mock("../../hooks/useLoopInstallPrompt", () => ({
+  useLoopInstallPrompt: vi.fn(),
+}));
+
 const fetchLoopInboxMock = vi.mocked(fetchLoopInbox);
 const fetchLoopActionCardMock = vi.mocked(fetchLoopActionCard);
 const fetchLoopActionCardForSessionMock = vi.mocked(fetchLoopActionCardForSession);
 const applyLoopInboxActionMock = vi.mocked(applyLoopInboxAction);
+const useLoopInstallPromptMock = vi.mocked(useLoopInstallPrompt);
 
 function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
   return {
@@ -112,6 +118,12 @@ describe("LoopInboxPage", () => {
       reason: "continue_session",
       queuedJobId: 7,
     });
+    useLoopInstallPromptMock.mockReturnValue({
+      canInstall: false,
+      showIosHint: false,
+      isInstalled: false,
+      install: vi.fn(),
+    });
   });
 
   it("renders the inbox row and action card", async () => {
@@ -162,5 +174,26 @@ describe("LoopInboxPage", () => {
 
     expect(screen.getByText("A newer turn replaced this follow-up.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open latest/i })).toHaveAttribute("href", "/loop/card/99");
+  });
+
+  it("shows the install banner when loop can be installed", async () => {
+    const user = userEvent.setup();
+    const installMock = vi.fn().mockResolvedValue(true);
+    useLoopInstallPromptMock.mockReturnValue({
+      canInstall: true,
+      showIosHint: false,
+      isInstalled: false,
+      install: installMock,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-install-banner")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("loop-install-action"));
+
+    expect(installMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -11,6 +11,7 @@ import {
   type LoopInboxAction,
   type LoopInboxItem,
 } from "../services/api/oikos";
+import { useLoopInstallPrompt } from "../hooks/useLoopInstallPrompt";
 import "../styles/loop-inbox.css";
 
 function formatDecision(decision: string): string {
@@ -143,6 +144,7 @@ export default function LoopInboxPage() {
   const { sessionId, cardId } = useParams<{ sessionId?: string; cardId?: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { canInstall, showIosHint, isInstalled, install } = useLoopInstallPrompt();
 
   const selectedCardId = cardId ? Number(cardId) : null;
   const selectedSessionId = !selectedCardId && sessionId ? sessionId : null;
@@ -205,6 +207,27 @@ export default function LoopInboxPage() {
             Open timeline
           </Link>
         </header>
+
+        {!isInstalled && (canInstall || showIosHint) && (
+          <section className="loop-install-banner" data-testid="loop-install-banner">
+            <div>
+              <strong>Install Loop</strong>
+              <p>Save this inbox to your home screen so approvals open fast even on weak mobile connections.</p>
+            </div>
+            <div className="loop-install-banner-actions">
+              {canInstall && (
+                <Button onClick={() => void install()} data-testid="loop-install-action">
+                  Install app
+                </Button>
+              )}
+              {showIosHint && (
+                <p className="loop-install-hint">
+                  On iPhone: tap Share, then <strong>Add to Home Screen</strong>.
+                </p>
+              )}
+            </div>
+          </section>
+        )}
 
         {inboxQuery.isLoading && !currentCard && (
           <div className="loop-inbox-loading">

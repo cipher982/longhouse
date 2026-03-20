@@ -1,6 +1,10 @@
 {
-  "name": "Longhouse — AI Session Archive",
-  "short_name": "Longhouse",
+  "id": "/loop",
+  "name": "Longhouse Loop",
+  "short_name": "Loop",
+  "description": "Handle finished coding turns from your phone with one-tap approvals.",
+  "start_url": "/loop",
+  "scope": "/loop",
   "icons": [
     {
       "src": "/maskable-icon-192.png",

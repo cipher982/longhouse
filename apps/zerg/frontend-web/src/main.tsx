@@ -130,6 +130,12 @@ if (replayScenario) {
   document.body.classList.add("replay-mode");
 }
 
+if ("serviceWorker" in navigator && import.meta.env.PROD && window.location.pathname.startsWith("/loop")) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/loop-sw.js", { scope: "/loop" }).catch(() => {});
+  });
+}
+
 const queryClient = new QueryClient();
 
 ReactDOM.createRoot(container).render(
