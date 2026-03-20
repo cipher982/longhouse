@@ -11,6 +11,7 @@ COPY pyproject.toml uv.lock README.md API.md /app/
 RUN uv sync --frozen --no-install-project --no-dev
 
 COPY control_plane /app/control_plane
+COPY longhouse_shared /app/longhouse_shared
 RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:${PATH}"
