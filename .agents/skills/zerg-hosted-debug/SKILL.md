@@ -15,6 +15,7 @@ Start with the repo helper:
 scripts/hosted-loop-debug.sh david010
 scripts/hosted-loop-debug.sh --subdomain david010 --session <session-id> --limit 5
 scripts/hosted-loop-debug.sh --subdomain david010 --logs
+scripts/hosted-loop-debug.sh --subdomain david010 --session <session-id> --json
 ```
 
 It does the right order automatically:
