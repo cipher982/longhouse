@@ -493,12 +493,12 @@ def _session_title(session: AgentSession) -> str:
     return f"Session {str(session.id)[:8]}"
 
 
-def _public_loop_url(session_id: str) -> str | None:
+def _public_loop_url(review_id: int) -> str | None:
     settings = get_settings()
     base_url = str(settings.app_public_url or settings.public_site_url or "").strip().rstrip("/")
     if not base_url:
         return None
-    return f"{base_url}/loop/{session_id}"
+    return f"{base_url}/loop/card/{review_id}"
 
 
 def _build_turn_review_notification_text(*, review: SessionTurnReview, session: AgentSession) -> str:
@@ -511,10 +511,46 @@ def _build_turn_review_notification_text(*, review: SessionTurnReview, session: 
     ]
     if review.follow_up_prompt:
         lines.append(f"Suggested next step: {review.follow_up_prompt}")
-    loop_url = _public_loop_url(str(review.session_id))
+    loop_url = _public_loop_url(int(review.id))
     if loop_url:
-        lines.append(f"Open: {loop_url}")
+        lines.append(f"Open in Loop: {loop_url}")
     return "\n".join(line.strip() for line in lines if str(line).strip())
+
+
+def _supersede_older_actionable_reviews(*, db: Session, review: SessionTurnReview) -> int:
+    from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_IGNORED
+    from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
+
+    rows = (
+        db.query(SessionTurnReview)
+        .filter(
+            SessionTurnReview.session_id == review.session_id,
+            SessionTurnReview.id < review.id,
+            SessionTurnReview.execution_state.in_(("awaiting_user_approval", "needs_human")),
+            SessionTurnReview.status.in_(("recorded", "enqueued")),
+        )
+        .all()
+    )
+    if not rows:
+        return 0
+
+    for row in rows:
+        if row.run_id is not None:
+            finalize_wakeups_for_run(
+                db,
+                run_id=row.run_id,
+                status=WAKEUP_STATUS_IGNORED,
+                reason="superseded",
+                payload_updates={"outcome": _EXPECTED_IGNORE_OUTCOME},
+            )
+        row.status = "ignored"
+        row.reason = "superseded"
+        row.actual_outcome = _EXPECTED_IGNORE_OUTCOME
+        row.shadow_alignment = _classify_alignment(_expected_outcome(row), _EXPECTED_IGNORE_OUTCOME)
+
+    db.commit()
+    db.refresh(review)
+    return len(rows)
 
 
 async def _send_turn_review_telegram_notification(
@@ -553,6 +589,7 @@ async def _send_turn_review_telegram_notification(
             to=chat_id,
             text=_format_for_telegram(message),
             parse_mode="html",
+            disable_web_page_preview=True,
         )
     )
     return bool(result.get("success"))
@@ -651,7 +688,7 @@ async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[
             )
             outcome = _failure_outcome(
                 "Loop controller could not decide this completed turn.",
-                ("The AI loop controller failed, so this session should stay conservative until the " "next explicit review."),
+                ("The AI loop controller failed, so this session should stay conservative " "until the next explicit review."),
                 blocked_reason="Loop controller evaluation failed.",
             )
             review_status = "failed"
@@ -682,6 +719,7 @@ async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[
     db.add(review)
     db.commit()
     db.refresh(review)
+    _supersede_older_actionable_reviews(db=db, review=review)
     return review, True
 
 

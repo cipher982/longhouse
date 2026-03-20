@@ -190,6 +190,7 @@ class ChannelMessage(TypedDict, total=False):
     # Options
     parse_mode: Literal["text", "markdown", "html"] | None
     silent: bool  # Don't trigger notifications
+    disable_web_page_preview: bool
     scheduled_at: datetime | None  # Schedule message
 
 

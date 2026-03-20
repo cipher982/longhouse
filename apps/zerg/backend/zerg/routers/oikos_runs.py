@@ -108,6 +108,7 @@ class SessionTurnReviewSummary(UTCBaseModel):
 class LoopInboxItem(UTCBaseModel):
     """Thin mobile-friendly summary of one session that needs attention."""
 
+    card_id: int
     session_id: str
     title: str
     project: Optional[str] = None
@@ -121,6 +122,9 @@ class LoopInboxItem(UTCBaseModel):
     follow_up_prompt: Optional[str] = None
     blocked_reasons: List[str] = []
     last_turn_at: datetime
+    card_state: str = "active"
+    card_state_reason: Optional[str] = None
+    superseded_by_card_id: Optional[int] = None
     requires_attention: bool
 
 
@@ -304,6 +308,22 @@ def _available_loop_actions(review: SessionTurnReview) -> List[str]:
     return actions
 
 
+def _load_review_by_card_id(
+    db: Session,
+    *,
+    owner_id: int,
+    card_id: int,
+) -> SessionTurnReview | None:
+    return (
+        db.query(SessionTurnReview)
+        .filter(
+            SessionTurnReview.owner_id == owner_id,
+            SessionTurnReview.id == card_id,
+        )
+        .first()
+    )
+
+
 def _load_latest_attention_reviews(
     db: Session,
     *,
@@ -349,6 +369,72 @@ def _load_latest_attention_review_for_session(
     if str(row.execution_state or "").strip() not in _ATTENTION_EXECUTION_STATES:
         return None
     return row
+
+
+def _load_latest_review_for_session(
+    db: Session,
+    *,
+    owner_id: int,
+    session_id: str,
+) -> SessionTurnReview | None:
+    return (
+        db.query(SessionTurnReview)
+        .filter(
+            SessionTurnReview.owner_id == owner_id,
+            SessionTurnReview.session_id == session_id,
+        )
+        .order_by(SessionTurnReview.id.desc())
+        .first()
+    )
+
+
+def _load_latest_newer_review_id(
+    db: Session,
+    *,
+    session_id: str,
+    review_id: int,
+) -> int | None:
+    row = (
+        db.query(SessionTurnReview.id)
+        .filter(
+            SessionTurnReview.session_id == session_id,
+            SessionTurnReview.id > review_id,
+        )
+        .order_by(SessionTurnReview.id.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    return int(row[0])
+
+
+def _derive_card_state(
+    db: Session,
+    *,
+    review: SessionTurnReview,
+) -> tuple[str, Optional[str], Optional[int]]:
+    newer_card_id = _load_latest_newer_review_id(db, session_id=str(review.session_id), review_id=int(review.id))
+    status = str(review.status or "").strip()
+    reason = str(review.reason or "").strip()
+    execution_state = str(review.execution_state or "").strip()
+
+    is_attention_review = execution_state in _ATTENTION_EXECUTION_STATES
+
+    if status in _ACTIONABLE_REVIEW_STATUSES and is_attention_review and newer_card_id is not None:
+        return "superseded", "A newer turn replaced this follow-up.", newer_card_id
+    if status in _ACTIONABLE_REVIEW_STATUSES and is_attention_review:
+        return "active", None, None
+    if status == "acted":
+        if reason == "not_now":
+            return "dismissed", "You dismissed this follow-up.", None
+        return "acted", "This follow-up already ran or was handled.", None
+    if status == "failed":
+        return "failed", "Longhouse could not complete this follow-up automatically.", None
+    if status == "ignored":
+        if reason == "superseded" or newer_card_id is not None:
+            return "superseded", "A newer turn replaced this follow-up.", newer_card_id
+        return "expired", "This follow-up no longer needs attention.", None
+    return "expired", "This follow-up is no longer actionable.", newer_card_id
 
 
 def _load_session_map(db: Session, session_ids: List[Any]) -> Dict[str, AgentSession]:
@@ -441,9 +527,17 @@ def _load_turn_context(
     return None, None
 
 
-def _build_loop_inbox_item(review: SessionTurnReview, session: AgentSession | None) -> LoopInboxItem:
+def _build_loop_inbox_item(
+    review: SessionTurnReview,
+    session: AgentSession | None,
+    *,
+    card_state: str = "active",
+    card_state_reason: str | None = None,
+    superseded_by_card_id: int | None = None,
+) -> LoopInboxItem:
     session_id = str(review.session_id)
     return LoopInboxItem(
+        card_id=int(review.id),
         session_id=session_id,
         title=_session_title(session, session_id),
         project=getattr(session, "project", None),
@@ -457,7 +551,10 @@ def _build_loop_inbox_item(review: SessionTurnReview, session: AgentSession | No
         follow_up_prompt=review.follow_up_prompt,
         blocked_reasons=_clean_blocked_reasons(review.blocked_reasons),
         last_turn_at=review.created_at,
-        requires_attention=True,
+        card_state=card_state,
+        card_state_reason=card_state_reason,
+        superseded_by_card_id=superseded_by_card_id,
+        requires_attention=card_state == "active",
     )
 
 
@@ -520,28 +617,36 @@ def list_loop_inbox(
     return [_build_loop_inbox_item(row, session_map.get(str(row.session_id))) for row in rows]
 
 
-@router.get("/loop-inbox/{session_id}", response_model=LoopActionCard)
-def get_loop_inbox_action_card(
-    session_id: str,
+@router.get("/loop-inbox/cards/{card_id}", response_model=LoopActionCard)
+def get_loop_inbox_action_card_by_card_id(
+    card_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> LoopActionCard:
-    """Return a compact action-card payload for one session that needs attention."""
+    """Return a compact action-card payload for one stable follow-up card."""
 
-    review = _load_latest_attention_review_for_session(db, owner_id=current_user.id, session_id=session_id)
+    review = _load_review_by_card_id(db, owner_id=current_user.id, card_id=card_id)
     if review is None:
-        raise HTTPException(status_code=404, detail="No attention-worthy turn review found for this session")
+        raise HTTPException(status_code=404, detail="No turn review found for this card")
 
+    session_id = str(review.session_id)
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    card_state, card_state_reason, superseded_by_card_id = _derive_card_state(db, review=review)
     last_user_text, last_assistant_text = _load_turn_context(
         db,
         session_id=session_id,
         assistant_event_id=review.assistant_event_id,
     )
-    item = _build_loop_inbox_item(review, session)
+    item = _build_loop_inbox_item(
+        review,
+        session,
+        card_state=card_state,
+        card_state_reason=card_state_reason,
+        superseded_by_card_id=superseded_by_card_id,
+    )
     return LoopActionCard(
         **item.model_dump(),
         rationale=review.rationale,
@@ -549,22 +654,47 @@ def get_loop_inbox_action_card(
         mode_summary=review.mode_summary,
         last_user_text=last_user_text,
         last_assistant_text=last_assistant_text or review.turn_excerpt,
-        available_actions=_available_loop_actions(review),
+        available_actions=_available_loop_actions(review) if card_state == "active" else [],
     )
 
 
-@router.post("/loop-inbox/{session_id}/actions", response_model=LoopInboxActionResult)
-def act_on_loop_inbox_item(
+@router.get("/loop-inbox/{session_id}", response_model=LoopActionCard)
+def get_loop_inbox_action_card_for_session(
     session_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> LoopActionCard:
+    """Compatibility lookup for older session-keyed links.
+
+    Returns the latest review for the session, even when it is stale or no longer actionable.
+    """
+
+    review = _load_latest_review_for_session(db, owner_id=current_user.id, session_id=session_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="No turn review found for this session")
+    return get_loop_inbox_action_card_by_card_id(
+        card_id=int(review.id),
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/loop-inbox/cards/{card_id}/actions", response_model=LoopInboxActionResult)
+def act_on_loop_inbox_item(
+    card_id: int,
     request: LoopInboxActionRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> LoopInboxActionResult:
-    """Apply one bounded phone-first action to the latest attention-worthy review."""
+    """Apply one bounded phone-first action to one exact follow-up card."""
 
-    review = _load_latest_attention_review_for_session(db, owner_id=current_user.id, session_id=session_id)
+    review = _load_review_by_card_id(db, owner_id=current_user.id, card_id=card_id)
     if review is None:
-        raise HTTPException(status_code=404, detail="No attention-worthy turn review found for this session")
+        raise HTTPException(status_code=404, detail="No turn review found for this card")
+
+    card_state, _card_state_reason, _superseded_by_card_id = _derive_card_state(db, review=review)
+    if card_state != "active":
+        raise HTTPException(status_code=409, detail="This follow-up card is no longer active")
 
     if request.action == "approve_recommended_action":
         if review.execution_state != "awaiting_user_approval" or review.recommended_action != "continue_session":

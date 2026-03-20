@@ -188,7 +188,7 @@ class TelegramChannel(WebhookChannel):
                     type="password",
                     required=False,
                     sensitive=True,
-                    help_text="Secret token for webhook validation. Telegram sends this in X-Telegram-Bot-Api-Secret-Token header.",
+                    help_text=("Secret token for webhook validation. Telegram sends this " "in X-Telegram-Bot-Api-Secret-Token header."),
                     advanced=True,
                 ),
             ]
@@ -343,6 +343,7 @@ class TelegramChannel(WebhookChannel):
         reply_to_id = message.get("reply_to_id")
         thread_id = message.get("thread_id")
         silent = message.get("silent", self._disable_notification)
+        disable_web_page_preview = bool(message.get("disable_web_page_preview", False))
 
         # Build optional parameters
         kwargs: dict[str, Any] = {}
@@ -350,6 +351,8 @@ class TelegramChannel(WebhookChannel):
             kwargs["parse_mode"] = parse_mode
         if silent:
             kwargs["disable_notification"] = True
+        if disable_web_page_preview:
+            kwargs["disable_web_page_preview"] = True
         if reply_to_id:
             kwargs["reply_to_message_id"] = int(reply_to_id)
         if thread_id:

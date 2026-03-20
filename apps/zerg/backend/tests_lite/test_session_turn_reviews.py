@@ -292,7 +292,80 @@ async def test_turn_review_assist_sends_telegram_loop_link_once(monkeypatch, tmp
     assert sent_messages[0]["to"] == "1234"
     assert "Only targeted verification remains." in str(sent_messages[0]["text"])
     assert "Run the pending targeted tests." in str(sent_messages[0]["text"])
-    assert f"https://longhouse.example/loop/{session_id}" in str(sent_messages[0]["text"])
+    assert "/loop/card/" in str(sent_messages[0]["text"])
+    assert sent_messages[0]["disable_web_page_preview"] is True
+
+
+@pytest.mark.asyncio
+async def test_new_turn_review_supersedes_older_actionable_review(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_supersedes_older.db")
+
+    decisions = [
+        LoopControllerDecision(
+            decision="continue",
+            summary="Continue the same session.",
+            rationale="One bounded next step remains.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=55,
+        ),
+        LoopControllerDecision(
+            decision="wait",
+            summary="Waiting on a broader human decision.",
+            rationale="The latest turn no longer has a safe bounded continue path.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=("Needs direction.",),
+            model_id="gpt-test",
+            raw_response='{"decision":"wait"}',
+            loop_thread_id=55,
+        ),
+    ]
+
+    async def _fake_evaluate(**_kwargs):
+        return decisions.pop(0)
+
+    async def _fake_invoke(*_args, **_kwargs):
+        return 987
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="run the next step",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+
+        first = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert first is not None
+        assert first.status == "enqueued"
+
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="Actually this now needs a broader decision before continuing.",
+                timestamp=_now(),
+            )
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.ended_at = _now()
+        db.commit()
+
+        second = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert second is not None
+        db.refresh(first)
+
+        assert first.status == "ignored"
+        assert first.reason == "superseded"
+        assert second.id != first.id
 
 
 @pytest.mark.asyncio

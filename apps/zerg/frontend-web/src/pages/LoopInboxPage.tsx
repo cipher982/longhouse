@@ -5,6 +5,7 @@ import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui"
 import {
   applyLoopInboxAction,
   fetchLoopActionCard,
+  fetchLoopActionCardForSession,
   fetchLoopInbox,
   type LoopActionCard,
   type LoopInboxAction,
@@ -26,6 +27,25 @@ function formatDecision(decision: string): string {
       return "Escalate";
     default:
       return decision.replace(/_/g, " ");
+  }
+}
+
+function formatCardState(state: string): string {
+  switch (state) {
+    case "active":
+      return "Active";
+    case "acted":
+      return "Handled";
+    case "dismissed":
+      return "Dismissed";
+    case "superseded":
+      return "Superseded";
+    case "expired":
+      return "Expired";
+    case "failed":
+      return "Failed";
+    default:
+      return state.replace(/_/g, " ");
   }
 }
 
@@ -77,6 +97,11 @@ function LoopActionButtons({
           Not now
         </Button>
       )}
+      {card.cardState === "superseded" && card.supersededByCardId && (
+        <Link className="ui-button ui-button--ghost ui-button--md" to={`/loop/card/${card.supersededByCardId}`}>
+          Open latest
+        </Link>
+      )}
       <Link className="ui-button ui-button--ghost ui-button--md" to={`/timeline/${card.sessionId}`}>
         Open full session
       </Link>
@@ -98,7 +123,7 @@ function LoopInboxRow({
       type="button"
       className={`loop-inbox-row${selected ? " is-selected" : ""}`}
       onClick={onSelect}
-      data-testid={`loop-inbox-row-${item.sessionId}`}
+      data-testid={`loop-inbox-row-${item.cardId}`}
     >
       <div className="loop-inbox-row-top">
         <strong>{item.title}</strong>
@@ -115,9 +140,12 @@ function LoopInboxRow({
 }
 
 export default function LoopInboxPage() {
-  const { sessionId } = useParams<{ sessionId?: string }>();
+  const { sessionId, cardId } = useParams<{ sessionId?: string; cardId?: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  const selectedCardId = cardId ? Number(cardId) : null;
+  const selectedSessionId = !selectedCardId && sessionId ? sessionId : null;
 
   const inboxQuery = useQuery({
     queryKey: ["loop-inbox"],
@@ -125,39 +153,45 @@ export default function LoopInboxPage() {
     refetchInterval: 15000,
   });
 
-  const selectedSessionId = sessionId ?? null;
-
   useEffect(() => {
-    if (selectedSessionId || !inboxQuery.data || inboxQuery.data.length === 0) return;
-    navigate(`/loop/${inboxQuery.data[0].sessionId}`, { replace: true });
-  }, [inboxQuery.data, navigate, selectedSessionId]);
+    if (selectedCardId || selectedSessionId || !inboxQuery.data || inboxQuery.data.length === 0) return;
+    navigate(`/loop/card/${inboxQuery.data[0].cardId}`, { replace: true });
+  }, [inboxQuery.data, navigate, selectedCardId, selectedSessionId]);
 
-  const cardQuery = useQuery({
-    queryKey: ["loop-action-card", selectedSessionId],
-    queryFn: () => fetchLoopActionCard(selectedSessionId as string),
+  const legacySessionQuery = useQuery({
+    queryKey: ["loop-action-card-session", selectedSessionId],
+    queryFn: () => fetchLoopActionCardForSession(selectedSessionId as string),
     enabled: Boolean(selectedSessionId),
   });
 
+  useEffect(() => {
+    if (!selectedSessionId || !legacySessionQuery.data) return;
+    navigate(`/loop/card/${legacySessionQuery.data.cardId}`, { replace: true });
+  }, [legacySessionQuery.data, navigate, selectedSessionId]);
+
+  const cardQuery = useQuery({
+    queryKey: ["loop-action-card", selectedCardId],
+    queryFn: () => fetchLoopActionCard(selectedCardId as number),
+    enabled: Number.isFinite(selectedCardId),
+  });
+
   const actionMutation = useMutation({
-    mutationFn: ({ currentSessionId, action }: { currentSessionId: string; action: LoopInboxAction }) =>
-      applyLoopInboxAction(currentSessionId, action),
+    mutationFn: ({ currentCardId, action }: { currentCardId: number; action: LoopInboxAction }) =>
+      applyLoopInboxAction(currentCardId, action),
     onSuccess: async (_result, variables) => {
       await queryClient.invalidateQueries({ queryKey: ["loop-inbox"] });
-      await queryClient.invalidateQueries({ queryKey: ["loop-action-card", variables.currentSessionId] });
-      const nextInbox = await queryClient.fetchQuery({
-        queryKey: ["loop-inbox"],
-        queryFn: fetchLoopInbox,
-      });
-      const stillSelected = nextInbox.some((item) => item.sessionId === variables.currentSessionId);
-      if (stillSelected) return;
-      navigate(nextInbox[0] ? `/loop/${nextInbox[0].sessionId}` : "/loop", { replace: true });
+      await queryClient.invalidateQueries({ queryKey: ["loop-action-card", variables.currentCardId] });
     },
   });
 
   const handleAction = (action: LoopInboxAction) => {
-    if (!selectedSessionId) return;
-    actionMutation.mutate({ currentSessionId: selectedSessionId, action });
+    if (!selectedCardId) return;
+    actionMutation.mutate({ currentCardId: selectedCardId, action });
   };
+
+  const currentCard = cardQuery.data ?? null;
+  const isLoadingCard = cardQuery.isLoading || legacySessionQuery.isLoading;
+  const hasInboxItems = (inboxQuery.data?.length ?? 0) > 0;
 
   return (
     <PageShell size="normal">
@@ -172,101 +206,120 @@ export default function LoopInboxPage() {
           </Link>
         </header>
 
-        {inboxQuery.isLoading && (
+        {inboxQuery.isLoading && !currentCard && (
           <div className="loop-inbox-loading">
             <Spinner size="md" />
             <span>Loading loop inbox…</span>
           </div>
         )}
 
-        {!inboxQuery.isLoading && inboxQuery.data?.length === 0 && (
+        {!inboxQuery.isLoading && !hasInboxItems && !currentCard && !isLoadingCard && (
           <EmptyState
             title="No sessions need attention"
             description="Finished turns that need approval or review will appear here."
           />
         )}
 
-        {!inboxQuery.isLoading && (inboxQuery.data?.length ?? 0) > 0 && (
+        {(!inboxQuery.isLoading || currentCard || isLoadingCard) && (hasInboxItems || currentCard || isLoadingCard) && (
           <div className="loop-inbox-layout">
             <section className="loop-inbox-list" aria-label="Sessions needing attention">
-              {inboxQuery.data?.map((item) => (
-                <LoopInboxRow
-                  key={item.sessionId}
-                  item={item}
-                  selected={item.sessionId === selectedSessionId}
-                  onSelect={() => navigate(`/loop/${item.sessionId}`)}
+              {hasInboxItems ? (
+                inboxQuery.data?.map((item) => (
+                  <LoopInboxRow
+                    key={item.cardId}
+                    item={item}
+                    selected={item.cardId === selectedCardId}
+                    onSelect={() => navigate(`/loop/card/${item.cardId}`)}
+                  />
+                ))
+              ) : (
+                <EmptyState
+                  title="No active cards"
+                  description="This follow-up still has details, but nothing else currently needs action."
                 />
-              ))}
+              )}
             </section>
 
             <section className="loop-inbox-card" data-testid="loop-inbox-card">
-              {cardQuery.isLoading && selectedSessionId && (
+              {isLoadingCard && (
                 <div className="loop-inbox-card-loading">
                   <Spinner size="sm" />
                   <span>Loading action card…</span>
                 </div>
               )}
 
-              {!selectedSessionId && (
+              {!selectedCardId && !selectedSessionId && !currentCard && !isLoadingCard && (
                 <EmptyState
-                  title="Select a session"
-                  description="Choose a session from the inbox to review the recommended next action."
+                  title="Select a follow-up"
+                  description="Choose a card from the inbox to review the recommended next action."
                 />
               )}
 
-              {cardQuery.data && (
+              {currentCard && (
                 <>
                   <div className="loop-inbox-card-top">
                     <div>
-                      <h2>{cardQuery.data.title}</h2>
+                      <h2>{currentCard.title}</h2>
                       <div className="loop-inbox-card-meta">
-                        <span>{cardQuery.data.project || "No project"}</span>
-                        {cardQuery.data.machine && <span>{cardQuery.data.machine}</span>}
-                        <span>{formatTimestamp(cardQuery.data.lastTurnAt)}</span>
+                        <span>{currentCard.project || "No project"}</span>
+                        {currentCard.machine && <span>{currentCard.machine}</span>}
+                        <span>{formatTimestamp(currentCard.lastTurnAt)}</span>
                       </div>
                     </div>
-                    <Badge variant="neutral">{formatDecision(cardQuery.data.decision)}</Badge>
+                    <div className="loop-inbox-card-top-badges">
+                      <Badge variant="neutral">{formatDecision(currentCard.decision)}</Badge>
+                      {currentCard.cardState !== "active" && (
+                        <Badge variant="warning">{formatCardState(currentCard.cardState)}</Badge>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="loop-inbox-card-section">
-                    <h3>What happened</h3>
-                    <p>{cardQuery.data.summary}</p>
-                  </div>
-
-                  {cardQuery.data.followUpPrompt && (
+                  {currentCard.cardStateReason && (
                     <div className="loop-inbox-card-section">
-                      <h3>Recommended next prompt</h3>
-                      <p>{cardQuery.data.followUpPrompt}</p>
+                      <h3>Status</h3>
+                      <p>{currentCard.cardStateReason}</p>
                     </div>
                   )}
 
-                  {cardQuery.data.rationale && (
+                  <div className="loop-inbox-card-section">
+                    <h3>What happened</h3>
+                    <p>{currentCard.summary}</p>
+                  </div>
+
+                  {currentCard.followUpPrompt && (
+                    <div className="loop-inbox-card-section">
+                      <h3>Recommended next prompt</h3>
+                      <p>{currentCard.followUpPrompt}</p>
+                    </div>
+                  )}
+
+                  {currentCard.rationale && (
                     <div className="loop-inbox-card-section">
                       <h3>Why</h3>
-                      <p>{cardQuery.data.rationale}</p>
+                      <p>{currentCard.rationale}</p>
                     </div>
                   )}
 
                   <div className="loop-inbox-card-context">
-                    {cardQuery.data.lastUserText && (
+                    {currentCard.lastUserText && (
                       <div className="loop-inbox-card-section">
                         <h3>Last user instruction</h3>
-                        <p>{cardQuery.data.lastUserText}</p>
+                        <p>{currentCard.lastUserText}</p>
                       </div>
                     )}
-                    {cardQuery.data.lastAssistantText && (
+                    {currentCard.lastAssistantText && (
                       <div className="loop-inbox-card-section">
                         <h3>Last assistant turn</h3>
-                        <p>{cardQuery.data.lastAssistantText}</p>
+                        <p>{currentCard.lastAssistantText}</p>
                       </div>
                     )}
                   </div>
 
-                  {cardQuery.data.blockedReasons.length > 0 && (
+                  {currentCard.blockedReasons.length > 0 && (
                     <div className="loop-inbox-card-section">
                       <h3>Blocked reasons</h3>
                       <ul className="loop-inbox-bullets">
-                        {cardQuery.data.blockedReasons.map((reason) => (
+                        {currentCard.blockedReasons.map((reason) => (
                           <li key={reason}>{reason}</li>
                         ))}
                       </ul>
@@ -274,7 +327,7 @@ export default function LoopInboxPage() {
                   )}
 
                   <LoopActionButtons
-                    card={cardQuery.data}
+                    card={currentCard}
                     onAction={handleAction}
                     pending={actionMutation.isPending}
                   />
