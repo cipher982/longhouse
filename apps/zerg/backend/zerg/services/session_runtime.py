@@ -131,9 +131,9 @@ def _display_phase_for_state(
     active_tool: str | None,
     confidence: str,
     terminal_state: str | None,
-    ended_at: datetime | None,
+    status: str,
 ) -> str:
-    if terminal_state is not None or phase == "finished" or ended_at is not None:
+    if terminal_state is not None or phase == "finished" or status == "completed":
         return "Completed"
     if confidence == "inferred":
         return "Active"
@@ -181,6 +181,12 @@ def build_runtime_view(
     phase_source = (state.phase_source or "fallback").strip() or "fallback"
     active_tool = (state.active_tool or "").strip() or None
     timeline_anchor_at = _normalize_utc(state.timeline_anchor_at) or _normalize_utc(session.started_at) or normalized_now
+    status = _status_for_state(
+        phase=runtime_phase,
+        confidence=confidence,
+        terminal_state=terminal_state,
+        ended_at=_normalize_utc(session.ended_at),
+    )
     presence_state: str | None = None
     presence_tool: str | None = None
     presence_updated_at = _normalize_utc(state.last_runtime_signal_at)
@@ -196,12 +202,7 @@ def build_runtime_view(
         runtime_source=phase_source,
         terminal_state=terminal_state,
         runtime_version=int(state.runtime_version or 0),
-        status=_status_for_state(
-            phase=runtime_phase,
-            confidence=confidence,
-            terminal_state=terminal_state,
-            ended_at=_normalize_utc(session.ended_at),
-        ),
+        status=status,
         presence_state=presence_state,
         presence_tool=presence_tool,
         presence_updated_at=presence_updated_at,
@@ -211,7 +212,7 @@ def build_runtime_view(
             active_tool=active_tool,
             confidence=confidence,
             terminal_state=terminal_state,
-            ended_at=_normalize_utc(session.ended_at),
+            status=status,
         ),
         active_tool=active_tool,
         confidence=confidence,

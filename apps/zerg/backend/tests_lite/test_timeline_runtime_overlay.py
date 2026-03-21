@@ -20,6 +20,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionPresence
+from zerg.models.agents import SessionRuntimeState
 
 
 def _make_db(tmp_path, name="timeline_runtime_overlay.db"):
@@ -213,3 +214,103 @@ def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
         assert row["display_phase"] == "Thinking"
         assert row["confidence"] == "live"
         assert row["timeline_anchor_at"] is not None
+
+
+def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path):
+    factory = _make_db(tmp_path, "materialized_runtime_state.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(days=7),
+            ended_at=now - timedelta(minutes=1),
+            project="runtime-state",
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{session.id}",
+                session_id=session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="running",
+                phase_source="semantic",
+                active_tool="bash",
+                phase_started_at=now - timedelta(seconds=20),
+                last_runtime_signal_at=now - timedelta(seconds=20),
+                last_progress_at=now - timedelta(seconds=10),
+                last_live_at=now - timedelta(seconds=20),
+                timeline_anchor_at=now - timedelta(seconds=10),
+                freshness_expires_at=now + timedelta(minutes=5),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=3,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == str(session.id)
+        assert row["status"] == "working"
+        assert row["presence_state"] == "running"
+        assert row["display_phase"] == "Running bash"
+        assert row["runtime_phase"] == "running"
+        assert row["runtime_source"] == "semantic"
+        assert row["runtime_version"] == 3
+        assert row["confidence"] == "live"
+
+
+def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(tmp_path):
+    factory = _make_db(tmp_path, "materialized_runtime_progress.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(days=2),
+            ended_at=now - timedelta(minutes=1),
+            project="runtime-progress",
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{session.id}",
+                session_id=session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="idle",
+                phase_source="progress",
+                active_tool=None,
+                phase_started_at=now - timedelta(minutes=1),
+                last_runtime_signal_at=None,
+                last_progress_at=now - timedelta(seconds=20),
+                last_live_at=now - timedelta(seconds=20),
+                timeline_anchor_at=now - timedelta(seconds=20),
+                freshness_expires_at=now - timedelta(seconds=1),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == str(session.id)
+        assert row["status"] == "working"
+        assert row["display_phase"] == "Active"
+        assert row["runtime_phase"] == "idle"
+        assert row["runtime_source"] == "progress"
+        assert row["presence_state"] is None
+        assert row["last_live_at"] is not None
+        assert row["confidence"] == "inferred"

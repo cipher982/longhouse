@@ -58,6 +58,9 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.demo_seed import delete_demo_sessions
 from zerg.services.demo_seed import seed_missing_demo_sessions
+from zerg.services.session_runtime import SessionRuntimeView
+from zerg.services.session_runtime import build_runtime_view
+from zerg.services.session_runtime import load_runtime_state_map
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.utils.time import UTCBaseModel
 
@@ -98,6 +101,12 @@ class SessionResponse(UTCBaseModel):
     tool_calls: int = Field(..., description="Tool call count")
     last_activity_at: Optional[datetime] = Field(None, description="Most recent transcript activity timestamp")
     timeline_anchor_at: Optional[datetime] = Field(None, description="Recency anchor used for timeline ordering")
+    runtime_phase: Optional[str] = Field(None, description="Canonical runtime phase")
+    phase_started_at: Optional[datetime] = Field(None, description="When the current runtime phase began")
+    last_progress_at: Optional[datetime] = Field(None, description="Most recent progress signal timestamp")
+    runtime_source: Optional[str] = Field(None, description="Materialized runtime source: semantic|progress|fallback")
+    terminal_state: Optional[str] = Field(None, description="Terminal runtime state when known")
+    runtime_version: Optional[int] = Field(None, description="Monotonic runtime version for patch ordering")
     status: Optional[str] = Field(None, description="Derived runtime status (working, idle, completed)")
     presence_state: Optional[str] = Field(None, description="Fresh presence signal when available")
     presence_tool: Optional[str] = Field(None, description="Tool currently executing (when applicable)")
@@ -174,6 +183,12 @@ LIVE_PRESENCE_STATES = {"thinking", "running", "needs_user", "blocked"}
 
 @dataclass(frozen=True)
 class SessionRuntimeOverlay:
+    runtime_phase: str | None
+    phase_started_at: datetime | None
+    last_progress_at: datetime | None
+    runtime_source: str | None
+    terminal_state: str | None
+    runtime_version: int | None
     status: str
     presence_state: str | None
     presence_tool: str | None
@@ -274,6 +289,12 @@ def _derive_session_runtime_overlay(
         confidence = "stale" if presence_updated_at is not None else None
 
     return SessionRuntimeOverlay(
+        runtime_phase=presence_state or ("finished" if ended_at is not None else ("running" if confidence == "inferred" else "idle")),
+        phase_started_at=presence_updated_at or progress_at,
+        last_progress_at=progress_at,
+        runtime_source=("semantic" if presence_state is not None else ("progress" if confidence == "inferred" else "fallback")),
+        terminal_state=("finished" if ended_at is not None and status == "completed" else None),
+        runtime_version=0,
         status=status,
         presence_state=presence_state,
         presence_tool=presence_tool,
@@ -289,6 +310,57 @@ def _derive_session_runtime_overlay(
         active_tool=presence_tool,
         confidence=confidence,
         timeline_anchor_at=timeline_anchor_at,
+    )
+
+
+def _overlay_from_runtime_state(
+    session: AgentSession,
+    *,
+    runtime_view: SessionRuntimeView,
+) -> SessionRuntimeOverlay:
+    return SessionRuntimeOverlay(
+        runtime_phase=runtime_view.runtime_phase,
+        phase_started_at=runtime_view.phase_started_at,
+        last_progress_at=runtime_view.last_progress_at,
+        runtime_source=runtime_view.runtime_source,
+        terminal_state=runtime_view.terminal_state,
+        runtime_version=runtime_view.runtime_version,
+        status=runtime_view.status,
+        presence_state=runtime_view.presence_state,
+        presence_tool=runtime_view.presence_tool,
+        presence_updated_at=runtime_view.presence_updated_at,
+        last_live_at=runtime_view.last_live_at,
+        display_phase=runtime_view.display_phase,
+        active_tool=runtime_view.active_tool,
+        confidence=runtime_view.confidence,
+        timeline_anchor_at=runtime_view.timeline_anchor_at,
+    )
+
+
+def _resolve_runtime_overlay(
+    session: AgentSession,
+    *,
+    last_activity_at: datetime | None,
+    presence_map: dict[str, SessionPresence],
+    runtime_state_map: dict[str, Any],
+    now: datetime,
+) -> SessionRuntimeOverlay:
+    runtime_state = runtime_state_map.get(str(session.id))
+    if runtime_state is not None:
+        return _overlay_from_runtime_state(
+            session,
+            runtime_view=build_runtime_view(
+                state=runtime_state,
+                session=session,
+                now=now,
+            ),
+        )
+
+    return _derive_session_runtime_overlay(
+        session,
+        last_activity_at=last_activity_at,
+        presence=presence_map.get(str(session.id)),
+        now=now,
     )
 
 
@@ -319,7 +391,12 @@ def _build_session_response(
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = _get_thread_meta(store, session, cache)
-    include_runtime = runtime_overlay is not None and (runtime_overlay.presence_updated_at is not None or session.ended_at is None)
+    include_runtime = runtime_overlay is not None and (
+        session.ended_at is None
+        or runtime_overlay.presence_updated_at is not None
+        or runtime_overlay.last_live_at is not None
+        or runtime_overlay.runtime_source not in {None, "fallback"}
+    )
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -336,6 +413,12 @@ def _build_session_response(
         tool_calls=session.tool_calls or 0,
         last_activity_at=last_activity_at,
         timeline_anchor_at=(runtime_overlay.timeline_anchor_at if runtime_overlay is not None else last_activity_at),
+        runtime_phase=(runtime_overlay.runtime_phase if runtime_overlay is not None else None),
+        phase_started_at=(runtime_overlay.phase_started_at if runtime_overlay is not None else None),
+        last_progress_at=(runtime_overlay.last_progress_at if runtime_overlay is not None else None),
+        runtime_source=(runtime_overlay.runtime_source if runtime_overlay is not None else None),
+        terminal_state=(runtime_overlay.terminal_state if runtime_overlay is not None else None),
+        runtime_version=(runtime_overlay.runtime_version if runtime_overlay is not None else None),
         status=(runtime_overlay.status if include_runtime else None),
         presence_state=(runtime_overlay.presence_state if include_runtime else None),
         presence_tool=(runtime_overlay.presence_tool if include_runtime else None),
@@ -414,6 +497,12 @@ class ActiveSessionResponse(UTCBaseModel):
     ended_at: Optional[datetime] = Field(None, description="Session end time")
     last_activity_at: datetime = Field(..., description="Most recent transcript activity timestamp")
     timeline_anchor_at: datetime = Field(..., description="Recency anchor used for live ordering")
+    runtime_phase: Optional[str] = Field(None, description="Canonical runtime phase")
+    phase_started_at: Optional[datetime] = Field(None, description="When the current runtime phase began")
+    last_progress_at: Optional[datetime] = Field(None, description="Most recent progress signal timestamp")
+    runtime_source: Optional[str] = Field(None, description="Materialized runtime source: semantic|progress|fallback")
+    terminal_state: Optional[str] = Field(None, description="Terminal runtime state when known")
+    runtime_version: Optional[int] = Field(None, description="Monotonic runtime version for patch ordering")
     status: str = Field(..., description="Session status (working, idle, completed)")
     attention: str = Field(..., description="Attention level (auto by default)")
     duration_minutes: int = Field(..., description="Duration in minutes")
@@ -2034,6 +2123,7 @@ async def list_sessions(
             session_ids = [s.id for s in fused]
             activity_map = store.get_last_activity_map(session_ids)
             presence_map = _load_presence_map(db, session_ids)
+            runtime_state_map = load_runtime_state_map(db, session_ids)
             now = datetime.now(timezone.utc)
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
             sem_score_map = {s.id: score for s, score in sem_hits}
@@ -2045,10 +2135,11 @@ async def list_sessions(
                     s,
                     thread_cache=thread_cache,
                     last_activity_at=_normalize_utc_datetime(activity_map.get(s.id) or s.ended_at or s.started_at),
-                    runtime_overlay=_derive_session_runtime_overlay(
+                    runtime_overlay=_resolve_runtime_overlay(
                         s,
                         last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
-                        presence=presence_map.get(str(s.id)),
+                        presence_map=presence_map,
+                        runtime_state_map=runtime_state_map,
                         now=now,
                     ),
                     first_user_message=first_user_map.get(s.id),
@@ -2109,6 +2200,7 @@ async def list_sessions(
         match_map = store.get_session_matches(session_ids, query, context_mode=context_mode) if query else {}
         activity_map = store.get_last_activity_map(session_ids)
         presence_map = _load_presence_map(db, session_ids)
+        runtime_state_map = load_runtime_state_map(db, session_ids)
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
         thread_cache: dict[str, tuple[str, int]] = {}
         now = datetime.now(timezone.utc)
@@ -2119,10 +2211,11 @@ async def list_sessions(
                 s,
                 thread_cache=thread_cache,
                 last_activity_at=_normalize_utc_datetime(activity_map.get(s.id) or s.ended_at or s.started_at),
-                runtime_overlay=_derive_session_runtime_overlay(
+                runtime_overlay=_resolve_runtime_overlay(
                     s,
                     last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
-                    presence=presence_map.get(str(s.id)),
+                    presence_map=presence_map,
+                    runtime_state_map=runtime_state_map,
                     now=now,
                 ),
                 first_user_message=first_user_map.get(s.id),
@@ -2280,15 +2373,17 @@ async def list_active_sessions(
         last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         presence_map = _load_presence_map(db, session_ids)
+        runtime_state_map = load_runtime_state_map(db, session_ids)
 
         now = datetime.now(timezone.utc)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
             last_activity_at = _normalize_utc_datetime(last_activity.get(s.id) or s.ended_at or s.started_at) or now
-            runtime_overlay = _derive_session_runtime_overlay(
+            runtime_overlay = _resolve_runtime_overlay(
                 s,
                 last_activity_at=last_activity.get(s.id) or s.ended_at or s.started_at,
-                presence=presence_map.get(str(s.id)),
+                presence_map=presence_map,
+                runtime_state_map=runtime_state_map,
                 now=now,
             )
 
@@ -2316,6 +2411,12 @@ async def list_active_sessions(
                     ended_at=s.ended_at,
                     last_activity_at=last_activity_at,
                     timeline_anchor_at=runtime_overlay.timeline_anchor_at,
+                    runtime_phase=runtime_overlay.runtime_phase,
+                    phase_started_at=runtime_overlay.phase_started_at,
+                    last_progress_at=runtime_overlay.last_progress_at,
+                    runtime_source=runtime_overlay.runtime_source,
+                    terminal_state=runtime_overlay.terminal_state,
+                    runtime_version=runtime_overlay.runtime_version,
                     status=runtime_overlay.status,
                     attention=attention_level,
                     duration_minutes=duration_minutes,
@@ -2571,11 +2672,21 @@ async def get_session(
         )
 
     activity_map = store.get_last_activity_map([session.id])
+    presence_map = _load_presence_map(db, [session.id])
+    runtime_state_map = load_runtime_state_map(db, [session.id])
     first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
+    now = datetime.now(timezone.utc)
     return _build_session_response(
         store,
         session,
         last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
+        runtime_overlay=_resolve_runtime_overlay(
+            session,
+            last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
+            presence_map=presence_map,
+            runtime_state_map=runtime_state_map,
+            now=now,
+        ),
         first_user_message=first_user_map.get(session.id),
     )
 
@@ -2599,8 +2710,11 @@ async def get_session_thread(
     thread_sessions = store.list_thread_sessions(session)
     head = store.get_thread_head(session)
     activity_map = store.get_last_activity_map([item.id for item in thread_sessions])
+    presence_map = _load_presence_map(db, [item.id for item in thread_sessions])
+    runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
     first_user_map = store.get_first_message_map([item.id for item in thread_sessions], role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = {}
+    now = datetime.now(timezone.utc)
 
     return SessionThreadResponse(
         root_session_id=str(session.thread_root_session_id or session.id),
@@ -2611,6 +2725,13 @@ async def get_session_thread(
                 item,
                 thread_cache=thread_cache,
                 last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
+                runtime_overlay=_resolve_runtime_overlay(
+                    item,
+                    last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
+                    presence_map=presence_map,
+                    runtime_state_map=runtime_state_map,
+                    now=now,
+                ),
                 first_user_message=first_user_map.get(item.id),
             )
             for item in thread_sessions
