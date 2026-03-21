@@ -98,6 +98,46 @@ export default [
     },
   },
   {
+    files: ["src/pages/*Page.tsx", "src/legacy/**/*Page.tsx"],
+    ignores: [
+      "src/pages/AdminPage.tsx",
+      "src/pages/AutomationsPage.tsx",
+      "src/pages/ChatPage.tsx",
+      "src/pages/LandingPage.tsx",
+      "src/pages/OikosChatPage.tsx",
+      "src/pages/SessionsPage.tsx",
+      "src/pages/SwarmOpsPage.tsx",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "react",
+              importNames: ["useEffect"],
+              message:
+                "Page-level useEffect is restricted. Prefer route/query ownership or a named browser-sync hook. If the effect is truly necessary, add an explicit allowlist entry in eslint.config.js.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.name='useEffect']",
+          message:
+            "Page-level useEffect is restricted. Prefer route/query ownership or a named browser-sync hook. If the effect is truly necessary, add an explicit allowlist entry in eslint.config.js.",
+        },
+        {
+          selector: "CallExpression[callee.object.name='React'][callee.property.name='useEffect']",
+          message:
+            "Page-level useEffect is restricted. Prefer route/query ownership or a named browser-sync hook. If the effect is truly necessary, add an explicit allowlist entry in eslint.config.js.",
+        },
+      ],
+    },
+  },
+  {
     files: ["**/*.test.ts", "**/*.test.tsx", "src/test/**/*.ts"],
     rules: {
       "no-prototype-builtins": "off",

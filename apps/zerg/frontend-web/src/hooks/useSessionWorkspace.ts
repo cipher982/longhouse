@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentSession, useAgentSessionProjectionInfinite, useAgentSessionThread } from "./useAgentSessions";
+import { useDebouncedValue } from "./useDebouncedValue";
 import {
   buildTimelineModel,
   getPreferredSelectionKey,
@@ -39,7 +40,7 @@ export function useSessionWorkspace(
 
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [timelineListElement, setTimelineListElement] = useState<HTMLDivElement | null>(null);
   const highlightedEventRef = useRef<number | null>(null);
@@ -48,21 +49,6 @@ export function useSessionWorkspace(
   const registerTimelineList = useCallback((node: HTMLDivElement | null) => {
     setTimelineListElement((current) => (current === node ? current : node));
   }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery]);
-
-  useEffect(() => {
-    setShowAbandonedBranches(false);
-    setEventFilter("all");
-    setSearchQuery("");
-    setDebouncedSearch("");
-    setSelectedKey(null);
-    highlightedEventRef.current = null;
-    autoScrolledSelectionRef.current = false;
-  }, [sessionId]);
 
   const projectionItems = useMemo(
     () => projectionPagesData?.pages.flatMap((page) => page.items) || [],
