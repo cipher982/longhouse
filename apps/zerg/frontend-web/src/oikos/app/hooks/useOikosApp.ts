@@ -76,7 +76,6 @@ export interface BootstrapData {
 }
 
 export interface UseOikosAppOptions {
-  autoConnect?: boolean
   onConnected?: () => void
   onDisconnected?: () => void
   onTranscript?: (text: string, isFinal: boolean) => void
@@ -892,13 +891,6 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
   useEffect(() => {
     initialize()
   }, [initialize])
-
-  // Auto-connect if enabled
-  useEffect(() => {
-    if (options.autoConnect && state.initialized && !state.connected && !state.connecting) {
-      connect()
-    }
-  }, [options.autoConnect, state.initialized, state.connected, state.connecting, connect])
 
   // ============= Return API =============
 

@@ -160,22 +160,15 @@ export function ChatContainer({ messages, userTranscriptPreview, showSurfaceBadg
     return `Run ${total}${reasoningPart}`
   }
 
-  // Auto-scroll to bottom when new messages arrive or during streaming
-  // Note: Don't include toolState here - it updates frequently (ticker, status changes)
-  // and would cause scroll jumps when user is trying to interact with tool cards
+  const toolCount = toolState.tools.size
+
+  // Keep the transcript pinned as content arrives, but only react to new tools,
+  // not every tool status tick.
   useEffect(() => {
     if (wrapperRef.current) {
       wrapperRef.current.scrollTop = wrapperRef.current.scrollHeight
     }
-  }, [messages, userTranscriptPreview])
-
-  // Scroll when new tools are added (but not on every status update)
-  const toolCount = toolState.tools.size
-  useEffect(() => {
-    if (wrapperRef.current && toolCount > 0) {
-      wrapperRef.current.scrollTop = wrapperRef.current.scrollHeight
-    }
-  }, [toolCount])
+  }, [messages, userTranscriptPreview, toolCount])
 
   // Build unified timeline of messages and tools
   // Sort by runId first (to keep related items together), then by logical order
