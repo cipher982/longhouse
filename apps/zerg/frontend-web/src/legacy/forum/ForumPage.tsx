@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useCallback, useMemo, useState } from "react";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { setSessionAction } from "../../services/api/agents";
 import type { UserStateAction } from "../../services/api/agents";
@@ -51,6 +51,17 @@ function formatDuration(startedAt: string, endedAt: string | null): string {
   return `${hours}h ${remMins}m`;
 }
 
+function buildForumSearch(sessionId: string | null, chat: boolean = false): string {
+  const params = new URLSearchParams();
+  if (sessionId) {
+    params.set("session", sessionId);
+    if (chat) {
+      params.set("chat", "true");
+    }
+  }
+  return params.toString();
+}
+
 export default function ForumPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -59,9 +70,7 @@ export default function ForumPage() {
   const sessionParam = params.get("session");
   const chatParam = params.get("chat") === "true";
 
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
-  const [chatMode, setChatMode] = useState(false);
 
   const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } = useActiveSessions({
     pollInterval: 2000,
@@ -91,39 +100,34 @@ export default function ForumPage() {
 
   const canvasState = useMemo(() => buildForumStateFromSessions(sessions), [sessions]);
 
-  const selectedSession = selectedSessionId
-    ? sessions.find((session) => session.id === selectedSessionId)
+  const selectedSession = sessionParam
+    ? sessions.find((session) => session.id === sessionParam) ?? null
     : null;
+  const selectedSessionId = selectedSession?.id ?? null;
   const selectedPresenceState = selectedSession
     ? normalizePresenceState(selectedSession.presence_state)
     : null;
   const selectedUnknownPresence = selectedSession
     ? hasUnknownPresenceState(selectedSession.presence_state)
     : false;
+  const chatMode = Boolean(selectedSession && selectedSession.provider === "claude" && chatParam);
+  const effectiveFocusEntityId = focusEntityId && sessions.some((session) => session.id === focusEntityId)
+    ? focusEntityId
+    : null;
 
-  useEffect(() => {
-    if (selectedSessionId && !selectedSession) {
-      setSelectedSessionId(null);
-      setFocusEntityId(null);
-    }
-  }, [selectedSessionId, selectedSession]);
+  const navigateToSelection = useCallback((sessionId: string | null, options?: { chat?: boolean; replace?: boolean }) => {
+    const search = buildForumSearch(sessionId, options?.chat ?? false);
+    navigate(
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : "",
+      },
+      { replace: options?.replace ?? false },
+    );
+  }, [location.pathname, navigate]);
 
-  useEffect(() => {
-    setChatMode(false);
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    if (!sessionParam || sessions.length === 0) return;
-
-    if (sessions.some((session) => session.id === sessionParam)) {
-      setSelectedSessionId(sessionParam);
-      setFocusEntityId(sessionParam);
-      if (chatParam) {
-        setChatMode(true);
-      }
-      navigate("/forum", { replace: true });
-    }
-  }, [sessionParam, chatParam, sessions, navigate]);
+  const shouldClearInvalidSelection = !sessionsLoading && sessionParam != null && selectedSession == null;
+  const shouldClearInvalidChat = !sessionsLoading && chatParam && selectedSession != null && selectedSession.provider !== "claude";
 
   const handleFocus = () => {
     if (!selectedSessionId) return;
@@ -137,12 +141,29 @@ export default function ForumPage() {
       queryClient.invalidateQueries({ queryKey: ["active-sessions"] });
       if (action === "archive" || action === "snooze") {
         // Session disappears from Forum after archiving/snoozing
-        setSelectedSessionId(null);
+        navigateToSelection(null, { replace: true });
       }
     } catch (e) {
       console.error("Session action failed", e);
     }
-  }, [selectedSessionId, queryClient]);
+  }, [navigateToSelection, queryClient, selectedSessionId]);
+
+  if (shouldClearInvalidSelection) {
+    return <Navigate to={location.pathname} replace />;
+  }
+
+  if (shouldClearInvalidChat && selectedSessionId != null) {
+    const search = buildForumSearch(selectedSessionId, false);
+    return (
+      <Navigate
+        to={{
+          pathname: location.pathname,
+          search: search ? `?${search}` : "",
+        }}
+        replace
+      />
+    );
+  }
 
   return (
     <PageShell size="full" className="forum-map-page">
@@ -219,7 +240,7 @@ export default function ForumPage() {
                     className={rowClass}
                     type="button"
                     onClick={() => {
-                      setSelectedSessionId(session.id);
+                      navigateToSelection(session.id);
                     }}
                   >
                     <div className="forum-session-title">
@@ -268,15 +289,18 @@ export default function ForumPage() {
             <ForumCanvas
               state={canvasState}
               selectedEntityId={selectedSessionId}
-              focusEntityId={focusEntityId}
-              onSelectEntity={setSelectedSessionId}
+              focusEntityId={effectiveFocusEntityId}
+              onSelectEntity={navigateToSelection}
             />
           )}
         </Card>
 
         <Card className="forum-map-panel forum-map-panel--right">
           {chatMode && selectedSession && selectedSession.provider === "claude" ? (
-            <SessionChat session={selectedSession} onClose={() => setChatMode(false)} />
+            <SessionChat
+              session={selectedSession}
+              onClose={() => navigateToSelection(selectedSession.id)}
+            />
           ) : (
             <>
               <div className="forum-panel-header">
@@ -342,10 +366,14 @@ export default function ForumPage() {
                     )}
                     <div className="forum-selection-actions">
                       <Button size="sm" variant="primary" onClick={handleFocus}>
-                        {focusEntityId === selectedSession.id ? "Unfocus" : "Focus"}
+                        {effectiveFocusEntityId === selectedSession.id ? "Unfocus" : "Focus"}
                       </Button>
                       {selectedSession.provider === "claude" && (
-                        <Button size="sm" variant="secondary" onClick={() => setChatMode(true)}>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => navigateToSelection(selectedSession.id, { chat: true })}
+                        >
                           Chat
                         </Button>
                       )}
