@@ -292,6 +292,45 @@ describe("useSessionWorkspace", () => {
     expect(result.current.selectedKey).toBe("message:4");
   });
 
+  it("hides filtered-out manual selection without discarding it", () => {
+    vi.useFakeTimers();
+
+    try {
+      const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+      act(() => {
+        result.current.selectKey("message:4");
+      });
+      expect(result.current.selectedKey).toBe("message:4");
+
+      act(() => {
+        result.current.setSearchQuery("Session event 12");
+      });
+
+      expect(result.current.searchQuery).toBe("Session event 12");
+
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(result.current.debouncedSearch).toBe("Session event 12");
+      expect(result.current.selectedKey).toBeNull();
+
+      act(() => {
+        result.current.setSearchQuery("");
+      });
+
+      expect(result.current.searchQuery).toBe("");
+
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(result.current.debouncedSearch).toBe("");
+      expect(result.current.selectedKey).toBe("message:4");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("debounces search query updates through the shared debounce hook", () => {
     vi.useFakeTimers();
 
