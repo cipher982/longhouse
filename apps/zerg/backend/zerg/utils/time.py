@@ -41,9 +41,17 @@ class UTCBaseModel(BaseModel):
     API response models.
     """
 
+    @staticmethod
+    def _serialize_datetime(dt: datetime) -> str:
+        if dt.tzinfo is None:
+            return f"{dt.isoformat()}Z"
+
+        normalized = dt.astimezone(timezone.utc)
+        return normalized.isoformat().replace("+00:00", "Z")
+
     model_config = ConfigDict(
         json_encoders={
-            datetime: lambda dt: (dt.isoformat() + "Z") if dt.tzinfo is None else dt.isoformat(),
+            datetime: _serialize_datetime,
         }
     )
 
