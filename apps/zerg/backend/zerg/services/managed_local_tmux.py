@@ -8,7 +8,7 @@ import shlex
 from zerg.session_execution_home import ManagedSessionTransport
 
 TMUX_SESSION_NAME_MAX = 64
-_TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.:-]+")
+_TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def normalize_tmux_session_name(seed: str, *, prefix: str = "lh") -> str:
