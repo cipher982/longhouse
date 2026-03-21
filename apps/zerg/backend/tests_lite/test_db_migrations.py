@@ -234,6 +234,34 @@ def test_startup_migration_adds_runner_availability_policy_and_backfills_default
     ]
 
 
+def test_startup_migration_adds_session_execution_home_columns(tmp_path):
+    db_path = tmp_path / "legacy_sessions.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    _make_legacy_schema(engine)
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+        row = conn.execute(
+            text(
+                """
+                SELECT execution_home, managed_transport, source_runner_id, source_runner_name, managed_session_name
+                FROM sessions
+                LIMIT 1
+                """
+            )
+        ).fetchone()
+
+    assert "execution_home" in columns
+    assert "managed_transport" in columns
+    assert "source_runner_id" in columns
+    assert "source_runner_name" in columns
+    assert "managed_session_name" in columns
+    assert row == ("legacy", None, None, None, None)
+
+
 def test_startup_migration_adds_session_loop_mode_and_backfills_manual(tmp_path):
     db_path = tmp_path / "legacy_sessions_loop_mode.db"
     engine = make_engine(f"sqlite:///{db_path}")

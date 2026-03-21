@@ -27,6 +27,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from zerg.models.types import GUID
+from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 
 if TYPE_CHECKING:
@@ -108,6 +109,16 @@ class AgentSession(AgentsBase):
     # active (default) | parked | snoozed | archived
     user_state = Column(String(20), nullable=False, server_default=text("'active'"))
     user_state_at = Column(DateTime(timezone=True), nullable=True)
+    execution_home = Column(
+        String(32),
+        nullable=False,
+        server_default=text(f"'{SessionExecutionHome.LEGACY.value}'"),
+        index=True,
+    )
+    managed_transport = Column(String(32), nullable=True)
+    source_runner_id = Column(Integer, nullable=True, index=True)
+    source_runner_name = Column(String(255), nullable=True)
+    managed_session_name = Column(String(255), nullable=True)
     loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.MANUAL.value}'"))
     # App-level reference to the per-session loop-controller thread.
     # This intentionally avoids a cross-metadata SQL FK to the main Thread table.

@@ -60,6 +60,9 @@ export interface AgentSession {
   execution_home: SessionExecutionHome;
   branched_from_event_id: number | null;
   is_writable_head: boolean;
+  managed_transport: ManagedSessionTransport | null;
+  source_runner_id: number | null;
+  source_runner_name: string | null;
   loop_mode: SessionLoopMode;
 }
 
@@ -182,6 +185,9 @@ export interface AgentActiveSession {
   // User-driven bucket
   user_state: "active" | "parked" | "snoozed" | "archived";
   execution_home: SessionExecutionHome;
+  managed_transport: ManagedSessionTransport | null;
+  source_runner_id: number | null;
+  source_runner_name: string | null;
   loop_mode: SessionLoopMode;
 }
 
@@ -192,6 +198,7 @@ export type SessionExecutionHome =
   | "managed_local"
   | "managed_hosted"
   | "cloud_takeover";
+export type ManagedSessionTransport = "tmux";
 
 export interface AgentActiveSessionsResponse {
   sessions: AgentActiveSession[];
