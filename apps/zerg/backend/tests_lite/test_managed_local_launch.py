@@ -90,6 +90,15 @@ class _FakeDispatcher:
                     "stderr": "" if self.verify_exit_code == 0 else "failed to find session",
                 },
             }
+        if command.startswith("tmux display-message"):
+            return {
+                "ok": True,
+                "data": {
+                    "exit_code": 0,
+                    "stdout": "claude",
+                    "stderr": "",
+                },
+            }
         return {
             "ok": True,
             "data": {
@@ -146,13 +155,17 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert session.continuation_kind == "local"
             assert session.origin_label == runner.name
 
-            assert len(dispatcher.calls) == 3
+            assert len(dispatcher.calls) == 4
             assert dispatcher.calls[0]["runner_id"] == runner.id
             assert "command -v tmux" in dispatcher.calls[0]["command"]
             assert "command -v claude-code" in dispatcher.calls[0]["command"]
             assert "tmux new-session -d -s" in dispatcher.calls[1]["command"]
             assert "claude-code --session-id" in dispatcher.calls[1]["command"]
             assert dispatcher.calls[2]["command"] == f"tmux has-session -t {session.managed_session_name}"
+            assert (
+                dispatcher.calls[3]["command"]
+                == f"tmux display-message -p -t {session.managed_session_name} '#{{pane_current_command}}'"
+            )
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -185,6 +198,7 @@ def test_launch_managed_local_session_rolls_back_when_tmux_verify_fails(monkeypa
             assert response.status_code == 502, response.text
             assert "failed to find session" in response.json()["detail"]
             assert db.query(AgentSession).count() == 0
-            assert len(dispatcher.calls) == 3
+            assert len(dispatcher.calls) == 4
+            assert dispatcher.calls[-1]["command"].startswith("tmux kill-session -t lh-hiring-")
         finally:
             api_app_ref.dependency_overrides = {}

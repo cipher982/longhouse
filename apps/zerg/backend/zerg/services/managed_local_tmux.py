@@ -57,6 +57,18 @@ def build_tmux_has_session_command(*, session_name: str) -> str:
     return f"tmux has-session -t {_quote(name)}"
 
 
+def build_tmux_current_command_command(*, session_name: str) -> str:
+    """Build a command that prints the active pane command for a tmux session."""
+    name = normalize_tmux_session_name(session_name, prefix="")
+    return f"tmux display-message -p -t {_quote(name)} '#{{pane_current_command}}'"
+
+
+def build_tmux_kill_session_command(*, session_name: str) -> str:
+    """Build a best-effort session kill command for cleanup."""
+    name = normalize_tmux_session_name(session_name, prefix="")
+    return f"tmux kill-session -t {_quote(name)}"
+
+
 def build_tmux_capture_command(*, session_name: str, lines: int = 200) -> str:
     """Build a pane-capture command for the tmux session."""
     name = normalize_tmux_session_name(session_name, prefix="")

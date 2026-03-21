@@ -3,7 +3,9 @@
 import shlex
 
 from zerg.services.managed_local_tmux import build_tmux_capture_command
+from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
+from zerg.services.managed_local_tmux import build_tmux_kill_session_command
 from zerg.services.managed_local_tmux import build_tmux_launch_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
@@ -39,8 +41,19 @@ def test_build_tmux_has_session_command_targets_session():
     assert build_tmux_has_session_command(session_name="lh-demo") == "tmux has-session -t lh-demo"
 
 
+def test_build_tmux_current_command_command_targets_session():
+    assert (
+        build_tmux_current_command_command(session_name="lh-demo")
+        == "tmux display-message -p -t lh-demo '#{pane_current_command}'"
+    )
+
+
 def test_build_tmux_capture_command_respects_line_window():
     assert build_tmux_capture_command(session_name="lh-demo", lines=120) == "tmux capture-pane -pt lh-demo -S -120"
+
+
+def test_build_tmux_kill_session_command_targets_session():
+    assert build_tmux_kill_session_command(session_name="lh-demo") == "tmux kill-session -t lh-demo"
 
 
 def test_build_tmux_send_text_command_handles_multiline_reply():
