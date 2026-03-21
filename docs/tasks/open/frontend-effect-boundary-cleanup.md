@@ -1,6 +1,6 @@
 # Frontend Effect-Boundary Cleanup
 
-Status: In progress
+Status: Complete
 Spec: `docs/specs/frontend-effect-boundary-cleanup.md`
 Last updated: 2026-03-21
 
@@ -30,7 +30,7 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - [x] Slice 3: rewrite route-owned pages (`ChatPage`, `SessionsPage`, conversation/trace/swarm/loop selection)
 - [x] Slice 4: move manual page fetch effects into React Query hooks
 - [x] Slice 5: clean up form/modal state choreography (`SettingsPage`, `SessionPickerModal`, related modals)
-- [ ] Slice 6: collapse infra callback-sync effects and add lint ratchet
+- [x] Slice 6: collapse infra callback-sync effects and add lint ratchet
 
 ## Notes
 
@@ -47,3 +47,5 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - `SettingsPage` now uses a keyed draft form instead of syncing query data into local state, `SessionPickerModal` now resets by mount/unmount instead of open/close effects, and GitHub repo pagination in `AddKnowledgeSourceModal` now lives in the query layer instead of component-local accumulation.
 - `useWebSocket` now reads the latest callbacks and invalidation keys through a shared `useLatest` helper instead of six ref-sync effects, and its connection lifecycle now tears down through one cleanup path instead of duplicated disconnect effects.
 - `AutomationsPage` and `WorkspaceShell` now keep imperative refs current during render instead of using one-effect sync shims.
+- `useSessionWorkspace` now debounces search through the shared `useDebouncedValue` helper, and `SessionDetailPage` resets workspace state by keying the session subtree instead of running a `sessionId` reset effect inside the hook.
+- ESLint now blocks new page-level `useEffect` usage outside an explicit allowlist, so the cleaned route/query-owned pages do not drift back toward effect glue.

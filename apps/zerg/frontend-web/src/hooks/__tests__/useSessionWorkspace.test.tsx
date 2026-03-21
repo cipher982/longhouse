@@ -269,4 +269,27 @@ describe("useSessionWorkspace", () => {
       },
     });
   });
+
+  it("debounces search query updates through the shared debounce hook", () => {
+    vi.useFakeTimers();
+
+    try {
+      const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+      act(() => {
+        result.current.setSearchQuery("Session event 12");
+      });
+
+      expect(result.current.searchQuery).toBe("Session event 12");
+      expect(result.current.debouncedSearch).toBe("");
+
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+
+      expect(result.current.debouncedSearch).toBe("Session event 12");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

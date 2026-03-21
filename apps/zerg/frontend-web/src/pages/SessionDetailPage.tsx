@@ -8,10 +8,10 @@
  * - Bottom dock: inline cloud continuation composer for supported providers
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
-import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SessionChat } from "../components/SessionChat";
 import { EventInspectorPane } from "../components/session-workspace/EventInspectorPane";
@@ -22,6 +22,7 @@ import type { ActiveSession } from "../hooks/useActiveSessions";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
+import type { AgentSession, AgentSessionThreadResponse } from "../services/api";
 import {
   fetchSessionTurnTelemetry,
   type SessionTurnReview,
@@ -33,22 +34,18 @@ import {
 } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
 
-export default function SessionDetailPage() {
-  const { sessionId } = useParams<{ sessionId: string }>();
+function SessionDetailWorkspaceRoute({
+  highlightEventId,
+  returnTo,
+  sessionId,
+}: {
+  highlightEventId: number | null;
+  returnTo: string;
+  sessionId: string | null;
+}) {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [searchParams] = useSearchParams();
-
-  const highlightEventId = useMemo(() => {
-    const raw = searchParams.get("event_id");
-    if (!raw) return null;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : null;
-  }, [searchParams]);
-
-  const shouldAutoResume = useMemo(() => searchParams.get("resume") === "1", [searchParams]);
-
-  const workspace = useSessionWorkspace(sessionId || null, { highlightEventId });
+  const queryClient = useQueryClient();
+  const workspace = useSessionWorkspace(sessionId, { highlightEventId });
   const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
   const [loopModePending, setLoopModePending] = useState(false);
 
@@ -86,42 +83,21 @@ export default function SessionDetailPage() {
     registerTimelineList,
   } = workspace;
 
-  const returnTo = (location.state as { from?: string } | null)?.from;
-
   const navigateToSession = (nextSessionId: string) => {
     navigate(`/timeline/${nextSessionId}`, {
       replace: nextSessionId === session?.id,
-      state: { from: returnTo ?? "/timeline" },
+      state: { from: returnTo },
     });
   };
 
   const handleBack = () => {
-    navigate(returnTo ?? "/timeline");
+    navigate(returnTo);
   };
-
-  useEffect(() => {
-    if (!shouldAutoResume) return;
-
-    const next = new URLSearchParams(searchParams);
-    next.delete("resume");
-    navigate(
-      {
-        pathname: location.pathname,
-        search: next.toString() ? `?${next.toString()}` : "",
-      },
-      { replace: true, state: { from: returnTo ?? "/timeline" } },
-    );
-  }, [shouldAutoResume, searchParams, navigate, location.pathname, returnTo]);
 
   useReadinessFlag({
     ready: !sessionLoading && !eventsLoading,
     screenshotReady: !sessionLoading && !eventsLoading,
   });
-
-  useEffect(() => {
-    setLoopModeOverride(null);
-    setLoopModePending(false);
-  }, [session?.id, session?.loop_mode]);
 
   const turnTelemetryQuery = useQuery({
     queryKey: ["session-turn-telemetry", session?.id],
@@ -283,7 +259,24 @@ export default function SessionDetailPage() {
     setLoopModeOverride(nextMode);
     setLoopModePending(true);
     try {
-      await setSessionLoopMode(session.id, nextMode);
+      const updatedSession = await setSessionLoopMode(session.id, nextMode);
+      queryClient.setQueryData<AgentSession>(["agent-session", session.id], (current) =>
+        current ? { ...current, loop_mode: updatedSession.loop_mode } : current,
+      );
+      queryClient.setQueryData<AgentSessionThreadResponse>(["agent-session-thread", session.id], (current) => {
+        if (!current) {
+          return current;
+        }
+        return {
+          ...current,
+          sessions: current.sessions.map((threadSession) =>
+            threadSession.id === session.id
+              ? { ...threadSession, loop_mode: updatedSession.loop_mode }
+              : threadSession,
+          ),
+        };
+      });
+      setLoopModeOverride(null);
       toast.success(`Loop mode set to ${nextMode}.`);
     } catch (error) {
       setLoopModeOverride(null);
@@ -376,7 +369,7 @@ export default function SessionDetailPage() {
                     if (!nextSessionId || nextSessionId === session.id) return;
                     navigate(`/timeline/${nextSessionId}`, {
                       replace: true,
-                      state: { from: returnTo ?? "/timeline" },
+                      state: { from: returnTo },
                     });
                   }}
                 />
@@ -394,5 +387,47 @@ export default function SessionDetailPage() {
         }
       />
     </div>
+  );
+}
+
+export default function SessionDetailPage() {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  const highlightEventId = useMemo(() => {
+    const raw = searchParams.get("event_id");
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [searchParams]);
+
+  const shouldAutoResume = searchParams.get("resume") === "1";
+  const returnTo = (location.state as { from?: string } | null)?.from ?? "/timeline";
+
+  if (shouldAutoResume) {
+    const next = new URLSearchParams(searchParams);
+    next.delete("resume");
+    return (
+      <Navigate
+        to={{
+          pathname: location.pathname,
+          search: next.toString() ? `?${next.toString()}` : "",
+        }}
+        replace
+        state={{ from: returnTo }}
+      />
+    );
+  }
+
+  // Key the workspace by session ID so filters, selection, and scroll state reset
+  // through remount semantics instead of a session-sync effect inside the hook.
+  return (
+    <SessionDetailWorkspaceRoute
+      key={sessionId ?? "__missing-session__"}
+      sessionId={sessionId ?? null}
+      highlightEventId={highlightEventId}
+      returnTo={returnTo}
+    />
   );
 }
