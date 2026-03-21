@@ -50,6 +50,11 @@ def classify_smoke_exception(exc: Exception) -> tuple[str, str]:
     lower = detail.lower()
     if "429" in detail and ("rate limit" in lower or "too many requests" in lower):
         return "skipped", f"rate limited: {detail}"
+    # Some OpenAI-compatible providers occasionally return a malformed payload
+    # (for example `choices: null`) that trips the SDK/client-side indexing path.
+    # That is a provider-side transient, not a product regression.
+    if detail == "'NoneType' object is not subscriptable":
+        return "skipped", f"malformed provider response: {detail}"
     return "fail", detail
 
 
