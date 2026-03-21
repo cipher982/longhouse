@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useParams } from "react-router-dom";
-import { XIcon } from "../components/icons";
-import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui";
+import { SidebarIcon, XIcon } from "../components/icons";
+import { Badge, Button, EmptyState, IconButton, PageShell, Spinner } from "../components/ui";
 import {
   applyLoopInboxAction,
   fetchLoopActionCard,
@@ -190,16 +190,20 @@ function LoopInboxRow({
   selected,
   to,
   onSelect,
+  compact = false,
 }: {
   item: LoopInboxItem;
   selected: boolean;
   to: string;
   onSelect?: () => void;
+  compact?: boolean;
 }) {
   return (
     <Link
       to={to}
-      className={`loop-inbox-row loop-inbox-row--${item.decision.replace(/_/g, "-")}${selected ? " is-selected" : ""}`}
+      className={`loop-inbox-row loop-inbox-row--${item.decision.replace(/_/g, "-")}${selected ? " is-selected" : ""}${
+        compact ? " loop-inbox-row--compact" : ""
+      }`}
       onClick={onSelect}
       aria-current={selected ? "page" : undefined}
       data-testid={`loop-inbox-row-${item.cardId}`}
@@ -306,9 +310,11 @@ export default function LoopInboxPage() {
   const queuePositionLabel = selectedQueueIndex >= 0 ? `Viewing ${selectedQueueIndex + 1} of ${inboxCount}` : null;
   const currentCardIsStale = Boolean(currentCard && currentCard.cardState !== "active");
   const currentCardNeedsQueueRecovery = currentCardIsStale && showMobileQueueToggle && selectedQueueIndex < 0;
+  const showMobileTopBar = isPhoneLayout && (hasInboxItems || currentCard || isLoadingCard);
+  const showMobileStatusNotice = isPhoneLayout && currentCardIsStale;
   const queueSummaryLabel =
     queueCountLabel && queuePositionLabel ? `${queueCountLabel} · ${queuePositionLabel}` : queueCountLabel;
-  const queuePeekAriaLabel = currentCardNeedsQueueRecovery
+  const queueButtonAriaLabel = currentCardNeedsQueueRecovery
     ? ["Open follow-ups", queueCountLabel, "Viewing older card"].filter(Boolean).join(". ")
     : ["Open follow-ups", queueCountLabel, queuePositionLabel].filter(Boolean).join(". ");
 
@@ -355,7 +361,7 @@ export default function LoopInboxPage() {
 
       {currentCard && (
         <>
-          {currentCard.cardState !== "active" && (
+          {!showMobileStatusNotice && currentCard.cardState !== "active" && (
             <div className="loop-inbox-card-status-banner" data-testid="loop-inbox-card-status-banner">
               <div className="loop-inbox-card-status-banner-copy">
                 <div className="loop-inbox-list-label">Current card status</div>
@@ -366,8 +372,9 @@ export default function LoopInboxPage() {
                 <Link
                   className="ui-button ui-button--secondary ui-button--sm"
                   to={`/loop/card/${currentCard.supersededByCardId}`}
+                  onClick={() => setQueueOpen(false)}
                 >
-                  Open latest
+                  Open current
                 </Link>
               )}
             </div>
@@ -531,33 +538,41 @@ export default function LoopInboxPage() {
 
   return (
     <PageShell size="wide" className="loop-inbox-shell">
-      {showMobileQueueToggle && !queueOpen && (
-        <button
-          type="button"
-          className={`loop-inbox-mobile-peek-tab${currentCardNeedsQueueRecovery ? " is-emphasized" : ""}`}
-          onClick={() => setQueueOpen(true)}
-          aria-haspopup="dialog"
-          aria-controls="loop-mobile-queue-drawer"
-          aria-expanded={queueOpen}
-          aria-label={queuePeekAriaLabel}
-          data-testid="loop-mobile-queue-peek-tab"
-        >
-          <span className="loop-inbox-mobile-peek-tab-handle" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </span>
-          <span
-            className="loop-inbox-mobile-queue-trigger-count loop-inbox-mobile-peek-tab-count"
-            data-testid="loop-mobile-queue-peek-count"
-            aria-hidden="true"
-          >
-            {inboxCount}
-          </span>
-        </button>
-      )}
       <div className="loop-inbox-page">
-        {!showCondensedMobileChrome && (
+        {showMobileTopBar && (
+          <header className="loop-inbox-mobile-header" data-testid="loop-mobile-header">
+            <div className="loop-inbox-mobile-header-slot">
+              {showMobileQueueToggle ? (
+                <IconButton
+                  className={`loop-inbox-mobile-header-trigger${queueOpen ? " is-active" : ""}`}
+                  onClick={() => setQueueOpen((open) => !open)}
+                  aria-haspopup="dialog"
+                  aria-controls="loop-mobile-queue-drawer"
+                  aria-expanded={queueOpen}
+                  aria-label={queueButtonAriaLabel}
+                  data-testid="loop-mobile-queue-button"
+                >
+                  <SidebarIcon width={18} height={18} />
+                  <span
+                    className="loop-inbox-mobile-header-trigger-count"
+                    data-testid="loop-mobile-queue-count"
+                    aria-hidden="true"
+                  >
+                    {inboxCount}
+                  </span>
+                </IconButton>
+              ) : (
+                <span className="loop-inbox-mobile-header-placeholder" aria-hidden="true" />
+              )}
+            </div>
+            <div className="loop-inbox-mobile-header-copy">
+              <div className="loop-inbox-mobile-header-title">Loop Inbox</div>
+            </div>
+            <span className="loop-inbox-mobile-header-placeholder" aria-hidden="true" />
+          </header>
+        )}
+
+        {!isPhoneLayout && (
           <header className="loop-inbox-header">
             <div className="loop-inbox-header-copy">
               <span className="loop-inbox-eyebrow">Mobile approvals</span>
@@ -590,6 +605,24 @@ export default function LoopInboxPage() {
         {(!inboxQuery.isLoading || currentCard || isLoadingCard) && (hasInboxItems || currentCard || isLoadingCard) && (
           isPhoneLayout ? (
             <>
+              {showMobileStatusNotice && currentCard && (
+                <section className="loop-inbox-mobile-status" data-testid="loop-inbox-card-status-banner">
+                  <div className="loop-inbox-mobile-status-copy">
+                    <h3>{cardStatusHeadline(currentCard)}</h3>
+                    {currentCard.cardStateReason && <p>{currentCard.cardStateReason}</p>}
+                  </div>
+                  {currentCard.cardState === "superseded" && currentCard.supersededByCardId && (
+                    <Link
+                      className="ui-button ui-button--secondary ui-button--sm"
+                      to={`/loop/card/${currentCard.supersededByCardId}`}
+                      onClick={() => setQueueOpen(false)}
+                    >
+                      Open current
+                    </Link>
+                  )}
+                </section>
+              )}
+
               {cardPanel}
               {pushBanner}
               {installBanner}
@@ -640,6 +673,7 @@ export default function LoopInboxPage() {
                           selected={item.cardId === selectedCardId}
                           to={buildLoopCardPath(item.cardId)}
                           onSelect={() => setQueueOpen(false)}
+                          compact
                         />
                       ))}
                     </div>
