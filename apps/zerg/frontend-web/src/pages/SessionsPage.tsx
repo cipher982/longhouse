@@ -108,6 +108,13 @@ function getTimelineAnchor(
   return session.timeline_anchor_at || session.last_activity_at || session.started_at;
 }
 
+function getResolvedTimelineAnchor(
+  session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">,
+  activeSession?: Pick<ActiveSession, "timeline_anchor_at" | "last_activity_at"> | null,
+): string {
+  return activeSession?.timeline_anchor_at || activeSession?.last_activity_at || getTimelineAnchor(session);
+}
+
 interface SessionThreadCard {
   threadId: string;
   head: AgentSession;
@@ -119,7 +126,10 @@ interface SessionThreadCard {
   headOriginLabel: string | null;
 }
 
-function buildThreadCards(sessions: AgentSession[]): SessionThreadCard[] {
+function buildThreadCards(
+  sessions: AgentSession[],
+  activeSessionsById: Map<string, ActiveSession>,
+): SessionThreadCard[] {
   const groups = new Map<string, {
     order: number;
     sessions: AgentSession[];
@@ -147,7 +157,6 @@ function buildThreadCards(sessions: AgentSession[]): SessionThreadCard[] {
   });
 
   return Array.from(groups.entries())
-    .sort((a, b) => a[1].order - b[1].order)
     .map(([threadId, group]) => {
       const orderedSessions = [...group.sessions].sort(
         (a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime(),
@@ -159,6 +168,7 @@ function buildThreadCards(sessions: AgentSession[]): SessionThreadCard[] {
         group.detail;
 
       return {
+        order: group.order,
         threadId,
         head,
         detail: group.detail,
@@ -168,14 +178,25 @@ function buildThreadCards(sessions: AgentSession[]): SessionThreadCard[] {
         startedOriginLabel: root.origin_label || root.environment,
         headOriginLabel: head.origin_label || head.environment,
       };
-    });
+    })
+    .sort((a, b) => {
+      const anchorDiff =
+        parseUTC(getResolvedTimelineAnchor(b.head, activeSessionsById.get(b.head.id) ?? null)).getTime() -
+        parseUTC(getResolvedTimelineAnchor(a.head, activeSessionsById.get(a.head.id) ?? null)).getTime();
+      if (anchorDiff !== 0) return anchorDiff;
+      return a.order - b.order;
+    })
+    .map(({ order: _order, ...card }) => card);
 }
 
-function groupThreadCardsByDay(cards: SessionThreadCard[]): Map<string, SessionThreadCard[]> {
+function groupThreadCardsByDay(
+  cards: SessionThreadCard[],
+  activeSessionsById: Map<string, ActiveSession>,
+): Map<string, SessionThreadCard[]> {
   const groups = new Map<string, SessionThreadCard[]>();
 
   for (const card of cards) {
-    const key = getDateKey(getTimelineAnchor(card.head));
+    const key = getDateKey(getResolvedTimelineAnchor(card.head, activeSessionsById.get(card.head.id) ?? null));
     const existing = groups.get(key) || [];
     existing.push(card);
     groups.set(key, existing);
@@ -596,7 +617,7 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
-        <span className="session-card-time">{formatRelativeTime(getTimelineAnchor(session))}</span>
+        <span className="session-card-time">{formatRelativeTime(getResolvedTimelineAnchor(session, activeSession))}</span>
       </div>
 
       <div className="session-card-meta">
@@ -910,8 +931,11 @@ export default function SessionsPage() {
     return () => clearApiError(); // ensure footer clears if user navigates away
   }, [error]);
 
-  const threadCards = useMemo(() => buildThreadCards(sessions), [sessions]);
-  const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards), [threadCards]);
+  const threadCards = useMemo(() => buildThreadCards(sessions, activeSessionsById), [sessions, activeSessionsById]);
+  const groupedSessions = useMemo(
+    () => groupThreadCardsByDay(threadCards, activeSessionsById),
+    [threadCards, activeSessionsById],
+  );
 
   const headerActions = (
     <div className="sessions-header-actions">
