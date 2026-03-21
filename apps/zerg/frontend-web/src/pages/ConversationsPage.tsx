@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import {
   Button,
   EmptyState,
@@ -69,6 +69,11 @@ function formatGmailConnectError(error: unknown): string {
   return error.message;
 }
 
+function buildConversationsPath(searchParams: URLSearchParams): string {
+  const query = searchParams.toString();
+  return query ? `/conversations?${query}` : "/conversations";
+}
+
 export default function ConversationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -76,7 +81,6 @@ export default function ConversationsPage() {
 
   const searchQuery = searchParams.get("q") ?? "";
   const selectedConversationId = Number(searchParams.get("conversation") || 0) || null;
-  const [draftQuery, setDraftQuery] = useState(searchQuery);
   const [replyBody, setReplyBody] = useState("");
   const [replyAll, setReplyAll] = useState(false);
   const gmailErrorParam = searchParams.get("gmail_error");
@@ -87,10 +91,6 @@ export default function ConversationsPage() {
   const gmailReady = authMethodsQuery.data?.gmail_ready ?? (usesHostedGmailConnect || Boolean(config.googleClientId));
   const gmailSetupMessage = authMethodsQuery.data?.gmail_setup_message ?? null;
   const canConnectGmail = gmailReady && (usesHostedGmailConnect || Boolean(config.googleClientId));
-
-  useEffect(() => {
-    setDraftQuery(searchQuery);
-  }, [searchQuery]);
 
   const listQuery = useQuery({
     queryKey: ["canonical-conversations", searchQuery],
@@ -109,36 +109,34 @@ export default function ConversationsPage() {
 
   useReadinessFlag({ ready: !listQuery.isLoading });
 
-  useEffect(() => {
-    if (conversations.length === 0) {
-      return;
-    }
-    if (selectedConversationId && conversations.some((conversation) => conversation.id === selectedConversationId)) {
-      return;
-    }
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set("conversation", String(conversations[0].id));
-    setSearchParams(nextParams, { replace: true });
-  }, [conversations, searchParams, selectedConversationId, setSearchParams]);
+  const selectedConversationInList =
+    selectedConversationId != null
+    && conversations.some((conversation) => conversation.id === selectedConversationId);
+  const shouldCanonicalizeSelection =
+    !listQuery.isLoading
+    && !listQuery.isError
+    && conversations.length > 0
+    && !selectedConversationInList;
+  const effectiveConversationId = shouldCanonicalizeSelection ? null : selectedConversationId;
 
   const detailQuery = useQuery({
-    queryKey: ["canonical-conversation", selectedConversationId],
-    queryFn: () => fetchConversation(selectedConversationId as number),
-    enabled: selectedConversationId !== null,
+    queryKey: ["canonical-conversation", effectiveConversationId],
+    queryFn: () => fetchConversation(effectiveConversationId as number),
+    enabled: effectiveConversationId !== null,
   });
 
   const messagesQuery = useQuery({
-    queryKey: ["canonical-conversation-messages", selectedConversationId],
-    queryFn: () => fetchConversationMessages(selectedConversationId as number, { limit: 200 }),
-    enabled: selectedConversationId !== null,
+    queryKey: ["canonical-conversation-messages", effectiveConversationId],
+    queryFn: () => fetchConversationMessages(effectiveConversationId as number, { limit: 200 }),
+    enabled: effectiveConversationId !== null,
   });
 
   const replyMutation = useMutation({
     mutationFn: () => {
-      if (selectedConversationId === null) {
+      if (effectiveConversationId === null) {
         throw new Error("Select a conversation first");
       }
-      return replyToConversation(selectedConversationId, {
+      return replyToConversation(effectiveConversationId, {
         body: replyBody.trim(),
         reply_all: replyAll,
       });
@@ -146,8 +144,8 @@ export default function ConversationsPage() {
     onSuccess: async () => {
       setReplyBody("");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["canonical-conversation-messages", selectedConversationId] }),
-        queryClient.invalidateQueries({ queryKey: ["canonical-conversation", selectedConversationId] }),
+        queryClient.invalidateQueries({ queryKey: ["canonical-conversation-messages", effectiveConversationId] }),
+        queryClient.invalidateQueries({ queryKey: ["canonical-conversation", effectiveConversationId] }),
         queryClient.invalidateQueries({ queryKey: ["canonical-conversations", searchQuery] }),
       ]);
     },
@@ -181,10 +179,10 @@ export default function ConversationsPage() {
 
   const selectedConversation = useMemo(
     () =>
-      conversations.find((conversation) => conversation.id === selectedConversationId)
+      conversations.find((conversation) => conversation.id === effectiveConversationId)
       ?? detailQuery.data
       ?? null,
-    [conversations, detailQuery.data, selectedConversationId],
+    [conversations, detailQuery.data, effectiveConversationId],
   );
 
   const messages = messagesQuery.data?.messages ?? [];
@@ -220,7 +218,7 @@ export default function ConversationsPage() {
       };
     }
 
-      return {
+    return {
       tone: "warning",
       title: "Gmail needs attention",
       description:
@@ -233,9 +231,11 @@ export default function ConversationsPage() {
     };
   }, [canConnectGmail, gmailErrorParam, gmailSetupMessage, gmailStatus, user, usesHostedGmailConnect]);
 
-  const handleSearch = (event: FormEvent) => {
+  const handleSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const trimmed = draftQuery.trim();
+    const formData = new FormData(event.currentTarget);
+    const rawQuery = formData.get("query");
+    const trimmed = typeof rawQuery === "string" ? rawQuery.trim() : "";
     const nextParams = new URLSearchParams(searchParams);
     if (trimmed) {
       nextParams.set("q", trimmed);
@@ -282,6 +282,12 @@ export default function ConversationsPage() {
     return "Reconnect Gmail above to restore syncing before new mail can land here.";
   }, [canConnectGmail, gmailSetupMessage, gmailStatus, searchQuery, user?.gmail_connected, usesHostedGmailConnect]);
 
+  if (shouldCanonicalizeSelection) {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("conversation", String(conversations[0].id));
+    return <Navigate to={buildConversationsPath(nextParams)} replace />;
+  }
+
   return (
     <PageShell size="full" className="conversations-page">
       <SectionHeader
@@ -326,12 +332,12 @@ export default function ConversationsPage() {
 
       <div className="conversations-layout">
         <aside className="conversations-sidebar">
-          <form className="conversations-search" onSubmit={handleSearch}>
+          <form key={searchQuery} className="conversations-search" onSubmit={handleSearch}>
             <Input
+              name="query"
               aria-label="Search conversations"
               placeholder="Search email threads"
-              value={draftQuery}
-              onChange={(event) => setDraftQuery(event.target.value)}
+              defaultValue={searchQuery}
             />
             <Button type="submit" variant="secondary">
               Search
@@ -364,7 +370,7 @@ export default function ConversationsPage() {
               <button
                 key={conversation.id}
                 type="button"
-                className={`conversations-list-item${conversation.id === selectedConversationId ? " is-active" : ""}`}
+                className={`conversations-list-item${conversation.id === effectiveConversationId ? " is-active" : ""}`}
                 data-testid={`conversation-item-${conversation.id}`}
                 onClick={() => handleSelectConversation(conversation)}
               >

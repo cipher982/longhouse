@@ -1,6 +1,5 @@
-import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui";
 import {
   applyLoopInboxAction,
@@ -83,6 +82,10 @@ function primaryActionLabel(card: LoopActionCard): string {
     return "Continue";
   }
   return "Approve";
+}
+
+function buildLoopCardPath(cardId: number): string {
+  return `/loop/card/${cardId}`;
 }
 
 function LoopActionButtons({
@@ -172,21 +175,11 @@ export default function LoopInboxPage() {
     refetchInterval: 15000,
   });
 
-  useEffect(() => {
-    if (selectedCardId || selectedSessionId || !inboxQuery.data || inboxQuery.data.length === 0) return;
-    navigate(`/loop/card/${inboxQuery.data[0].cardId}`, { replace: true });
-  }, [inboxQuery.data, navigate, selectedCardId, selectedSessionId]);
-
   const legacySessionQuery = useQuery({
     queryKey: ["loop-action-card-session", selectedSessionId],
     queryFn: () => fetchLoopActionCardForSession(selectedSessionId as string),
     enabled: Boolean(selectedSessionId),
   });
-
-  useEffect(() => {
-    if (!selectedSessionId || !legacySessionQuery.data) return;
-    navigate(`/loop/card/${legacySessionQuery.data.cardId}`, { replace: true });
-  }, [legacySessionQuery.data, navigate, selectedSessionId]);
 
   const cardQuery = useQuery({
     queryKey: ["loop-action-card", selectedCardId],
@@ -211,6 +204,15 @@ export default function LoopInboxPage() {
   const currentCard = cardQuery.data ?? null;
   const isLoadingCard = cardQuery.isLoading || legacySessionQuery.isLoading;
   const hasInboxItems = (inboxQuery.data?.length ?? 0) > 0;
+  const initialCardId = !selectedCardId && !selectedSessionId ? inboxQuery.data?.[0]?.cardId ?? null : null;
+
+  if (selectedSessionId && legacySessionQuery.data) {
+    return <Navigate to={buildLoopCardPath(legacySessionQuery.data.cardId)} replace />;
+  }
+
+  if (initialCardId != null) {
+    return <Navigate to={buildLoopCardPath(initialCardId)} replace />;
+  }
 
   return (
     <PageShell size="wide" className="loop-inbox-shell">
@@ -285,7 +287,7 @@ export default function LoopInboxPage() {
                       key={item.cardId}
                       item={item}
                       selected={item.cardId === selectedCardId}
-                      onSelect={() => navigate(`/loop/card/${item.cardId}`)}
+                      onSelect={() => navigate(buildLoopCardPath(item.cardId))}
                     />
                   ))}
                 </div>
