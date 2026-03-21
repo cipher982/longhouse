@@ -1,38 +1,50 @@
 /**
- * Lightweight module-level pub/sub for API health state.
+ * Footer-level API health derived from tracked React Query state.
  *
- * Pages call reportApiError / clearApiError; the StatusFooter subscribes via
- * useApiHealth() to reflect degraded state without requiring Context threading.
+ * Queries that should surface degraded API status opt in with `meta.apiHealth`.
+ * That keeps the footer tied to the data layer instead of mirroring page-local
+ * query errors into a second store via useEffect.
  */
 import { useSyncExternalStore } from "react";
+import { useQueryClient, type Query, type QueryClient } from "@tanstack/react-query";
 
-type Listener = (error: Error | null) => void;
-
-let _currentError: Error | null = null;
-const _listeners = new Set<Listener>();
-
-function subscribe(listener: Listener): () => void {
-  _listeners.add(listener);
-  return () => {
-    _listeners.delete(listener);
-  };
+function queryAffectsApiHealth(query: Query): boolean {
+  return Boolean((query.meta as { apiHealth?: boolean } | undefined)?.apiHealth);
 }
 
-function getSnapshot(): Error | null {
-  return _currentError;
+function toError(value: unknown): Error | null {
+  if (!value) return null;
+  return value instanceof Error ? value : new Error(String(value));
 }
 
-export function reportApiError(error: Error): void {
-  _currentError = error;
-  _listeners.forEach((l) => l(error));
+function getSnapshot(queryClient: QueryClient): Error | null {
+  let latest: { error: Error; updatedAt: number } | null = null;
+
+  for (const query of queryClient.getQueryCache().getAll()) {
+    if (!queryAffectsApiHealth(query)) continue;
+    const error = toError(query.state.error);
+    if (!error) continue;
+    const updatedAt = query.state.errorUpdatedAt || 0;
+    if (!latest || updatedAt >= latest.updatedAt) {
+      latest = { error, updatedAt };
+    }
+  }
+
+  return latest?.error ?? null;
 }
 
-export function clearApiError(): void {
-  if (_currentError === null) return; // no-op if already clear
-  _currentError = null;
-  _listeners.forEach((l) => l(null));
+function subscribe(queryClient: QueryClient, onStoreChange: () => void): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (!event?.query || !queryAffectsApiHealth(event.query)) return;
+    onStoreChange();
+  });
 }
 
 export function useApiHealth(): Error | null {
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const queryClient = useQueryClient();
+  return useSyncExternalStore(
+    (onStoreChange) => subscribe(queryClient, onStoreChange),
+    () => getSnapshot(queryClient),
+    () => getSnapshot(queryClient),
+  );
 }
