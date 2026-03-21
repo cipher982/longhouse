@@ -14,6 +14,10 @@ def test_normalize_tmux_session_name_sanitizes_and_prefixes():
     assert normalize_tmux_session_name(" Session 123 / weird ") == "lh-Session-123-weird"
 
 
+def test_normalize_tmux_session_name_rewrites_tmux_target_separator():
+    assert normalize_tmux_session_name("colon:test") == "lh-colon-test"
+
+
 def test_validate_managed_transport_accepts_tmux_and_empty():
     assert validate_managed_transport("tmux") == "tmux"
     assert validate_managed_transport(None) is None
