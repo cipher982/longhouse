@@ -44,3 +44,4 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - `TraceExplorerPage` now reads the route param directly, and `SwarmOpsPage` now treats `filter` and `run` as URL-owned state with declarative fallback selection.
 - The remaining selection cleanup is concentrated in the legacy forum surface.
 - `SessionDetailPage` now reads turn telemetry through React Query, `SessionChat` now reads lock status through a shared query contract, and `OikosChatPage` now uses query-owned capability + preload bootstrap state instead of manual fetch effects.
+- `SettingsPage` now uses a keyed draft form instead of syncing query data into local state, `SessionPickerModal` now resets by mount/unmount instead of open/close effects, and GitHub repo pagination in `AddKnowledgeSourceModal` now lives in the query layer instead of component-local accumulation.
