@@ -3,7 +3,7 @@
  * Only visible to developers (isDevelopment) or admins (user.role === 'ADMIN')
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useAppState } from '../context'
 import config from '../../../lib/config'
 import { fetchWithRefresh } from '../../../lib/auth-refresh'
@@ -29,42 +29,35 @@ interface DebugPanelProps {
   isResetting?: boolean
 }
 
+async function fetchThreadInfo(): Promise<ThreadInfo | null> {
+  try {
+    const response = await fetchWithRefresh(`${config.apiBaseUrl}/oikos/thread`, {
+      credentials: 'include',
+    })
+    if (!response.ok) {
+      return null
+    }
+    return response.json()
+  } catch (error) {
+    console.warn('[DebugPanel] Failed to fetch thread info:', error)
+    return null
+  }
+}
+
 export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: DebugPanelProps) {
   const state = useAppState()
-  const [threadInfo, setThreadInfo] = useState<ThreadInfo | null>(null)
-
-  // Fetch thread info
-  const fetchThreadInfo = useCallback(async () => {
-    try {
-      const response = await fetchWithRefresh(`${config.apiBaseUrl}/oikos/thread`, {
-        credentials: 'include',
-      })
-      if (response.ok) {
-        const data = await response.json()
-        setThreadInfo(data)
-      }
-    } catch (error) {
-      console.warn('[DebugPanel] Failed to fetch thread info:', error)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchThreadInfo()
-    // Always poll every 10 seconds - panel is always visible on desktop
-    // (isOpen only controls mobile slide-in animation)
-    const interval = setInterval(fetchThreadInfo, 10000)
-    return () => clearInterval(interval)
-  }, [fetchThreadInfo])
-
-  // Refresh after messages change
-  useEffect(() => {
-    fetchThreadInfo()
-  }, [state.messages.length, fetchThreadInfo])
+  const threadInfoQuery = useQuery({
+    queryKey: ['oikos-thread-info', state.messages.length],
+    queryFn: fetchThreadInfo,
+    placeholderData: (previousData) => previousData,
+    refetchInterval: 10000,
+    retry: false,
+  })
+  const threadInfo = threadInfoQuery.data ?? null
 
   const handleReset = async () => {
     await onReset()
-    // Refresh thread info after reset completes
-    await fetchThreadInfo()
+    await threadInfoQuery.refetch()
   }
 
   const voiceStatusColor = {
