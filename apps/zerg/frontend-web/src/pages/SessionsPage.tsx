@@ -16,7 +16,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import { useActiveSessions, type ActiveSession } from "../hooks/useActiveSessions";
+import { useClickOutside } from "../hooks/useClickOutside";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSession,
@@ -499,29 +501,19 @@ function FilterPopover({
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
 
+  useClickOutside({
+    refs: [ref, anchorRef],
+    onClickOutside: onClose,
+  });
+  useEscapeKey(() => {
+    onClose();
+  });
+
   useEffect(() => {
     if (!anchorRef.current) return;
     const rect = anchorRef.current.getBoundingClientRect();
     setPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
   }, [anchorRef]);
-
-  useEffect(() => {
-    const handleDown = (e: MouseEvent) => {
-      if (
-        ref.current && !ref.current.contains(e.target as Node) &&
-        anchorRef.current && !anchorRef.current.contains(e.target as Node)
-      ) {
-        onClose();
-      }
-    };
-    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("mousedown", handleDown);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleDown);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [onClose, anchorRef]);
 
   if (!pos) return null;
 

@@ -17,6 +17,7 @@ import {
   useTestConnectorBeforeSave,
 } from "../../hooks/useAutomationConnectors";
 import { useAccountConnectors } from "../../hooks/useAccountConnectors";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 import { useAuth } from "../../lib/auth";
 import type { McpServerAddRequest, McpServerResponse } from "../../services/api";
 import { TOOL_GROUPS, UTILITY_TOOLS } from "../../constants/toolGroups";
@@ -124,6 +125,10 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
     onClose();
   }, [debouncedUpdateAllowedTools, onClose, confirm]);
 
+  useEscapeKey(() => {
+    handleClose();
+  }, isOpen);
+
   // Rehydrate selectedTools from server state when drawer opens
   useEffect(() => {
     if (!isOpen) {
@@ -140,22 +145,6 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
       setSelectedTools(new Set(automation.allowed_tools));
     }
   }, [debouncedUpdateAllowedTools.isError, automation?.allowed_tools]);
-
-  // ESC key handler
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        handleClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isOpen, handleClose]);
 
   // --- Tool Logic ---
 
