@@ -2,6 +2,10 @@ import { test, expect, type Page } from './fixtures';
 import { PUBLIC_PAGES } from './helpers/page-list';
 import { installDeterministicVisualFonts } from './helpers/visual-baseline';
 
+function getPublicSnapshotName(name: string): string {
+  return process.platform === 'linux' ? `${name}-linux` : name;
+}
+
 async function waitForPublicPageReady(page: Page) {
   await page.waitForLoadState('load');
   await page.evaluate(async () => {
@@ -63,7 +67,7 @@ async function captureBaseline(page: Page, path: string, name: string) {
   await page.goto(path);
   await installDeterministicVisualFonts(page);
   await waitForPublicPageReady(page);
-  await expect(page).toHaveScreenshot(`${name}.png`, {
+  await expect(page).toHaveScreenshot(`${getPublicSnapshotName(name)}.png`, {
     fullPage: true,
     animations: 'disabled',
     maxDiffPixelRatio: 0.02,
