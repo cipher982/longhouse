@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useParams } from "react-router-dom";
-import { SidebarIcon, XIcon } from "../components/icons";
+import { ChevronRightIcon, SidebarIcon, XIcon } from "../components/icons";
 import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui";
 import {
   applyLoopInboxAction,
@@ -67,6 +67,37 @@ function decisionBadgeVariant(decision: string): DecisionBadgeVariant {
       return "error";
     default:
       return "neutral";
+  }
+}
+
+function cardStateBadgeVariant(state: string): DecisionBadgeVariant {
+  switch (state) {
+    case "active":
+      return "success";
+    case "superseded":
+    case "expired":
+      return "warning";
+    case "failed":
+      return "error";
+    default:
+      return "neutral";
+  }
+}
+
+function cardStatusHeadline(card: Pick<LoopActionCard, "cardState">): string {
+  switch (card.cardState) {
+    case "superseded":
+      return "Viewing older card";
+    case "expired":
+      return "This follow-up expired";
+    case "acted":
+      return "This follow-up was already handled";
+    case "dismissed":
+      return "This follow-up was dismissed";
+    case "failed":
+      return "This follow-up failed";
+    default:
+      return "Current card status";
   }
 }
 
@@ -147,11 +178,6 @@ function LoopActionButtons({
           Not now
         </Button>
       )}
-      {card.cardState === "superseded" && card.supersededByCardId && (
-        <Link className="ui-button ui-button--ghost ui-button--md" to={`/loop/card/${card.supersededByCardId}`}>
-          Open latest
-        </Link>
-      )}
       <Link className="ui-button ui-button--ghost ui-button--md" to={`/timeline/${card.sessionId}`}>
         Open full session
       </Link>
@@ -180,7 +206,12 @@ function LoopInboxRow({
     >
       <div className="loop-inbox-row-top">
         <strong>{item.title}</strong>
-        <Badge variant={decisionBadgeVariant(item.decision)}>{formatDecision(item.decision)}</Badge>
+        <div className="loop-inbox-row-badges">
+          <Badge variant={decisionBadgeVariant(item.decision)}>{formatDecision(item.decision)}</Badge>
+          {item.cardState !== "active" && (
+            <Badge variant={cardStateBadgeVariant(item.cardState)}>{formatCardState(item.cardState)}</Badge>
+          )}
+        </div>
       </div>
       <div className="loop-inbox-row-meta">
         <span>{item.project || "No project"}</span>
@@ -199,6 +230,7 @@ export default function LoopInboxPage() {
   const loopPush = useLoopPushNotifications({ isInstalled });
   const isPhoneLayout = useIsPhoneLayout();
   const [queueOpen, setQueueOpen] = useState(false);
+  const [queueAutoOpenedCardId, setQueueAutoOpenedCardId] = useState<number | null>(null);
 
   const selectedCardId = cardId ? Number(cardId) : null;
   const selectedSessionId = !selectedCardId && sessionId ? sessionId : null;
@@ -272,15 +304,33 @@ export default function LoopInboxPage() {
   const showPushBanner = loopPush.error || (loopPush.enabledInBackend && loopPush.supported) || loopPush.isEnabled;
   const queueCountLabel = hasInboxItems ? formatFollowUpCount(inboxCount) : null;
   const queuePositionLabel = selectedQueueIndex >= 0 ? `Viewing ${selectedQueueIndex + 1} of ${inboxCount}` : null;
-  const mobileHeaderDetail = showMobileQueueToggle ? queuePositionLabel ?? queueCountLabel : queueCountLabel;
+  const currentCardIsStale = Boolean(currentCard && currentCard.cardState !== "active");
+  const currentCardNeedsQueueRecovery = currentCardIsStale && showMobileQueueToggle && selectedQueueIndex < 0;
   const queueSummaryLabel =
     queueCountLabel && queuePositionLabel ? `${queueCountLabel} · ${queuePositionLabel}` : queueCountLabel;
+  const mobileQueueDetail = currentCardNeedsQueueRecovery
+    ? [queueCountLabel, "Viewing older card"].filter(Boolean).join(" · ")
+    : queueSummaryLabel;
+  const staticMobileHeaderDetail = currentCardIsStale
+    ? cardStatusHeadline(currentCard as LoopActionCard)
+    : queueCountLabel;
 
   useEffect(() => {
     if (!showMobileQueueToggle) {
       setQueueOpen(false);
     }
   }, [showMobileQueueToggle]);
+
+  useEffect(() => {
+    if (!(currentCardNeedsQueueRecovery && isPhoneLayout && selectedCardId != null)) {
+      return;
+    }
+    if (queueAutoOpenedCardId === selectedCardId) {
+      return;
+    }
+    setQueueOpen(true);
+    setQueueAutoOpenedCardId(selectedCardId);
+  }, [currentCardNeedsQueueRecovery, isPhoneLayout, queueAutoOpenedCardId, selectedCardId]);
 
   if (selectedSessionId && legacySessionQuery.data) {
     return <Navigate to={buildLoopCardPath(legacySessionQuery.data.cardId)} replace />;
@@ -308,6 +358,24 @@ export default function LoopInboxPage() {
 
       {currentCard && (
         <>
+          {currentCard.cardState !== "active" && (
+            <div className="loop-inbox-card-status-banner" data-testid="loop-inbox-card-status-banner">
+              <div className="loop-inbox-card-status-banner-copy">
+                <div className="loop-inbox-list-label">Current card status</div>
+                <h3>{cardStatusHeadline(currentCard)}</h3>
+                {currentCard.cardStateReason && <p>{currentCard.cardStateReason}</p>}
+              </div>
+              {currentCard.cardState === "superseded" && currentCard.supersededByCardId && (
+                <Link
+                  className="ui-button ui-button--secondary ui-button--sm"
+                  to={`/loop/card/${currentCard.supersededByCardId}`}
+                >
+                  Open latest
+                </Link>
+              )}
+            </div>
+          )}
+
           <div className="loop-inbox-card-top">
             <div>
               <h2>{currentCard.title}</h2>
@@ -327,7 +395,7 @@ export default function LoopInboxPage() {
             </div>
           </div>
 
-          {currentCard.cardStateReason && (
+          {currentCard.cardStateReason && currentCard.cardState === "active" && (
             <div className="loop-inbox-card-section">
               <h3>Status</h3>
               <p>{currentCard.cardStateReason}</p>
@@ -468,28 +536,43 @@ export default function LoopInboxPage() {
     <PageShell size="wide" className="loop-inbox-shell">
       <div className="loop-inbox-page">
         {showCondensedMobileChrome ? (
-          <div className="loop-inbox-mobile-header" data-testid="loop-mobile-header">
-            <div className="loop-inbox-mobile-header-copy">
-              <div className="loop-inbox-mobile-header-label">Loop Inbox</div>
-              {mobileHeaderDetail && <div className="loop-inbox-mobile-header-detail">{mobileHeaderDetail}</div>}
-            </div>
+          <div
+            className={`loop-inbox-mobile-header${showMobileQueueToggle ? " loop-inbox-mobile-header--interactive" : ""}`}
+            data-testid="loop-mobile-header"
+          >
             {showMobileQueueToggle && (
-              <Button
-                variant="secondary"
-                size="sm"
-                className="loop-inbox-mobile-followups-trigger"
+              <button
+                type="button"
+                className="loop-inbox-mobile-queue-strip"
                 onClick={() => setQueueOpen(true)}
                 aria-haspopup="dialog"
                 aria-controls="loop-mobile-queue-drawer"
                 aria-expanded={queueOpen}
                 data-testid="loop-mobile-queue-toggle"
               >
-                <SidebarIcon width={16} height={16} />
-                <span className="loop-inbox-mobile-followups-trigger-label">Follow-ups</span>
-                <span className="loop-inbox-mobile-queue-trigger-count" aria-hidden="true">
-                  {inboxCount}
-                </span>
-              </Button>
+                <div className="loop-inbox-mobile-queue-strip-copy">
+                  <div className="loop-inbox-mobile-queue-strip-label">Loop Inbox</div>
+                  <div className="loop-inbox-mobile-queue-strip-title">
+                    <SidebarIcon width={16} height={16} />
+                    <span>Open follow-ups</span>
+                  </div>
+                  {mobileQueueDetail && <div className="loop-inbox-mobile-queue-strip-detail">{mobileQueueDetail}</div>}
+                </div>
+                <div className="loop-inbox-mobile-queue-strip-meta">
+                  <span className="loop-inbox-mobile-queue-trigger-count" aria-hidden="true">
+                    {inboxCount}
+                  </span>
+                  <ChevronRightIcon width={16} height={16} aria-hidden="true" />
+                </div>
+              </button>
+            )}
+            {!showMobileQueueToggle && (
+              <div className="loop-inbox-mobile-header-copy loop-inbox-mobile-header-copy--static">
+                <div className="loop-inbox-mobile-header-label">Loop Inbox</div>
+                {staticMobileHeaderDetail && (
+                  <div className="loop-inbox-mobile-header-detail">{staticMobileHeaderDetail}</div>
+                )}
+              </div>
             )}
           </div>
         ) : (

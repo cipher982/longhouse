@@ -67,6 +67,19 @@ const cards = {
       "I finished the settings/modal ownership pass and only the final cleanup tranche remains.",
     available_actions: ["approve_recommended_action", "not_now"],
   },
+  390: {
+    ...inboxItems[1],
+    card_id: 390,
+    session_id: "sess-stale",
+    title: "Frontend Effect Cleanup Fully Completed",
+    summary: "This older card is no longer the active thing to review.",
+    rationale:
+      "A newer turn superseded this review, so the remaining useful action is to open the active follow-up instead.",
+    card_state: "superseded",
+    card_state_reason: "A newer turn replaced this follow-up.",
+    superseded_by_card_id: 99,
+    available_actions: [],
+  },
 };
 
 async function mockLoopInboxApi(page: import("@playwright/test").Page): Promise<void> {
@@ -126,9 +139,10 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   await expect(header).toBeVisible();
   await expect(card).toBeVisible();
   await expect(queueToggle).toBeVisible();
-  await expect(header).toContainText("Loop Inbox");
+  await expect(header).toContainText("Open follow-ups");
   await expect(header).toContainText("Viewing 1 of 2");
-  await expect(queueToggle).toContainText("Follow-ups");
+  await expect(header).toContainText("2 open follow-ups");
+  await expect(queueToggle).toContainText("Open follow-ups");
   await expect(page.getByRole("link", { name: "Open timeline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Candidate Interview Recaps and Hiring Pitches" })).toBeVisible();
   await expect(page.getByText(/^Attention queue$/)).toHaveCount(0);
@@ -162,6 +176,28 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   await page.waitForURL("**/loop/card/99", { timeout: 10000 });
   await expect(page.getByTestId("loop-mobile-queue-drawer")).toHaveCount(0);
-  await expect(page.getByText("Viewing 2 of 2")).toBeVisible();
+  await expect(header).toContainText("Viewing 2 of 2");
   await expect(page.getByRole("heading", { name: "Settings and Modal Ownership Committed" })).toBeVisible();
+});
+
+test("loop inbox auto-opens the queue when a stale mobile card is selected", async ({
+  page,
+}) => {
+  await mockLoopInboxApi(page);
+
+  await page.goto("/loop/card/390");
+
+  const header = page.getByTestId("loop-mobile-header");
+  const drawer = page.getByTestId("loop-mobile-queue-drawer");
+  const statusBanner = page.getByTestId("loop-inbox-card-status-banner");
+
+  await expect(header).toBeVisible();
+  await expect(header).toContainText("Open follow-ups");
+  await expect(header).toContainText("2 open follow-ups");
+  await expect(header).toContainText("Viewing older card");
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByText("Settings and Modal Ownership Committed")).toBeVisible();
+  await expect(statusBanner).toContainText("Viewing older card");
+  await expect(statusBanner).toContainText("A newer turn replaced this follow-up.");
+  await expect(statusBanner.getByRole("link", { name: "Open latest" })).toHaveAttribute("href", "/loop/card/99");
 });
