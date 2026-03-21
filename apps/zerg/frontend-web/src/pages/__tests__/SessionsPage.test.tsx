@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession, AgentSessionFilters, AgentSessionsListResponse } from "../../services/api/agents";
 import type { ActiveSession } from "../../hooks/useActiveSessions";
@@ -132,13 +132,26 @@ function renderSessionsPage(initialEntry = "/timeline") {
     <QueryClientProvider client={queryClient}>
       <TestRouter initialEntries={[initialEntry]}>
         <Routes>
-          <Route path="/timeline" element={<SessionsPage />} />
+          <Route
+            path="/timeline"
+            element={
+              <>
+                <SessionsPage />
+                <LocationProbe />
+              </>
+            }
+          />
           <Route path="/briefings" element={<div>Briefings</div>} />
           <Route path="/settings" element={<div>Settings</div>} />
         </Routes>
       </TestRouter>
     </QueryClientProvider>
   );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
 describe("SessionsPage", () => {
@@ -241,26 +254,49 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("removes the provider chip without introducing a 1d filter", async () => {
+    const user = userEvent.setup();
+    renderSessionsPage("/timeline?provider=claude");
+
+    const dismissButton = await screen.findByLabelText("Remove claude filter");
+    await user.click(dismissButton);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Remove claude filter")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Remove 1d filter")).not.toBeInTheDocument();
+      expect(screen.getByTestId("location-probe")).toHaveTextContent("/timeline");
+    });
+  });
+
+  it("treats a blank days_back param as the default window", async () => {
+    renderSessionsPage("/timeline?provider=claude&days_back=");
+
+    await waitFor(() => {
+      expect(latestFilters?.days_back).toBe(14);
+      expect(screen.queryByLabelText("Remove 1d filter")).not.toBeInTheDocument();
+    });
+  });
+
   it("renders live runtime state directly on the main timeline cards", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
-        sessions: [makeSession({ ended_at: "2026-03-21T12:03:00Z" })],
+        sessions: [
+          makeSession({
+            ended_at: "2026-03-21T12:03:00Z",
+            status: "working",
+            presence_state: "running",
+            presence_tool: "bash",
+            presence_updated_at: "2026-03-21T12:04:00Z",
+            last_live_at: "2026-03-21T12:04:00Z",
+            display_phase: "Running bash",
+          }),
+        ],
         total: 1,
         has_real_sessions: true,
       },
       isLoading: false,
       error: null,
       refetch: vi.fn(),
-    });
-
-    mockUseActiveSessions.mockReturnValue({
-      data: {
-        sessions: [makeActiveSession()],
-        total: 1,
-        last_refresh: "2026-03-21T12:04:00Z",
-      },
-      isLoading: false,
-      error: null,
     });
 
     renderSessionsPage();
@@ -270,10 +306,31 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
     expect(mockUseActiveSessions).toHaveBeenCalledWith(
       expect.objectContaining({
-        enabled: true,
+        enabled: false,
         limit: 50,
       }),
     );
+  });
+
+  it("only enables the active sessions poll when live view is open", async () => {
+    const user = userEvent.setup();
+    renderSessionsPage();
+
+    expect(mockUseActiveSessions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        enabled: false,
+      }),
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Live view" }));
+
+    await waitFor(() => {
+      expect(mockUseActiveSessions).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          enabled: true,
+        }),
+      );
+    });
   });
 
   it("marks open sessions as inferred when live overlay is unavailable", async () => {
@@ -295,7 +352,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
-  it("uses the live overlay timeline anchor for the card timestamp", async () => {
+  it("uses the session timeline anchor for the card timestamp", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-21T12:05:00Z"));
 
@@ -306,6 +363,7 @@ describe("SessionsPage", () => {
             started_at: "2026-03-21T11:00:00Z",
             ended_at: "2026-03-21T12:00:00Z",
             last_activity_at: "2026-03-21T12:00:00Z",
+            timeline_anchor_at: "2026-03-21T12:03:00Z",
           }),
         ],
         total: 1,
@@ -316,28 +374,12 @@ describe("SessionsPage", () => {
       refetch: vi.fn(),
     });
 
-    mockUseActiveSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeActiveSession({
-            timeline_anchor_at: "2026-03-21T12:03:00Z",
-            last_activity_at: "2026-03-21T12:03:00Z",
-            presence_updated_at: "2026-03-21T12:03:00Z",
-          }),
-        ],
-        total: 1,
-        last_refresh: "2026-03-21T12:03:00Z",
-      },
-      isLoading: false,
-      error: null,
-    });
-
     renderSessionsPage();
 
     expect(screen.getByText("2m ago")).toBeInTheDocument();
   });
 
-  it("reorders timeline cards when the live overlay makes an older session newest", async () => {
+  it("reorders timeline cards when the session timeline anchor makes an older session newest", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -356,6 +398,7 @@ describe("SessionsPage", () => {
             summary_title: "alpha",
             started_at: "2026-03-20T12:00:00Z",
             last_activity_at: "2026-03-20T12:00:00Z",
+            timeline_anchor_at: "2026-03-21T12:04:00Z",
             thread_root_session_id: "session-alpha",
             thread_head_session_id: "session-alpha",
           }),
@@ -368,27 +411,7 @@ describe("SessionsPage", () => {
       refetch: vi.fn(),
     });
 
-    mockUseActiveSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeActiveSession({
-            id: "session-alpha",
-            project: "alpha",
-            timeline_anchor_at: "2026-03-21T12:04:00Z",
-            last_activity_at: "2026-03-21T12:04:00Z",
-            presence_updated_at: "2026-03-21T12:04:00Z",
-          }),
-        ],
-        total: 1,
-        last_refresh: "2026-03-21T12:04:00Z",
-      },
-      isLoading: false,
-      error: null,
-    });
-
     const { container } = renderSessionsPage();
-
-    await screen.findByText("Running bash");
 
     const projects = Array.from(container.querySelectorAll(".session-card-project")).map((node) => node.textContent);
     expect(projects[0]).toBe("alpha");
@@ -396,6 +419,7 @@ describe("SessionsPage", () => {
   });
 
   it("prefers fresher timeline runtime over an older active poll snapshot", async () => {
+    const user = userEvent.setup();
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -435,9 +459,13 @@ describe("SessionsPage", () => {
       error: null,
     });
 
-    renderSessionsPage();
+    const { container } = renderSessionsPage();
+
+    await user.click(await screen.findByRole("button", { name: "Live view" }));
 
     expect(await screen.findByText("Needs you")).toBeInTheDocument();
-    expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
+    const timelinePhases = Array.from(container.querySelectorAll(".session-card-runtime-phase")).map((node) => node.textContent);
+    expect(timelinePhases).toContain("Needs you");
+    expect(timelinePhases).not.toContain("Running bash");
   });
 });
