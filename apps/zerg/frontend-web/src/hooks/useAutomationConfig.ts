@@ -20,6 +20,11 @@ import {
   updateAutomation,
 } from "../services/api";
 
+type AllowedToolsMutationCallbacks = {
+  onSuccess?: (allowedTools: string[] | null) => void;
+  onError?: (error: Error) => void;
+};
+
 export function useContainerPolicy() {
   return useQuery<ContainerPolicy>({
     queryKey: ["config", "container-policy"],
@@ -161,6 +166,8 @@ export function useDebouncedUpdateAllowedTools(automationId: number | null, debo
   const queryClient = useQueryClient();
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pendingValueRef = useRef<string[] | null>(null);
+  const pendingCallbacksRef = useRef<AllowedToolsMutationCallbacks | null>(null);
+  const activeCallbacksRef = useRef<AllowedToolsMutationCallbacks | null>(null);
   const lastSyncedRef = useRef<string[] | null>(null);
 
   const mutation = useMutation({
@@ -173,28 +180,39 @@ export function useDebouncedUpdateAllowedTools(automationId: number | null, debo
     onSuccess: (response) => {
       // Track last successful sync as source of truth
       lastSyncedRef.current = response.allowed_tools ?? null;
+      activeCallbacksRef.current?.onSuccess?.(lastSyncedRef.current);
+      activeCallbacksRef.current = null;
       queryClient.invalidateQueries({ queryKey: ["automation", automationId] });
 
       // Fire queued change if one exists
       if (pendingValueRef.current !== null) {
         const queued = pendingValueRef.current;
+        const queuedCallbacks = pendingCallbacksRef.current;
         pendingValueRef.current = null;
+        pendingCallbacksRef.current = null;
         // Schedule on next tick to avoid nested mutation calls
-        setTimeout(() => mutation.mutate(queued), 0);
+        setTimeout(() => {
+          activeCallbacksRef.current = queuedCallbacks;
+          mutation.mutate(queued);
+        }, 0);
       }
     },
     onError: (error: Error) => {
       toast.error(`Failed to update tools: ${error.message}. Changes reverted.`);
+      activeCallbacksRef.current?.onError?.(error);
+      activeCallbacksRef.current = null;
       // Force refresh from server to restore correct state
       queryClient.invalidateQueries({ queryKey: ["automation", automationId] });
       // Clear pending value on error to avoid retrying bad data
       pendingValueRef.current = null;
+      pendingCallbacksRef.current = null;
     },
   });
 
-  const debouncedMutate = (allowedTools: string[] | null) => {
+  const debouncedMutate = (allowedTools: string[] | null, callbacks?: AllowedToolsMutationCallbacks) => {
     // Always queue the latest value (never drop user input)
     pendingValueRef.current = allowedTools;
+    pendingCallbacksRef.current = callbacks ?? null;
 
     // If mutation in-flight, queued value will fire in onSuccess
     if (mutation.isPending) {
@@ -209,6 +227,8 @@ export function useDebouncedUpdateAllowedTools(automationId: number | null, debo
     // Set new timer
     debounceTimerRef.current = setTimeout(() => {
       if (pendingValueRef.current !== null) {
+        activeCallbacksRef.current = pendingCallbacksRef.current;
+        pendingCallbacksRef.current = null;
         mutation.mutate(pendingValueRef.current);
         pendingValueRef.current = null;
       }
@@ -221,6 +241,8 @@ export function useDebouncedUpdateAllowedTools(automationId: number | null, debo
     if (debounceTimerRef.current && pendingValueRef.current !== null) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
+      activeCallbacksRef.current = pendingCallbacksRef.current;
+      pendingCallbacksRef.current = null;
       mutation.mutate(pendingValueRef.current);
       pendingValueRef.current = null;
     }
@@ -231,6 +253,7 @@ export function useDebouncedUpdateAllowedTools(automationId: number | null, debo
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
       pendingValueRef.current = null;
+      pendingCallbacksRef.current = null;
     }
   };
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useRef, useState, type FormEvent } from "react";
 import clsx from "clsx";
 import { useConfirm } from "../confirm";
 import {
@@ -19,10 +19,10 @@ import {
 import { useAccountConnectors } from "../../hooks/useAccountConnectors";
 import { useEscapeKey } from "../../hooks/useEscapeKey";
 import { useAuth } from "../../lib/auth";
-import type { McpServerAddRequest, McpServerResponse } from "../../services/api";
+import type { AccountConnectorStatus, ConnectorStatus } from "../../types/connectors";
+import type { Automation, ContainerPolicy, McpServerAddRequest, McpServerResponse } from "../../services/api";
 import { TOOL_GROUPS, UTILITY_TOOLS } from "../../constants/toolGroups";
 import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigModal";
-import type { ConnectorStatus } from "../../types/connectors";
 import { Link } from "react-router-dom";
 import { PlugIcon } from "../icons";
 import { Button } from "../ui";
@@ -39,6 +39,24 @@ type AllowedToolOption = {
   source: "builtin" | `mcp:${string}`;
 };
 
+type AutomationSettingsDrawerContentProps = {
+  automation: Automation;
+  policy: ContainerPolicy | undefined;
+  servers: McpServerResponse[] | undefined;
+  loadingServers: boolean;
+  toolOptions: AllowedToolOption[];
+  debouncedUpdateAllowedTools: ReturnType<typeof useDebouncedUpdateAllowedTools>;
+  addMcpServer: ReturnType<typeof useAddMcpServer>;
+  removeMcpServer: ReturnType<typeof useRemoveMcpServer>;
+  testMcpServer: ReturnType<typeof useTestMcpServer>;
+  connectors: ConnectorStatus[] | undefined;
+  accountConnectors: AccountConnectorStatus[] | undefined;
+  configureConnector: ReturnType<typeof useConfigureConnector>;
+  testBeforeSave: ReturnType<typeof useTestConnectorBeforeSave>;
+  user: ReturnType<typeof useAuth>["user"];
+  handleClose: () => Promise<void>;
+};
+
 export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: AutomationSettingsDrawerProps) {
   const { user } = useAuth();
   const confirm = useConfirm();
@@ -50,24 +68,127 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
   const addMcpServer = useAddMcpServer(isOpen ? automationId : null);
   const removeMcpServer = useRemoveMcpServer(isOpen ? automationId : null);
   const testMcpServer = useTestMcpServer(isOpen ? automationId : null);
-
-  // Connector Hooks
   const { data: connectors } = useAutomationConnectors(isOpen ? automationId : null);
   const { data: accountConnectors } = useAccountConnectors();
   const configureConnector = useConfigureConnector(automationId);
   const testBeforeSave = useTestConnectorBeforeSave(automationId);
 
-  // Helper to check ownership
-  const isOwner = user?.id === automation?.owner_id;
+  const handleClose = useCallback(async () => {
+    if (debouncedUpdateAllowedTools.hasPendingDebounce) {
+      const shouldSave = await confirm({
+        title: 'Unsaved changes',
+        message: 'You have unsaved changes. Do you want to save them before closing?',
+        confirmLabel: 'Save & Close',
+        cancelLabel: 'Discard',
+        variant: 'warning',
+      });
+      if (shouldSave) {
+        debouncedUpdateAllowedTools.flush();
+      } else {
+        debouncedUpdateAllowedTools.cancelPending();
+      }
+    }
 
-  // Helper to check if a connector is configured at account level
-  // Only valid if current user is the owner (since accountConnectors fetches MY connectors)
+    if (debouncedUpdateAllowedTools.isPending) {
+      const closeAnyway = await confirm({
+        title: 'Save in progress',
+        message: 'Changes are still being saved. Close anyway?',
+        confirmLabel: 'Close Anyway',
+        cancelLabel: 'Wait',
+        variant: 'warning',
+      });
+      if (!closeAnyway) {
+        return;
+      }
+    }
+
+    onClose();
+  }, [debouncedUpdateAllowedTools, onClose, confirm]);
+
+  useEscapeKey(() => {
+    void handleClose();
+  }, isOpen);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  return (
+    <div
+      className="automation-settings-backdrop open"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          void handleClose();
+        }
+      }}
+      role="presentation"
+    >
+      {automation ? (
+        <AutomationSettingsDrawerContent
+          automation={automation}
+          policy={policy}
+          servers={servers}
+          loadingServers={loadingServers}
+          toolOptions={toolOptions}
+          debouncedUpdateAllowedTools={debouncedUpdateAllowedTools}
+          addMcpServer={addMcpServer}
+          removeMcpServer={removeMcpServer}
+          testMcpServer={testMcpServer}
+          connectors={connectors}
+          accountConnectors={accountConnectors}
+          configureConnector={configureConnector}
+          testBeforeSave={testBeforeSave}
+          user={user}
+          handleClose={handleClose}
+        />
+      ) : (
+        <aside className="automation-settings-drawer open" data-testid="automation-settings-modal">
+          <header className="automation-settings-header">
+            <div>
+              <h2>Automation Config</h2>
+              <p>Loading automation…</p>
+            </div>
+            <button type="button" className="close-btn" onClick={() => void handleClose()} aria-label="Close settings">
+              ×
+            </button>
+          </header>
+          <section className="automation-settings-section">
+            <p className="muted">Loading automation settings…</p>
+          </section>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+function AutomationSettingsDrawerContent({
+  automation,
+  policy,
+  servers,
+  loadingServers,
+  toolOptions,
+  debouncedUpdateAllowedTools,
+  addMcpServer,
+  removeMcpServer,
+  testMcpServer,
+  connectors,
+  accountConnectors,
+  configureConnector,
+  testBeforeSave,
+  user,
+  handleClose,
+}: AutomationSettingsDrawerContentProps) {
+  const confirm = useConfirm();
+  const isOwner = user?.id === automation.owner_id;
   const isConfiguredAtAccountLevel = (type: string) => {
     if (!isOwner) return false;
-    return accountConnectors?.find((c) => c.type === type)?.configured ?? false;
+    return accountConnectors?.find((connector) => connector.type === type)?.configured ?? false;
   };
 
-  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
+  const [selectedTools, setSelectedTools] = useState<Set<string>>(
+    () => new Set(automation.allowed_tools ?? []),
+  );
+  const lastSavedToolsRef = useRef<string[]>(automation.allowed_tools ?? []);
   const [customTool, setCustomTool] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [formMode, setFormMode] = useState<"preset" | "custom">("preset");
@@ -86,92 +207,39 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
     displayName: "",
   });
 
-  // Unified close handler that guards all close paths
-  const handleClose = useCallback(async () => {
-    // Check if debounce timer is active (user has unsaved changes)
-    if (debouncedUpdateAllowedTools.hasPendingDebounce) {
-      const shouldSave = await confirm({
-        title: 'Unsaved changes',
-        message: 'You have unsaved changes. Do you want to save them before closing?',
-        confirmLabel: 'Save & Close',
-        cancelLabel: 'Discard',
-        variant: 'warning',
-      });
-      if (shouldSave) {
-        // Flush pending changes immediately
-        debouncedUpdateAllowedTools.flush();
-        // Note: drawer will close, mutation happens in background
-        // User will see save indicator if they reopen quickly
-      } else {
-        // User chose to discard changes
-        debouncedUpdateAllowedTools.cancelPending();
-      }
-    }
-
-    // Check if mutation is in-flight
-    if (debouncedUpdateAllowedTools.isPending) {
-      const closeAnyway = await confirm({
-        title: 'Save in progress',
-        message: 'Changes are still being saved. Close anyway?',
-        confirmLabel: 'Close Anyway',
-        cancelLabel: 'Wait',
-        variant: 'warning',
-      });
-      if (!closeAnyway) {
-        return;
-      }
-    }
-
-    onClose();
-  }, [debouncedUpdateAllowedTools, onClose, confirm]);
-
-  useEscapeKey(() => {
-    handleClose();
-  }, isOpen);
-
-  // Rehydrate selectedTools from server state when drawer opens
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-    const tools = automation?.allowed_tools ?? [];
-    setSelectedTools(new Set(tools));
-  }, [automation?.allowed_tools, isOpen]);
-
-  // Rollback optimistic updates on error
-  useEffect(() => {
-    if (debouncedUpdateAllowedTools.isError && automation?.allowed_tools) {
-      // Restore last known good state from server
-      setSelectedTools(new Set(automation.allowed_tools));
-    }
-  }, [debouncedUpdateAllowedTools.isError, automation?.allowed_tools]);
-
   // --- Tool Logic ---
 
-  const toggleTool = (tool: string) => {
-    setSelectedTools((prev) => {
-      const next = new Set(prev);
-      if (next.has(tool)) {
-        next.delete(tool);
-      } else {
-        next.add(tool);
-      }
-      // Auto-save via debounced mutation
-      debouncedUpdateAllowedTools.mutate(Array.from(next));
-      return next;
+  const queueAllowedToolsUpdate = (next: Set<string>) => {
+    const nextAllowedTools = Array.from(next);
+    setSelectedTools(next);
+    debouncedUpdateAllowedTools.mutate(nextAllowedTools, {
+      onSuccess: (savedTools) => {
+        lastSavedToolsRef.current = savedTools ?? nextAllowedTools;
+      },
+      onError: () => {
+        setSelectedTools(new Set(lastSavedToolsRef.current));
+      },
     });
+  };
+
+  const toggleTool = (tool: string) => {
+    const next = new Set(selectedTools);
+    if (next.has(tool)) {
+      next.delete(tool);
+    } else {
+      next.add(tool);
+    }
+    queueAllowedToolsUpdate(next);
   };
 
   const handleAddCustomTool = () => {
     const trimmed = customTool.trim();
-    if (!trimmed) {
+    if (!trimmed || selectedTools.has(trimmed)) {
       return;
     }
-    setSelectedTools((prev) => {
-      const next = new Set(prev).add(trimmed);
-      debouncedUpdateAllowedTools.mutate(Array.from(next));
-      return next;
-    });
+    const next = new Set(selectedTools);
+    next.add(trimmed);
+    queueAllowedToolsUpdate(next);
     setCustomTool("");
   };
 
@@ -189,15 +257,12 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
     const tools = TOOL_GROUPS[key];
     if (!tools) return;
 
-    setSelectedTools((prev) => {
-      const next = new Set(prev);
-      tools.forEach((t) => {
-        if (enabled) next.add(t);
-        else next.delete(t);
-      });
-      debouncedUpdateAllowedTools.mutate(Array.from(next));
-      return next;
+    const next = new Set(selectedTools);
+    tools.forEach((tool) => {
+      if (enabled) next.add(tool);
+      else next.delete(tool);
     });
+    queueAllowedToolsUpdate(next);
 
     if (enabled) {
       // Check if we need to configure credentials
@@ -340,22 +405,14 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
   // --- Rendering ---
 
   return (
-    <div
-      className={clsx("automation-settings-backdrop", { open: isOpen })}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) {
-          handleClose();
-        }
-      }}
-      role="presentation"
-    >
-      <aside className={clsx("automation-settings-drawer", { open: isOpen })} data-testid="automation-settings-modal">
+    <>
+      <aside className="automation-settings-drawer open" data-testid="automation-settings-modal">
         <header className="automation-settings-header">
           <div>
             <h2>Automation Config</h2>
-            <p>{automation?.name}</p>
+            <p>{automation.name}</p>
           </div>
-          <button type="button" className="close-btn" onClick={handleClose} aria-label="Close settings">
+          <button type="button" className="close-btn" onClick={() => void handleClose()} aria-label="Close settings">
             ×
           </button>
         </header>
@@ -738,7 +795,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
         </section>
 
         <footer className="automation-settings-footer">
-          <Button type="button" variant="primary" onClick={handleClose}>
+          <Button type="button" variant="primary" onClick={() => void handleClose()}>
             Close
           </Button>
         </footer>
@@ -762,7 +819,7 @@ export function AutomationSettingsDrawer({ automationId, isOpen, onClose }: Auto
         isSaving={configureConnector.isPending}
         isTesting={testBeforeSave.isPending}
       />
-    </div>
+    </>
   );
 }
 
