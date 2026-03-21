@@ -22,7 +22,9 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.models.agents import AgentSession
+from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
+from zerg.services.managed_local_tmux import build_tmux_kill_session_command
 from zerg.services.managed_local_tmux import build_tmux_launch_command
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
 from zerg.services.managed_local_tmux import validate_managed_transport
@@ -109,7 +111,8 @@ def _build_entry_command(*, provider_session_id: str, display_name: str | None) 
     parts = ["claude-code", "--session-id", provider_session_id]
     if display_name and display_name.strip():
         parts.extend(["-n", display_name.strip()])
-    return "source ~/.zshrc >/dev/null 2>&1; exec " + " ".join(shlex.quote(part) for part in parts)
+    inner = "source ~/.zshrc >/dev/null 2>&1; exec " + " ".join(shlex.quote(part) for part in parts)
+    return f"zsh -lc {shlex.quote(inner)}"
 
 
 def _build_preflight_command(*, cwd: str) -> str:
@@ -165,7 +168,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     session = AgentSession(
         id=session_uuid,
         provider="claude",
-        environment="Managed Local",
+        environment="development",
         project=project,
         device_id=runner.name,
         cwd=cwd,
@@ -199,7 +202,22 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         cwd=cwd,
         launch_command=entry_command,
     )
-    verify_command = build_tmux_has_session_command(session_name=managed_session_name)
+    verify_session_command = build_tmux_has_session_command(session_name=managed_session_name)
+    verify_command = build_tmux_current_command_command(session_name=managed_session_name)
+
+    async def _cleanup_tmux_session() -> None:
+        try:
+            await dispatcher.dispatch_job(
+                db=db,
+                owner_id=params.owner_id,
+                runner_id=runner.id,
+                command=build_tmux_kill_session_command(session_name=managed_session_name),
+                timeout_secs=10,
+                commis_id=None,
+                run_id=None,
+            )
+        except Exception:
+            return
 
     launch_result = await dispatcher.dispatch_job(
         db=db,
@@ -221,6 +239,28 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         detail = stderr or stdout or "Managed local launcher exited non-zero"
         raise ManagedLocalLaunchError(detail, status_code=502)
 
+    verify_session_result = await dispatcher.dispatch_job(
+        db=db,
+        owner_id=params.owner_id,
+        runner_id=runner.id,
+        command=verify_session_command,
+        timeout_secs=10,
+        commis_id=None,
+        run_id=None,
+    )
+    if not verify_session_result.get("ok"):
+        detail = verify_session_result.get("error", {}).get("message", "Managed local session verification failed")
+        await _cleanup_tmux_session()
+        raise ManagedLocalLaunchError(detail, status_code=502)
+
+    verify_session_data = verify_session_result.get("data", {})
+    if int(verify_session_data.get("exit_code", 1)) != 0:
+        stderr = (verify_session_data.get("stderr") or "").strip()
+        stdout = (verify_session_data.get("stdout") or "").strip()
+        detail = stderr or stdout or "tmux session did not start successfully"
+        await _cleanup_tmux_session()
+        raise ManagedLocalLaunchError(detail, status_code=502)
+
     verify_result = await dispatcher.dispatch_job(
         db=db,
         owner_id=params.owner_id,
@@ -232,6 +272,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     )
     if not verify_result.get("ok"):
         detail = verify_result.get("error", {}).get("message", "Managed local session verification failed")
+        await _cleanup_tmux_session()
         raise ManagedLocalLaunchError(detail, status_code=502)
 
     verify_data = verify_result.get("data", {})
@@ -239,7 +280,23 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         stderr = (verify_data.get("stderr") or "").strip()
         stdout = (verify_data.get("stdout") or "").strip()
         detail = stderr or stdout or "tmux session did not start successfully"
+        await _cleanup_tmux_session()
         raise ManagedLocalLaunchError(detail, status_code=502)
+
+    pane_command = (verify_data.get("stdout") or "").strip().lower()
+    if pane_command in {"", "bash", "sh", "zsh", "fish"}:
+        await _cleanup_tmux_session()
+        raise ManagedLocalLaunchError(
+            f"Managed local session started an idle shell instead of Claude ({pane_command or 'empty pane'})",
+            status_code=502,
+        )
+
+    if "claude" not in pane_command and "node" not in pane_command:
+        await _cleanup_tmux_session()
+        raise ManagedLocalLaunchError(
+            f"Managed local session started an unexpected pane command ({pane_command})",
+            status_code=502,
+        )
 
     db.commit()
     db.refresh(session)
