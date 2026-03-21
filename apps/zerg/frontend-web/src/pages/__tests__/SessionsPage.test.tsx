@@ -283,4 +283,104 @@ describe("SessionsPage", () => {
     expect(screen.getByText("Inferred")).toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
+
+  it("uses the live overlay timeline anchor for the card timestamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T12:05:00Z"));
+
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            started_at: "2026-03-21T11:00:00Z",
+            ended_at: "2026-03-21T12:00:00Z",
+            last_activity_at: "2026-03-21T12:00:00Z",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseActiveSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeActiveSession({
+            timeline_anchor_at: "2026-03-21T12:03:00Z",
+            last_activity_at: "2026-03-21T12:03:00Z",
+            presence_updated_at: "2026-03-21T12:03:00Z",
+          }),
+        ],
+        total: 1,
+        last_refresh: "2026-03-21T12:03:00Z",
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderSessionsPage();
+
+    expect(screen.getByText("2m ago")).toBeInTheDocument();
+  });
+
+  it("reorders timeline cards when the live overlay makes an older session newest", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            id: "session-beta",
+            project: "beta",
+            summary_title: "beta",
+            started_at: "2026-03-21T12:00:00Z",
+            last_activity_at: "2026-03-21T12:00:00Z",
+            thread_root_session_id: "session-beta",
+            thread_head_session_id: "session-beta",
+          }),
+          makeSession({
+            id: "session-alpha",
+            project: "alpha",
+            summary_title: "alpha",
+            started_at: "2026-03-20T12:00:00Z",
+            last_activity_at: "2026-03-20T12:00:00Z",
+            thread_root_session_id: "session-alpha",
+            thread_head_session_id: "session-alpha",
+          }),
+        ],
+        total: 2,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseActiveSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeActiveSession({
+            id: "session-alpha",
+            project: "alpha",
+            timeline_anchor_at: "2026-03-21T12:04:00Z",
+            last_activity_at: "2026-03-21T12:04:00Z",
+            presence_updated_at: "2026-03-21T12:04:00Z",
+          }),
+        ],
+        total: 1,
+        last_refresh: "2026-03-21T12:04:00Z",
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    const { container } = renderSessionsPage();
+
+    await screen.findByText("Running bash");
+
+    const projects = Array.from(container.querySelectorAll(".session-card-project")).map((node) => node.textContent);
+    expect(projects[0]).toBe("alpha");
+    expect(projects[1]).toBe("beta");
+  });
 });
