@@ -216,6 +216,109 @@ def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
         assert row["timeline_anchor_at"] is not None
 
 
+def test_sessions_list_uses_runtime_anchor_for_old_runtime_only_session(tmp_path):
+    factory = _make_db(tmp_path, "runtime_anchor_sessions.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        old_runtime = _seed_session(
+            db,
+            started_at=now - timedelta(days=30),
+            ended_at=None,
+            project="old-runtime",
+        )
+        _seed_session(
+            db,
+            started_at=now - timedelta(hours=2),
+            ended_at=now - timedelta(hours=1),
+            project="recent-history",
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{old_runtime.id}",
+                session_id=old_runtime.id,
+                provider="claude",
+                device_id="cinder",
+                phase="running",
+                phase_source="semantic",
+                active_tool="bash",
+                phase_started_at=now - timedelta(seconds=30),
+                last_runtime_signal_at=now - timedelta(seconds=30),
+                last_progress_at=now - timedelta(seconds=15),
+                last_live_at=now - timedelta(seconds=30),
+                timeline_anchor_at=now - timedelta(seconds=15),
+                freshness_expires_at=now + timedelta(minutes=5),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=2,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert payload["total"] >= 1
+        row = payload["sessions"][0]
+        assert row["id"] == str(old_runtime.id)
+        assert row["project"] == "old-runtime"
+        assert row["status"] == "working"
+        assert row["display_phase"] == "Running bash"
+        assert row["timeline_anchor_at"] is not None
+
+
+def test_active_sessions_uses_runtime_anchor_for_old_runtime_only_session(tmp_path):
+    factory = _make_db(tmp_path, "runtime_anchor_active.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        old_runtime = _seed_session(
+            db,
+            started_at=now - timedelta(days=30),
+            ended_at=None,
+            project="old-runtime-active",
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{old_runtime.id}",
+                session_id=old_runtime.id,
+                provider="claude",
+                device_id="cinder",
+                phase="thinking",
+                phase_source="semantic",
+                active_tool=None,
+                phase_started_at=now - timedelta(seconds=10),
+                last_runtime_signal_at=now - timedelta(seconds=10),
+                last_progress_at=now - timedelta(seconds=10),
+                last_live_at=now - timedelta(seconds=10),
+                timeline_anchor_at=now - timedelta(seconds=10),
+                freshness_expires_at=now + timedelta(minutes=1),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions/active?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()["sessions"]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["id"] == str(old_runtime.id)
+        assert row["status"] == "working"
+        assert row["presence_state"] == "thinking"
+        assert row["display_phase"] == "Thinking"
+
+
 def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path):
     factory = _make_db(tmp_path, "materialized_runtime_state.db")
     now = datetime.now(timezone.utc)
