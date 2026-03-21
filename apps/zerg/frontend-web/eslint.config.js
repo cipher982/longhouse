@@ -101,7 +101,6 @@ export default [
     files: ["src/pages/*Page.tsx", "src/legacy/**/*Page.tsx"],
     ignores: [
       "src/pages/ChatPage.tsx",
-      "src/pages/LandingPage.tsx",
       "src/pages/OikosChatPage.tsx",
       "src/pages/SessionsPage.tsx",
       "src/pages/SwarmOpsPage.tsx",

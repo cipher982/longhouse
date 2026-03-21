@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useMemo } from "react";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
+import { useRootUiEffects } from "../hooks/useRootUiEffects";
 import "../styles/landing.css";
 
 // Section components
@@ -18,6 +19,7 @@ import { SocialProof } from "../components/landing/SocialProof";
 import { ComparisonTable } from "../components/landing/ComparisonTable";
 
 import { FooterCTA } from "../components/landing/FooterCTA";
+import { LandingPerfHud } from "../components/landing/LandingPerfHud";
 
 type LandingFxName = "particles" | "hero";
 type ScreenshotFrameTheme = "warm" | "cool-pop";
@@ -49,123 +51,43 @@ function parseScreenshotThemeParam(value: string | null): ScreenshotFrameTheme {
   return "warm";
 }
 
-function getLandingFxFromUrl(): {
+function getLandingStateFromSearch(search: string): {
   fxEnabled: Set<LandingFxName>;
   showPerfHud: boolean;
   screenshotTheme: ScreenshotFrameTheme;
   showScreenshotThemeToggle: boolean;
+  disableRedirect: boolean;
 } {
-  if (typeof window === "undefined") {
-    return {
-      fxEnabled: new Set<LandingFxName>(["particles", "hero"]),
-      showPerfHud: false,
-      screenshotTheme: "warm",
-      showScreenshotThemeToggle: false,
-    };
-  }
-
-  const params = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams(search);
   const fxEnabled = parseFxParam(params.get("fx")) ?? new Set<LandingFxName>(["particles", "hero"]);
   const perfRaw = (params.get("perf") ?? "").trim().toLowerCase();
   const showPerfHud = perfRaw === "1" || perfRaw === "true" || perfRaw === "yes";
   const screenshotTheme = parseScreenshotThemeParam(params.get("screenshot_theme"));
   const showScreenshotThemeToggle = params.get("marketing") === "true";
-  return { fxEnabled, showPerfHud, screenshotTheme, showScreenshotThemeToggle };
-}
-
-function LandingPerfHud({
-  fxEnabled,
-}: {
-  fxEnabled: Set<LandingFxName>;
-}) {
-  const [stats, setStats] = useState<{ fps: number; avgMs: number; p95Ms: number } | null>(null);
-
-  useEffect(() => {
-    const frameTimes: number[] = [];
-    let last = performance.now();
-    let rafId = 0;
-    let intervalId = 0;
-
-    const onFrame = (now: number) => {
-      const dt = now - last;
-      last = now;
-      frameTimes.push(dt);
-      if (frameTimes.length > 240) frameTimes.shift();
-      rafId = requestAnimationFrame(onFrame);
-    };
-
-    rafId = requestAnimationFrame(onFrame);
-
-    intervalId = window.setInterval(() => {
-      if (frameTimes.length < 5) return;
-      const times = [...frameTimes].sort((a, b) => a - b);
-      const avgMs = times.reduce((sum, t) => sum + t, 0) / times.length;
-      const p95Ms = times[Math.floor(times.length * 0.95)] ?? avgMs;
-      const fps = avgMs > 0 ? 1000 / avgMs : 0;
-      setStats({ fps, avgMs, p95Ms });
-    }, 500);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  if (!stats) return null;
-
-  const fxText = Array.from(fxEnabled).sort().join(", ") || "none";
-
-  return (
-    <div className="landing-perf-hud">
-      <div>{`fps ~ ${stats.fps.toFixed(0)}`}</div>
-      <div>{`avg ${stats.avgMs.toFixed(1)}ms`}</div>
-      <div>{`p95 ${stats.p95Ms.toFixed(1)}ms`}</div>
-      <div className="landing-perf-hud-fx">{`fx: ${fxText}`}</div>
-    </div>
-  );
+  const disableRedirect = params.get("noredirect") === "1";
+  return { fxEnabled, showPerfHud, screenshotTheme, showScreenshotThemeToggle, disableRedirect };
 }
 
 export default function LandingPage() {
   const { isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
+  const [, setSearchParams] = useSearchParams();
 
   const {
     fxEnabled,
     showPerfHud,
-    screenshotTheme: initialScreenshotTheme,
+    screenshotTheme,
     showScreenshotThemeToggle,
-  } = useMemo(() => getLandingFxFromUrl(), []);
-  const [screenshotTheme, setScreenshotTheme] = useState<ScreenshotFrameTheme>(initialScreenshotTheme);
+    disableRedirect,
+  } = useMemo(() => getLandingStateFromSearch(location.search), [location.search]);
   const particlesEnabled = fxEnabled.has("particles");
   const heroAnimationsEnabled = fxEnabled.has("hero");
+  const fxText = useMemo(() => Array.from(fxEnabled).sort().join(", ") || "none", [fxEnabled]);
 
   // Enable normal document scrolling (app shell locks root by default)
   usePublicPageScroll();
-
-  // Control global UI effects based on landing page effects
-  useEffect(() => {
-    const hasAnyEffect = particlesEnabled || heroAnimationsEnabled;
-    const container = document.getElementById("react-root");
-    const previous = container?.getAttribute("data-ui-effects");
-    if (container) {
-      container.setAttribute("data-ui-effects", hasAnyEffect ? "on" : "off");
-    }
-    return () => {
-      if (!container) return;
-      if (previous) container.setAttribute("data-ui-effects", previous);
-      else container.removeAttribute("data-ui-effects");
-    };
-  }, [particlesEnabled, heroAnimationsEnabled]);
-
-  // If already logged in, redirect to timeline (production only)
-  useEffect(() => {
-    if (!config.authEnabled || config.demoMode) return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("noredirect") === "1") return;
-    if (isAuthenticated && !isLoading) {
-      navigate("/timeline");
-    }
-  }, [isAuthenticated, isLoading, navigate]);
+  useRootUiEffects(particlesEnabled || heroAnimationsEnabled);
 
   // Show loading while checking auth or accepting token
   if (isLoading) {
@@ -174,6 +96,10 @@ export default function LandingPage() {
         <SwarmLogo size={64} className="landing-loading-logo" />
       </div>
     );
+  }
+
+  if (config.authEnabled && !config.demoMode && !disableRedirect && isAuthenticated) {
+    return <Navigate to="/timeline" replace />;
   }
 
   const scrollToHowItWorks = () => {
@@ -195,12 +121,9 @@ export default function LandingPage() {
   };
 
   const handleScreenshotThemeChange = (nextTheme: ScreenshotFrameTheme) => {
-    setScreenshotTheme(nextTheme);
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(location.search);
     params.set("screenshot_theme", nextTheme);
-    const query = params.toString();
-    const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
-    window.history.replaceState({}, "", nextUrl);
+    setSearchParams(params, { replace: true });
   };
 
   return (
@@ -255,7 +178,7 @@ export default function LandingPage() {
         </div>
       )}
 
-      {showPerfHud && <LandingPerfHud fxEnabled={fxEnabled} />}
+      {showPerfHud && <LandingPerfHud fxText={fxText} />}
     </div>
   );
 }
