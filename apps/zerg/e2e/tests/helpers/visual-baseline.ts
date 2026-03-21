@@ -57,3 +57,14 @@ export async function installDeterministicVisualFonts(page: Page): Promise<void>
     await document.fonts.ready;
   }, VISUAL_FONT_FAMILY);
 }
+
+export function getPlatformScopedSnapshotName(name: string, platform: string = process.platform): string {
+  return platform === 'linux' ? `${name}-linux` : name;
+}
+
+export function getPlatformScopedDesktopSnapshotFile(
+  name: string,
+  platform: string = process.platform,
+): string {
+  return `${getPlatformScopedSnapshotName(name, platform)}-chromium-darwin.png`;
+}
