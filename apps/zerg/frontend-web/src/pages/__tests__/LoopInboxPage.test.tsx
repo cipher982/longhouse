@@ -278,11 +278,12 @@ describe("LoopInboxPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
       expect(screen.getByTestId("loop-mobile-queue-toggle")).toBeInTheDocument();
-      expect(screen.getByText("Viewing 1 of 2")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-header")).toHaveTextContent("Viewing 1 of 2");
     });
 
     expect(screen.queryByText(/^Attention queue$/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Follow-ups/i })).toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-header")).toHaveTextContent("Open follow-ups");
+    expect(screen.getByRole("button", { name: /Open follow-ups/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Open timeline/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("loop-mobile-queue-toggle"));
@@ -309,12 +310,56 @@ describe("LoopInboxPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/99");
       expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
-      expect(screen.getByText("Viewing 2 of 2")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-header")).toHaveTextContent("Viewing 2 of 2");
     });
 
     const card = screen.getByTestId("loop-inbox-card");
     expect(within(card).getByRole("heading", { name: "Runner rollout" })).toBeInTheDocument();
     expect(within(card).getByText(/^Approve the runner rollout and resume the deploy\.$/i)).toBeInTheDocument();
+  });
+
+  it("auto-opens the mobile queue and flags older cards when the selected card is stale", async () => {
+    setViewportWidth(390);
+
+    fetchLoopInboxMock.mockResolvedValue([
+      makeInboxItem(),
+      makeInboxItem({
+        cardId: 99,
+        sessionId: "sess-2",
+        title: "Latest follow-up",
+        summary: "A newer turn replaced the older card.",
+        followUpPrompt: "Continue with the latest follow-up instead.",
+        lastTurnAt: "2026-03-19T12:05:00Z",
+      }),
+    ]);
+    fetchLoopActionCardMock.mockResolvedValue(
+      makeActionCard({
+        cardId: 390,
+        sessionId: "sess-stale",
+        title: "Frontend Effect Cleanup Fully Completed",
+        summary: "This older card is no longer the active thing to review.",
+        cardState: "superseded",
+        cardStateReason: "A newer turn replaced this follow-up.",
+        supersededByCardId: 99,
+        availableActions: [],
+      }),
+    );
+
+    renderPage("/loop/card/390");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
+    });
+
+    const header = screen.getByTestId("loop-mobile-header");
+    expect(header).toHaveTextContent("Open follow-ups");
+    expect(header).toHaveTextContent("2 open follow-ups");
+    expect(header).toHaveTextContent("Viewing older card");
+
+    const statusBanner = screen.getByTestId("loop-inbox-card-status-banner");
+    expect(within(statusBanner).getByRole("heading", { name: /Viewing older card/i })).toBeInTheDocument();
+    expect(within(statusBanner).getByText("A newer turn replaced this follow-up.")).toBeInTheDocument();
+    expect(within(statusBanner).getByRole("link", { name: /Open latest/i })).toHaveAttribute("href", "/loop/card/99");
   });
 
   it("uses compact mobile chrome and keeps the push CTA below the card", async () => {
