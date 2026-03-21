@@ -39,7 +39,6 @@ import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import {
   usePerformanceMonitoring,
-  useBundleSizeWarning,
 } from "../lib/usePerformance";
 import config from "../lib/config";
 
@@ -116,8 +115,7 @@ function LegacyForumRedirect() {
 
 export default function App() {
   // Performance monitoring
-  usePerformanceMonitoring("App");
-  useBundleSizeWarning();
+  usePerformanceMonitoring("App", { includeBundleSizeWarning: true });
 
   const demoRoutes = [
     // Marketing / public pages
