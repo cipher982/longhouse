@@ -16,6 +16,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import { useActiveSessions, type ActiveSession } from "../hooks/useActiveSessions";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSession,
@@ -45,6 +46,22 @@ import "../styles/sessions.css";
 
 const DAYS_OPTIONS = [7, 14, 30, 60, 90] as const;
 const PAGE_SIZE = 50;
+const DEFAULT_DAYS_BACK = 14;
+const DEFAULT_SORT_ORDER = "relevant";
+
+type SortOrder = "relevant" | "recent";
+
+interface SessionsUrlState {
+  project: string;
+  provider: string;
+  environment: string;
+  hideAutonomous: boolean;
+  daysBack: number;
+  searchQuery: string;
+  aiSearch: boolean;
+  sortOrder: SortOrder;
+  limit: number;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -309,6 +326,49 @@ function cwdBasename(cwd: string | null): string | null {
 function truncateText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength - 3).trim()}...`;
+}
+
+function parsePositiveIntParam(rawValue: string | null, fallback: number, min: number = 1): number {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.floor(parsed));
+}
+
+function readSessionsUrlState(searchParams: URLSearchParams): SessionsUrlState {
+  const mode = searchParams.get("mode");
+  const aiSearch =
+    mode === "hybrid" ||
+    mode === "semantic" ||
+    mode === "smart" ||
+    searchParams.get("semantic") === "1";
+
+  return {
+    project: searchParams.get("project") || "",
+    provider: searchParams.get("provider") || "",
+    environment: searchParams.get("environment") || "",
+    hideAutonomous: searchParams.get("hide_autonomous") !== "false",
+    daysBack: parsePositiveIntParam(searchParams.get("days_back"), DEFAULT_DAYS_BACK),
+    searchQuery: searchParams.get("query") || "",
+    aiSearch,
+    sortOrder: searchParams.get("sort") === "recent" ? "recent" : DEFAULT_SORT_ORDER,
+    limit: parsePositiveIntParam(searchParams.get("limit"), PAGE_SIZE, PAGE_SIZE),
+  };
+}
+
+function buildSessionsSearchParams(state: SessionsUrlState): URLSearchParams {
+  const params = new URLSearchParams();
+
+  if (state.project) params.set("project", state.project);
+  if (state.provider) params.set("provider", state.provider);
+  if (state.environment) params.set("environment", state.environment);
+  if (state.daysBack !== DEFAULT_DAYS_BACK) params.set("days_back", String(state.daysBack));
+  if (state.searchQuery) params.set("query", state.searchQuery);
+  if (state.aiSearch) params.set("mode", "hybrid");
+  if (state.searchQuery && state.sortOrder !== DEFAULT_SORT_ORDER) params.set("sort", state.sortOrder);
+  if (!state.hideAutonomous) params.set("hide_autonomous", "false");
+  if (state.limit !== PAGE_SIZE) params.set("limit", String(state.limit));
+
+  return params;
 }
 
 function getLiveSessionScope(session: ActiveSession): string {
@@ -640,87 +700,104 @@ export default function SessionsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const urlState = useMemo(() => readSessionsUrlState(searchParams), [searchParams]);
+  const {
+    project,
+    provider,
+    environment,
+    hideAutonomous,
+    daysBack,
+    searchQuery,
+    aiSearch,
+    sortOrder,
+    limit,
+  } = urlState;
 
-  // Filter state from URL params
-  const [project, setProject] = useState(searchParams.get("project") || "");
-  const [provider, setProvider] = useState(searchParams.get("provider") || "");
-  const [environment, setEnvironment] = useState(searchParams.get("environment") || "");
-  // hide_autonomous defaults true; only false when URL param is explicitly "false"
-  const [hideAutonomous, setHideAutonomous] = useState(
-    searchParams.get("hide_autonomous") !== "false"
+  const updateUrlState = useCallback(
+    (updater: SessionsUrlState | Partial<SessionsUrlState> | ((prev: SessionsUrlState) => SessionsUrlState)) => {
+      const previous = readSessionsUrlState(searchParams);
+      const next =
+        typeof updater === "function"
+          ? updater(previous)
+          : {
+              ...previous,
+              ...updater,
+            };
+      setSearchParams(buildSessionsSearchParams(next), { replace: true });
+    },
+    [searchParams, setSearchParams]
   );
-  const [daysBack, setDaysBack] = useState(
-    Number(searchParams.get("days_back")) || 14
-  );
-  const [searchQuery, setSearchQuery] = useState(searchParams.get("query") || "");
-  const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
-  // AI search toggle: false = keyword (instant), true = hybrid (AI-powered, ~500ms–2s).
-  // Backwards compat: old mode=hybrid/semantic/smart URLs and ?semantic=1 all map to ai=true.
-  const [aiSearch, setAiSearch] = useState<boolean>(() => {
-    const m = searchParams.get("mode");
-    if (m === "hybrid" || m === "semantic" || m === "smart") return true;
-    if (searchParams.get("semantic") === "1") return true;
-    return false;
-  });
-  // Derived — kept for backend API compatibility
-  const searchMode = aiSearch ? "hybrid" : "keyword";
 
-  // Sort order — only meaningful when a query is present.
-  // Defaults to 'relevant' (best BM25/RRF match first).
-  const [sortOrder, setSortOrder] = useState<"relevant" | "recent">(() => {
-    const s = searchParams.get("sort");
-    return s === "recent" ? "recent" : "relevant";
-  });
+  const updateFilterState = useCallback(
+    (patch: Partial<SessionsUrlState> | ((prev: SessionsUrlState) => SessionsUrlState)) => {
+      updateUrlState((previous) => {
+        const next =
+          typeof patch === "function"
+            ? patch(previous)
+            : {
+                ...previous,
+                ...patch,
+              };
+        return {
+          ...next,
+          limit: PAGE_SIZE,
+        };
+      });
+    },
+    [updateUrlState]
+  );
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const [recallOpen, setRecallOpen] = useState(false);
   const [liveViewOpen, setLiveViewOpen] = useState(false);
 
-  // Pagination state
-  const [limit, setLimit] = useState(PAGE_SIZE);
-
   // Fetch dynamic filter options
   const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack);
   const projectOptions = filtersData?.projects || [];
   const providerOptions = filtersData?.providers || [];
   const machineOptions = filtersData?.machines || [];
+  const handleProjectChange = useCallback(
+    (value: string) => updateFilterState({ project: value }),
+    [updateFilterState]
+  );
+  const handleProviderChange = useCallback(
+    (value: string) => updateFilterState({ provider: value }),
+    [updateFilterState]
+  );
+  const handleEnvironmentChange = useCallback(
+    (value: string) => updateFilterState({ environment: value }),
+    [updateFilterState]
+  );
+  const handleDaysBackChange = useCallback(
+    (value: number) => updateFilterState({ daysBack: value }),
+    [updateFilterState]
+  );
+  const handleHideAutonomousChange = useCallback(
+    (value: boolean) => updateFilterState({ hideAutonomous: value }),
+    [updateFilterState]
+  );
+  const handleSearchQueryChange = useCallback(
+    (value: string) => {
+      updateFilterState((previous) => ({
+        ...previous,
+        searchQuery: value,
+        sortOrder: value ? previous.sortOrder : DEFAULT_SORT_ORDER,
+      }));
+    },
+    [updateFilterState]
+  );
+  const handleAiSearchToggle = useCallback(
+    () => updateFilterState((previous) => ({ ...previous, aiSearch: !previous.aiSearch })),
+    [updateFilterState]
+  );
+  const handleSortOrderChange = useCallback(
+    (value: SortOrder) => updateFilterState({ sortOrder: value }),
+    [updateFilterState]
+  );
 
-  // Debounce — longer when AI search is on to avoid hammering the embedding API per keystroke
-  const [aiSearchPending, setAiSearchPending] = useState(false);
-  const aiPendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    const delay = aiSearch ? 700 : 300;
-    if (aiSearch && searchQuery !== debouncedQuery) setAiSearchPending(true);
-    const timer = setTimeout(() => {
-      setDebouncedQuery(searchQuery);
-      setAiSearchPending(false);
-    }, delay);
-    return () => {
-      clearTimeout(timer);
-      if (aiPendingTimer.current) clearTimeout(aiPendingTimer.current);
-    };
-  }, [searchQuery, aiSearch]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Update URL params when filters change
-  useEffect(() => {
-    const params = new URLSearchParams();
-    if (project) params.set("project", project);
-    if (provider) params.set("provider", provider);
-    if (environment) params.set("environment", environment);
-    if (daysBack !== 14) params.set("days_back", String(daysBack));
-    if (debouncedQuery) params.set("query", debouncedQuery);
-    if (aiSearch) params.set("mode", "hybrid");
-    if (debouncedQuery && sortOrder !== "relevant") params.set("sort", sortOrder);
-    if (!hideAutonomous) params.set("hide_autonomous", "false");
-    setSearchParams(params, { replace: true });
-  }, [project, provider, environment, daysBack, debouncedQuery, aiSearch, sortOrder, hideAutonomous, setSearchParams]);
-
-  // Reset pagination when filters change
-  useEffect(() => {
-    setLimit(PAGE_SIZE);
-  }, [project, provider, environment, daysBack, debouncedQuery]);
+  const debouncedQuery = useDebouncedValue(searchQuery, aiSearch ? 700 : 300);
+  const aiSearchPending = aiSearch && searchQuery !== debouncedQuery;
 
   // Build filters — mode and sort are passed through to the backend.
   // Hybrid mode sends a single request; the backend handles RRF fusion.
@@ -732,7 +809,7 @@ export default function SessionsPage() {
       days_back: daysBack,
       query: debouncedQuery || undefined,
       limit,
-      mode: searchMode === "keyword" ? undefined : searchMode,
+      mode: aiSearch ? "hybrid" : undefined,
       sort: debouncedQuery ? (sortOrder === "recent" ? "recency" : "relevance") : undefined,
       hide_autonomous: hideAutonomous ? undefined : false,
     }),
@@ -834,19 +911,27 @@ export default function SessionsPage() {
 
   // Load more sessions
   const handleLoadMore = useCallback(() => {
-    setLimit((prev) => prev + PAGE_SIZE);
-  }, []);
+    updateUrlState((previous) => ({
+      ...previous,
+      limit: previous.limit + PAGE_SIZE,
+    }));
+  }, [updateUrlState]);
 
   // Clear filters
   const handleClearFilters = useCallback(() => {
-    setProject("");
-    setProvider("");
-    setEnvironment("");
-    setDaysBack(14);
-    setSearchQuery("");
-    setAiSearch(false);
+    updateUrlState({
+      project: "",
+      provider: "",
+      environment: "",
+      hideAutonomous: true,
+      daysBack: DEFAULT_DAYS_BACK,
+      searchQuery: "",
+      aiSearch: false,
+      sortOrder: DEFAULT_SORT_ORDER,
+      limit: PAGE_SIZE,
+    });
     setPopoverOpen(false);
-  }, []);
+  }, [updateUrlState]);
 
 
   // Demo seeding state
@@ -872,7 +957,7 @@ export default function SessionsPage() {
     }
   }, [queryClient]);
 
-  const hasFilters = !!(project || provider || environment || daysBack !== 14 || searchQuery);
+  const hasFilters = !!(project || provider || environment || daysBack !== DEFAULT_DAYS_BACK || searchQuery);
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
 
   // Count active non-default filters (for badge)
@@ -880,7 +965,7 @@ export default function SessionsPage() {
     project,
     provider,
     environment,
-    daysBack !== 14 ? "active" : "",
+    daysBack !== DEFAULT_DAYS_BACK ? "active" : "",
     !hideAutonomous ? "active" : "",
   ].filter(Boolean).length;
 
@@ -1084,13 +1169,13 @@ export default function SessionsPage() {
               type="search"
               placeholder="Search sessions..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => handleSearchQueryChange(e.target.value)}
               className="sessions-search-input"
             />
             <button
               type="button"
               className={`sessions-ai-toggle${aiSearch ? " sessions-ai-toggle--active" : ""}`}
-              onClick={() => setAiSearch((v) => !v)}
+              onClick={handleAiSearchToggle}
               aria-pressed={aiSearch}
               title={aiSearch ? "AI search on — finds by meaning (slower)" : "AI search — finds sessions by meaning"}
             >
@@ -1126,8 +1211,8 @@ export default function SessionsPage() {
                 onKeyDown={(e) => {
                   const orders: Array<"relevant" | "recent"> = ["relevant", "recent"];
                   const idx = orders.indexOf(sortOrder);
-                  if (e.key === "ArrowLeft") { e.preventDefault(); setSortOrder(orders[(idx + 1) % 2]); }
-                  if (e.key === "ArrowRight") { e.preventDefault(); setSortOrder(orders[(idx + 1) % 2]); }
+                  if (e.key === "ArrowLeft") { e.preventDefault(); handleSortOrderChange(orders[(idx + 1) % 2]); }
+                  if (e.key === "ArrowRight") { e.preventDefault(); handleSortOrderChange(orders[(idx + 1) % 2]); }
                   requestAnimationFrame(() => {
                     const active = e.currentTarget.querySelector<HTMLButtonElement>('[aria-checked="true"]');
                     active?.focus();
@@ -1140,7 +1225,7 @@ export default function SessionsPage() {
                   aria-checked={sortOrder === "relevant"}
                   tabIndex={sortOrder === "relevant" ? 0 : -1}
                   className={`sessions-mode-btn${sortOrder === "relevant" ? " sessions-mode-btn--active" : ""}`}
-                  onClick={() => setSortOrder("relevant")}
+                  onClick={() => handleSortOrderChange("relevant")}
                   title="Sort by relevance to your query"
                 >
                   Relevant
@@ -1151,7 +1236,7 @@ export default function SessionsPage() {
                   aria-checked={sortOrder === "recent"}
                   tabIndex={sortOrder === "recent" ? 0 : -1}
                   className={`sessions-mode-btn${sortOrder === "recent" ? " sessions-mode-btn--active" : ""}`}
-                  onClick={() => setSortOrder("recent")}
+                  onClick={() => handleSortOrderChange("recent")}
                   title="Sort by most recent activity"
                 >
                   Recent
@@ -1161,13 +1246,13 @@ export default function SessionsPage() {
           </div>
 
           {/* Active filter chips */}
-          {(provider || environment || project || daysBack !== 14 || !hideAutonomous) && (
+          {(provider || environment || project || daysBack !== DEFAULT_DAYS_BACK || !hideAutonomous) && (
             <div className="sessions-filter-chips">
-              {provider && <FilterChip label={provider} onDismiss={() => setProvider("")} />}
-              {environment && <FilterChip label={environment} onDismiss={() => setEnvironment("")} />}
-              {project && <FilterChip label={project} onDismiss={() => setProject("")} />}
-              {daysBack !== 14 && <FilterChip label={`${daysBack}d`} onDismiss={() => setDaysBack(14)} />}
-              {!hideAutonomous && <FilterChip label="show auto" onDismiss={() => setHideAutonomous(true)} />}
+              {provider && <FilterChip label={provider} onDismiss={() => handleProviderChange("")} />}
+              {environment && <FilterChip label={environment} onDismiss={() => handleEnvironmentChange("")} />}
+              {project && <FilterChip label={project} onDismiss={() => handleProjectChange("")} />}
+              {daysBack !== DEFAULT_DAYS_BACK && <FilterChip label={`${daysBack}d`} onDismiss={() => handleDaysBackChange(DEFAULT_DAYS_BACK)} />}
+              {!hideAutonomous && <FilterChip label="show auto" onDismiss={() => handleHideAutonomousChange(true)} />}
             </div>
           )}
 
@@ -1218,11 +1303,11 @@ export default function SessionsPage() {
           <FilterPopover
             anchorRef={filterBtnRef}
             onClose={() => setPopoverOpen(false)}
-            project={project} setProject={setProject} projectOptions={projectOptions}
-            provider={provider} setProvider={setProvider} providerOptions={providerOptions}
-            environment={environment} setEnvironment={setEnvironment} machineOptions={machineOptions}
-            daysBack={daysBack} setDaysBack={setDaysBack}
-            hideAutonomous={hideAutonomous} setHideAutonomous={setHideAutonomous}
+            project={project} setProject={handleProjectChange} projectOptions={projectOptions}
+            provider={provider} setProvider={handleProviderChange} providerOptions={providerOptions}
+            environment={environment} setEnvironment={handleEnvironmentChange} machineOptions={machineOptions}
+            daysBack={daysBack} setDaysBack={handleDaysBackChange}
+            hideAutonomous={hideAutonomous} setHideAutonomous={handleHideAutonomousChange}
             filtersLoading={filtersLoading}
           />
         )}
