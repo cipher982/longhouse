@@ -134,12 +134,13 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   const card = page.getByTestId("loop-inbox-card");
   const peekTab = page.getByTestId("loop-mobile-queue-peek-tab");
+  const peekCount = page.getByTestId("loop-mobile-queue-peek-count");
 
   await expect(card).toBeVisible();
   await expect(peekTab).toBeVisible();
   await expect(page.getByTestId("loop-mobile-header")).toHaveCount(0);
-  await expect(peekTab).toContainText("Follow-ups");
-  await expect(peekTab.getByText("2", { exact: true })).toBeVisible();
+  await expect(peekTab).toHaveAttribute("aria-label", /Open follow-ups/);
+  await expect(peekCount).toHaveText("2");
   await expect(page.getByRole("link", { name: "Open timeline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Candidate Interview Recaps and Hiring Pitches" })).toBeVisible();
   await expect(page.getByText(/^Attention queue$/)).toHaveCount(0);
@@ -156,7 +157,8 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   const peekTabBox = await peekTab.boundingBox();
   expect(peekTabBox).toBeTruthy();
   expect(peekTabBox?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(4);
-  expect((peekTabBox?.x ?? 0) + (peekTabBox?.width ?? 0)).toBeGreaterThan(88);
+  expect(peekTabBox?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(88);
+  expect(peekTabBox?.width ?? 0).toBeGreaterThan(34);
   await saveScreenshot(page, testInfo, "loop-inbox-mobile-closed.png");
 
   await peekTab.click();

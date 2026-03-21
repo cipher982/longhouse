@@ -281,8 +281,8 @@ describe("LoopInboxPage", () => {
 
     expect(screen.queryByText(/^Attention queue$/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
-    expect(screen.getByTestId("loop-mobile-queue-peek-tab")).toHaveTextContent("Follow-ups");
-    expect(within(screen.getByTestId("loop-mobile-queue-peek-tab")).getByText("2")).toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-queue-peek-tab")).toHaveAttribute("aria-label", expect.stringMatching(/Open follow-ups/i));
+    expect(screen.getByTestId("loop-mobile-queue-peek-count")).toHaveTextContent("2");
     expect(screen.getByRole("button", { name: /Open follow-ups/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Open timeline/i })).not.toBeInTheDocument();
 
