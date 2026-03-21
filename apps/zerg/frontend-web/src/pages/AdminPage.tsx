@@ -1,11 +1,11 @@
-import React, { useMemo, useState, useEffect } from "react";
-import { createPortal } from "react-dom";
+import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
+import AdminConfirmationModal from "../components/admin/AdminConfirmationModal";
 import {
   Button,
   Card,
@@ -299,118 +299,6 @@ function MetricCard({
   );
 }
 
-// Confirmation Modal component with React Portal
-function ConfirmationModal({
-  isOpen,
-  onClose,
-  onConfirm,
-  title,
-  message,
-  confirmText = "Confirm",
-  isDangerous = false,
-  requirePassword = false,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: (password?: string) => void;
-  title: string;
-  message: string;
-  confirmText?: string;
-  isDangerous?: boolean;
-  requirePassword?: boolean;
-}) {
-  const [password, setPassword] = useState("");
-
-  // Lock body scroll when modal is open
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isOpen]);
-
-  // Handle Escape key
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleEscape);
-    return () => window.removeEventListener('keydown', handleEscape);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
-
-  const handleConfirm = () => {
-    onConfirm(requirePassword ? password : undefined);
-    setPassword("");
-  };
-
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      onClose();
-    }
-  };
-
-  const modalContent = (
-    <div
-      className="admin-confirm-overlay"
-      onClick={handleBackdropClick}
-    >
-      <Card
-        className="admin-confirm-card"
-        onClick={(e: React.MouseEvent) => e.stopPropagation()}
-      >
-        <Card.Header>
-          <h3 className="admin-confirm-title">{title}</h3>
-        </Card.Header>
-        <Card.Body>
-          <p>{message}</p>
-          {requirePassword && (
-            <div className="form-group admin-confirm-field">
-              <input
-                type="password"
-                className="ui-input"
-                placeholder="Confirmation password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && password) {
-                    handleConfirm();
-                  }
-                }}
-                autoFocus
-              />
-            </div>
-          )}
-          <div className="modal-actions admin-confirm-actions">
-            <Button variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              variant={isDangerous ? "danger" : "primary"}
-              onClick={handleConfirm}
-              disabled={requirePassword && !password}
-            >
-              {confirmText}
-            </Button>
-          </div>
-        </Card.Body>
-      </Card>
-    </div>
-  );
-
-  // Render modal at document.body level using Portal
-  return createPortal(modalContent, document.body);
-}
-
 // Top automations table component - using real backend contract
 function TopAutomationsTable({
   automations = [],
@@ -530,7 +418,7 @@ function UsersTable({
               </div>
             </Table.Cell>
             <Table.Cell>
-              <Badge variant={user.role === 'admin' ? 'success' : 'neutral'}>
+              <Badge variant={user.role === "ADMIN" ? "success" : "neutral"}>
                 {user.role}
               </Badge>
             </Table.Cell>
@@ -711,8 +599,6 @@ function AdminPage() {
   const [userDetailOpen, setUserDetailOpen] = useState(false);
   const [demoEmail, setDemoEmail] = useState("");
   const [demoDisplayName, setDemoDisplayName] = useState("");
-  const [demoScenario, setDemoScenario] = useState("swarm-mvp");
-  const [selectedDemoUserId, setSelectedDemoUserId] = useState<number | null>(null);
   const [demoResetState, setDemoResetState] = useState<{
     isOpen: boolean;
     target: AdminUserRow | null;
@@ -747,12 +633,6 @@ function AdminPage() {
   const demoUsers = useMemo(() => {
     return (usersData?.users ?? []).filter((demoUser) => demoUser.is_demo);
   }, [usersData]);
-
-  useEffect(() => {
-    if (!selectedDemoUserId && demoUsers.length > 0) {
-      setSelectedDemoUserId(demoUsers[0].id);
-    }
-  }, [demoUsers, selectedDemoUserId]);
 
   useReadinessFlag({ ready: !summaryLoading && !usersLoading });
 
@@ -814,13 +694,6 @@ function AdminPage() {
     },
   });
 
-  // Handle permission errors - FIXED: Move ALL hooks before conditional logic
-  React.useEffect(() => {
-    if (summaryError instanceof Error && summaryError.message.includes("Admin access required")) {
-      toast.error("Admin access required to view this page");
-    }
-  }, [summaryError]);
-
   // Handle users table sort
   const handleUsersSort = (field: string) => {
     if (field === usersSortField) {
@@ -842,38 +715,6 @@ function AdminPage() {
       email: demoEmail.trim() || undefined,
       display_name: demoDisplayName.trim() || undefined,
     });
-  };
-
-  const handleSeedDemo = (userId?: number | null) => {
-    const targetId = userId ?? selectedDemoUserId;
-    if (!targetId) {
-      toast.error("Select a demo account first");
-      return;
-    }
-    const demoUser = demoUsers.find((item) => item.id === targetId);
-    if (!demoUser) {
-      toast.error("Demo account not found");
-      return;
-    }
-    const scenarioName = demoScenario.trim();
-    if (!scenarioName) {
-      toast.error("Enter a scenario name to seed");
-      return;
-    }
-    seedScenarioMutation.mutate({
-      name: scenarioName,
-      owner_email: demoUser.email,
-      clean: true,
-    });
-  };
-
-  const handleImpersonate = (userId?: number | null) => {
-    const targetId = userId ?? selectedDemoUserId;
-    if (!targetId) {
-      toast.error("Select a demo account first");
-      return;
-    }
-    impersonateMutation.mutate({ user_id: targetId });
   };
 
   // One-click: seed sample data then impersonate
@@ -901,13 +742,8 @@ function AdminPage() {
     }
   };
 
-  const handleOpenDemoReset = (userId?: number | null) => {
-    const targetId = userId ?? selectedDemoUserId;
-    if (!targetId) {
-      toast.error("Select a demo account first");
-      return;
-    }
-    const demoUser = demoUsers.find((item) => item.id === targetId);
+  const handleOpenDemoReset = (userId: number) => {
+    const demoUser = demoUsers.find((item) => item.id === userId);
     if (!demoUser) {
       toast.error("Demo account not found");
       return;
@@ -985,7 +821,7 @@ function AdminPage() {
           variant="error"
           title="Error loading operations"
           description={String(summaryError)}
-          action={<Button onClick={() => window.location.reload()}>Retry</Button>}
+          action={<Button onClick={() => queryClient.invalidateQueries({ queryKey: ["ops-summary"] })}>Retry</Button>}
         />
       ) : summary ? (
         <div className="admin-stack ops-admin-stack">
@@ -1290,7 +1126,7 @@ function AdminPage() {
       ) : null}
 
       {/* Confirmation Modal */}
-      <ConfirmationModal
+      <AdminConfirmationModal
         isOpen={modalState.isOpen}
         onClose={() => setModalState({ isOpen: false, type: null, requirePassword: false })}
         onConfirm={handleConfirmReset}
@@ -1309,7 +1145,7 @@ function AdminPage() {
         requirePassword={modalState.requirePassword}
       />
 
-      <ConfirmationModal
+      <AdminConfirmationModal
         isOpen={demoResetState.isOpen}
         onClose={() => setDemoResetState({ isOpen: false, target: null })}
         onConfirm={handleConfirmDemoReset}
