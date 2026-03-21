@@ -23,7 +23,6 @@ import TraceExplorerPage from "../pages/TraceExplorerPage";
 import ReliabilityPage from "../pages/ReliabilityPage";
 import SessionsPage from "../pages/SessionsPage";
 import SessionDetailPage from "../pages/SessionDetailPage";
-import LoopInboxPage from "../pages/LoopInboxPage";
 import { BriefingsPage } from "../pages/BriefingsPage";
 import { InsightsPage } from "../pages/InsightsPage";
 import DemoBanner from "../components/DemoBanner";
@@ -33,6 +32,7 @@ import { AuthGuard } from "../lib/auth";
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
 const ChatPage = lazy(() => import("../pages/ChatPage"));
 const ConversationsPage = lazy(() => import("../pages/ConversationsPage"));
+const LoopInboxPage = lazy(() => import("../pages/LoopInboxPage"));
 const OikosChatPage = lazy(() => import("../pages/OikosChatPage"));
 const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
 import { ShelfProvider } from "../lib/useShelfState";
@@ -116,6 +116,14 @@ function LegacyForumRedirect() {
 export default function App() {
   // Performance monitoring
   usePerformanceMonitoring("App", { includeBundleSizeWarning: true });
+
+  const loopInboxElement = (
+    <ErrorBoundary>
+      <Suspense fallback={<PageLoader />}>
+        <LoopInboxPage />
+      </Suspense>
+    </ErrorBoundary>
+  );
 
   const demoRoutes = [
     // Marketing / public pages
@@ -272,27 +280,15 @@ export default function App() {
             children: [
               {
                 path: "/loop",
-                element: (
-                  <ErrorBoundary>
-                    <LoopInboxPage />
-                  </ErrorBoundary>
-                ),
+                element: loopInboxElement,
               },
               {
                 path: "/loop/card/:cardId",
-                element: (
-                  <ErrorBoundary>
-                    <LoopInboxPage />
-                  </ErrorBoundary>
-                ),
+                element: loopInboxElement,
               },
               {
                 path: "/loop/:sessionId",
-                element: (
-                  <ErrorBoundary>
-                    <LoopInboxPage />
-                  </ErrorBoundary>
-                ),
+                element: loopInboxElement,
               },
             ],
           },
