@@ -133,17 +133,19 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   await page.goto("/loop/card/42");
 
   const card = page.getByTestId("loop-inbox-card");
-  const peekTab = page.getByTestId("loop-mobile-queue-peek-tab");
-  const peekCount = page.getByTestId("loop-mobile-queue-peek-count");
+  const header = page.getByTestId("loop-mobile-header");
+  const queueButton = page.getByTestId("loop-mobile-queue-button");
+  const queueCount = page.getByTestId("loop-mobile-queue-count");
 
   await expect(card).toBeVisible();
-  await expect(peekTab).toBeVisible();
-  await expect(page.getByTestId("loop-mobile-header")).toHaveCount(0);
-  await expect(peekTab).toHaveAttribute("aria-label", /Open follow-ups/);
-  await expect(peekCount).toHaveText("2");
+  await expect(header).toBeVisible();
+  await expect(queueButton).toBeVisible();
+  await expect(queueButton).toHaveAttribute("aria-label", /Open follow-ups/);
+  await expect(queueCount).toHaveText("2");
   await expect(page.getByRole("link", { name: "Open timeline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Candidate Interview Recaps and Hiring Pitches" })).toBeVisible();
   await expect(page.getByText(/^Attention queue$/)).toHaveCount(0);
+  await expect(page.getByText(/^2 open follow-ups$/)).toHaveCount(0);
 
   const viewport = page.viewportSize();
   if (!viewport) {
@@ -152,18 +154,19 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   const cardBox = await card.boundingBox();
   expect(cardBox).toBeTruthy();
-  expect(cardBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(viewport.height * 0.18);
+  expect(cardBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(viewport.height * 0.24);
 
-  const peekTabBox = await peekTab.boundingBox();
-  expect(peekTabBox).toBeTruthy();
-  expect(peekTabBox?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(4);
-  expect(peekTabBox?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(56);
-  expect(peekTabBox?.width ?? 0).toBeGreaterThan(24);
-  expect(peekTabBox?.height ?? 0).toBeGreaterThan(60);
-  expect((peekTabBox?.height ?? 0) > (peekTabBox?.width ?? Number.POSITIVE_INFINITY)).toBe(true);
+  const headerBox = await header.boundingBox();
+  const queueButtonBox = await queueButton.boundingBox();
+  expect(headerBox).toBeTruthy();
+  expect(queueButtonBox).toBeTruthy();
+  expect(queueButtonBox?.width ?? 0).toBeGreaterThanOrEqual(44);
+  expect(queueButtonBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+  expect(queueButtonBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(cardBox?.y ?? 0);
+  expect((headerBox?.y ?? 0) + (headerBox?.height ?? 0)).toBeLessThanOrEqual((cardBox?.y ?? 0) + 2);
   await saveScreenshot(page, testInfo, "loop-inbox-mobile-closed.png");
 
-  await peekTab.click();
+  await queueButton.click();
 
   const drawer = page.getByTestId("loop-mobile-queue-drawer");
   await expect(drawer).toBeVisible();
@@ -182,7 +185,8 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   await page.waitForURL("**/loop/card/99", { timeout: 10000 });
   await expect(page.getByTestId("loop-mobile-queue-drawer")).toHaveCount(0);
-  await expect(page.getByTestId("loop-mobile-queue-peek-tab")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-header")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-button")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Settings and Modal Ownership Committed" })).toBeVisible();
 });
 
@@ -196,11 +200,12 @@ test("loop inbox auto-opens the queue when a stale mobile card is selected", asy
   const drawer = page.getByTestId("loop-mobile-queue-drawer");
   const statusBanner = page.getByTestId("loop-inbox-card-status-banner");
 
-  await expect(page.getByTestId("loop-mobile-header")).toHaveCount(0);
-  await expect(page.getByTestId("loop-mobile-queue-peek-tab")).toHaveCount(0);
+  await expect(page.getByTestId("loop-mobile-header")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-button")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-count")).toHaveText("2");
   await expect(drawer).toBeVisible();
   await expect(drawer.getByText("Settings and Modal Ownership Committed")).toBeVisible();
   await expect(statusBanner).toContainText("Viewing older card");
   await expect(statusBanner).toContainText("A newer turn replaced this follow-up.");
-  await expect(statusBanner.getByRole("link", { name: "Open latest" })).toHaveAttribute("href", "/loop/card/99");
+  await expect(statusBanner.getByRole("link", { name: "Open current" })).toHaveAttribute("href", "/loop/card/99");
 });

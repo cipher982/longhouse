@@ -230,7 +230,7 @@ describe("LoopInboxPage", () => {
     });
 
     expect(screen.getByText("A newer turn replaced this follow-up.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open latest/i })).toHaveAttribute("href", "/loop/card/99");
+    expect(screen.getByRole("link", { name: /Open current/i })).toHaveAttribute("href", "/loop/card/99");
   });
 
   it("hides the mobile queue toggle when only one active follow-up exists", async () => {
@@ -241,7 +241,8 @@ describe("LoopInboxPage", () => {
       expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
     });
 
-    expect(screen.queryByTestId("loop-mobile-queue-peek-tab")).not.toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
+    expect(screen.queryByTestId("loop-mobile-queue-button")).not.toBeInTheDocument();
   });
 
   it("opens the mobile queue drawer and selecting another follow-up swaps the card", async () => {
@@ -276,17 +277,20 @@ describe("LoopInboxPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-queue-peek-tab")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-button")).toBeInTheDocument();
     });
 
     expect(screen.queryByText(/^Attention queue$/i)).not.toBeInTheDocument();
-    expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
-    expect(screen.getByTestId("loop-mobile-queue-peek-tab")).toHaveAttribute("aria-label", expect.stringMatching(/Open follow-ups/i));
-    expect(screen.getByTestId("loop-mobile-queue-peek-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("loop-mobile-queue-button")).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Open follow-ups/i),
+    );
+    expect(screen.getByTestId("loop-mobile-queue-count")).toHaveTextContent("2");
     expect(screen.getByRole("button", { name: /Open follow-ups/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Open timeline/i })).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId("loop-mobile-queue-peek-tab"));
+    await user.click(screen.getByTestId("loop-mobile-queue-button"));
 
     await waitFor(() => {
       expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
@@ -304,13 +308,13 @@ describe("LoopInboxPage", () => {
       expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId("loop-mobile-queue-peek-tab"));
+    await user.click(screen.getByTestId("loop-mobile-queue-button"));
     await user.click(screen.getByTestId("loop-inbox-row-99"));
 
     await waitFor(() => {
       expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/99");
       expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
-      expect(screen.getByTestId("loop-mobile-queue-peek-tab")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-button")).toBeInTheDocument();
     });
 
     const card = screen.getByTestId("loop-inbox-card");
@@ -351,13 +355,14 @@ describe("LoopInboxPage", () => {
       expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
     });
 
-    expect(screen.queryByTestId("loop-mobile-queue-peek-tab")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-queue-button")).toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-queue-count")).toHaveTextContent("2");
 
     const statusBanner = screen.getByTestId("loop-inbox-card-status-banner");
     expect(within(statusBanner).getByRole("heading", { name: /Viewing older card/i })).toBeInTheDocument();
     expect(within(statusBanner).getByText("A newer turn replaced this follow-up.")).toBeInTheDocument();
-    expect(within(statusBanner).getByRole("link", { name: /Open latest/i })).toHaveAttribute("href", "/loop/card/99");
+    expect(within(statusBanner).getByRole("link", { name: /Open current/i })).toHaveAttribute("href", "/loop/card/99");
   });
 
   it("uses compact mobile chrome and keeps the push CTA below the card", async () => {
@@ -383,7 +388,7 @@ describe("LoopInboxPage", () => {
       expect(screen.getByTestId("loop-push-banner")).toBeInTheDocument();
     });
 
-    expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
     expect(screen.queryByText(/Handle finished coding turns without opening the full desktop workspace\./i)).not.toBeInTheDocument();
 
     const card = screen.getByTestId("loop-inbox-card");
@@ -408,7 +413,7 @@ describe("LoopInboxPage", () => {
       expect(screen.getByTestId("loop-install-banner")).toBeInTheDocument();
     });
 
-    expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
     const card = screen.getByTestId("loop-inbox-card");
     const installBanner = screen.getByTestId("loop-install-banner");
     expect(card.compareDocumentPosition(installBanner) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
