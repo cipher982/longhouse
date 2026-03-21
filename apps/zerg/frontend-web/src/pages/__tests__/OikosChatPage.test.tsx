@@ -8,7 +8,7 @@
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestRouter } from '../../test/test-utils';
 import { SessionPickerProvider } from '../../components/SessionPickerProvider';
@@ -20,6 +20,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchThreadByTitle: vi.fn(),
   fetchThreadMessages: vi.fn(),
   fetchSystemCapabilities: vi.fn(),
+  request: vi.fn(),
 }));
 
 vi.mock('../../services/api', async (importOriginal) => {
@@ -34,7 +35,13 @@ const {
   fetchThreadByTitle: mockFetchThreadByTitle,
   fetchThreadMessages: mockFetchThreadMessages,
   fetchSystemCapabilities: mockFetchSystemCapabilities,
+  request: mockRequest,
 } = apiMocks;
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-search">{location.search}</div>;
+}
 
 function renderOikosChatPage(initialEntry = '/chat') {
   const queryClient = new QueryClient({
@@ -49,7 +56,15 @@ function renderOikosChatPage(initialEntry = '/chat') {
       <SessionPickerProvider>
         <TestRouter initialEntries={[initialEntry]}>
           <Routes>
-            <Route path="/chat" element={<OikosChatPage />} />
+            <Route
+              path="/chat"
+              element={(
+                <>
+                  <OikosChatPage />
+                  <LocationProbe />
+                </>
+              )}
+            />
           </Routes>
         </TestRouter>
       </SessionPickerProvider>
@@ -61,6 +76,7 @@ describe('OikosChatPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     oikosToolStore.clearTools();
+    window.sessionStorage.clear();
     mockFetchSystemCapabilities.mockResolvedValue({
       llm_available: true,
       auth_disabled: false,
@@ -451,6 +467,70 @@ describe('OikosChatPage', () => {
       await waitFor(() => {
         expect(screen.getByText(/Check my health data/)).toBeInTheDocument();
       });
+    });
+  });
+
+  describe('Demo seeding', () => {
+    it('canonicalizes seeded demo routes without reseeding', async () => {
+      const now = new Date().toISOString();
+      const demoThreadTitle = '[scenario:oikos-math] Oikos math (2+2)';
+
+      window.sessionStorage.setItem('oikos-demo-seeded:oikos-math', '1');
+      mockFetchThreadByTitle.mockResolvedValue({
+        id: 7,
+        automation_id: 1,
+        title: demoThreadTitle,
+        active: true,
+        created_at: now,
+        updated_at: now,
+        messages: [],
+      });
+      mockFetchThreadMessages.mockResolvedValue([]);
+
+      renderOikosChatPage('/chat?demo=oikos-math');
+
+      await waitFor(() => {
+        const params = new URLSearchParams(screen.getByTestId('location-search').textContent ?? '');
+        expect(params.get('demo')).toBe('oikos-math');
+        expect(params.get('thread')).toBe(demoThreadTitle);
+      });
+
+      expect(mockRequest).not.toHaveBeenCalled();
+      await waitFor(() => expect(mockFetchThreadByTitle).toHaveBeenCalledWith(demoThreadTitle));
+    });
+
+    it('seeds unseeded demo routes once before canonicalizing the thread', async () => {
+      const now = new Date().toISOString();
+      const demoThreadTitle = '[scenario:oikos-math] Oikos math (2+2)';
+
+      mockRequest.mockResolvedValue({});
+      mockFetchThreadByTitle.mockResolvedValue({
+        id: 7,
+        automation_id: 1,
+        title: demoThreadTitle,
+        active: true,
+        created_at: now,
+        updated_at: now,
+        messages: [],
+      });
+      mockFetchThreadMessages.mockResolvedValue([]);
+
+      renderOikosChatPage('/chat?demo=oikos-math');
+
+      await waitFor(() => {
+        expect(mockRequest).toHaveBeenCalledWith('/scenarios/seed', {
+          method: 'POST',
+          body: JSON.stringify({ name: 'oikos-math', clean: true }),
+        });
+      });
+
+      await waitFor(() => {
+        const params = new URLSearchParams(screen.getByTestId('location-search').textContent ?? '');
+        expect(params.get('demo')).toBe('oikos-math');
+        expect(params.get('thread')).toBe(demoThreadTitle);
+      });
+
+      expect(window.sessionStorage.getItem('oikos-demo-seeded:oikos-math')).toBe('1');
     });
   });
 });
