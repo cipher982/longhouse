@@ -24,9 +24,9 @@ Ship the first trustworthy away-from-keyboard product for laptop-first Claude us
 ## Checklist
 
 - [x] Create persistent managed-local spec with decisions and phased plan
-- [ ] Add managed-local execution-home + tmux metadata to sessions
-- [ ] Add managed-local tmux command builder/service with focused tests
-- [ ] Expose execution-home metadata in session APIs
+- [x] Add managed-local execution-home + tmux metadata to sessions
+- [x] Add managed-local tmux command builder/service with focused tests
+- [x] Expose execution-home metadata in session APIs
 - [ ] Add managed-local launcher on a connected runner
 - [ ] Route `/sessions/{id}/chat` to tmux-backed local sessions
 - [ ] Add Loop `Reply` as a first-class action for managed-local cards

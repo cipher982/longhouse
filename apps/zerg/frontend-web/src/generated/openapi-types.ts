@@ -2348,6 +2348,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/oikos/push-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Loop Push Config
+         * @description Return Loop PWA push availability for the authenticated user.
+         */
+        get: operations["get_loop_push_config_oikos_push_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oikos/push-subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Loop Push Subscription
+         * @description Upsert one authenticated Loop PWA push subscription.
+         */
+        post: operations["register_loop_push_subscription_oikos_push_subscriptions_post"];
+        /**
+         * Delete Loop Push Subscription
+         * @description Revoke one Loop PWA push subscription for the authenticated user.
+         */
+        delete: operations["delete_loop_push_subscription_oikos_push_subscriptions_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/oikos/runs/active": {
         parameters: {
             query?: never;
@@ -4233,6 +4277,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream Timeline Sessions */
+        get: operations["stream_timeline_sessions_timeline_sessions_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/summary": {
         parameters: {
             query?: never;
@@ -4395,6 +4456,23 @@ export interface paths {
         };
         /** Get Timeline Session Events */
         get: operations["get_timeline_session_events_timeline_sessions__session_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/projection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session Projection */
+        get: operations["get_timeline_session_projection_timeline_sessions__session_id__projection_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4851,6 +4929,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/sessions/{session_id}/projection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Projection
+         * @description Get the stitched lineage-path projection for a focused session.
+         */
+        get: operations["get_session_projection_agents_sessions__session_id__projection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/{session_id}/export": {
         parameters: {
             query?: never;
@@ -4978,6 +5076,26 @@ export interface paths {
          * @description Upsert real-time presence state for a session.
          */
         post: operations["upsert_presence_agents_presence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/runtime/events/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Runtime Event Batch
+         * @description Ingest normalized runtime events and materialize runtime state.
+         */
+        post: operations["ingest_runtime_event_batch_agents_runtime_events_batch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5312,9 +5430,45 @@ export interface components {
             /**
              * Last Activity At
              * Format: date-time
-             * @description Most recent event timestamp
+             * @description Most recent transcript activity timestamp
              */
             last_activity_at: string;
+            /**
+             * Timeline Anchor At
+             * Format: date-time
+             * @description Recency anchor used for live ordering
+             */
+            timeline_anchor_at: string;
+            /**
+             * Runtime Phase
+             * @description Canonical runtime phase
+             */
+            runtime_phase?: string | null;
+            /**
+             * Phase Started At
+             * @description When the current runtime phase began
+             */
+            phase_started_at?: string | null;
+            /**
+             * Last Progress At
+             * @description Most recent progress signal timestamp
+             */
+            last_progress_at?: string | null;
+            /**
+             * Runtime Source
+             * @description Materialized runtime source: semantic|progress|fallback
+             */
+            runtime_source?: string | null;
+            /**
+             * Terminal State
+             * @description Terminal runtime state when known
+             */
+            terminal_state?: string | null;
+            /**
+             * Runtime Version
+             * @description Monotonic runtime version for patch ordering
+             */
+            runtime_version?: number | null;
             /**
              * Status
              * @description Session status (working, idle, completed)
@@ -5366,11 +5520,48 @@ export interface components {
              */
             presence_updated_at?: string | null;
             /**
+             * Last Live At
+             * @description Most recent live-signal timestamp
+             */
+            last_live_at?: string | null;
+            /**
+             * Display Phase
+             * @description User-facing runtime phase label
+             */
+            display_phase?: string | null;
+            /**
+             * Active Tool
+             * @description Active tool label for runtime display
+             */
+            active_tool?: string | null;
+            /**
+             * Confidence
+             * @description Runtime confidence: live|inferred|stale
+             */
+            confidence?: string | null;
+            /**
              * User State
              * @description User classification: active|parked|snoozed|archived
              * @default active
              */
             user_state: string;
+            /**
+             * @description Execution home: legacy|managed_local|managed_hosted|cloud_takeover
+             * @default legacy
+             */
+            execution_home: components["schemas"]["SessionExecutionHome"];
+            /** @description Managed transport when Longhouse owns the session runtime */
+            managed_transport?: components["schemas"]["ManagedSessionTransport"] | null;
+            /**
+             * Source Runner Id
+             * @description Runner id for managed local sessions
+             */
+            source_runner_id?: number | null;
+            /**
+             * Source Runner Name
+             * @description Runner name for managed local sessions
+             */
+            source_runner_name?: string | null;
             /**
              * @description Session loop mode: manual|assist|autopilot
              * @default manual
@@ -7723,6 +7914,48 @@ export interface components {
             requires_attention: boolean;
         };
         /**
+         * LoopPushConfigResponse
+         * @description Public Loop PWA push configuration for authenticated browsers.
+         */
+        LoopPushConfigResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Vapid Public Key */
+            vapid_public_key?: string | null;
+        };
+        /**
+         * LoopPushSubscriptionDeleteRequest
+         * @description Delete one Loop PWA push subscription by endpoint.
+         */
+        LoopPushSubscriptionDeleteRequest: {
+            /** Endpoint */
+            endpoint: string;
+        };
+        /**
+         * LoopPushSubscriptionRequest
+         * @description Raw browser PushSubscription payload from the Loop PWA.
+         */
+        LoopPushSubscriptionRequest: {
+            /** Subscription */
+            subscription: {
+                [key: string]: unknown;
+            };
+            /** Install Id */
+            install_id?: string | null;
+            /** User Agent */
+            user_agent?: string | null;
+        };
+        /**
+         * LoopPushSubscriptionResponse
+         * @description Result of registering one Loop PWA push subscription.
+         */
+        LoopPushSubscriptionResponse: {
+            /** Id */
+            id: number;
+            /** Status */
+            status: string;
+        };
+        /**
          * MCPServerAddRequest
          * @description Request model for adding an MCP server.
          */
@@ -7818,6 +8051,12 @@ export interface components {
             /** Tools */
             tools?: string[];
         };
+        /**
+         * ManagedSessionTransport
+         * @description Execution transport for Longhouse-managed sessions.
+         * @enum {string}
+         */
+        ManagedSessionTransport: "tmux";
         /** MessageCreate */
         MessageCreate: {
             /** Role */
@@ -8319,6 +8558,10 @@ export interface components {
              * @default claude
              */
             provider: string | null;
+            /** Occurred At */
+            occurred_at?: string | null;
+            /** Dedupe Key */
+            dedupe_key?: string | null;
         };
         /**
          * PullResponse
@@ -9103,6 +9346,55 @@ export interface components {
              */
             runners: components["schemas"]["RunnerSeedItem"][];
         };
+        /** RuntimeEventBatchIngest */
+        RuntimeEventBatchIngest: {
+            /** Events */
+            events: components["schemas"]["RuntimeEventIngest"][];
+        };
+        /** RuntimeEventBatchResult */
+        RuntimeEventBatchResult: {
+            /** Accepted */
+            accepted: number;
+            /** Duplicates */
+            duplicates: number;
+            /** Updated Runtime Keys */
+            updated_runtime_keys: string[];
+        };
+        /** RuntimeEventIngest */
+        RuntimeEventIngest: {
+            /** Runtime Key */
+            runtime_key: string;
+            /** Session Id */
+            session_id?: string | null;
+            /** Provider */
+            provider: string;
+            /** Device Id */
+            device_id?: string | null;
+            /** Source */
+            source: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "phase_signal" | "progress_signal" | "terminal_signal" | "binding_signal";
+            /** Phase */
+            phase?: string | null;
+            /** Tool Name */
+            tool_name?: string | null;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Freshness Ms */
+            freshness_ms?: number | null;
+            /** Dedupe Key */
+            dedupe_key: string;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * ScenarioSeedRequest
          * @description Request model for seeding deterministic scenario data.
@@ -9221,6 +9513,12 @@ export interface components {
             message: string;
         };
         /**
+         * SessionExecutionHome
+         * @description Where a coding session currently lives.
+         * @enum {string}
+         */
+        SessionExecutionHome: "legacy" | "managed_local" | "managed_hosted" | "cloud_takeover";
+        /**
          * SessionLockInfo
          * @description Information about a session lock.
          */
@@ -9298,6 +9596,90 @@ export interface components {
             total_messages: number;
         };
         /**
+         * SessionProjectionItemResponse
+         * @description One stitched item in a selected session's projected lineage path.
+         */
+        SessionProjectionItemResponse: {
+            /**
+             * Kind
+             * @description Projection item kind: event|seam
+             */
+            kind: string;
+            /**
+             * Session Id
+             * @description Concrete session UUID for this item
+             */
+            session_id: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             * @description Timestamp used for item ordering and display
+             */
+            timestamp: string;
+            /** @description Present when kind=event */
+            event?: components["schemas"]["EventResponse"] | null;
+            /**
+             * Continued From Session Id
+             * @description Parent continuation session UUID for seams
+             */
+            continued_from_session_id?: string | null;
+            /**
+             * Continuation Kind
+             * @description Continuation kind for seam items
+             */
+            continuation_kind?: string | null;
+            /**
+             * Origin Label
+             * @description Origin label for seam items
+             */
+            origin_label?: string | null;
+            /**
+             * Parent Origin Label
+             * @description Origin label for the parent segment
+             */
+            parent_origin_label?: string | null;
+            /**
+             * Parent Continuation Kind
+             * @description Continuation kind for the parent segment
+             */
+            parent_continuation_kind?: string | null;
+            /**
+             * Branched From Event Id
+             * @description Event id where the child continuation branched
+             */
+            branched_from_event_id?: number | null;
+        };
+        /**
+         * SessionProjectionResponse
+         * @description Response for a stitched lineage-path projection.
+         */
+        SessionProjectionResponse: {
+            /** Root Session Id */
+            root_session_id: string;
+            /** Focus Session Id */
+            focus_session_id: string;
+            /** Head Session Id */
+            head_session_id: string;
+            /** Path Session Ids */
+            path_session_ids: string[];
+            /** Items */
+            items: components["schemas"]["SessionProjectionItemResponse"][];
+            /** Total */
+            total: number;
+            /**
+             * Branch Mode
+             * @description Branch projection mode: head|all
+             * @default head
+             */
+            branch_mode: string;
+            /**
+             * Abandoned Events
+             * @description Events excluded from head projection due to rewind branches
+             * @default 0
+             */
+            abandoned_events: number;
+        };
+        /**
          * SessionResponse
          * @description Response for a single session.
          */
@@ -9370,9 +9752,84 @@ export interface components {
             tool_calls: number;
             /**
              * Last Activity At
-             * @description Most recent event timestamp
+             * @description Most recent transcript activity timestamp
              */
             last_activity_at?: string | null;
+            /**
+             * Timeline Anchor At
+             * @description Recency anchor used for timeline ordering
+             */
+            timeline_anchor_at?: string | null;
+            /**
+             * Runtime Phase
+             * @description Canonical runtime phase
+             */
+            runtime_phase?: string | null;
+            /**
+             * Phase Started At
+             * @description When the current runtime phase began
+             */
+            phase_started_at?: string | null;
+            /**
+             * Last Progress At
+             * @description Most recent progress signal timestamp
+             */
+            last_progress_at?: string | null;
+            /**
+             * Runtime Source
+             * @description Materialized runtime source: semantic|progress|fallback
+             */
+            runtime_source?: string | null;
+            /**
+             * Terminal State
+             * @description Terminal runtime state when known
+             */
+            terminal_state?: string | null;
+            /**
+             * Runtime Version
+             * @description Monotonic runtime version for patch ordering
+             */
+            runtime_version?: number | null;
+            /**
+             * Status
+             * @description Derived runtime status (working, idle, completed)
+             */
+            status?: string | null;
+            /**
+             * Presence State
+             * @description Fresh presence signal when available
+             */
+            presence_state?: string | null;
+            /**
+             * Presence Tool
+             * @description Tool currently executing (when applicable)
+             */
+            presence_tool?: string | null;
+            /**
+             * Presence Updated At
+             * @description When presence was last signalled
+             */
+            presence_updated_at?: string | null;
+            /**
+             * Last Live At
+             * @description Most recent live-signal timestamp
+             */
+            last_live_at?: string | null;
+            /**
+             * Display Phase
+             * @description User-facing runtime phase label
+             */
+            display_phase?: string | null;
+            /**
+             * Active Tool
+             * @description Active tool label for runtime display
+             */
+            active_tool?: string | null;
+            /**
+             * Confidence
+             * @description Runtime confidence: live|inferred|stale
+             */
+            confidence?: string | null;
             /**
              * Summary
              * @description Session summary
@@ -9455,6 +9912,23 @@ export interface components {
              * @default false
              */
             is_sidechain: boolean;
+            /**
+             * @description Execution home: legacy|managed_local|managed_hosted|cloud_takeover
+             * @default legacy
+             */
+            execution_home: components["schemas"]["SessionExecutionHome"];
+            /** @description Managed transport when Longhouse owns the session runtime */
+            managed_transport?: components["schemas"]["ManagedSessionTransport"] | null;
+            /**
+             * Source Runner Id
+             * @description Runner id for managed local sessions
+             */
+            source_runner_id?: number | null;
+            /**
+             * Source Runner Name
+             * @description Runner name for managed local sessions
+             */
+            source_runner_name?: string | null;
             /**
              * @description Session loop mode: manual|assist|autopilot
              * @default manual
@@ -13542,6 +14016,7 @@ export interface operations {
         parameters: {
             query: {
                 token: string;
+                return_to?: string | null;
                 session_factory?: unknown;
             };
             header?: never;
@@ -15003,6 +15478,111 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LoopInboxActionResult"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_loop_push_config_oikos_push_config_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopPushConfigResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_loop_push_subscription_oikos_push_subscriptions_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopPushSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopPushSubscriptionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_loop_push_subscription_oikos_push_subscriptions_delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopPushSubscriptionDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -18146,6 +18726,63 @@ export interface operations {
             };
         };
     };
+    stream_timeline_sessions_timeline_sessions_stream_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
+                /** @description Filter by environment (production, development, test, e2e) */
+                environment?: string | null;
+                /** @description Include test/e2e sessions (default: False) */
+                include_test?: boolean;
+                /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
+                hide_autonomous?: boolean;
+                /** @description Filter by device ID */
+                device_id?: string | null;
+                /** @description Days to look back */
+                days_back?: number;
+                /** @description Search query for content */
+                query?: string | null;
+                /** @description Max results */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+                /** @description Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present. */
+                sort?: string | null;
+                /** @description Search mode: lexical|semantic|hybrid. Default: lexical. */
+                mode?: string | null;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_timeline_session_summaries_timeline_sessions_summary_get: {
         parameters: {
             query?: {
@@ -18513,6 +19150,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_session_projection_timeline_sessions__session_id__projection_get: {
+        parameters: {
+            query?: {
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
+                /** @description Max projected items */
+                limit?: number;
+                /** @description Offset within the stitched projection */
+                offset?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionProjectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -19383,6 +20059,45 @@ export interface operations {
             };
         };
     };
+    get_session_projection_agents_sessions__session_id__projection_get: {
+        parameters: {
+            query?: {
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
+                /** @description Max projected items */
+                limit?: number;
+                /** @description Offset within the stitched projection */
+                offset?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionProjectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     export_session_agents_sessions__session_id__export_get: {
         parameters: {
             query?: {
@@ -19577,6 +20292,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_runtime_event_batch_agents_runtime_events_batch_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuntimeEventBatchIngest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeEventBatchResult"];
+                };
             };
             /** @description Validation Error */
             422: {

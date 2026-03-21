@@ -61,6 +61,7 @@ from zerg.services.demo_seed import seed_missing_demo_sessions
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import load_runtime_state_map
+from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.utils.time import UTCBaseModel
@@ -84,6 +85,11 @@ def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
         return None
     try:
         return SessionExecutionHome(str(value).strip())
+def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
+    if value is None:
+        return None
+    try:
+        return ManagedSessionTransport(value)
     except ValueError:
         return None
 
@@ -107,8 +113,6 @@ def _resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
         return SessionExecutionHome.MANAGED_HOSTED
 
     return SessionExecutionHome.LEGACY
-
-
 # ---------------------------------------------------------------------------
 # Response Models
 # ---------------------------------------------------------------------------
@@ -166,6 +170,12 @@ class SessionResponse(UTCBaseModel):
     branched_from_event_id: Optional[int] = Field(None, description="Event id where this continuation branched")
     is_writable_head: bool = Field(False, description="True when this session is the current writable head")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
+    managed_transport: Optional[ManagedSessionTransport] = Field(
+        None,
+        description="Managed transport when Longhouse owns the session runtime",
+    )
+    source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
+    source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
 
 
@@ -479,6 +489,9 @@ def _build_session_response(
         branched_from_event_id=session.branched_from_event_id,
         is_writable_head=bool(session.is_writable_head),
         is_sidechain=bool(session.is_sidechain or False),
+        managed_transport=_coerce_managed_transport(getattr(session, "managed_transport", None)),
+        source_runner_id=getattr(session, "source_runner_id", None),
+        source_runner_name=getattr(session, "source_runner_name", None),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 
@@ -560,6 +573,12 @@ class ActiveSessionResponse(UTCBaseModel):
         SessionExecutionHome.LEGACY,
         description="Execution home: legacy|managed_local|managed_hosted|cloud_takeover",
     )
+    managed_transport: Optional[ManagedSessionTransport] = Field(
+        None,
+        description="Managed transport when Longhouse owns the session runtime",
+    )
+    source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
+    source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
 
 
@@ -2473,6 +2492,9 @@ async def list_active_sessions(
                     confidence=runtime_overlay.confidence,
                     user_state=s.user_state or "active",
                     execution_home=_resolve_execution_home(s),
+                    managed_transport=_coerce_managed_transport(getattr(s, "managed_transport", None)),
+                    source_runner_id=getattr(s, "source_runner_id", None),
+                    source_runner_name=getattr(s, "source_runner_name", None),
                     loop_mode=_coerce_session_loop_mode(getattr(s, "loop_mode", None)),
                 )
             )

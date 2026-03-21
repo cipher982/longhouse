@@ -26,6 +26,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zerg.config import get_settings
+from zerg.session_execution_home import SessionExecutionHome
 
 logger = logging.getLogger(__name__)
 
@@ -491,6 +492,30 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("UPDATE sessions SET user_state = 'active' WHERE user_state IS NULL"))
             if "user_state_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state_at DATETIME"))
+            if "execution_home" not in columns:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE sessions ADD COLUMN execution_home VARCHAR(32) DEFAULT '{SessionExecutionHome.LEGACY.value}' NOT NULL"
+                    )
+                )
+            conn.execute(text(f"UPDATE sessions SET execution_home = '{SessionExecutionHome.LEGACY.value}' WHERE execution_home IS NULL"))
+            conn.execute(
+                text(
+                    """
+                    UPDATE sessions
+                    SET execution_home = 'legacy'
+                    WHERE execution_home NOT IN ('legacy', 'managed_local', 'managed_hosted', 'cloud_takeover')
+                    """
+                )
+            )
+            if "managed_transport" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN managed_transport VARCHAR(32)"))
+            if "source_runner_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN source_runner_id INTEGER"))
+            if "source_runner_name" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN source_runner_name VARCHAR(255)"))
+            if "managed_session_name" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN managed_session_name VARCHAR(255)"))
             if "loop_mode" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_mode VARCHAR(20) DEFAULT 'manual' NOT NULL"))
             conn.execute(text("UPDATE sessions SET loop_mode = 'manual' WHERE loop_mode IS NULL"))
@@ -521,6 +546,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN is_writable_head INTEGER NOT NULL DEFAULT 1"))
             conn.execute(text("UPDATE sessions SET thread_root_session_id = id WHERE thread_root_session_id IS NULL"))
             conn.execute(text("UPDATE sessions SET is_writable_head = 1 WHERE is_writable_head IS NULL"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_execution_home ON sessions(execution_home)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_source_runner_id ON sessions(source_runner_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head ON sessions(thread_root_session_id, is_writable_head)"))
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
