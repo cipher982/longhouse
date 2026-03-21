@@ -285,6 +285,7 @@ async function main() {
   const args = process.argv.slice(2);
   const jsonMode = args.includes("--json");
   const skipLlm = args.includes("--skip-llm") || process.env.SKIP_LLM === "1";
+  const useLinuxBaselines = process.platform === "linux";
 
   const outputDirIdx = args.indexOf("--output-dir");
   const outputDir = outputDirIdx >= 0 ? args[outputDirIdx + 1] : "./visual-compare-results";
@@ -311,18 +312,27 @@ async function main() {
       process.exit(2);
     }
 
-    const baselineFiles = fs.readdirSync(baselineDir).filter((f) => f.endsWith(".png"));
+    const baselineFiles = pageFilter
+      ? pageFilter.map((name) => `${name}${useLinuxBaselines ? "-linux" : ""}-chromium-darwin.png`)
+      : fs.readdirSync(baselineDir)
+          .filter((f) => f.endsWith(".png"))
+          .filter((f) => (useLinuxBaselines ? f.includes("-linux-chromium-darwin.png") : !f.includes("-linux-chromium-darwin.png")));
+
     for (const file of baselineFiles) {
-      const name = file.replace(/-chromium-darwin\.png$/, "").replace(/\.png$/, "");
-      if (pageFilter && !pageFilter.includes(name)) continue;
+      const logicalName = file
+        .replace(/-linux(?=-chromium-darwin\.png$)/, "")
+        .replace(/-chromium-darwin\.png$/, "")
+        .replace(/\.png$/, "");
+
+      if (pageFilter && !pageFilter.includes(logicalName)) continue;
 
       const currentFile = path.join(currentDir, file);
       if (!fs.existsSync(currentFile)) {
         // Try without platform suffix
-        const altFile = path.join(currentDir, `${name}.png`);
+        const altFile = path.join(currentDir, `${logicalName}.png`);
         if (!fs.existsSync(altFile)) {
           results.push({
-            name,
+            name: logicalName,
             diff_ratio: 1.0,
             pixel_diff_count: 0,
             total_pixels: 0,
@@ -332,10 +342,10 @@ async function main() {
           });
           continue;
         }
-        results.push(await comparePair(name, path.join(baselineDir, file), altFile, outputDir, skipLlm));
+        results.push(await comparePair(logicalName, path.join(baselineDir, file), altFile, outputDir, skipLlm));
         continue;
       }
-      results.push(await comparePair(name, path.join(baselineDir, file), currentFile, outputDir, skipLlm));
+      results.push(await comparePair(logicalName, path.join(baselineDir, file), currentFile, outputDir, skipLlm));
     }
   } else {
     // Single-pair mode
