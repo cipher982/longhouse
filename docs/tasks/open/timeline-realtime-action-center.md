@@ -1,4 +1,4 @@
-# Timeline Realtime Action Center
+# Timeline Realtime Desktop Control View
 
 Status: In progress
 Spec: `docs/specs/timeline-realtime-action-center.md`
@@ -6,7 +6,7 @@ Last updated: 2026-03-21
 
 ## Goal
 
-Make Timeline the single live action center for agent sessions. Keep one page and one scrolling list, but make each timeline card trustworthy about what is happening right now so users can stop juggling multiple terminal tabs for local Claude and Codex work.
+Make Timeline the primary desktop runtime/control view for agent sessions. Keep one page and one scrolling list, but make each timeline card trustworthy about what is happening right now so users can stop juggling multiple terminal tabs for local Claude and Codex work.
 
 ## Done when
 
@@ -16,6 +16,7 @@ Make Timeline the single live action center for agent sessions. Keep one page an
 - The phase-2 runtime architecture is specified with exact storage, reducer, collector, and API contracts.
 - The follow-on plan for process/PID liveness and richer Codex runtime signals is documented and staged.
 - Backend and frontend tests cover the new row-overlay contract and the main regressions called out in the spec.
+- Timeline surfaces runtime truth without defining continuation transport or follow-up execution semantics.
 
 ## Checklist
 
@@ -36,8 +37,10 @@ Make Timeline the single live action center for agent sessions. Keep one page an
 
 ## Notes
 
-- Product direction is one Timeline page, not a separate live destination.
+- Product direction is one Timeline page, not a separate desktop live destination.
 - Avoid introducing new user-facing bucket concepts in the first slice; the main value is “what is happening now” on the existing recency-driven list.
 - Keep list ordering stable. Fast runtime updates should update card chrome, not cause constant reordering.
 - Slice 1 does not depend on PID/process supervision.
 - Phase 2 should keep the UI contract simple: one row, one runtime overlay, one SSE patch stream.
+- Timeline is a desktop runtime/control view. Loop or follow-up cards can own mobile actions and continuation semantics.
+- `needs_user` is a runtime phase, not a promise about which actions are or are not available.
