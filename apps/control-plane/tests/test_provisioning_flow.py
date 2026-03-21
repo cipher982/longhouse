@@ -627,7 +627,6 @@ class TestEnvGeneration:
     def test_custom_env_null_value_removes_base_key(self):
         with (
             patch.object(settings, "instance_openai_allowlist", "testuser"),
-            patch.object(settings, "instance_openai_base_url", "https://llm.proxy"),
             patch.object(settings, "instance_openai_api_key", "sk-default"),
         ):
             env = _env_for(
@@ -666,11 +665,10 @@ class TestOpenAIAllowlist:
         with (
             patch.object(settings, "instance_openai_allowlist", "testuser"),
             patch.object(settings, "instance_openai_api_key", "sk-test"),
-            patch.object(settings, "instance_openai_base_url", "https://llm.test"),
         ):
             env = _env_for("testuser", "other@test.com")
             assert env.get("OPENAI_API_KEY") == "sk-test"
-            assert env.get("OPENAI_BASE_URL") == "https://llm.test"
+            assert "OPENAI_BASE_URL" not in env
 
     def test_not_allowed(self):
         with (

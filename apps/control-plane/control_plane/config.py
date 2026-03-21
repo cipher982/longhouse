@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     instance_password: str | None = None
     instance_password_hash: str | None = None
     instance_openai_api_key: str | None = None
-    instance_openai_base_url: str | None = None
     instance_openai_allowlist: str | None = None
 
     # Instance secrets (required when auth is enabled)

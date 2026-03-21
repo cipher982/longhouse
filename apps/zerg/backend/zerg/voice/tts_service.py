@@ -22,7 +22,6 @@ import httpx
 from openai import AsyncOpenAI
 
 from zerg.config import get_settings
-from zerg.voice.openai_metadata import get_openai_audio_extra_body
 
 logger = logging.getLogger(__name__)
 
@@ -219,9 +218,6 @@ class TTSService:
             }
             if instructions:
                 payload["instructions"] = instructions
-            extra_body = get_openai_audio_extra_body("longhouse:voice-tts", api_key=api_key)
-            if extra_body:
-                payload["extra_body"] = extra_body
 
             response = await self._get_openai_client().audio.speech.create(
                 **payload,

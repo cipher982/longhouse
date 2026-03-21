@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from openai import AsyncOpenAI
 
 from zerg.config import get_settings
-from zerg.voice.openai_metadata import get_openai_audio_extra_body
 
 logger = logging.getLogger(__name__)
 
@@ -125,18 +124,13 @@ class STTService:
         file_obj.name = filename or "audio.wav"
 
         try:
-            request_kwargs: dict[str, object] = {
-                "model": selected_model,
-                "file": file_obj,
-                "response_format": "json",
-                "prompt": prompt,
-                "language": language,
-            }
-            extra_body = get_openai_audio_extra_body("longhouse:voice-stt", api_key=settings.openai_api_key)
-            if extra_body:
-                request_kwargs["extra_body"] = extra_body
-
-            response = await self._get_client().audio.transcriptions.create(**request_kwargs)
+            response = await self._get_client().audio.transcriptions.create(
+                model=selected_model,
+                file=file_obj,
+                response_format="json",
+                prompt=prompt,
+                language=language,
+            )
         except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to caller
             logger.exception("STT: transcription failed")
             return STTResult(success=False, error=str(exc), model=selected_model)
