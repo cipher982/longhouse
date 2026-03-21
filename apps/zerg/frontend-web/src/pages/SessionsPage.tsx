@@ -897,7 +897,7 @@ export default function SessionsPage() {
     [project, provider, environment, daysBack, debouncedQuery, limit, aiSearch, sortOrder, hideAutonomous]
   );
 
-  const timelineStreamEligible = !debouncedQuery && !aiSearch;
+  const timelineStreamEligible = !debouncedQuery && !aiSearch && typeof EventSource !== "undefined";
   const timelineStreamEnabled = timelineStreamEligible && documentVisible;
 
   // Single unified query — use SSE for live rows and keep a slow polling backstop.

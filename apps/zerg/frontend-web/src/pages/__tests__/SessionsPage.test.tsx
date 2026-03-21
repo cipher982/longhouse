@@ -177,6 +177,7 @@ describe("SessionsPage", () => {
     latestSessionOptions = undefined;
     latestTimelineStreamOptions = undefined;
     setDocumentVisibility("visible");
+    vi.stubGlobal("EventSource", class {} as typeof EventSource);
 
     mockUseAgentSessions.mockImplementation((filters: AgentSessionFilters, options?: { refetchInterval?: unknown }) => {
       latestFilters = filters;
@@ -216,6 +217,7 @@ describe("SessionsPage", () => {
   afterEach(() => {
     vi.useRealTimers();
     setDocumentVisibility("visible");
+    vi.unstubAllGlobals();
   });
 
   it("hydrates timeline filters directly from the URL", async () => {
@@ -261,6 +263,17 @@ describe("SessionsPage", () => {
 
     await waitFor(() => {
       expect(latestTimelineStreamOptions?.enabled).toBe(true);
+    });
+  });
+
+  it("falls back to normal polling when EventSource is unavailable", async () => {
+    vi.stubGlobal("EventSource", undefined);
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(false);
+      expect(latestSessionOptions?.refetchInterval).not.toBe(120000);
+      expect(typeof latestSessionOptions?.refetchInterval).toBe("function");
     });
   });
 
