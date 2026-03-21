@@ -156,14 +156,17 @@ function LocationProbe() {
 
 describe("SessionsPage", () => {
   let latestFilters: AgentSessionFilters | undefined;
+  let latestSessionOptions: { refetchInterval?: unknown } | undefined;
 
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
     latestFilters = undefined;
+    latestSessionOptions = undefined;
 
-    mockUseAgentSessions.mockImplementation((filters: AgentSessionFilters) => {
+    mockUseAgentSessions.mockImplementation((filters: AgentSessionFilters, options?: { refetchInterval?: unknown }) => {
       latestFilters = filters;
+      latestSessionOptions = options;
       return {
         data: makeSessionsResponse(),
         isLoading: false,
@@ -215,6 +218,14 @@ describe("SessionsPage", () => {
         sort: "recency",
         hide_autonomous: false,
       });
+    });
+  });
+
+  it("uses a slow reconciliation poll when the timeline SSE stream is active", async () => {
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestSessionOptions?.refetchInterval).toBe(120000);
     });
   });
 

@@ -50,6 +50,7 @@ import "../styles/sessions.css";
 const DAYS_OPTIONS = [7, 14, 30, 60, 90] as const;
 const PAGE_SIZE = 50;
 const DEFAULT_DAYS_BACK = 14;
+const TIMELINE_RECONCILIATION_MS = 120_000;
 const DEFAULT_SORT_ORDER = "relevant";
 
 type SortOrder = "relevant" | "recent";
@@ -876,12 +877,16 @@ export default function SessionsPage() {
     [project, provider, environment, daysBack, debouncedQuery, limit, aiSearch, sortOrder, hideAutonomous]
   );
 
-  // Single unified query — no dual-fetch fallback logic needed.
+  const timelineStreamEnabled = !debouncedQuery && !aiSearch;
+
+  // Single unified query — use SSE for live rows and keep a slow polling backstop.
   const activeResult = useAgentSessions(filters, {
-    refetchInterval: (query) => {
-      const pendingSessions = query.state.data?.sessions?.some((session) => !session.summary_title && !session.summary);
-      return pendingSessions ? 3_000 : 30_000;
-    },
+    refetchInterval: timelineStreamEnabled
+      ? TIMELINE_RECONCILIATION_MS
+      : (query) => {
+          const pendingSessions = query.state.data?.sessions?.some((session) => !session.summary_title && !session.summary);
+          return pendingSessions ? 3_000 : 30_000;
+        },
   });
   const data = activeResult.data;
   const isLoading = activeResult.isLoading;
@@ -892,7 +897,6 @@ export default function SessionsPage() {
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
   const hasMore = sessions.length < total;
-  const timelineStreamEnabled = !debouncedQuery && !aiSearch;
 
   useTimelineSessionStream(filters, { enabled: timelineStreamEnabled });
 
