@@ -1,20 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SwarmOpsPage from "../SwarmOpsPage";
 import { request } from "../../services/api";
 import { TestRouter } from "../../test/test-utils";
-
-const mockNavigate = vi.fn();
-
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  };
-});
 
 vi.mock("../../services/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/api")>();
@@ -26,7 +16,21 @@ vi.mock("../../services/api", async (importOriginal) => {
 
 const requestMock = request as unknown as vi.MockedFunction<typeof request>;
 
-function renderSwarmOps() {
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="swarm-location">{`${location.pathname}${location.search}`}</div>;
+}
+
+function SwarmOpsRoute() {
+  return (
+    <>
+      <SwarmOpsPage />
+      <LocationProbe />
+    </>
+  );
+}
+
+function renderSwarmOps(initialEntry = "/runs") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, cacheTime: 0 },
@@ -35,8 +39,11 @@ function renderSwarmOps() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <TestRouter initialEntries={["/runs"]}>
-        <SwarmOpsPage />
+      <TestRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/runs" element={<SwarmOpsRoute />} />
+          <Route path="/automations/:automationId/thread/:threadId" element={<LocationProbe />} />
+        </Routes>
       </TestRouter>
     </QueryClientProvider>
   );
@@ -65,6 +72,19 @@ describe("SwarmOpsPage", () => {
             updated_at: "2026-03-17T12:05:00Z",
             completed_at: null,
           },
+          {
+            id: 8,
+            automation_id: 102,
+            thread_id: 502,
+            automation_name: "Archive Sweep",
+            status: "success",
+            summary: "Completed cleanly",
+            signal: "Completed cleanly",
+            signal_source: "summary",
+            created_at: "2026-03-16T10:00:00Z",
+            updated_at: "2026-03-16T10:10:00Z",
+            completed_at: "2026-03-16T10:10:00Z",
+          },
         ]);
       }
 
@@ -76,21 +96,50 @@ describe("SwarmOpsPage", () => {
         });
       }
 
+      if (path === "/oikos/runs/8/events?limit=120") {
+        return Promise.resolve({
+          run_id: 8,
+          events: [],
+          total: 0,
+        });
+      }
+
       return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
   });
 
-  it("uses automation fields for display and thread navigation", async () => {
-    const user = userEvent.setup();
+  it("canonicalizes the base runs route to the first visible run", async () => {
     renderSwarmOps();
 
-    const runRow = await screen.findByRole("button", {
-      name: /Priority Inbox running Need your input Signal: Summary Needs You/i,
+    await waitFor(() => {
+      expect(screen.getByTestId("swarm-location")).toHaveTextContent("/runs?run=7");
     });
-    await user.click(runRow);
+  });
 
-    await user.click(await screen.findByRole("button", { name: "Open thread" }));
+  it("makes filter and selected run URL-owned", async () => {
+    renderSwarmOps("/runs?filter=all&run=7");
 
-    expect(mockNavigate).toHaveBeenCalledWith("/automations/101/thread/501");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Completed" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Completed" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("swarm-location")).toHaveTextContent("/runs?filter=done&run=8");
+    });
+
+    expect((await screen.findAllByText("Archive Sweep")).length).toBeGreaterThan(0);
+  });
+
+  it("uses the selected run from the URL to render the detail pane", async () => {
+    renderSwarmOps("/runs?run=7");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("swarm-location")).toHaveTextContent("/runs?run=7");
+    });
+
+    expect((await screen.findAllByText("Priority Inbox")).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Open thread" })).toBeEnabled();
   });
 });

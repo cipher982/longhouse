@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, EmptyState, PageShell, SectionHeader, Spinner } from "../components/ui";
 import { request } from "../services/api";
 import { parseUTC } from "../lib/dateUtils";
@@ -152,11 +152,36 @@ function getRunDisplayName(run: Pick<RunSummary, "automation_name">): string {
   return run.automation_name ?? "Untitled automation";
 }
 
+function parseRunFilter(value: string | null): RunFilter {
+  switch (value) {
+    case "all":
+    case "attention":
+    case "active":
+    case "done":
+      return value;
+    default:
+      return "attention";
+  }
+}
+
+function parseRunId(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function buildRunsPath(searchParams: URLSearchParams): string {
+  const query = searchParams.toString();
+  return query ? `/runs?${query}` : "/runs";
+}
+
 export default function SwarmOpsPage() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [filter, setFilter] = useState<RunFilter>("attention");
-  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filterParam = searchParams.get("filter");
+  const runParam = searchParams.get("run");
+  const filter = parseRunFilter(filterParam);
+  const requestedRunId = parseRunId(runParam);
 
   const runsQuery = useQuery({
     queryKey: ["swarm-ops", "runs", RUN_LIMIT],
@@ -165,10 +190,9 @@ export default function SwarmOpsPage() {
   });
 
   const demoScenario = useMemo(() => {
-    const params = new URLSearchParams(location.search);
-    const value = params.get("demo");
+    const value = searchParams.get("demo");
     return value && value.trim().length > 0 ? value.trim() : null;
-  }, [location.search]);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!demoScenario) return;
@@ -190,11 +214,10 @@ export default function SwarmOpsPage() {
           window.sessionStorage.setItem(storageKey, "1");
         }
         if (!cancelled) {
-          runsQuery.refetch();
+          void runsQuery.refetch();
         }
       } catch (error) {
         // Ignore demo seeding failures (prod blocks this endpoint).
-        // eslint-disable-next-line no-console
         console.warn("Swarm demo seeding failed:", error);
       }
     };
@@ -205,6 +228,23 @@ export default function SwarmOpsPage() {
       cancelled = true;
     };
   }, [demoScenario, runsQuery]);
+
+  const handleSelectFilter = (nextFilter: RunFilter) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextFilter === "attention") {
+      nextParams.delete("filter");
+    } else {
+      nextParams.set("filter", nextFilter);
+    }
+    nextParams.delete("run");
+    setSearchParams(nextParams);
+  };
+
+  const handleSelectRun = (runId: number) => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("run", String(runId));
+    setSearchParams(nextParams);
+  };
 
   const runs = useMemo<RunWithAttention[]>(() => {
     return (runsQuery.data ?? []).map((run) => ({
@@ -234,26 +274,28 @@ export default function SwarmOpsPage() {
     }
   }, [filter, sortedRuns]);
 
-  useEffect(() => {
-    if (sortedRuns.length === 0) {
-      setSelectedRunId(null);
-      return;
-    }
-
-    if (selectedRunId === null || !sortedRuns.some((run) => run.id === selectedRunId)) {
-      setSelectedRunId(sortedRuns[0].id);
-    }
-  }, [sortedRuns, selectedRunId]);
-
-  const selectedRun = sortedRuns.find((run) => run.id === selectedRunId) ?? null;
+  const selectionReady = !runsQuery.isLoading && !runsQuery.error;
+  const canonicalSelectedRunId = !selectionReady
+    ? requestedRunId
+    : visibleRuns.length === 0
+    ? null
+    : requestedRunId != null && visibleRuns.some((run) => run.id === requestedRunId)
+    ? requestedRunId
+    : visibleRuns[0].id;
+  const hasCanonicalFilterParam = filterParam == null || filterParam === filter;
+  const hasCanonicalRunParam = runParam == null
+    ? canonicalSelectedRunId == null
+    : canonicalSelectedRunId != null && runParam === String(canonicalSelectedRunId);
+  const shouldCanonicalizeSearchParams = hasCanonicalFilterParam === false || hasCanonicalRunParam === false;
+  const selectedRun = visibleRuns.find((run) => run.id === canonicalSelectedRunId) ?? null;
   const selectedAutomationId = selectedRun ? getRunAutomationId(selectedRun) : null;
   const selectedAutomationName = selectedRun ? getRunDisplayName(selectedRun) : "Untitled automation";
   const shouldPollEvents = selectedRun ? ACTIVE_STATUSES.has(selectedRun.status) : false;
 
   const runEventsQuery = useQuery({
-    queryKey: ["swarm-ops", "events", selectedRunId],
-    enabled: selectedRunId != null,
-    queryFn: () => request<RunEventsResponse>(`/oikos/runs/${selectedRunId}/events?limit=120`),
+    queryKey: ["swarm-ops", "events", canonicalSelectedRunId],
+    enabled: canonicalSelectedRunId != null,
+    queryFn: () => request<RunEventsResponse>(`/oikos/runs/${canonicalSelectedRunId}/events?limit=120`),
     refetchInterval: shouldPollEvents ? 5000 : false,
   });
 
@@ -298,6 +340,21 @@ export default function SwarmOpsPage() {
     );
   }
 
+  if (shouldCanonicalizeSearchParams) {
+    const nextParams = new URLSearchParams(searchParams);
+    if (filter === "attention") {
+      nextParams.delete("filter");
+    } else {
+      nextParams.set("filter", filter);
+    }
+    if (canonicalSelectedRunId == null) {
+      nextParams.delete("run");
+    } else {
+      nextParams.set("run", String(canonicalSelectedRunId));
+    }
+    return <Navigate to={buildRunsPath(nextParams)} replace />;
+  }
+
   return (
     <PageShell size="wide" className="swarm-ops-shell">
       <div className="swarm-ops-page">
@@ -309,28 +366,28 @@ export default function SwarmOpsPage() {
               <Button
                 variant={filter === "attention" ? "primary" : "secondary"}
                 size="sm"
-                onClick={() => setFilter("attention")}
+                onClick={() => handleSelectFilter("attention")}
               >
                 Needs attention
               </Button>
               <Button
                 variant={filter === "active" ? "primary" : "secondary"}
                 size="sm"
-                onClick={() => setFilter("active")}
+                onClick={() => handleSelectFilter("active")}
               >
                 Active
               </Button>
               <Button
                 variant={filter === "done" ? "primary" : "secondary"}
                 size="sm"
-                onClick={() => setFilter("done")}
+                onClick={() => handleSelectFilter("done")}
               >
                 Completed
               </Button>
               <Button
                 variant={filter === "all" ? "primary" : "secondary"}
                 size="sm"
-                onClick={() => setFilter("all")}
+                onClick={() => handleSelectFilter("all")}
               >
                 All
               </Button>
@@ -376,7 +433,7 @@ export default function SwarmOpsPage() {
               <div className="swarm-ops-list-body">
                 {visibleRuns.map((run) => {
                   const statusVariant = STATUS_BADGE_VARIANT[run.status] ?? "neutral";
-                  const isSelected = run.id === selectedRunId;
+                  const isSelected = run.id === canonicalSelectedRunId;
                   const signalText = run.signal || run.summary || "No signal yet";
                   const signalSourceLabel = run.signal_source ? SIGNAL_SOURCE_LABEL[run.signal_source] ?? "Signal" : null;
                   const lastEventLine = run.last_event_type
@@ -387,10 +444,11 @@ export default function SwarmOpsPage() {
                     <button
                       key={run.id}
                       type="button"
+                      data-testid={`swarm-run-${run.id}`}
                       className={clsx("swarm-ops-item", `swarm-ops-item--${run.attention}`, {
                         "swarm-ops-item--active": isSelected,
                       })}
-                      onClick={() => setSelectedRunId(run.id)}
+                      onClick={() => handleSelectRun(run.id)}
                       aria-pressed={isSelected}
                     >
                       <div className="swarm-ops-item-main">

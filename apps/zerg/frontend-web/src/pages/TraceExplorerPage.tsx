@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/auth";
@@ -117,6 +117,10 @@ const sourceStyles: Record<string, { color: string; bg: string; label: string }>
     label: "LLM",
   },
 };
+
+function buildTracePath(traceId: string | null): string {
+  return traceId ? `/traces/${traceId}` : "/traces";
+}
 
 // Timeline event component
 function TimelineEventRow({ event, isLast }: { event: TimelineEvent; isLast: boolean }) {
@@ -347,27 +351,15 @@ function TraceDetailView({
 
 export default function TraceExplorerPage() {
   const { user } = useAuth();
-  const { traceId: urlTraceId } = useParams<{ traceId?: string }>();
+  const { traceId } = useParams<{ traceId?: string }>();
   const navigate = useNavigate();
-  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const limit = 20;
-
-  // Sync URL param to state on mount and when URL changes
-  useEffect(() => {
-    if (urlTraceId) {
-      setSelectedTraceId(urlTraceId);
-    }
-  }, [urlTraceId]);
+  const selectedTraceId = traceId ?? null;
 
   // Update URL when trace selection changes
   const handleSelectTrace = (traceId: string | null) => {
-    setSelectedTraceId(traceId);
-    if (traceId) {
-      navigate(`/traces/${traceId}`, { replace: true });
-    } else {
-      navigate('/traces', { replace: true });
-    }
+    navigate(buildTracePath(traceId), { replace: true });
   };
 
   const { data, isLoading, error } = useQuery({
@@ -423,6 +415,7 @@ export default function TraceExplorerPage() {
                     {data.traces.map((trace) => (
                       <Table.Row
                         key={trace.trace_id}
+                        data-testid={`trace-row-${trace.trace_id}`}
                         onClick={() => handleSelectTrace(trace.trace_id)}
                         className="trace-explorer-trace-row"
                       >
