@@ -33,11 +33,13 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (idToken: string) => Promise<TokenData>;
-  logout: () => void;
-  refreshAuth?: () => Promise<void>;
+  logout: () => Promise<void>;
+  refreshAuth: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+export const CURRENT_USER_QUERY_KEY = ['current-user'] as const;
+export const AUTH_METHODS_QUERY_KEY = ['auth-methods'] as const;
 
 // Custom error class that includes HTTP status for retry logic
 class HttpError extends Error {
@@ -109,7 +111,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isAuthenticated: false,
       isLoading: false,
       login: async () => ({ access_token: '', expires_in: 0 }),
-      logout: () => {},
+      logout: async () => {},
+      refreshAuth: async () => {},
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -131,7 +134,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isAuthenticated: true,
       isLoading: false,
       login: async () => ({ access_token: '', expires_in: 0 }),
-      logout: () => {},
+      logout: async () => {},
+      refreshAuth: async () => {},
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -141,49 +145,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
 }
 
 function AuthProviderInner({ children }: AuthProviderProps) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const queryClient = useQueryClient();
 
-  // Check auth status via cookie on mount (always enabled - cookie determines auth)
-  const { data: userData, isLoading, error, refetch } = useQuery<User | null>({
-    queryKey: ['current-user'],
-    queryFn: getCurrentUser,
-    enabled: true, // Always try - cookie auth is checked server-side
-    // Retry on 502/503 (service unavailable) but not on 401 (auth required)
-    retry: (failureCount, err) => {
-      if (isServiceUnavailable(err)) {
-        return failureCount < 5; // Retry up to 5 times for service unavailable
-      }
-      return false; // Don't retry auth failures
-    },
-    retryDelay: (attemptIndex) => Math.min(1000 * Math.pow(2, attemptIndex), 10000),
-    staleTime: 5 * 60 * 1000, // 5 minutes
-  });
+  const { data: userData, isLoading, refetch } = useCurrentUserQuery();
 
   const loginMutation = useMutation({
     mutationFn: loginWithGoogle,
-    onSuccess: () => {
+    onSuccess: async () => {
       // Cookie is set by server; refetch user data
-      refetch();
+      await refetch();
     },
     onError: (error: Error) => {
       toast.error(`Login failed: ${error.message}`);
     },
   });
-
-  useEffect(() => {
-    if (userData) {
-      setUser(userData);
-      setIsAuthenticated(true);
-      return;
-    }
-
-    if (userData === null || error) {
-      setUser(null);
-      setIsAuthenticated(false);
-    }
-  }, [userData, error]);
 
   const login = async (idToken: string): Promise<TokenData> => {
     const result = await loginMutation.mutateAsync(idToken);
@@ -192,9 +167,10 @@ function AuthProviderInner({ children }: AuthProviderProps) {
 
   const logout = async () => {
     await logoutFromServer(); // Clear server-side cookie
-    setUser(null);
-    setIsAuthenticated(false);
-    queryClient.clear();
+    queryClient.removeQueries({
+      predicate: (query) => query.queryKey[0] !== CURRENT_USER_QUERY_KEY[0],
+    });
+    queryClient.setQueryData(CURRENT_USER_QUERY_KEY, null);
   };
 
   const refreshAuth = async () => {
@@ -203,8 +179,8 @@ function AuthProviderInner({ children }: AuthProviderProps) {
   };
 
   const value: AuthContextType = {
-    user,
-    isAuthenticated,
+    user: userData ?? null,
+    isAuthenticated: Boolean(userData),
     isLoading,
     login,
     logout,
@@ -224,6 +200,22 @@ export function useAuth(): AuthContextType {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
+}
+
+export function useCurrentUserQuery() {
+  return useQuery<User | null>({
+    queryKey: CURRENT_USER_QUERY_KEY,
+    queryFn: getCurrentUser,
+    enabled: true,
+    retry: (failureCount, err) => {
+      if (isServiceUnavailable(err)) {
+        return failureCount < 5;
+      }
+      return false;
+    },
+    retryDelay: (attemptIndex) => Math.min(1000 * Math.pow(2, attemptIndex), 10000),
+    staleTime: 5 * 60 * 1000,
+  });
 }
 
 // Google Sign-In component
@@ -324,7 +316,7 @@ export interface AuthMethods {
 
 export function useAuthMethods() {
   return useQuery<AuthMethods>({
-    queryKey: ['auth-methods'],
+    queryKey: AUTH_METHODS_QUERY_KEY,
     queryFn: getAuthMethods,
     staleTime: 5 * 60 * 1000,
   });

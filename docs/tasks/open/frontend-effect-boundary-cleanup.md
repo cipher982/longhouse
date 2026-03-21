@@ -2,7 +2,7 @@
 
 Status: In progress
 Spec: `docs/specs/frontend-effect-boundary-cleanup.md`
-Last updated: 2026-03-20
+Last updated: 2026-03-21
 
 ## Goal
 
@@ -10,9 +10,9 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 
 ## Current focus
 
-- Rewrite auth/config consumers around shared query ownership.
-- Start the route-owned page cleanup on `ChatPage` and `SessionsPage`.
-- Keep pushing shared primitives so later slices delete patterns instead of copying them.
+- Rewrite the route-owned page cleanup on `ChatPage` and `SessionsPage`.
+- Collapse remaining URL/list selection effects in the smaller pages after the two big route surfaces move.
+- Keep pushing shared primitives only where they directly unlock effect deletion.
 
 ## Done when
 
@@ -26,7 +26,7 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 
 - [x] Create persistent spec and tracking doc
 - [x] Slice 1: add shared frontend primitives (`useAuthMethods`, metadata/readiness helpers, sanctioned debounce path)
-- [ ] Slice 2: rewrite auth/config consumers around shared query ownership
+- [x] Slice 2: rewrite auth/config consumers around shared query ownership
 - [ ] Slice 3: rewrite route-owned pages (`ChatPage`, `SessionsPage`, conversation/trace/swarm/loop selection)
 - [ ] Slice 4: move manual page fetch effects into React Query hooks
 - [ ] Slice 5: clean up form/modal state choreography (`SettingsPage`, `SessionPickerModal`, related modals)
@@ -38,3 +38,4 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - This task is not a vanity “fewer hooks” pass. Legitimate browser-sync effects stay; state-sync and fetch-sync effects are the target.
 - Oikos voice/media hooks are explicitly not phase-one rewrite targets unless they block the simpler page/state cleanup.
 - Slice 1 landed shared `useAuthMethods`, `usePageMeta`, `useReadinessFlag`, and `useDebouncedValue` primitives, plus first migrations and lint guardrails against direct page metadata/readiness writes.
+- Slice 2 landed shared auth query keys, a query-owned `AuthProvider`, and cache updates that now flow through the same `current-user` contract instead of mirrored provider state.
