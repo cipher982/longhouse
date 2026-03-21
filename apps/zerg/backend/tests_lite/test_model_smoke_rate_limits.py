@@ -27,6 +27,13 @@ def test_classify_smoke_exception_keeps_real_failures_red():
     assert detail == "Connection reset by peer"
 
 
+def test_classify_smoke_exception_skips_malformed_provider_payloads():
+    status, detail = classify_smoke_exception(TypeError("'NoneType' object is not subscriptable"))
+
+    assert status == "skipped"
+    assert "malformed provider response" in detail
+
+
 def test_build_openai_smoke_request_uses_minimal_reasoning_for_gpt5():
     request = build_openai_smoke_request("gpt-5-nano")
 
