@@ -5,7 +5,7 @@
  * Device-token ingest and machine workflows stay on `/api/agents/*`.
  */
 
-import { request } from "./base";
+import { buildUrl, request } from "./base";
 
 const TIMELINE_API_PREFIX = "/timeline";
 const TIMELINE_SESSIONS_PREFIX = `${TIMELINE_API_PREFIX}/sessions`;
@@ -27,6 +27,12 @@ export interface AgentSession {
   ended_at: string | null;
   last_activity_at: string | null;
   timeline_anchor_at?: string | null;
+  runtime_phase?: string | null;
+  phase_started_at?: string | null;
+  last_progress_at?: string | null;
+  runtime_source?: string | null;
+  terminal_state?: string | null;
+  runtime_version?: number | null;
   status?: AgentSessionStatus | null;
   presence_state?: PresenceState | null;
   presence_tool?: string | null;
@@ -151,6 +157,12 @@ export interface AgentActiveSession {
   ended_at: string | null;
   last_activity_at: string;
   timeline_anchor_at?: string;
+  runtime_phase?: string | null;
+  phase_started_at?: string | null;
+  last_progress_at?: string | null;
+  runtime_source?: string | null;
+  terminal_state?: string | null;
+  runtime_version?: number | null;
   status: AgentSessionStatus;
   attention: AgentAttentionLevel;
   duration_minutes: number;
@@ -239,6 +251,26 @@ export interface AgentFiltersResponse {
   machines: string[];
 }
 
+export interface TimelineSessionUpsertEvent {
+  session: AgentSession;
+  total?: number;
+  has_real_sessions?: boolean;
+}
+
+export interface TimelineSessionRemoveEvent {
+  session_id: string;
+  total?: number;
+  has_real_sessions?: boolean;
+}
+
+export interface TimelineSessionStreamHandlers {
+  onConnected?: () => void;
+  onHeartbeat?: (timestamp: string) => void;
+  onSessionUpsert?: (event: TimelineSessionUpsertEvent) => void;
+  onSessionRemove?: (event: TimelineSessionRemoveEvent) => void;
+  onError?: (error: Event) => void;
+}
+
 // ---------------------------------------------------------------------------
 // API Functions
 // ---------------------------------------------------------------------------
@@ -268,6 +300,79 @@ export async function fetchAgentSessions(
   const path = `${TIMELINE_SESSIONS_PREFIX}${queryString ? `?${queryString}` : ""}`;
 
   return request<AgentSessionsListResponse>(path, { method: "GET" });
+}
+
+function buildTimelineSessionsParams(filters: AgentSessionFilters = {}): URLSearchParams {
+  const params = new URLSearchParams();
+
+  if (filters.project) params.set("project", filters.project);
+  if (filters.provider) params.set("provider", filters.provider);
+  if (filters.environment) params.set("environment", filters.environment);
+  if (filters.device_id) params.set("device_id", filters.device_id);
+  if (filters.days_back) params.set("days_back", String(filters.days_back));
+  if (filters.query) params.set("query", filters.query);
+  if (filters.limit) params.set("limit", String(filters.limit));
+  if (filters.offset) params.set("offset", String(filters.offset));
+  if (filters.mode && filters.mode !== "lexical") params.set("mode", filters.mode);
+  if (filters.sort) params.set("sort", filters.sort);
+  if (filters.hide_autonomous === false) params.set("hide_autonomous", "false");
+
+  return params;
+}
+
+function parseStreamEventData<T>(event: MessageEvent): T | null {
+  try {
+    return JSON.parse(event.data) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function connectTimelineSessionsStream(
+  filters: AgentSessionFilters = {},
+  handlers: TimelineSessionStreamHandlers = {},
+): () => void {
+  const params = buildTimelineSessionsParams(filters);
+  const commisId = typeof window !== "undefined" ? window.__TEST_COMMIS_ID__ : undefined;
+  if (commisId !== undefined) {
+    params.set("commis", String(commisId));
+  }
+  const queryString = params.toString();
+  const url = buildUrl(`${TIMELINE_SESSIONS_PREFIX}/stream${queryString ? `?${queryString}` : ""}`);
+  const eventSource = new EventSource(url, { withCredentials: true });
+
+  eventSource.addEventListener("connected", () => {
+    handlers.onConnected?.();
+  });
+
+  eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
+    const data = parseStreamEventData<{ timestamp: string }>(event);
+    if (data?.timestamp) {
+      handlers.onHeartbeat?.(data.timestamp);
+    }
+  });
+
+  eventSource.addEventListener("session_upsert", (event: MessageEvent) => {
+    const data = parseStreamEventData<TimelineSessionUpsertEvent>(event);
+    if (data?.session) {
+      handlers.onSessionUpsert?.(data);
+    }
+  });
+
+  eventSource.addEventListener("session_remove", (event: MessageEvent) => {
+    const data = parseStreamEventData<TimelineSessionRemoveEvent>(event);
+    if (data?.session_id) {
+      handlers.onSessionRemove?.(data);
+    }
+  });
+
+  eventSource.onerror = (error) => {
+    handlers.onError?.(error);
+  };
+
+  return () => {
+    eventSource.close();
+  };
 }
 
 /**

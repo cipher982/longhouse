@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentsBase
+from zerg.models.agents import SessionRuntimeState
+from zerg.routers.timeline import _timeline_sessions_stream
+
+
+def _make_db(tmp_path, name="timeline_stream.db"):
+    db_path = tmp_path / name
+    engine = make_engine(f"sqlite:///{db_path}")
+    AgentsBase.metadata.create_all(bind=engine)
+    return make_sessionmaker(engine)
+
+
+def _seed_session(
+    db,
+    *,
+    started_at: datetime,
+    ended_at: datetime | None = None,
+    project: str = "zerg",
+):
+    session = AgentSession(
+        provider="claude",
+        environment="production",
+        project=project,
+        started_at=started_at,
+        ended_at=ended_at,
+        user_messages=2,
+        assistant_messages=2,
+        tool_calls=1,
+        summary="Timeline stream test",
+        summary_title="Timeline stream test",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+class _ConnectedRequest:
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
+    session_local = _make_db(tmp_path, "timeline_stream_upsert.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        old_runtime = _seed_session(
+            db,
+            started_at=now - timedelta(days=30),
+            ended_at=None,
+            project="old-runtime-stream",
+        )
+        _seed_session(
+            db,
+            started_at=now - timedelta(hours=2),
+            ended_at=now - timedelta(hours=1),
+            project="recent-history-stream",
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{old_runtime.id}",
+                session_id=old_runtime.id,
+                provider="claude",
+                device_id="cinder",
+                phase="running",
+                phase_source="semantic",
+                active_tool="bash",
+                phase_started_at=now - timedelta(seconds=30),
+                last_runtime_signal_at=now - timedelta(seconds=30),
+                last_progress_at=now - timedelta(seconds=10),
+                last_live_at=now - timedelta(seconds=30),
+                timeline_anchor_at=now - timedelta(seconds=10),
+                freshness_expires_at=now + timedelta(minutes=5),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+
+    async def _collect_events():
+        stream = _timeline_sessions_stream(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            hide_autonomous=True,
+            device_id=None,
+            days_back=14,
+            query=None,
+            limit=1,
+            offset=0,
+            sort=None,
+            mode="lexical",
+            context_mode="forensic",
+        )
+        events = [await anext(stream), await anext(stream)]
+        await stream.aclose()
+        return events
+
+    events = asyncio.run(_collect_events())
+    upsert_payload = json.loads(events[1]["data"])
+
+    assert events[0]["event"] == "connected"
+    assert events[1]["event"] == "session_upsert"
+    assert "Timeline session stream connected" in events[0]["data"]
+    assert upsert_payload["session"]["project"] == "old-runtime-stream"
+    assert upsert_payload["session"]["display_phase"] == "Running bash"
