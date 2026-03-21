@@ -224,8 +224,6 @@ def _env_for(
     if _openai_env_allowed(subdomain, owner_email):
         if settings.instance_openai_api_key:
             env["OPENAI_API_KEY"] = settings.instance_openai_api_key
-        if settings.instance_openai_base_url:
-            env["OPENAI_BASE_URL"] = settings.instance_openai_base_url
 
     if settings.instance_ssh_private_key_b64:
         env["SSH_PRIVATE_KEY_B64"] = settings.instance_ssh_private_key_b64

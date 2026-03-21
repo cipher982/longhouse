@@ -17,6 +17,7 @@ import { DemoVideoPlaceholder } from "./DemoVideoPlaceholder";
  * a "Coming Soon" placeholder state via its onError handler.
  */
 const DEMO_VIDEO_URL: string | undefined = "/videos/timeline-demo.mp4";
+const DEMO_VIDEO_THUMBNAIL_URL = "/images/landing/timeline-preview.png";
 
 interface DemoSectionProps {
   screenshotTheme: "warm" | "cool-pop";
@@ -34,7 +35,7 @@ export function DemoSection({ screenshotTheme }: DemoSectionProps) {
 
         <ProductShowcase screenshotTheme={screenshotTheme} />
 
-        <DemoVideoPlaceholder videoUrl={DEMO_VIDEO_URL} />
+        <DemoVideoPlaceholder videoUrl={DEMO_VIDEO_URL} thumbnailUrl={DEMO_VIDEO_THUMBNAIL_URL} />
       </div>
     </section>
   );

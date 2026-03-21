@@ -182,6 +182,22 @@ export interface LoopInboxActionResult {
   queuedJobId: number | null;
 }
 
+interface LoopPushConfigRaw {
+  enabled: boolean;
+  vapid_public_key: string | null;
+}
+
+export interface LoopPushConfig {
+  enabled: boolean;
+  vapidPublicKey: string | null;
+}
+
+export interface LoopPushSubscriptionRegistration {
+  subscription: PushSubscriptionJSON;
+  installId?: string | null;
+  userAgent?: string | null;
+}
+
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
@@ -302,4 +318,32 @@ export async function applyLoopInboxAction(
     reason: asString(row.reason),
     queuedJobId: asNumber(row.queued_job_id),
   };
+}
+
+export async function fetchLoopPushConfig(): Promise<LoopPushConfig> {
+  const row = await request<LoopPushConfigRaw>("/oikos/push-config");
+  return {
+    enabled: Boolean(row.enabled),
+    vapidPublicKey: asString(row.vapid_public_key),
+  };
+}
+
+export async function registerLoopPushSubscription(
+  payload: LoopPushSubscriptionRegistration,
+): Promise<void> {
+  await request("/oikos/push-subscriptions", {
+    method: "POST",
+    body: JSON.stringify({
+      subscription: payload.subscription,
+      install_id: payload.installId ?? null,
+      user_agent: payload.userAgent ?? null,
+    }),
+  });
+}
+
+export async function deleteLoopPushSubscription(endpoint: string): Promise<void> {
+  await request("/oikos/push-subscriptions", {
+    method: "DELETE",
+    body: JSON.stringify({ endpoint }),
+  });
 }

@@ -191,10 +191,13 @@ class Settings:  # noqa: D401 – simple data container
 
     # Telegram channel integration ------------------------------------
     telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
-    telegram_webhook_url: str | None = (
-        None  # TELEGRAM_WEBHOOK_URL (e.g. https://your-domain/api/webhooks/channels/telegram)
-    )
+    telegram_webhook_url: str | None = None  # TELEGRAM_WEBHOOK_URL (e.g. https://your-domain/api/webhooks/channels/telegram)
     telegram_webhook_secret: str | None = None  # TELEGRAM_WEBHOOK_SECRET for request validation
+
+    # Loop PWA web push -------------------------------------------------
+    loop_push_vapid_public_key: str | None = None
+    loop_push_vapid_private_key: str | None = None
+    loop_push_vapid_subject: str | None = None
 
     # Memory Files -----------------------------------------------------
     memory_files_enabled: bool = False
@@ -238,6 +241,11 @@ class Settings:  # noqa: D401 – simple data container
     def llm_disabled(self) -> bool:  # noqa: D401
         """Return True when outbound LLM calls are globally disabled."""
         return _truthy(os.getenv("LLM_DISABLED"))
+
+    @property
+    def loop_push_enabled(self) -> bool:  # noqa: D401
+        """Return True when Loop PWA web push is fully configured."""
+        return bool(self.loop_push_vapid_public_key and self.loop_push_vapid_private_key and self.loop_push_vapid_subject)
 
     @property
     def db_is_sqlite(self) -> bool:
@@ -362,14 +370,12 @@ def validate_public_origin_config(settings: Settings, cors_origins: list[str]) -
     public_site_origin = _origin_from_url(settings.public_site_url)
     if public_site_origin and public_site_origin not in cors_origins:
         warnings.append(
-            "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. "
-            "Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
+            "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. " "Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
         )
 
     if not public_site_origin and not settings.allowed_cors_origins and not settings.auth_disabled:
         warnings.append(
-            "PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. "
-            "CORS will default to localhost."
+            "PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. " "CORS will default to localhost."
         )
 
     return warnings
@@ -522,6 +528,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
         telegram_webhook_url=os.getenv("TELEGRAM_WEBHOOK_URL"),
         telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET"),
+        loop_push_vapid_public_key=os.getenv("LOOP_PUSH_VAPID_PUBLIC_KEY"),
+        loop_push_vapid_private_key=os.getenv("LOOP_PUSH_VAPID_PRIVATE_KEY"),
+        loop_push_vapid_subject=os.getenv("LOOP_PUSH_VAPID_SUBJECT"),
     )
 
 
@@ -586,10 +595,7 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
         if weak:
             missing_vars.append("JWT_SECRET (must be >=16 chars, not 'dev-secret')")
 
-        weak_internal = (
-            settings.internal_api_secret.strip() in {"", "dev-internal-secret"}
-            or len(settings.internal_api_secret) < 16
-        )
+        weak_internal = settings.internal_api_secret.strip() in {"", "dev-internal-secret"} or len(settings.internal_api_secret) < 16
         if weak_internal:
             missing_vars.append("INTERNAL_API_SECRET (must be >=16 chars, not 'dev-internal-secret')")
 

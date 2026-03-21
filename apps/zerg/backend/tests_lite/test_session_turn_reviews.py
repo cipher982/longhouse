@@ -8,9 +8,11 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
@@ -314,6 +316,10 @@ async def test_turn_review_assist_sends_telegram_loop_link_once(monkeypatch, tmp
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
     monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
     monkeypatch.setattr(
+        "zerg.services.session_turn_reviews._send_turn_review_push_notification",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
         "zerg.services.session_turn_reviews.get_settings",
         lambda: SimpleNamespace(app_public_url="https://longhouse.example", public_site_url=None),
     )
@@ -341,6 +347,97 @@ async def test_turn_review_assist_sends_telegram_loop_link_once(monkeypatch, tmp
     assert "Run the pending targeted tests." in str(sent_messages[0]["text"])
     assert "/loop/card/" in str(sent_messages[0]["text"])
     assert sent_messages[0]["disable_web_page_preview"] is True
+
+
+@pytest.mark.asyncio
+async def test_turn_review_assist_prefers_loop_push_over_telegram(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_assist_prefers_loop_push.db")
+    push_calls: list[int] = []
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Only targeted verification remains.",
+            rationale="This is the routine continue case after a completed assistant turn.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=41,
+        )
+
+    async def _fake_invoke(*_args, **_kwargs):
+        return 777
+
+    async def _fake_telegram(**_kwargs):
+        raise AssertionError("Telegram fallback should not run when Loop push succeeds")
+
+    def _fake_push(**kwargs):
+        push_calls.append(int(kwargs["review"].id))
+        return True
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+    monkeypatch.setattr("zerg.services.session_turn_reviews._send_turn_review_push_notification", _fake_push)
+    monkeypatch.setattr("zerg.services.session_turn_reviews._send_turn_review_telegram_notification", _fake_telegram)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False, telegram_chat_id="1234")
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="finish the verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+
+        assert review is not None
+        assert push_calls == [int(review.id)]
+
+
+@pytest.mark.asyncio
+async def test_turn_review_autopilot_does_not_send_mobile_notification(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_no_mobile_notification.db")
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Only targeted verification remains.",
+            rationale="This is the routine continue case after a completed assistant turn.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=43,
+        )
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr(
+        "zerg.services.session_turn_reviews._send_turn_review_push_notification",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Push should not fire for acted reviews")),
+    )
+    monkeypatch.setattr(
+        "zerg.services.session_turn_reviews._send_turn_review_telegram_notification",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Telegram should not fire for acted reviews")),
+    )
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=True, telegram_chat_id="1234")
+        session_id = _seed_session(
+            db,
+            loop_mode="autopilot",
+            user_text="finish the verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+
+        assert review is not None
+        assert review.status == "acted"
+        assert review.reason == "continue_session"
 
 
 @pytest.mark.asyncio

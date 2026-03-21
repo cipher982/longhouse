@@ -104,7 +104,7 @@ jobs:
       - name: Check email routing (mailto → Cloudflare forward rules)
         id: email_routing
         env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN }}
         run: |
           chmod +x scripts/check-email-routing.sh
           ./scripts/check-email-routing.sh

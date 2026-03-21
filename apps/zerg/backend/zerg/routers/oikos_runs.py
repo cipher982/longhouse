@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import func
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
 
+from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentEvent
@@ -32,6 +34,8 @@ from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
 from zerg.models.run_event import RunEvent
 from zerg.models.work import OikosWakeup
+from zerg.services.loop_push import revoke_loop_push_subscription
+from zerg.services.loop_push import upsert_loop_push_subscription
 from zerg.services.session_turn_reviews import approve_pending_turn_review
 from zerg.services.session_turn_reviews import dismiss_pending_turn_review
 from zerg.utils.time import UTCBaseModel
@@ -154,6 +158,34 @@ class LoopInboxActionResult(UTCBaseModel):
     status: str
     reason: Optional[str] = None
     queued_job_id: Optional[int] = None
+
+
+class LoopPushConfigResponse(UTCBaseModel):
+    """Public Loop PWA push configuration for authenticated browsers."""
+
+    enabled: bool
+    vapid_public_key: Optional[str] = None
+
+
+class LoopPushSubscriptionRequest(UTCBaseModel):
+    """Raw browser PushSubscription payload from the Loop PWA."""
+
+    subscription: Dict[str, Any]
+    install_id: Optional[str] = None
+    user_agent: Optional[str] = None
+
+
+class LoopPushSubscriptionResponse(UTCBaseModel):
+    """Result of registering one Loop PWA push subscription."""
+
+    id: int
+    status: str
+
+
+class LoopPushSubscriptionDeleteRequest(UTCBaseModel):
+    """Delete one Loop PWA push subscription by endpoint."""
+
+    endpoint: str
 
 
 def _get_owned_run(db: Session, *, run_id: int, owner_id: int) -> Run | None:
@@ -728,6 +760,66 @@ def act_on_loop_inbox_item(
         reason=review.reason,
         queued_job_id=None,
     )
+
+
+@router.get("/push-config", response_model=LoopPushConfigResponse)
+def get_loop_push_config(
+    current_user=Depends(get_current_oikos_user),
+) -> LoopPushConfigResponse:
+    """Return Loop PWA push availability for the authenticated user."""
+
+    _ = current_user  # auth gate only
+    settings = get_settings()
+    if not settings.loop_push_enabled:
+        return LoopPushConfigResponse(enabled=False, vapid_public_key=None)
+    return LoopPushConfigResponse(
+        enabled=True,
+        vapid_public_key=settings.loop_push_vapid_public_key,
+    )
+
+
+@router.post("/push-subscriptions", response_model=LoopPushSubscriptionResponse)
+def register_loop_push_subscription(
+    request: LoopPushSubscriptionRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> LoopPushSubscriptionResponse:
+    """Upsert one authenticated Loop PWA push subscription."""
+
+    settings = get_settings()
+    if not settings.loop_push_enabled:
+        raise HTTPException(status_code=409, detail="Loop push is not enabled on this instance")
+
+    try:
+        row = upsert_loop_push_subscription(
+            db=db,
+            owner_id=current_user.id,
+            subscription=request.subscription,
+            install_id=request.install_id,
+            user_agent=request.user_agent,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return LoopPushSubscriptionResponse(id=int(row.id), status="active")
+
+
+@router.delete("/push-subscriptions", status_code=204)
+def delete_loop_push_subscription(
+    request: LoopPushSubscriptionDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_oikos_user),
+) -> Response:
+    """Revoke one Loop PWA push subscription for the authenticated user."""
+
+    revoked = revoke_loop_push_subscription(
+        db=db,
+        owner_id=current_user.id,
+        endpoint=request.endpoint,
+    )
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Push subscription not found")
+    return Response(status_code=204)
 
 
 def _extract_text_from_message_content(content: Any) -> Optional[str]:

@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
+import { XIcon } from "../components/icons";
 import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui";
 import {
   applyLoopInboxAction,
@@ -11,9 +13,11 @@ import {
   type LoopInboxItem,
 } from "../services/api/oikos";
 import { useLoopInstallPrompt } from "../hooks/useLoopInstallPrompt";
+import { useLoopPushNotifications } from "../hooks/useLoopPushNotifications";
 import "../styles/loop-inbox.css";
 
 type DecisionBadgeVariant = "neutral" | "success" | "warning" | "error";
+const PHONE_BREAKPOINT_PX = 768;
 
 function formatDecision(decision: string): string {
   switch (decision) {
@@ -66,6 +70,37 @@ function decisionBadgeVariant(decision: string): DecisionBadgeVariant {
   }
 }
 
+function cardStateBadgeVariant(state: string): DecisionBadgeVariant {
+  switch (state) {
+    case "active":
+      return "success";
+    case "superseded":
+    case "expired":
+      return "warning";
+    case "failed":
+      return "error";
+    default:
+      return "neutral";
+  }
+}
+
+function cardStatusHeadline(card: Pick<LoopActionCard, "cardState">): string {
+  switch (card.cardState) {
+    case "superseded":
+      return "Viewing older card";
+    case "expired":
+      return "This follow-up expired";
+    case "acted":
+      return "This follow-up was already handled";
+    case "dismissed":
+      return "This follow-up was dismissed";
+    case "failed":
+      return "This follow-up failed";
+    default:
+      return "Current card status";
+  }
+}
+
 function formatTimestamp(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "Just now";
@@ -82,6 +117,31 @@ function primaryActionLabel(card: LoopActionCard): string {
     return "Continue";
   }
   return "Approve";
+}
+
+function formatFollowUpCount(count: number): string {
+  return `${count} open follow-up${count === 1 ? "" : "s"}`;
+}
+
+function useIsPhoneLayout(): boolean {
+  const [isPhoneLayout, setIsPhoneLayout] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < PHONE_BREAKPOINT_PX;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const updateLayout = () => {
+      setIsPhoneLayout(window.innerWidth < PHONE_BREAKPOINT_PX);
+    };
+
+    updateLayout();
+    window.addEventListener("resize", updateLayout);
+    return () => window.removeEventListener("resize", updateLayout);
+  }, []);
+
+  return isPhoneLayout;
 }
 
 function buildLoopCardPath(cardId: number): string {
@@ -118,11 +178,6 @@ function LoopActionButtons({
           Not now
         </Button>
       )}
-      {card.cardState === "superseded" && card.supersededByCardId && (
-        <Link className="ui-button ui-button--ghost ui-button--md" to={`/loop/card/${card.supersededByCardId}`}>
-          Open latest
-        </Link>
-      )}
       <Link className="ui-button ui-button--ghost ui-button--md" to={`/timeline/${card.sessionId}`}>
         Open full session
       </Link>
@@ -133,22 +188,30 @@ function LoopActionButtons({
 function LoopInboxRow({
   item,
   selected,
+  to,
   onSelect,
 }: {
   item: LoopInboxItem;
   selected: boolean;
-  onSelect: () => void;
+  to: string;
+  onSelect?: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <Link
+      to={to}
       className={`loop-inbox-row loop-inbox-row--${item.decision.replace(/_/g, "-")}${selected ? " is-selected" : ""}`}
       onClick={onSelect}
+      aria-current={selected ? "page" : undefined}
       data-testid={`loop-inbox-row-${item.cardId}`}
     >
       <div className="loop-inbox-row-top">
         <strong>{item.title}</strong>
-        <Badge variant={decisionBadgeVariant(item.decision)}>{formatDecision(item.decision)}</Badge>
+        <div className="loop-inbox-row-badges">
+          <Badge variant={decisionBadgeVariant(item.decision)}>{formatDecision(item.decision)}</Badge>
+          {item.cardState !== "active" && (
+            <Badge variant={cardStateBadgeVariant(item.cardState)}>{formatCardState(item.cardState)}</Badge>
+          )}
+        </div>
       </div>
       <div className="loop-inbox-row-meta">
         <span>{item.project || "No project"}</span>
@@ -156,15 +219,18 @@ function LoopInboxRow({
         <span>{formatTimestamp(item.lastTurnAt)}</span>
       </div>
       <p>{item.summary}</p>
-    </button>
+    </Link>
   );
 }
 
 export default function LoopInboxPage() {
   const { sessionId, cardId } = useParams<{ sessionId?: string; cardId?: string }>();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { canInstall, showIosHint, isInstalled, install } = useLoopInstallPrompt();
+  const loopPush = useLoopPushNotifications({ isInstalled });
+  const isPhoneLayout = useIsPhoneLayout();
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [queueAutoOpenedCardId, setQueueAutoOpenedCardId] = useState<number | null>(null);
 
   const selectedCardId = cardId ? Number(cardId) : null;
   const selectedSessionId = !selectedCardId && sessionId ? sessionId : null;
@@ -201,10 +267,67 @@ export default function LoopInboxPage() {
     actionMutation.mutate({ currentCardId: selectedCardId, action });
   };
 
+  useEffect(() => {
+    if (!isPhoneLayout) {
+      setQueueOpen(false);
+    }
+  }, [isPhoneLayout]);
+
+  useEffect(() => {
+    if (!(isPhoneLayout && queueOpen)) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    const closeQueue = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setQueueOpen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", closeQueue);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeQueue);
+    };
+  }, [isPhoneLayout, queueOpen]);
+
   const currentCard = cardQuery.data ?? null;
   const isLoadingCard = cardQuery.isLoading || legacySessionQuery.isLoading;
-  const hasInboxItems = (inboxQuery.data?.length ?? 0) > 0;
-  const initialCardId = !selectedCardId && !selectedSessionId ? inboxQuery.data?.[0]?.cardId ?? null : null;
+  const inboxItems = inboxQuery.data ?? [];
+  const inboxCount = inboxItems.length;
+  const hasInboxItems = inboxCount > 0;
+  const initialCardId = !selectedCardId && !selectedSessionId ? inboxItems[0]?.cardId ?? null : null;
+  const selectedQueueIndex = selectedCardId ? inboxItems.findIndex((item) => item.cardId === selectedCardId) : -1;
+  const showMobileQueueToggle = isPhoneLayout && inboxCount > 1;
+  const showCondensedMobileChrome = isPhoneLayout && Boolean(currentCard || isLoadingCard || selectedCardId || selectedSessionId);
+  const showInstallBanner = !isInstalled && (canInstall || showIosHint);
+  const showPushBanner = loopPush.error || (loopPush.enabledInBackend && loopPush.supported) || loopPush.isEnabled;
+  const queueCountLabel = hasInboxItems ? formatFollowUpCount(inboxCount) : null;
+  const queuePositionLabel = selectedQueueIndex >= 0 ? `Viewing ${selectedQueueIndex + 1} of ${inboxCount}` : null;
+  const currentCardIsStale = Boolean(currentCard && currentCard.cardState !== "active");
+  const currentCardNeedsQueueRecovery = currentCardIsStale && showMobileQueueToggle && selectedQueueIndex < 0;
+  const queueSummaryLabel =
+    queueCountLabel && queuePositionLabel ? `${queueCountLabel} · ${queuePositionLabel}` : queueCountLabel;
+  const queuePeekAriaLabel = currentCardNeedsQueueRecovery
+    ? ["Open follow-ups", queueCountLabel, "Viewing older card"].filter(Boolean).join(". ")
+    : ["Open follow-ups", queueCountLabel, queuePositionLabel].filter(Boolean).join(". ");
+
+  useEffect(() => {
+    if (!showMobileQueueToggle) {
+      setQueueOpen(false);
+    }
+  }, [showMobileQueueToggle]);
+
+  useEffect(() => {
+    if (!(currentCardNeedsQueueRecovery && isPhoneLayout && selectedCardId != null)) {
+      return;
+    }
+    if (queueAutoOpenedCardId === selectedCardId) {
+      return;
+    }
+    setQueueOpen(true);
+    setQueueAutoOpenedCardId(selectedCardId);
+  }, [currentCardNeedsQueueRecovery, isPhoneLayout, queueAutoOpenedCardId, selectedCardId]);
 
   if (selectedSessionId && legacySessionQuery.data) {
     return <Navigate to={buildLoopCardPath(legacySessionQuery.data.cardId)} replace />;
@@ -214,40 +337,241 @@ export default function LoopInboxPage() {
     return <Navigate to={buildLoopCardPath(initialCardId)} replace />;
   }
 
+  const cardPanel = (
+    <section className="loop-inbox-card" data-testid="loop-inbox-card">
+      {isLoadingCard && (
+        <div className="loop-inbox-card-loading">
+          <Spinner size="sm" />
+          <span>Loading action card…</span>
+        </div>
+      )}
+
+      {!selectedCardId && !selectedSessionId && !currentCard && !isLoadingCard && (
+        <EmptyState
+          title="Select a follow-up"
+          description="Choose a card from the inbox to review the recommended next action."
+        />
+      )}
+
+      {currentCard && (
+        <>
+          {currentCard.cardState !== "active" && (
+            <div className="loop-inbox-card-status-banner" data-testid="loop-inbox-card-status-banner">
+              <div className="loop-inbox-card-status-banner-copy">
+                <div className="loop-inbox-list-label">Current card status</div>
+                <h3>{cardStatusHeadline(currentCard)}</h3>
+                {currentCard.cardStateReason && <p>{currentCard.cardStateReason}</p>}
+              </div>
+              {currentCard.cardState === "superseded" && currentCard.supersededByCardId && (
+                <Link
+                  className="ui-button ui-button--secondary ui-button--sm"
+                  to={`/loop/card/${currentCard.supersededByCardId}`}
+                >
+                  Open latest
+                </Link>
+              )}
+            </div>
+          )}
+
+          <div className="loop-inbox-card-top">
+            <div>
+              <h2>{currentCard.title}</h2>
+              <div className="loop-inbox-card-meta">
+                <span>{currentCard.project || "No project"}</span>
+                {currentCard.machine && <span>{currentCard.machine}</span>}
+                <span>{formatTimestamp(currentCard.lastTurnAt)}</span>
+              </div>
+            </div>
+            <div className="loop-inbox-card-top-badges">
+              <Badge variant={decisionBadgeVariant(currentCard.decision)}>
+                {formatDecision(currentCard.decision)}
+              </Badge>
+              {currentCard.cardState !== "active" && (
+                <Badge variant="warning">{formatCardState(currentCard.cardState)}</Badge>
+              )}
+            </div>
+          </div>
+
+          {currentCard.cardStateReason && currentCard.cardState === "active" && (
+            <div className="loop-inbox-card-section">
+              <h3>Status</h3>
+              <p>{currentCard.cardStateReason}</p>
+            </div>
+          )}
+
+          <div className="loop-inbox-card-section">
+            <h3>What happened</h3>
+            <p>{currentCard.summary}</p>
+          </div>
+
+          {currentCard.followUpPrompt && (
+            <div className="loop-inbox-card-section">
+              <h3>Recommended next prompt</h3>
+              <p>{currentCard.followUpPrompt}</p>
+            </div>
+          )}
+
+          {currentCard.rationale && (
+            <div className="loop-inbox-card-section">
+              <h3>Why</h3>
+              <p>{currentCard.rationale}</p>
+            </div>
+          )}
+
+          <div className="loop-inbox-card-context">
+            {currentCard.lastUserText && (
+              <div className="loop-inbox-card-section">
+                <h3>Last user instruction</h3>
+                <p>{currentCard.lastUserText}</p>
+              </div>
+            )}
+            {currentCard.lastAssistantText && (
+              <div className="loop-inbox-card-section">
+                <h3>Last assistant turn</h3>
+                <p>{currentCard.lastAssistantText}</p>
+              </div>
+            )}
+          </div>
+
+          {currentCard.blockedReasons.length > 0 && (
+            <div className="loop-inbox-card-section">
+              <h3>Blocked reasons</h3>
+              <ul className="loop-inbox-bullets">
+                {currentCard.blockedReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <LoopActionButtons
+            card={currentCard}
+            onAction={handleAction}
+            pending={actionMutation.isPending}
+          />
+        </>
+      )}
+    </section>
+  );
+
+  const installBanner = showInstallBanner ? (
+    <section
+      className={`loop-install-banner${showCondensedMobileChrome ? " loop-install-banner--compact" : ""}`}
+      data-testid="loop-install-banner"
+    >
+      <div>
+        <strong>Install Loop</strong>
+        <p>
+          {showCondensedMobileChrome
+            ? "Save this view to your home screen for faster approvals."
+            : "Save this inbox to your home screen so approvals open fast even on weak mobile connections."}
+        </p>
+      </div>
+      <div className="loop-install-banner-actions">
+        {canInstall && (
+          <Button onClick={() => void install()} data-testid="loop-install-action">
+            Install app
+          </Button>
+        )}
+        {showIosHint && (
+          <p className="loop-install-hint">
+            On iPhone: tap Share, then <strong>Add to Home Screen</strong>.
+          </p>
+        )}
+      </div>
+    </section>
+  ) : null;
+
+  const pushBanner = showPushBanner ? (
+    <section
+      className={`loop-push-banner${showCondensedMobileChrome ? " loop-push-banner--compact" : ""}`}
+      data-testid="loop-push-banner"
+    >
+      <div>
+        <strong>Loop notifications</strong>
+        <p>
+          {showCondensedMobileChrome
+            ? "Turn on direct card alerts for this phone."
+            : "Get a direct nudge to the exact action card when a coding turn needs approval, instead of checking the desktop app."}
+        </p>
+        {loopPush.isEnabled && (
+          <p className="loop-push-status" data-testid="loop-push-enabled-copy">
+            Notifications are on for this install.
+          </p>
+        )}
+        {loopPush.error && (
+          <p className="loop-push-error" data-testid="loop-push-error">
+            {loopPush.error}
+          </p>
+        )}
+      </div>
+      <div className="loop-push-banner-actions">
+        {loopPush.canEnable && (
+          <Button
+            onClick={() => void loopPush.enable()}
+            disabled={loopPush.isBusy}
+            data-testid="loop-push-enable-action"
+          >
+            {loopPush.isBusy ? "Enabling…" : "Enable notifications"}
+          </Button>
+        )}
+        {loopPush.canDisable && (
+          <Button
+            variant="ghost"
+            onClick={() => void loopPush.disable()}
+            disabled={loopPush.isBusy}
+            data-testid="loop-push-disable-action"
+          >
+            {loopPush.isBusy ? "Updating…" : "Disable notifications"}
+          </Button>
+        )}
+      </div>
+    </section>
+  ) : null;
+
   return (
     <PageShell size="wide" className="loop-inbox-shell">
+      {showMobileQueueToggle && !queueOpen && (
+        <button
+          type="button"
+          className={`loop-inbox-mobile-peek-tab${currentCardNeedsQueueRecovery ? " is-emphasized" : ""}`}
+          onClick={() => setQueueOpen(true)}
+          aria-haspopup="dialog"
+          aria-controls="loop-mobile-queue-drawer"
+          aria-expanded={queueOpen}
+          aria-label={queuePeekAriaLabel}
+          data-testid="loop-mobile-queue-peek-tab"
+        >
+          <span className="loop-inbox-mobile-peek-tab-handle" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <span
+            className="loop-inbox-mobile-queue-trigger-count loop-inbox-mobile-peek-tab-count"
+            data-testid="loop-mobile-queue-peek-count"
+            aria-hidden="true"
+          >
+            {inboxCount}
+          </span>
+        </button>
+      )}
       <div className="loop-inbox-page">
-        <header className="loop-inbox-header">
-          <div className="loop-inbox-header-copy">
-            <span className="loop-inbox-eyebrow">Mobile approvals</span>
-            <h1>Loop Inbox</h1>
-            <p>Handle finished coding turns without opening the full desktop workspace.</p>
-          </div>
-          <Link className="ui-button ui-button--ghost ui-button--md" to="/timeline">
-            Open timeline
-          </Link>
-        </header>
-
-        {!isInstalled && (canInstall || showIosHint) && (
-          <section className="loop-install-banner" data-testid="loop-install-banner">
-            <div>
-              <strong>Install Loop</strong>
-              <p>Save this inbox to your home screen so approvals open fast even on weak mobile connections.</p>
+        {!showCondensedMobileChrome && (
+          <header className="loop-inbox-header">
+            <div className="loop-inbox-header-copy">
+              <span className="loop-inbox-eyebrow">Mobile approvals</span>
+              <h1>Loop Inbox</h1>
+              <p>Handle finished coding turns without opening the full desktop workspace.</p>
             </div>
-            <div className="loop-install-banner-actions">
-              {canInstall && (
-                <Button onClick={() => void install()} data-testid="loop-install-action">
-                  Install app
-                </Button>
-              )}
-              {showIosHint && (
-                <p className="loop-install-hint">
-                  On iPhone: tap Share, then <strong>Add to Home Screen</strong>.
-                </p>
-              )}
-            </div>
-          </section>
+            <Link className="ui-button ui-button--ghost ui-button--md" to="/timeline">
+              Open timeline
+            </Link>
+          </header>
         )}
+
+        {!showCondensedMobileChrome && installBanner}
+        {!showCondensedMobileChrome && pushBanner}
 
         {inboxQuery.isLoading && !currentCard && (
           <div className="loop-inbox-loading">
@@ -264,138 +588,114 @@ export default function LoopInboxPage() {
         )}
 
         {(!inboxQuery.isLoading || currentCard || isLoadingCard) && (hasInboxItems || currentCard || isLoadingCard) && (
-          <div className="loop-inbox-layout">
-            <section className="loop-inbox-list" aria-label="Sessions needing attention">
-              <div className="loop-inbox-list-header">
-                <div>
-                  <div className="loop-inbox-list-label">Attention queue</div>
-                  <div className="loop-inbox-list-title">
-                    {hasInboxItems ? "Open follow-ups" : "Nothing actionable right now"}
-                  </div>
-                </div>
-                {hasInboxItems && (
-                  <span className="loop-inbox-list-count">
-                    {inboxQuery.data?.length ?? 0}
-                  </span>
-                )}
-              </div>
+          isPhoneLayout ? (
+            <>
+              {cardPanel}
+              {pushBanner}
+              {installBanner}
 
-              {hasInboxItems ? (
-                <div className="loop-inbox-list-body">
-                  {inboxQuery.data?.map((item) => (
-                    <LoopInboxRow
-                      key={item.cardId}
-                      item={item}
-                      selected={item.cardId === selectedCardId}
-                      onSelect={() => navigate(buildLoopCardPath(item.cardId))}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <EmptyState
-                  title="No active cards"
-                  description="This follow-up still has details, but nothing else currently needs action."
-                />
-              )}
-            </section>
-
-            <section className="loop-inbox-card" data-testid="loop-inbox-card">
-              {isLoadingCard && (
-                <div className="loop-inbox-card-loading">
-                  <Spinner size="sm" />
-                  <span>Loading action card…</span>
-                </div>
-              )}
-
-              {!selectedCardId && !selectedSessionId && !currentCard && !isLoadingCard && (
-                <EmptyState
-                  title="Select a follow-up"
-                  description="Choose a card from the inbox to review the recommended next action."
-                />
-              )}
-
-              {currentCard && (
+              {showMobileQueueToggle && queueOpen && (
                 <>
-                  <div className="loop-inbox-card-top">
-                    <div>
-                      <h2>{currentCard.title}</h2>
-                      <div className="loop-inbox-card-meta">
-                        <span>{currentCard.project || "No project"}</span>
-                        {currentCard.machine && <span>{currentCard.machine}</span>}
-                        <span>{formatTimestamp(currentCard.lastTurnAt)}</span>
-                      </div>
-                    </div>
-                    <div className="loop-inbox-card-top-badges">
-                      <Badge variant={decisionBadgeVariant(currentCard.decision)}>
-                        {formatDecision(currentCard.decision)}
-                      </Badge>
-                      {currentCard.cardState !== "active" && (
-                        <Badge variant="warning">{formatCardState(currentCard.cardState)}</Badge>
-                      )}
-                    </div>
-                  </div>
-
-                  {currentCard.cardStateReason && (
-                    <div className="loop-inbox-card-section">
-                      <h3>Status</h3>
-                      <p>{currentCard.cardStateReason}</p>
-                    </div>
-                  )}
-
-                  <div className="loop-inbox-card-section">
-                    <h3>What happened</h3>
-                    <p>{currentCard.summary}</p>
-                  </div>
-
-                  {currentCard.followUpPrompt && (
-                    <div className="loop-inbox-card-section">
-                      <h3>Recommended next prompt</h3>
-                      <p>{currentCard.followUpPrompt}</p>
-                    </div>
-                  )}
-
-                  {currentCard.rationale && (
-                    <div className="loop-inbox-card-section">
-                      <h3>Why</h3>
-                      <p>{currentCard.rationale}</p>
-                    </div>
-                  )}
-
-                  <div className="loop-inbox-card-context">
-                    {currentCard.lastUserText && (
-                      <div className="loop-inbox-card-section">
-                        <h3>Last user instruction</h3>
-                        <p>{currentCard.lastUserText}</p>
-                      </div>
-                    )}
-                    {currentCard.lastAssistantText && (
-                      <div className="loop-inbox-card-section">
-                        <h3>Last assistant turn</h3>
-                        <p>{currentCard.lastAssistantText}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {currentCard.blockedReasons.length > 0 && (
-                    <div className="loop-inbox-card-section">
-                      <h3>Blocked reasons</h3>
-                      <ul className="loop-inbox-bullets">
-                        {currentCard.blockedReasons.map((reason) => (
-                          <li key={reason}>{reason}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  <LoopActionButtons
-                    card={currentCard}
-                    onAction={handleAction}
-                    pending={actionMutation.isPending}
+                  <div
+                    className="loop-inbox-queue-drawer-scrim"
+                    data-testid="loop-mobile-queue-scrim"
+                    onClick={() => setQueueOpen(false)}
+                    aria-hidden="true"
                   />
+                  <aside
+                    id="loop-mobile-queue-drawer"
+                    className="loop-inbox-queue-drawer"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="loop-mobile-queue-drawer-title"
+                    data-testid="loop-mobile-queue-drawer"
+                  >
+                    <div className="loop-inbox-queue-drawer-header">
+                      <div>
+                        <div className="loop-inbox-list-label">Loop Inbox</div>
+                        <h2 id="loop-mobile-queue-drawer-title" className="loop-inbox-queue-drawer-title">
+                          Follow-ups
+                        </h2>
+                        {queueSummaryLabel && (
+                          <p className="loop-inbox-queue-drawer-summary">{queueSummaryLabel}</p>
+                        )}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="loop-inbox-queue-drawer-close"
+                        onClick={() => setQueueOpen(false)}
+                        aria-label="Close follow-ups"
+                        data-testid="loop-mobile-queue-close"
+                      >
+                        <XIcon width={18} height={18} />
+                      </Button>
+                    </div>
+
+                    <div className="loop-inbox-queue-drawer-body">
+                      {inboxItems.map((item) => (
+                        <LoopInboxRow
+                          key={item.cardId}
+                          item={item}
+                          selected={item.cardId === selectedCardId}
+                          to={buildLoopCardPath(item.cardId)}
+                          onSelect={() => setQueueOpen(false)}
+                        />
+                      ))}
+                    </div>
+
+                    <div className="loop-inbox-queue-drawer-footer">
+                      <Link
+                        className="ui-button ui-button--ghost ui-button--md loop-inbox-queue-drawer-footer-link"
+                        to="/timeline"
+                        onClick={() => setQueueOpen(false)}
+                      >
+                        Open timeline
+                      </Link>
+                    </div>
+                  </aside>
                 </>
               )}
-            </section>
-          </div>
+            </>
+          ) : (
+            <div className="loop-inbox-layout">
+              <section className="loop-inbox-list" aria-label="Sessions needing attention">
+                <div className="loop-inbox-list-header">
+                  <div>
+                    <div className="loop-inbox-list-label">Attention queue</div>
+                    <div className="loop-inbox-list-title">
+                      {hasInboxItems ? "Open follow-ups" : "Nothing actionable right now"}
+                    </div>
+                  </div>
+                  {hasInboxItems && (
+                    <span className="loop-inbox-list-count">
+                      {inboxCount}
+                    </span>
+                  )}
+                </div>
+
+                {hasInboxItems ? (
+                  <div className="loop-inbox-list-body">
+                    {inboxItems.map((item) => (
+                      <LoopInboxRow
+                        key={item.cardId}
+                        item={item}
+                        selected={item.cardId === selectedCardId}
+                        to={buildLoopCardPath(item.cardId)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState
+                    title="No active cards"
+                    description="This follow-up still has details, but nothing else currently needs action."
+                  />
+                )}
+              </section>
+
+              {cardPanel}
+            </div>
+          )
         )}
       </div>
     </PageShell>

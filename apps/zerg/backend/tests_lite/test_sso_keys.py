@@ -11,11 +11,21 @@ Uses in-memory SQLite with inline setup (no shared conftest).
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from cryptography.fernet import Fernet
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 from zerg.services import sso_keys as sso_keys_mod
 
