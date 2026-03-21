@@ -126,7 +126,10 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   await expect(header).toBeVisible();
   await expect(card).toBeVisible();
   await expect(queueToggle).toBeVisible();
-  await expect(page.getByText("2 open follow-ups · 1 of 2")).toBeVisible();
+  await expect(header).toContainText("Loop Inbox");
+  await expect(header).toContainText("Viewing 1 of 2");
+  await expect(queueToggle).toContainText("Follow-ups");
+  await expect(page.getByRole("link", { name: "Open timeline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Candidate Interview Recaps and Hiring Pitches" })).toBeVisible();
   await expect(page.getByText(/^Attention queue$/)).toHaveCount(0);
 
@@ -145,7 +148,8 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   const drawer = page.getByTestId("loop-mobile-queue-drawer");
   await expect(drawer).toBeVisible();
   await expect(page.getByTestId("loop-mobile-queue-scrim")).toBeVisible();
-  await expect(drawer.getByRole("heading", { name: "Open follow-ups" })).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "Follow-ups" })).toBeVisible();
+  await expect(drawer.getByRole("link", { name: "Open timeline" })).toBeVisible();
   await expect(drawer.getByText("Settings and Modal Ownership Committed")).toBeVisible();
 
   const drawerBox = await drawer.boundingBox();
@@ -158,6 +162,6 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   await page.waitForURL("**/loop/card/99", { timeout: 10000 });
   await expect(page.getByTestId("loop-mobile-queue-drawer")).toHaveCount(0);
-  await expect(page.getByText("2 open follow-ups · 2 of 2")).toBeVisible();
+  await expect(page.getByText("Viewing 2 of 2")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Settings and Modal Ownership Committed" })).toBeVisible();
 });

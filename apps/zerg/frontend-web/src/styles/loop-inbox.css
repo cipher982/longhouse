@@ -89,15 +89,22 @@
   color: var(--color-text-muted);
 }
 
-.loop-inbox-mobile-header-actions {
-  display: flex;
+.loop-inbox-mobile-followups-trigger {
+  min-height: 44px;
+  padding-inline: var(--space-3);
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   flex-shrink: 0;
 }
 
-.loop-inbox-mobile-queue-trigger {
+.loop-inbox-mobile-followups-trigger svg {
   flex-shrink: 0;
+  color: var(--color-brand-primary);
+}
+
+.loop-inbox-mobile-followups-trigger-label {
+  line-height: 1;
 }
 
 .loop-inbox-mobile-queue-trigger-count {
@@ -501,6 +508,16 @@
   color: var(--color-text-secondary);
 }
 
+.loop-inbox-queue-drawer-close {
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: 0;
+}
+
+.loop-inbox-queue-drawer-close svg {
+  flex-shrink: 0;
+}
+
 .loop-inbox-queue-drawer-body {
   display: flex;
   flex-direction: column;
@@ -508,6 +525,19 @@
   overflow-y: auto;
   min-height: 0;
   padding-right: var(--space-1);
+}
+
+.loop-inbox-queue-drawer-footer {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-glass-1);
+}
+
+.loop-inbox-queue-drawer-footer-link {
+  width: 100%;
+}
+
+.loop-inbox-queue-drawer-footer-link.ui-button {
+  justify-content: center;
 }
 
 .loop-inbox-bullets {
@@ -579,10 +609,6 @@
     justify-content: flex-start;
   }
 
-  .loop-inbox-mobile-header {
-    align-items: flex-start;
-  }
-
   .loop-install-banner--compact,
   .loop-push-banner--compact {
     flex-direction: row;
@@ -590,7 +616,6 @@
     padding: var(--space-2) var(--space-3);
   }
 
-  .loop-inbox-mobile-header-actions,
   .loop-inbox-mobile-header .ui-button,
   .loop-install-banner--compact .loop-install-banner-actions,
   .loop-push-banner--compact .loop-push-banner-actions {
@@ -600,7 +625,7 @@
   }
 
   .loop-inbox-mobile-header .ui-button,
-  .loop-inbox-mobile-queue-trigger,
+  .loop-inbox-mobile-followups-trigger,
   .loop-install-banner--compact .ui-button,
   .loop-push-banner--compact .ui-button {
     width: auto;

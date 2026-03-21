@@ -119,6 +119,7 @@ function renderPage(initialEntry = "/loop/card/42") {
           <Route path="/loop" element={<LoopInboxRoute />} />
           <Route path="/loop/card/:cardId" element={<LoopInboxRoute />} />
           <Route path="/loop/:sessionId" element={<LoopInboxRoute />} />
+          <Route path="/timeline" element={<LocationProbe />} />
           <Route path="/timeline/:sessionId" element={<LocationProbe />} />
         </Routes>
       </TestRouter>
@@ -277,10 +278,12 @@ describe("LoopInboxPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
       expect(screen.getByTestId("loop-mobile-queue-toggle")).toBeInTheDocument();
-      expect(screen.getByText("2 open follow-ups · 1 of 2")).toBeInTheDocument();
+      expect(screen.getByText("Viewing 1 of 2")).toBeInTheDocument();
     });
 
     expect(screen.queryByText(/^Attention queue$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Follow-ups/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open timeline/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("loop-mobile-queue-toggle"));
 
@@ -289,6 +292,10 @@ describe("LoopInboxPage", () => {
       expect(screen.getByTestId("loop-mobile-queue-scrim")).toBeInTheDocument();
       expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
     });
+
+    const drawer = screen.getByTestId("loop-mobile-queue-drawer");
+    expect(within(drawer).getByRole("heading", { name: "Follow-ups" })).toBeInTheDocument();
+    expect(within(drawer).getByRole("link", { name: /Open timeline/i })).toHaveAttribute("href", "/timeline");
 
     await user.click(screen.getByTestId("loop-mobile-queue-close"));
 
@@ -302,7 +309,7 @@ describe("LoopInboxPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/99");
       expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
-      expect(screen.getByText("2 open follow-ups · 2 of 2")).toBeInTheDocument();
+      expect(screen.getByText("Viewing 2 of 2")).toBeInTheDocument();
     });
 
     const card = screen.getByTestId("loop-inbox-card");
