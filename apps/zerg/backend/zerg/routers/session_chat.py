@@ -35,12 +35,19 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.models.user import User
 from zerg.services.agents_store import AgentsStore
+from zerg.services.managed_local_launcher import ManagedLocalLaunchError
+from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
+from zerg.services.managed_local_launcher import launch_managed_local_session
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_continuity import ship_session_to_zerg
 from zerg.services.session_continuity import workspace_resolver
+from zerg.session_execution_home import ManagedSessionTransport
+from zerg.session_execution_home import SessionExecutionHome
+from zerg.session_loop_mode import SessionLoopMode
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +85,8 @@ def _get_session_chat_backend() -> str:
     if not backend:
         return SESSION_CHAT_BACKEND_AMBIENT
     if backend not in SUPPORTED_SESSION_CHAT_BACKENDS:
-        raise RuntimeError(f"{SESSION_CHAT_BACKEND_ENV} must be one of {sorted(SUPPORTED_SESSION_CHAT_BACKENDS)} (got {backend!r})")
+        allowed = sorted(SUPPORTED_SESSION_CHAT_BACKENDS)
+        raise RuntimeError(f"{SESSION_CHAT_BACKEND_ENV} must be one of {allowed} (got {backend!r})")
     return backend
 
 
@@ -179,6 +187,36 @@ class SessionChatRequest(BaseModel):
     """Request to chat with a session."""
 
     message: str = Field(..., min_length=1, max_length=10000, description="User message")
+
+
+class ManagedLocalSessionLaunchRequest(BaseModel):
+    """Request to start a managed local Claude session on a runner."""
+
+    runner_target: str = Field(..., description="Runner name or runner:<id>")
+    cwd: str = Field(..., min_length=1, description="Working directory on the source runner")
+    project: str | None = Field(None, description="Optional project label")
+    git_repo: str | None = Field(None, description="Optional git repository path")
+    git_branch: str | None = Field(None, description="Optional git branch name")
+    display_name: str | None = Field(None, description="Optional Claude display name for the session")
+    loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
+    managed_transport: ManagedSessionTransport = Field(
+        ManagedSessionTransport.TMUX,
+        description="Managed local transport (tmux only in v1)",
+    )
+
+
+class ManagedLocalSessionLaunchResponse(BaseModel):
+    """Response after successfully starting a managed local session."""
+
+    session_id: str
+    provider_session_id: str
+    execution_home: SessionExecutionHome
+    managed_transport: ManagedSessionTransport
+    loop_mode: SessionLoopMode
+    source_runner_id: int
+    source_runner_name: str
+    managed_session_name: str
+    attach_command: str
 
 
 class SessionLockInfo(BaseModel):
@@ -373,7 +411,7 @@ def _persist_fake_continuation_turn(
         ),
         cwd=target_session.cwd if target_session else str(workspace_path.absolute()),
         git_repo=target_session.git_repo if target_session else (source_session.git_repo if source_session else None),
-        git_branch=target_session.git_branch if target_session else (source_session.git_branch if source_session else None),
+        git_branch=(target_session.git_branch if target_session else (source_session.git_branch if source_session else None)),
         started_at=target_session.started_at if target_session else user_timestamp,
         ended_at=assistant_timestamp,
         provider_session_id=provider_session_id,
@@ -810,6 +848,56 @@ async def chat_with_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(e)[:200]}",
         )
+
+
+@router.post("/managed-local", response_model=ManagedLocalSessionLaunchResponse)
+async def launch_managed_local(
+    body: ManagedLocalSessionLaunchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_oikos_user),
+):
+    """Start a managed local Claude session inside tmux on a connected runner.
+
+    This is the first trustworthy laptop-first path:
+    - Longhouse launches stock Claude Code under tmux on the user's runner
+    - the session is explicitly marked managed_local
+    - later Loop/chat actions can target this exact session home
+    """
+    try:
+        result = await launch_managed_local_session(
+            db,
+            ManagedLocalLaunchParams(
+                owner_id=current_user.id,
+                runner_target=body.runner_target,
+                cwd=body.cwd,
+                project=body.project,
+                git_repo=body.git_repo,
+                git_branch=body.git_branch,
+                display_name=body.display_name,
+                loop_mode=body.loop_mode.value,
+                managed_transport=body.managed_transport.value,
+            ),
+        )
+    except ManagedLocalLaunchError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except Exception:
+        db.rollback()
+        logger.exception("Managed local launch failed unexpectedly")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Managed local launch failed")
+
+    session = result.session
+    return ManagedLocalSessionLaunchResponse(
+        session_id=str(session.id),
+        provider_session_id=session.provider_session_id or str(session.id),
+        execution_home=SessionExecutionHome(session.execution_home or SessionExecutionHome.LEGACY.value),
+        managed_transport=ManagedSessionTransport(session.managed_transport or ManagedSessionTransport.TMUX.value),
+        loop_mode=SessionLoopMode(session.loop_mode or SessionLoopMode.MANUAL.value),
+        source_runner_id=int(session.source_runner_id or 0),
+        source_runner_name=session.source_runner_name or "",
+        managed_session_name=session.managed_session_name or "",
+        attach_command=result.attach_command,
+    )
 
 
 @router.get("/{session_id}/lock")
