@@ -243,7 +243,7 @@ describe("LoopInboxPage", () => {
     expect(screen.queryByTestId("loop-mobile-queue-toggle")).not.toBeInTheDocument();
   });
 
-  it("opens the mobile queue sheet and selecting another follow-up swaps the card", async () => {
+  it("opens the mobile queue drawer and selecting another follow-up swaps the card", async () => {
     const user = userEvent.setup();
     setViewportWidth(390);
 
@@ -275,19 +275,25 @@ describe("LoopInboxPage", () => {
     renderPage();
 
     await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
       expect(screen.getByTestId("loop-mobile-queue-toggle")).toBeInTheDocument();
+      expect(screen.getByText("2 open follow-ups · 1 of 2")).toBeInTheDocument();
     });
+
+    expect(screen.queryByText(/^Attention queue$/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("loop-mobile-queue-toggle"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-queue-sheet")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-scrim")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
     });
 
     await user.click(screen.getByTestId("loop-mobile-queue-close"));
 
     await waitFor(() => {
-      expect(screen.queryByTestId("loop-mobile-queue-sheet")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
     });
 
     await user.click(screen.getByTestId("loop-mobile-queue-toggle"));
@@ -295,7 +301,8 @@ describe("LoopInboxPage", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/99");
-      expect(screen.queryByTestId("loop-mobile-queue-sheet")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
+      expect(screen.getByText("2 open follow-ups · 2 of 2")).toBeInTheDocument();
     });
 
     const card = screen.getByTestId("loop-inbox-card");

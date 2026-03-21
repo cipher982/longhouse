@@ -269,6 +269,20 @@ export default function LoopInboxPage() {
   const showCondensedMobileChrome = isPhoneLayout && Boolean(currentCard || isLoadingCard || selectedCardId || selectedSessionId);
   const showInstallBanner = !isInstalled && (canInstall || showIosHint);
   const showPushBanner = loopPush.error || (loopPush.enabledInBackend && loopPush.supported) || loopPush.isEnabled;
+  const queuePositionLabel =
+    showMobileQueueToggle && selectedQueueIndex >= 0 ? `${selectedQueueIndex + 1} of ${inboxCount}` : null;
+  const queueSummaryLabel =
+    showMobileQueueToggle && selectedQueueIndex >= 0
+      ? `${formatFollowUpCount(inboxCount)} · ${queuePositionLabel}`
+      : showMobileQueueToggle
+        ? formatFollowUpCount(inboxCount)
+        : null;
+
+  useEffect(() => {
+    if (!showMobileQueueToggle) {
+      setQueueOpen(false);
+    }
+  }, [showMobileQueueToggle]);
 
   if (selectedSessionId && legacySessionQuery.data) {
     return <Navigate to={buildLoopCardPath(legacySessionQuery.data.cardId)} replace />;
@@ -280,30 +294,6 @@ export default function LoopInboxPage() {
 
   const cardPanel = (
     <section className="loop-inbox-card" data-testid="loop-inbox-card">
-      {showMobileQueueToggle && (
-        <div className="loop-inbox-mobile-queue">
-          <div>
-            <div className="loop-inbox-mobile-queue-label">Attention queue</div>
-            <div className="loop-inbox-mobile-queue-title">{formatFollowUpCount(inboxCount)}</div>
-            {selectedQueueIndex >= 0 && (
-              <p className="loop-inbox-mobile-queue-detail">Viewing {selectedQueueIndex + 1} of {inboxCount}</p>
-            )}
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="loop-inbox-mobile-queue-action"
-            onClick={() => setQueueOpen(true)}
-            aria-haspopup="dialog"
-            aria-controls="loop-mobile-queue-sheet"
-            aria-expanded={queueOpen}
-            data-testid="loop-mobile-queue-toggle"
-          >
-            View queue
-          </Button>
-        </div>
-      )}
-
       {isLoadingCard && (
         <div className="loop-inbox-card-loading">
           <Spinner size="sm" />
@@ -481,10 +471,32 @@ export default function LoopInboxPage() {
       <div className="loop-inbox-page">
         {showCondensedMobileChrome ? (
           <div className="loop-inbox-mobile-header" data-testid="loop-mobile-header">
-            <div className="loop-inbox-mobile-header-label">Loop Inbox</div>
-            <Link className="ui-button ui-button--ghost ui-button--sm" to="/timeline">
-              Timeline
-            </Link>
+            <div className="loop-inbox-mobile-header-copy">
+              <div className="loop-inbox-mobile-header-label">Loop Inbox</div>
+              {queueSummaryLabel && <div className="loop-inbox-mobile-header-detail">{queueSummaryLabel}</div>}
+            </div>
+            <div className="loop-inbox-mobile-header-actions">
+              {showMobileQueueToggle && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="loop-inbox-mobile-queue-trigger"
+                  onClick={() => setQueueOpen(true)}
+                  aria-haspopup="dialog"
+                  aria-controls="loop-mobile-queue-drawer"
+                  aria-expanded={queueOpen}
+                  data-testid="loop-mobile-queue-toggle"
+                >
+                  Queue
+                  <span className="loop-inbox-mobile-queue-trigger-count" aria-hidden="true">
+                    {inboxCount}
+                  </span>
+                </Button>
+              )}
+              <Link className="ui-button ui-button--ghost ui-button--sm" to="/timeline">
+                Timeline
+              </Link>
+            </div>
           </div>
         ) : (
           <header className="loop-inbox-header">
@@ -524,31 +536,35 @@ export default function LoopInboxPage() {
               {installBanner}
 
               {showMobileQueueToggle && queueOpen && (
-                <div
-                  className="loop-inbox-queue-sheet-backdrop"
-                  onClick={() => setQueueOpen(false)}
-                >
-                  <section
-                    id="loop-mobile-queue-sheet"
-                    className="loop-inbox-queue-sheet"
+                <>
+                  <div
+                    className="loop-inbox-queue-drawer-scrim"
+                    data-testid="loop-mobile-queue-scrim"
+                    onClick={() => setQueueOpen(false)}
+                    aria-hidden="true"
+                  />
+                  <aside
+                    id="loop-mobile-queue-drawer"
+                    className="loop-inbox-queue-drawer"
                     role="dialog"
                     aria-modal="true"
-                    aria-labelledby="loop-mobile-queue-sheet-title"
-                    data-testid="loop-mobile-queue-sheet"
-                    onClick={(event) => event.stopPropagation()}
+                    aria-labelledby="loop-mobile-queue-drawer-title"
+                    data-testid="loop-mobile-queue-drawer"
                   >
-                    <div className="loop-inbox-queue-sheet-handle" aria-hidden="true" />
-                    <div className="loop-inbox-queue-sheet-header">
+                    <div className="loop-inbox-queue-drawer-header">
                       <div>
                         <div className="loop-inbox-list-label">Attention queue</div>
-                        <h2 id="loop-mobile-queue-sheet-title" className="loop-inbox-queue-sheet-title">
+                        <h2 id="loop-mobile-queue-drawer-title" className="loop-inbox-queue-drawer-title">
                           Open follow-ups
                         </h2>
+                        {queueSummaryLabel && (
+                          <p className="loop-inbox-queue-drawer-summary">{queueSummaryLabel}</p>
+                        )}
                       </div>
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="loop-inbox-queue-sheet-close"
+                        className="loop-inbox-queue-drawer-close"
                         onClick={() => setQueueOpen(false)}
                         data-testid="loop-mobile-queue-close"
                       >
@@ -556,7 +572,7 @@ export default function LoopInboxPage() {
                       </Button>
                     </div>
 
-                    <div className="loop-inbox-queue-sheet-body">
+                    <div className="loop-inbox-queue-drawer-body">
                       {inboxItems.map((item) => (
                         <LoopInboxRow
                           key={item.cardId}
@@ -567,8 +583,8 @@ export default function LoopInboxPage() {
                         />
                       ))}
                     </div>
-                  </section>
-                </div>
+                  </aside>
+                </>
               )}
             </>
           ) : (
