@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession, AgentSessionFilters, AgentSessionsListResponse } from "../../services/api/agents";
+import type { ActiveSession } from "../../hooks/useActiveSessions";
 import { TestRouter } from "../../test/test-utils";
 import SessionsPage from "../SessionsPage";
 
@@ -80,6 +81,33 @@ function makeSessionsResponse(): AgentSessionsListResponse {
     sessions: [makeSession()],
     total: 120,
     has_real_sessions: true,
+  };
+}
+
+function makeActiveSession(overrides: Partial<ActiveSession> = {}): ActiveSession {
+  return {
+    id: "session-1",
+    project: "zerg",
+    provider: "codex",
+    cwd: "/Users/davidrose/git/zerg",
+    git_repo: "https://github.com/cipher982/longhouse.git",
+    git_branch: "main",
+    started_at: "2026-03-21T12:00:00Z",
+    ended_at: null,
+    last_activity_at: "2026-03-21T12:04:00Z",
+    status: "working",
+    attention: "soft",
+    duration_minutes: 4,
+    last_user_message: "clean this up",
+    last_assistant_message: "Running tests now",
+    message_count: 8,
+    tool_calls: 2,
+    presence_state: "running",
+    presence_tool: "bash",
+    presence_updated_at: "2026-03-21T12:04:00Z",
+    user_state: "active",
+    loop_mode: "manual",
+    ...overrides,
   };
 }
 
@@ -200,5 +228,59 @@ describe("SessionsPage", () => {
         limit: 100,
       });
     });
+  });
+
+  it("renders live runtime state directly on the main timeline cards", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeSession({ ended_at: "2026-03-21T12:03:00Z" })],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseActiveSessions.mockReturnValue({
+      data: {
+        sessions: [makeActiveSession()],
+        total: 1,
+        last_refresh: "2026-03-21T12:04:00Z",
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Running bash")).toBeInTheDocument();
+    expect(screen.getByText("Live now")).toBeInTheDocument();
+    expect(screen.queryByText("In progress")).not.toBeInTheDocument();
+    expect(mockUseActiveSessions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabled: true,
+        limit: 50,
+      }),
+    );
+  });
+
+  it("marks open sessions as inferred when live overlay is unavailable", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeSession({ ended_at: null })],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("Inferred")).toBeInTheDocument();
+    expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 });
