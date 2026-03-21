@@ -10,12 +10,11 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 
 ## Done when
 
-- The existing Timeline cards show live runtime state directly on the main page without a separate live subpanel.
-- The main session list can surface older-but-active sessions based on real activity, not just `started_at`.
-- The first implementation slice works with current Claude presence and transcript-derived fallbacks without making the list jitter.
-- The phase-2 runtime architecture is specified with exact storage, reducer, collector, and API contracts.
-- The follow-on plan for process/PID liveness and richer Codex runtime signals is documented and staged.
-- Backend and frontend tests cover the new row-overlay contract and the main regressions called out in the spec.
+- The main Timeline cards take their runtime truth from `/timeline/sessions` rows, not an optional `/sessions/active` overlay merge.
+- Older-but-active sessions stay visible based on real activity, not raw `started_at`.
+- Materialized runtime state is the normal Timeline truth path and remaining ad hoc fallbacks are clearly migration-only.
+- Timeline keeps the current row-level SSE model, but the backend no longer polls the full filtered list every second per client.
+- Backend and frontend tests cover the Timeline row runtime contract and stream behavior.
 - Timeline surfaces runtime truth without defining continuation transport or follow-up execution semantics.
 
 ## Checklist
@@ -26,21 +25,19 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - [x] Fold live state into the existing Timeline cards and retire the separate live panel from the main flow
 - [x] Define the post-slice-1 liveness plan for local Claude/Codex sessions
 - [x] Add targeted backend and frontend tests
-- [x] Write the concrete phase-2 runtime architecture spec
-- [ ] Implement `session_runtime_state` and `session_runtime_events`
-- [ ] Add runtime event ingest endpoint and reducer service
-- [ ] Mirror Claude hook signals into runtime events
-- [ ] Emit transcript progress and binding signals into runtime state
-- [ ] Add timeline SSE patch stream and client integration
-- [ ] Add managed Codex runtime adapter
+- [x] Ship materialized runtime state and runtime events for Timeline
+- [x] Ship Timeline SSE row updates with a slow reconciliation poll
+- [x] Refresh the spec/task docs to match shipped reality
+- [ ] Collapse the main Timeline off the secondary `/sessions/active` overlay path
+- [ ] Reduce ad hoc runtime fallback paths on the Timeline read path
+- [ ] Replace the backend 1-second full-list SSE polling loop with a cheaper change detector
 - [ ] Verify the timeline manually with multiple concurrent sessions and long-running silent turns
 
 ## Notes
 
 - Product direction is one Timeline page, not a separate desktop live destination.
-- Avoid introducing new user-facing bucket concepts in the first slice; the main value is “what is happening now” on the existing recency-driven list.
 - Keep list ordering stable. Fast runtime updates should update card chrome, not cause constant reordering.
-- Slice 1 does not depend on PID/process supervision.
-- Phase 2 should keep the UI contract simple: one row, one runtime overlay, one SSE patch stream.
+- The current SSE protocol should stay row-level (`session_upsert` / `session_remove`) unless simpler backend optimizations prove insufficient.
+- `/sessions/active` is migration residue for the main Timeline flow, not the target architecture.
 - Timeline is a desktop runtime/control view. Loop or follow-up cards can own mobile actions and continuation semantics.
 - `needs_user` is a runtime phase, not a promise about which actions are or are not available.
