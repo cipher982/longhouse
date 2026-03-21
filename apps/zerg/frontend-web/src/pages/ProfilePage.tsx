@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
-import { useAuth } from "../lib/auth";
+import { CURRENT_USER_QUERY_KEY, useAuth } from "../lib/auth";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   Button,
@@ -75,9 +75,8 @@ export default function ProfilePage() {
     mutationFn: updateUserProfile,
     onSuccess: (updatedUser) => {
       toast.success("Profile updated successfully!");
-      // Update the auth context and queries
-      queryClient.setQueryData(['current-user'], updatedUser);
-      queryClient.invalidateQueries({ queryKey: ['current-user'] });
+      queryClient.setQueryData(CURRENT_USER_QUERY_KEY, updatedUser);
+      queryClient.invalidateQueries({ queryKey: CURRENT_USER_QUERY_KEY });
     },
     onError: (error: Error) => {
       toast.error(`Failed to update profile: ${error.message}`);
@@ -90,9 +89,8 @@ export default function ProfilePage() {
     onSuccess: (updatedUser) => {
       toast.success("Avatar uploaded successfully!");
       setAvatarUrl(updatedUser.avatar_url || "");
-      // Update the auth context and queries
-      queryClient.setQueryData(['current-user'], updatedUser);
-      queryClient.invalidateQueries({ queryKey: ['current-user'] });
+      queryClient.setQueryData(CURRENT_USER_QUERY_KEY, updatedUser);
+      queryClient.invalidateQueries({ queryKey: CURRENT_USER_QUERY_KEY });
     },
     onError: (error: Error) => {
       toast.error(`Failed to upload avatar: ${error.message}`);

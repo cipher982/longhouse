@@ -170,7 +170,7 @@ export default function ConversationsPage() {
       if ("redirected" in result) {
         return;
       }
-      await refreshAuth?.();
+      await refreshAuth();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["canonical-conversations"] }),
         queryClient.invalidateQueries({ queryKey: ["canonical-conversation"] }),
