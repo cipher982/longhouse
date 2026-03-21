@@ -36,6 +36,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionPresence
+from zerg.models.agents import SessionRuntimeState
 
 logger = logging.getLogger(__name__)
 
@@ -1517,11 +1518,14 @@ class AgentsStore:
         if anchor_on_activity:
             last_activity_subq = self._last_activity_subquery()
             presence_subq = self._presence_updated_subquery()
+            runtime_anchor_subq = self._runtime_anchor_subquery()
             stmt = stmt.outerjoin(last_activity_subq, last_activity_subq.c.session_id == AgentSession.id)
             stmt = stmt.outerjoin(presence_subq, presence_subq.c.session_id == AgentSession.id)
+            stmt = stmt.outerjoin(runtime_anchor_subq, runtime_anchor_subq.c.session_id == AgentSession.id)
             activity_anchor = self._recent_activity_anchor_expr(
                 last_activity_subq.c.last_activity_at,
                 presence_subq.c.presence_updated_at,
+                runtime_anchor_subq.c.runtime_timeline_anchor_at,
             )
 
         # Environment filtering
@@ -1579,13 +1583,19 @@ class AgentsStore:
         return sessions, total
 
     @staticmethod
-    def _recent_activity_anchor_expr(last_activity_expr, presence_updated_expr):
-        latest_signal = case(
-            (presence_updated_expr.is_(None), last_activity_expr),
-            (last_activity_expr.is_(None), presence_updated_expr),
-            (presence_updated_expr >= last_activity_expr, presence_updated_expr),
-            else_=last_activity_expr,
+    def _latest_non_null_expr(lhs, rhs):
+        return case(
+            (rhs.is_(None), lhs),
+            (lhs.is_(None), rhs),
+            (rhs >= lhs, rhs),
+            else_=lhs,
         )
+
+    @classmethod
+    def _recent_activity_anchor_expr(cls, last_activity_expr, presence_updated_expr, runtime_anchor_expr=None):
+        latest_signal = cls._latest_non_null_expr(last_activity_expr, presence_updated_expr)
+        if runtime_anchor_expr is not None:
+            latest_signal = cls._latest_non_null_expr(latest_signal, runtime_anchor_expr)
         return func.coalesce(latest_signal, AgentSession.started_at)
 
     def _last_activity_subquery(self):
@@ -1621,6 +1631,18 @@ class AgentsStore:
             SessionPresence.session_id.label("session_id"),
             SessionPresence.updated_at.label("presence_updated_at"),
         ).subquery()
+
+    @staticmethod
+    def _runtime_anchor_subquery():
+        return (
+            select(
+                SessionRuntimeState.session_id.label("session_id"),
+                func.max(SessionRuntimeState.timeline_anchor_at).label("runtime_timeline_anchor_at"),
+            )
+            .where(SessionRuntimeState.session_id.is_not(None))
+            .group_by(SessionRuntimeState.session_id)
+            .subquery()
+        )
 
     def get_first_message_map(
         self,
