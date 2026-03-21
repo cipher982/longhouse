@@ -21,9 +21,9 @@ from control_plane.models import User
 from control_plane.routers.auth import SESSION_COOKIE_NAME
 from control_plane.routers.auth import _append_return_to
 from control_plane.routers.auth import _decode_jwt
-from control_plane.routers.auth import _normalize_local_return_to
 from control_plane.routers.instances import _build_migration_status
 from control_plane.services.provisioner import Provisioner
+from longhouse_shared.redirects import normalize_local_return_to
 
 router = APIRouter(tags=["ui"])
 
@@ -475,7 +475,7 @@ def open_instance(request: Request, return_to: str | None = Query(default=None),
     )
 
     handoff_url = f"{instance_url}/api/auth/accept-token?token={urllib.parse.quote(token, safe='')}"
-    safe_return_to = _normalize_local_return_to(return_to)
+    safe_return_to = normalize_local_return_to(return_to)
     if safe_return_to:
         handoff_url = f"{handoff_url}&return_to={urllib.parse.quote(safe_return_to, safe='')}"
     return RedirectResponse(handoff_url, status_code=302)

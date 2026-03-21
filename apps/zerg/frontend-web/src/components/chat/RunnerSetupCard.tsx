@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { fetchRunners, type Runner } from "../../services/api";
 import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
 import { CheckCircleIcon, MonitorIcon, ClipboardIcon, AlertTriangleIcon, ChevronRightIcon, ChevronDownIcon } from "../icons";
@@ -21,21 +21,66 @@ interface RunnerSetupCardProps {
 
 type ConnectionStatus = "waiting" | "connected" | "expired";
 
+function formatTimeRemaining(expiresAt: string, nowMs: number) {
+  const expiry = parseUTC(expiresAt);
+  const diffMs = expiry.getTime() - nowMs;
+
+  if (diffMs <= 0) {
+    return "Expired";
+  }
+
+  const minutes = Math.floor(diffMs / 60000);
+  const seconds = Math.floor((diffMs % 60000) / 1000);
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function useNow(enabled: boolean, intervalMs = 1000) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
+    setNowMs(Date.now());
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, intervalMs);
+
+    return () => window.clearInterval(interval);
+  }, [enabled, intervalMs]);
+
+  return nowMs;
+}
+
+function findNewEnrolledRunner(runners: Runner[], baselineRunnerIds: Set<number>, tokenCreatedAt: Date) {
+  return runners.find((runner) => {
+    if (runner.status !== "online") return false;
+    if (baselineRunnerIds.has(runner.id)) return false;
+
+    const runnerCreatedAt = parseUTC(runner.created_at);
+    return runnerCreatedAt >= tokenCreatedAt;
+  }) ?? null;
+}
+
 export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [nativeMode, setNativeMode] = useState<RunnerNativeInstallMode>("desktop");
-  const [status, setStatus] = useState<ConnectionStatus>("waiting");
-  const [connectedRunner, setConnectedRunner] = useState<Runner | null>(null);
-  const [timeRemaining, setTimeRemaining] = useState("");
-  const [baselineRunnerIds, setBaselineRunnerIds] = useState<Set<number> | null>(null);
   const [showRawOutput, setShowRawOutput] = useState(false);
   const [showManualSetup, setShowManualSetup] = useState(false);
-  const queryClient = useQueryClient();
 
   // Track when the token was generated (card render time).
   // Used to verify runners were enrolled via THIS token, not pre-existing.
+  const tokenKeyRef = useRef(data.enroll_token);
   const tokenCreatedAt = useRef(new Date());
+  const baselineRunnerIdsRef = useRef<Set<number> | null>(null);
+
+  if (tokenKeyRef.current !== data.enroll_token) {
+    tokenKeyRef.current = data.enroll_token;
+    tokenCreatedAt.current = new Date();
+    baselineRunnerIdsRef.current = null;
+  }
 
   const copyToClipboard = async (text: string): Promise<boolean> => {
     try {
@@ -65,84 +110,39 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
     }
   };
 
-  // Calculate time remaining
-  const updateTimeRemaining = useCallback(() => {
-    const expiry = parseUTC(data.expires_at);
-    const now = new Date();
-    const diffMs = expiry.getTime() - now.getTime();
+  const nowMs = useNow(true);
+  const timeRemaining = formatTimeRemaining(data.expires_at, nowMs);
+  const isExpired = timeRemaining === "Expired";
 
-    if (diffMs <= 0) {
-      setTimeRemaining("Expired");
-      setStatus("expired");
-      return;
-    }
+  const enrolledRunnerQuery = useQuery<Runner | null>({
+    queryKey: ["runner-setup-enrollment", data.enroll_token, data.expires_at],
+    enabled: !isExpired,
+    refetchInterval: 3000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    placeholderData: (previousRunner) => previousRunner,
+    queryFn: async () => {
+      const runners = await fetchRunners();
 
-    const minutes = Math.floor(diffMs / 60000);
-    const seconds = Math.floor((diffMs % 60000) / 1000);
-    setTimeRemaining(`${minutes}:${seconds.toString().padStart(2, "0")}`);
-  }, [data.expires_at]);
-
-  // Timer for countdown
-  useEffect(() => {
-    if (status === "connected" || status === "expired") return;
-
-    updateTimeRemaining();
-    const interval = setInterval(updateTimeRemaining, 1000);
-    return () => clearInterval(interval);
-  }, [status, updateTimeRemaining]);
-
-  // Poll for new runners
-  useEffect(() => {
-    if (status !== "waiting") return;
-
-    // Capture baseline of ALL runner IDs on first poll.
-    // To detect the runner enrolled via THIS token, we check:
-    // 1. Runner ID is NOT in the baseline (brand new runner)
-    // 2. Runner was created AFTER the token was generated
-    // 3. Runner is currently online
-    // This prevents false positives from existing runners reconnecting.
-    const pollForNewRunner = async () => {
-      try {
-        const runners = await fetchRunners();
-
-        if (baselineRunnerIds === null) {
-          // First poll - capture ALL runner IDs as baseline
-          const allIds = new Set(runners.map((r) => r.id));
-          setBaselineRunnerIds(allIds);
-          return;
-        }
-
-        // Find runner that:
-        // - Is online
-        // - Is NOT in baseline (brand new)
-        // - Was created AFTER the token was generated
-        const newEnrolledRunner = runners.find((r) => {
-          if (r.status !== "online") return false;
-          if (baselineRunnerIds.has(r.id)) return false;
-
-          // Verify runner was created after token generation
-          const runnerCreatedAt = parseUTC(r.created_at);
-          if (runnerCreatedAt < tokenCreatedAt.current) return false;
-
-          return true;
-        });
-
-        if (newEnrolledRunner) {
-          setConnectedRunner(newEnrolledRunner);
-          setStatus("connected");
-          // Invalidate runners query to refresh the list
-          queryClient.invalidateQueries({ queryKey: ["runners"] });
-        }
-      } catch (error) {
-        console.error("Failed to poll for runners:", error);
+      if (baselineRunnerIdsRef.current === null) {
+        baselineRunnerIdsRef.current = new Set(runners.map((runner) => runner.id));
+        return null;
       }
-    };
 
-    // Poll every 3 seconds
-    pollForNewRunner();
-    const interval = setInterval(pollForNewRunner, 3000);
-    return () => clearInterval(interval);
-  }, [status, baselineRunnerIds, queryClient]);
+      return findNewEnrolledRunner(
+        runners,
+        baselineRunnerIdsRef.current,
+        tokenCreatedAt.current,
+      );
+    },
+  });
+
+  const connectedRunner = enrolledRunnerQuery.data ?? null;
+  const status: ConnectionStatus = connectedRunner
+    ? "connected"
+    : isExpired
+      ? "expired"
+      : "waiting";
 
   const nativeInstallCommand = buildRunnerNativeInstallCommand({
     enrollToken: data.enroll_token,

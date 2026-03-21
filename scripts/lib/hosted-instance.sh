@@ -39,6 +39,18 @@ print(json.dumps(payload, separators=(",", ":")), end="")
 PY
 }
 
+_lh_hosted_urlencode() {
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+
+  "$python_bin" - "$1" <<'PY'
+import sys
+import urllib.parse
+
+print(urllib.parse.quote(sys.argv[1], safe=""), end="")
+PY
+}
+
 lh_hosted_require_env() {
   local name=""
   for name in "$@"; do
@@ -47,6 +59,42 @@ lh_hosted_require_env() {
       return 1
     fi
   done
+}
+
+_lh_hosted_build_accept_token_redirect_url() {
+  local token="$1"
+  local return_to="${2:-}"
+  local instance_url="${3:-${LH_INSTANCE_URL:-}}"
+  local encoded_token=""
+  local encoded_return_to=""
+  local safe_return_to=""
+  local python_bin=""
+
+  if [[ -z "$token" || -z "$instance_url" ]]; then
+    echo "Usage: _lh_hosted_build_accept_token_redirect_url <token> [return_to] [instance_url]" >&2
+    return 1
+  fi
+
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+  encoded_token="$(_lh_hosted_urlencode "$token")" || return 1
+  safe_return_to="$("$python_bin" - "$return_to" <<'PY'
+import sys
+
+value = sys.argv[1]
+if not value or not value.startswith("/") or value.startswith("//"):
+    print("", end="")
+else:
+    print(value, end="")
+PY
+)" || return 1
+
+  local url="${instance_url%/}/api/auth/accept-token?token=${encoded_token}"
+  if [[ -n "$safe_return_to" ]]; then
+    encoded_return_to="$(_lh_hosted_urlencode "$safe_return_to")" || return 1
+    url="${url}&return_to=${encoded_return_to}"
+  fi
+
+  printf '%s\n' "$url"
 }
 
 _lh_hosted_parse_instance_payload() {
@@ -566,6 +614,42 @@ lh_hosted_accept_login_token() {
     echo "Instance rejected login token at ${instance_url} (HTTP ${http_code})" >&2
     return 1
   fi
+}
+
+lh_hosted_accept_login_token_redirect() {
+  local token="$1"
+  local cookie_jar="$2"
+  local return_to="${3:-}"
+  local instance_url="${4:-${LH_INSTANCE_URL:-}}"
+  local headers_file=""
+  local http_code=""
+  local location=""
+  local request_url=""
+
+  if [[ -z "$token" || -z "$cookie_jar" || -z "$instance_url" ]]; then
+    echo "Usage: lh_hosted_accept_login_token_redirect <token> <cookie_jar> [return_to] [instance_url]" >&2
+    return 1
+  fi
+
+  request_url="$(_lh_hosted_build_accept_token_redirect_url "$token" "$return_to" "$instance_url")" || return 1
+  headers_file="$(mktemp)"
+  http_code="$(curl -sS -D "$headers_file" -o /dev/null -w "%{http_code}" -c "$cookie_jar" "$request_url")"
+
+  if [[ "$http_code" != "302" ]]; then
+    echo "Instance rejected redirect login token at ${instance_url} (HTTP ${http_code})" >&2
+    rm -f "$headers_file"
+    return 1
+  fi
+
+  location="$(awk 'BEGIN{IGNORECASE=1} /^location:/ {sub(/\r$/, "", $2); print $2; exit}' "$headers_file")"
+  rm -f "$headers_file"
+
+  if [[ -z "$location" ]]; then
+    echo "Accept-token redirect response missing Location header" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$location"
 }
 
 lh_hosted_authenticate_cookie_jar() {

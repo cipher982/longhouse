@@ -45,6 +45,7 @@ from control_plane.models import Instance
 from control_plane.models import User
 from control_plane.services.gmail_pubsub import HostedGmailPubSubError
 from control_plane.services.gmail_pubsub import ensure_instance_gmail_subscription
+from longhouse_shared.redirects import normalize_local_return_to
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -295,20 +296,8 @@ def _issue_hosted_gmail_state(*, email: str, instance: str) -> str:
     )
 
 
-def _normalize_local_return_to(return_to: str | None) -> str | None:
-    if not return_to:
-        return None
-
-    parsed = urllib.parse.urlparse(return_to)
-    if parsed.scheme or parsed.netloc:
-        return None
-    if not return_to.startswith("/") or return_to.startswith("//"):
-        return None
-    return return_to
-
-
 def _append_return_to(path: str, return_to: str | None) -> str:
-    safe_return_to = _normalize_local_return_to(return_to)
+    safe_return_to = normalize_local_return_to(return_to)
     if not safe_return_to:
         return path
 
@@ -336,7 +325,7 @@ def _decode_login_return_state(state: str | None) -> str | None:
     if payload.get("purpose") != "control_plane_login_return":
         raise ValueError("Invalid login return state")
 
-    safe_return_to = _normalize_local_return_to(str(payload.get("return_to") or ""))
+    safe_return_to = normalize_local_return_to(str(payload.get("return_to") or ""))
     if not safe_return_to:
         raise ValueError("Invalid login return target")
 
@@ -471,7 +460,7 @@ def email_login(
 ):
     """Authenticate with email + password."""
     email = email.strip().lower()
-    safe_return_to = _normalize_local_return_to(return_to)
+    safe_return_to = normalize_local_return_to(return_to)
 
     user = db.query(User).filter(User.email == email).first()
     if not user or not user.password_hash:
@@ -497,7 +486,7 @@ def email_login(
 def google_login(return_to: str | None = None):
     """Redirect to Google OAuth consent screen."""
     _require_oauth()
-    safe_return_to = _normalize_local_return_to(return_to)
+    safe_return_to = normalize_local_return_to(return_to)
 
     params_dict = {
         "client_id": settings.google_client_id,

@@ -5,8 +5,6 @@
  * Injects keyframe animations once via a module-level flag.
  */
 
-import { useEffect } from "react";
-
 export type PresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
 export type PresenceStateInput = PresenceState | (string & {});
 
@@ -67,6 +65,8 @@ function ensureStyles() {
   `;
   document.head.appendChild(el);
 }
+
+ensureStyles();
 
 // ---------------------------------------------------------------------------
 // Tool label helpers
@@ -211,10 +211,6 @@ function TypingDots() {
 // ---------------------------------------------------------------------------
 
 export function PresenceBadge({ state, tool, compact = false, className, heuristicActive = false, showUnknown = false }: PresenceBadgeProps) {
-  useEffect(() => {
-    ensureStyles();
-  }, []);
-
   const normalizedState = normalizePresenceState(state);
   const hasUnknownState = state != null && normalizedState == null;
 
@@ -431,10 +427,6 @@ export interface PresenceHeroProps {
 }
 
 export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
-  useEffect(() => {
-    ensureStyles();
-  }, []);
-
   const normalizedState = normalizePresenceState(state);
   if (normalizedState === null) return null;
 

@@ -8,7 +8,7 @@
  * Or:      make qa-live
  */
 
-import { test, expect } from "./fixtures";
+import { test, expect, normalizeToken } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -106,6 +106,10 @@ async function findRecentSessionWithEvents(
   return typeof fallbackId === "string" ? fallbackId : null;
 }
 
+function isLoopPath(pathname: string): boolean {
+  return /^\/loop(?:\/.*)?$/.test(pathname);
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
@@ -183,6 +187,68 @@ test("auth + timeline loads with session rows", async ({ context }) => {
 // ---------------------------------------------------------------------------
 // Test 2: Legacy forum route redirects to timeline
 // ---------------------------------------------------------------------------
+
+test("loop login round-trip preserves loop destination", async ({
+  browser,
+  frontendBaseUrl,
+}) => {
+  test.setTimeout(45_000);
+
+  const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
+  if (!loginToken) {
+    test.skip(true, "SMOKE_LOGIN_TOKEN not set");
+    return;
+  }
+
+  const baseOrigin = new URL(frontendBaseUrl).origin;
+  const context = await browser.newContext({ baseURL: baseOrigin });
+  const page = await context.newPage();
+
+  try {
+    await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
+    const loginButton = page.getByRole("button", {
+      name: /continue to your longhouse account/i,
+    });
+    await loginButton.waitFor({ timeout: 15_000 });
+    await loginButton.click();
+    await page.waitForURL((url) => url.host === "control.longhouse.ai", {
+      timeout: 20_000,
+    });
+
+    const controlPlaneUrl = page.url();
+    expect(
+      controlPlaneUrl,
+      "Hosted login CTA should preserve /loop through the control-plane return_to chain",
+    ).toContain(
+      "return_to=%2Fdashboard%2Fopen-instance%3Freturn_to%3D%252Floop",
+    );
+
+    await page.goto(
+      `${baseOrigin}/api/auth/accept-token?token=${encodeURIComponent(loginToken)}&return_to=%2Floop`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForURL((url) => isLoopPath(url.pathname), {
+      timeout: 20_000,
+    });
+
+    const finalPath = new URL(page.url()).pathname;
+    expect(
+      isLoopPath(finalPath),
+      `Expected hosted handoff to land on /loop or a loop child path, got ${finalPath}`,
+    ).toBe(true);
+    expect(finalPath, "Hosted handoff should not dump users on /timeline").not.toContain(
+      "/timeline",
+    );
+  } catch (error) {
+    await failWithScreenshot(
+      page,
+      "loop-auth-round-trip",
+      error instanceof Error ? error.message : String(error),
+    );
+  } finally {
+    await context.close();
+  }
+});
 
 test("forum route redirects to timeline without auth errors", async ({
   context,
