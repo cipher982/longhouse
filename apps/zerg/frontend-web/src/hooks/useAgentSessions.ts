@@ -4,7 +4,7 @@
  * Used by the Session Picker modal and other session UIs.
  */
 
-import { useInfiniteQuery, useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, keepPreviousData, type UseQueryOptions } from "@tanstack/react-query";
 import {
   fetchAgentSessions,
   fetchAgentSession,
@@ -34,9 +34,14 @@ import {
 /**
  * Hook to fetch sessions for the timeline page.
  */
+type AgentSessionsQueryOptions = Pick<
+  UseQueryOptions<AgentSessionsListResponse>,
+  "enabled" | "refetchInterval"
+>;
+
 export function useAgentSessions(
   filters: AgentSessionFilters = {},
-  options: { enabled?: boolean; refetchInterval?: number } = {}
+  options: AgentSessionsQueryOptions = {}
 ) {
   return useQuery<AgentSessionsListResponse>({
     queryKey: ["agent-sessions", filters],

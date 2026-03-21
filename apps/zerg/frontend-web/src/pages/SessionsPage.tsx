@@ -850,7 +850,12 @@ export default function SessionsPage() {
   );
 
   // Single unified query — no dual-fetch fallback logic needed.
-  const activeResult = useAgentSessions(filters, { refetchInterval: 30_000 });
+  const activeResult = useAgentSessions(filters, {
+    refetchInterval: (query) => {
+      const pendingSessions = query.state.data?.sessions?.some((session) => !session.summary_title && !session.summary);
+      return pendingSessions ? 3_000 : 30_000;
+    },
+  });
   const data = activeResult.data;
   const isLoading = activeResult.isLoading;
   const error = activeResult.error;
@@ -894,14 +899,6 @@ export default function SessionsPage() {
     () => new Map(activeSessions.map((session) => [session.id, session])),
     [activeSessions],
   );
-
-  // Fast-poll while any visible session is still generating its summary
-  const hasPendingSessions = sessions.some((s) => !s.summary_title && !s.summary);
-  useEffect(() => {
-    if (!hasPendingSessions) return;
-    const id = setInterval(() => { refetch(); }, 3_000);
-    return () => clearInterval(id);
-  }, [hasPendingSessions, refetch]);
 
   // Report API health to footer indicator; clear on recovery or unmount
   useEffect(() => {
