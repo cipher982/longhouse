@@ -67,6 +67,7 @@ COPY --from=dependencies /repo/apps/zerg/backend/.venv ./.venv
 
 # Copy backend source
 COPY apps/zerg/backend/ ./
+COPY apps/control-plane/longhouse_shared /app/longhouse_shared
 
 # Copy shared config
 COPY config/models.json /config/models.json

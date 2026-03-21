@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 import os
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
@@ -29,15 +32,21 @@ from zerg.database import get_db
 from zerg.schemas.schemas import TokenOut
 from zerg.services import sso_keys as sso_keys_service
 
+
+def _configure_shared_imports() -> None:
+    for parent in Path(__file__).resolve().parents:
+        for candidate in (parent, parent / "apps" / "control-plane"):
+            if (candidate / "longhouse_shared" / "redirects.py").exists():
+                candidate_str = str(candidate)
+                if candidate_str not in sys.path:
+                    sys.path.append(candidate_str)
+                return
+
+
+_configure_shared_imports()
+normalize_local_return_to = importlib.import_module("longhouse_shared.redirects").normalize_local_return_to
+
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-def _normalize_local_return_to(return_to: str | None) -> str | None:
-    if not return_to:
-        return None
-    if not return_to.startswith("/") or return_to.startswith("//"):
-        return None
-    return return_to
 
 
 def _accept_token(response: Response, token: str, db: Session) -> TokenOut:
@@ -153,7 +162,7 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
 def accept_token_redirect(token: str, response: Response, return_to: str | None = None, db: Session = Depends(get_db)):
     """Accept a hosted login token, set the cookie, and continue to the app."""
     _accept_token(response, token, db)
-    redirect = RedirectResponse(_normalize_local_return_to(return_to) or "/timeline", status_code=302)
+    redirect = RedirectResponse(normalize_local_return_to(return_to) or "/timeline", status_code=302)
     for header_name, header_value in response.headers.items():
         if header_name.lower() == "set-cookie":
             redirect.headers.append("set-cookie", header_value)
