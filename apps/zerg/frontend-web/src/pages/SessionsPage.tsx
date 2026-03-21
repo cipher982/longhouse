@@ -37,6 +37,7 @@ import { PresenceBadge } from "../components/PresenceBadge";
 import { parseUTC } from "../lib/dateUtils";
 import { reportApiError, clearApiError } from "../lib/apiHealth";
 import { getProviderColor, supportsCloudContinuation } from "../lib/providers";
+import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { RecallPanel } from "../components/RecallPanel";
 import "../styles/sessions.css";
 
@@ -301,13 +302,7 @@ function sessionSortKey(status: string): number {
 }
 
 function isSessionLive(session: ActiveSession): boolean {
-  return (
-    session.status === "working" ||
-    session.presence_state === "thinking" ||
-    session.presence_state === "running" ||
-    session.presence_state === "needs_user" ||
-    session.presence_state === "blocked"
-  );
+  return resolveSessionRuntimeState(session, session).isLive;
 }
 
 function repoNameFromUrl(url: string | null): string | null {
@@ -555,17 +550,27 @@ function FilterPopover({
 
 interface SessionCardProps {
   thread: SessionThreadCard;
+  activeSession?: ActiveSession | null;
   onClick: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
 }
 
-function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
+function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
   const session = thread.head;
   const detailSession = thread.detail;
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
-  const isActive = !session.ended_at;
+  const runtime = resolveSessionRuntimeState(session, activeSession);
+  const runtimeMetaLabel = runtime.isLive
+    ? runtime.heuristicActive
+      ? "Inferred"
+      : "Live now"
+    : runtime.lastLiveAt
+      ? `Seen ${formatRelativeTime(runtime.lastLiveAt)}`
+      : runtime.confidence === "stale"
+        ? "Stale"
+        : null;
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -575,12 +580,21 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: Sess
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
   const primaryActionLabel = supportsCloudContinuation(session.provider) ? "Continue in cloud" : "Latest context";
+  const cardClassName = [
+    "session-card",
+    runtime.isLive ? "session-card--live" : "",
+    runtime.isIdle ? "session-card--idle" : "",
+    runtime.heuristicActive ? "session-card--inferred" : "",
+    runtime.tone === "running" ? "session-card--running" : "",
+    runtime.tone === "needs-user" ? "session-card--needs-user" : "",
+    runtime.tone === "blocked" ? "session-card--blocked" : "",
+  ].filter(Boolean).join(" ");
 
   return (
     <Card
-      className={`session-card${isActive ? " session-card--active" : ""}`}
+      className={cardClassName}
       onClick={onClick}
-      style={!isActive ? { borderLeftColor: getProviderColor(session.provider) } : undefined}
+      style={{ borderLeftColor: getProviderColor(session.provider) }}
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
@@ -609,12 +623,24 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: Sess
             {thread.continuationCount} continuations
           </span>
         )}
-        {isActive && (
-          <span className="session-active-indicator">In progress</span>
-        )}
       </div>
 
       <div className="session-card-body">
+        {runtime.hasSignal && (
+          <div className={`session-card-runtime session-card-runtime--${runtime.tone}`}>
+            <PresenceBadge
+              state={runtime.presenceState}
+              tool={runtime.presenceTool}
+              compact
+              heuristicActive={runtime.heuristicActive}
+              showUnknown={runtime.confidence === "stale"}
+            />
+            <span className="session-card-runtime-phase">{runtime.displayPhase}</span>
+            {runtimeMetaLabel && (
+              <span className="session-card-runtime-meta">{runtimeMetaLabel}</span>
+            )}
+          </div>
+        )}
         {title && <div className="session-card-title">{title}</div>}
         {showSummary && (
           <div className="session-card-summary">{session.summary}</div>
@@ -665,12 +691,20 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: Sess
 interface SessionGroupProps {
   title: string;
   sessions: SessionThreadCard[];
+  activeSessionsById: Map<string, ActiveSession>;
   onSessionClick: (thread: SessionThreadCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
 }
 
-function SessionGroup({ title, sessions, onSessionClick, highlightQuery, isSemanticResult }: SessionGroupProps) {
+function SessionGroup({
+  title,
+  sessions,
+  activeSessionsById,
+  onSessionClick,
+  highlightQuery,
+  isSemanticResult,
+}: SessionGroupProps) {
   return (
     <div className="session-group">
       <div className="session-group-header">
@@ -682,6 +716,7 @@ function SessionGroup({ title, sessions, onSessionClick, highlightQuery, isSeman
           <SessionCard
             key={thread.threadId}
             thread={thread}
+            activeSession={activeSessionsById.get(thread.head.id) ?? null}
             onClick={() => onSessionClick(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
@@ -834,9 +869,10 @@ export default function SessionsPage() {
     error: activeSessionsError,
   } = useActiveSessions({
     pollInterval: 2000,
-    limit: 30,
-    days_back: 7,
-    enabled: liveViewOpen,
+    limit: Math.max(limit, PAGE_SIZE),
+    days_back: daysBack,
+    project: project || undefined,
+    enabled: true,
   });
 
   const activeSessions = useMemo(() => {
@@ -856,6 +892,10 @@ export default function SessionsPage() {
 
   const liveAuthError = (activeSessionsError as { status?: number } | null)?.status === 401;
   const liveList = useMemo(() => activeSessions.slice(0, 8), [activeSessions]);
+  const activeSessionsById = useMemo(
+    () => new Map(activeSessions.map((session) => [session.id, session])),
+    [activeSessions],
+  );
 
   // Fast-poll while any visible session is still generating its summary
   const hasPendingSessions = sessions.some((s) => !s.summary_title && !s.summary);
@@ -1091,8 +1131,8 @@ export default function SessionsPage() {
                   {activeSessionsLoading && liveTotal === 0
                     ? "Checking live sessions..."
                     : liveTotal === 0
-                      ? "No live sessions in the last 7 days"
-                      : `${liveCount} active · ${liveTotal} total (last 7 days)`
+                      ? `No live sessions in the last ${daysBack} days`
+                      : `${liveCount} active · ${liveTotal} total (last ${daysBack} days)`
                   }
                 </div>
               </div>
@@ -1118,7 +1158,8 @@ export default function SessionsPage() {
               ) : (
                 <div className="sessions-live-list">
                   {liveList.map((session) => {
-                    const isActive = isSessionLive(session);
+                    const runtime = resolveSessionRuntimeState(session, session);
+                    const isActive = runtime.isLive;
                     const rowClass = [
                       "sessions-live-row",
                       isActive ? "sessions-live-row--active" : "",
@@ -1142,14 +1183,14 @@ export default function SessionsPage() {
                         </div>
                         <div className="sessions-live-row-presence">
                           <PresenceBadge
-                            state={session.presence_state}
-                            tool={session.presence_tool}
+                            state={runtime.presenceState}
+                            tool={runtime.presenceTool}
                             compact
-                            heuristicActive={session.status === "working" && session.ended_at == null}
-                            showUnknown={session.ended_at == null}
+                            heuristicActive={runtime.heuristicActive}
+                            showUnknown={runtime.confidence === "stale"}
                           />
                           <span className="sessions-live-row-presence-label">
-                            {isActive ? "Live" : "Idle"}
+                            {runtime.displayPhase}
                           </span>
                         </div>
                       </button>
@@ -1343,6 +1384,7 @@ export default function SessionsPage() {
                 key={dateKey}
                 title={dateKey}
                 sessions={daySessions}
+                activeSessionsById={activeSessionsById}
                 onSessionClick={handleSessionClick}
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
