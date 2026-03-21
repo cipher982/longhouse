@@ -4158,6 +4158,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/managed-local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Launch Managed Local
+         * @description Start a managed local Claude session inside tmux on a connected runner.
+         *
+         *     This is the first trustworthy laptop-first path:
+         *     - Longhouse launches stock Claude Code under tmux on the user's runner
+         *     - the session is explicitly marked managed_local
+         *     - later Loop/chat actions can target this exact session home
+         */
+        post: operations["launch_managed_local_sessions_managed_local_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/lock": {
         parameters: {
             query?: never;
@@ -8050,6 +8075,73 @@ export interface components {
             message: string;
             /** Tools */
             tools?: string[];
+        };
+        /**
+         * ManagedLocalSessionLaunchRequest
+         * @description Request to start a managed local Claude session on a runner.
+         */
+        ManagedLocalSessionLaunchRequest: {
+            /**
+             * Runner Target
+             * @description Runner name or runner:<id>
+             */
+            runner_target: string;
+            /**
+             * Cwd
+             * @description Working directory on the source runner
+             */
+            cwd: string;
+            /**
+             * Project
+             * @description Optional project label
+             */
+            project?: string | null;
+            /**
+             * Git Repo
+             * @description Optional git repository path
+             */
+            git_repo?: string | null;
+            /**
+             * Git Branch
+             * @description Optional git branch name
+             */
+            git_branch?: string | null;
+            /**
+             * Display Name
+             * @description Optional Claude display name for the session
+             */
+            display_name?: string | null;
+            /**
+             * @description manual | assist | autopilot
+             * @default manual
+             */
+            loop_mode: components["schemas"]["SessionLoopMode"];
+            /**
+             * @description Managed local transport (tmux only in v1)
+             * @default tmux
+             */
+            managed_transport: components["schemas"]["ManagedSessionTransport"];
+        };
+        /**
+         * ManagedLocalSessionLaunchResponse
+         * @description Response after successfully starting a managed local session.
+         */
+        ManagedLocalSessionLaunchResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Provider Session Id */
+            provider_session_id: string;
+            execution_home: components["schemas"]["SessionExecutionHome"];
+            managed_transport: components["schemas"]["ManagedSessionTransport"];
+            loop_mode: components["schemas"]["SessionLoopMode"];
+            /** Source Runner Id */
+            source_runner_id: number;
+            /** Source Runner Name */
+            source_runner_name: string;
+            /** Managed Session Name */
+            managed_session_name: string;
+            /** Attach Command */
+            attach_command: string;
         };
         /**
          * ManagedSessionTransport
@@ -18426,6 +18518,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    launch_managed_local_sessions_managed_local_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedLocalSessionLaunchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedLocalSessionLaunchResponse"];
                 };
             };
             /** @description Validation Error */
