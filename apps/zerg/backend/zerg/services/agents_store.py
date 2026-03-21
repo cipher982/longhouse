@@ -1338,6 +1338,7 @@ class AgentsStore:
         events_inserted = 0
         events_skipped = 0
         leaf_uuid_hint: str | None = None
+        latest_inserted_timestamp: datetime | None = None
 
         for event_data in data.events:
             event_hash = self._compute_event_hash(event_data)
@@ -1371,6 +1372,11 @@ class AgentsStore:
             result = self.db.execute(stmt)
             if result.rowcount > 0:
                 events_inserted += 1
+                normalized_timestamp = _normalize_utc_naive(event_data.timestamp)
+                if normalized_timestamp is not None and (
+                    latest_inserted_timestamp is None or normalized_timestamp > latest_inserted_timestamp
+                ):
+                    latest_inserted_timestamp = normalized_timestamp
             else:
                 events_skipped += 1
 
@@ -1419,6 +1425,41 @@ class AgentsStore:
             from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 
             enqueue_ingest_tasks(self.db, str(session_id))
+
+        from zerg.services.session_runtime import RuntimeEventIngest
+        from zerg.services.session_runtime import ingest_runtime_events
+        from zerg.services.session_runtime import runtime_key_for_session
+
+        runtime_key = runtime_key_for_session(data.provider, str(session_id))
+        runtime_events = [
+            RuntimeEventIngest(
+                runtime_key=runtime_key,
+                session_id=session_id,
+                provider=data.provider,
+                device_id=data.device_id,
+                source="agents_ingest",
+                kind="binding_signal",
+                occurred_at=_normalize_utc_naive(data.started_at) or datetime.now(timezone.utc).replace(tzinfo=None),
+                dedupe_key=f"binding:{runtime_key}:{session_id}",
+                payload={},
+            )
+        ]
+        if events_inserted > 0 and latest_inserted_timestamp is not None:
+            latest_event_id = self.get_latest_event_id(session_id)
+            runtime_events.append(
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider=data.provider,
+                    device_id=data.device_id,
+                    source="agents_ingest",
+                    kind="progress_signal",
+                    occurred_at=latest_inserted_timestamp,
+                    dedupe_key=f"progress:{session_id}:{latest_event_id or latest_inserted_timestamp.isoformat()}",
+                    payload={"progress_kind": "transcript_append"},
+                )
+            )
+        ingest_runtime_events(self.db, runtime_events)
 
         self.db.commit()
 

@@ -98,6 +98,7 @@ from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import automation_router as automation_runs_router
 from zerg.routers.runs import router as runs_router
+from zerg.routers.runtime import router as runtime_router
 from zerg.routers.session_chat import router as session_chat_router
 from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
@@ -1070,6 +1071,7 @@ api_app.include_router(timeline_router)  # Browser-owned timeline/session archiv
 api_app.include_router(agents_router)  # Agents schema for cross-provider session tracking
 api_app.include_router(heartbeat_router)  # Engine daemon heartbeat ingest
 api_app.include_router(presence_router)  # Claude Code hook presence signals
+api_app.include_router(runtime_router)  # Normalized runtime event ingest
 api_app.include_router(device_tokens_router)  # Per-device authentication tokens
 api_app.include_router(insights_router)  # Insights tracking for agent infrastructure
 api_app.include_router(machine_insights_router)  # Machine-auth insight reads for continuity tools
