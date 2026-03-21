@@ -266,6 +266,9 @@ export default function LoopInboxPage() {
   const initialCardId = !selectedCardId && !selectedSessionId ? inboxItems[0]?.cardId ?? null : null;
   const selectedQueueIndex = selectedCardId ? inboxItems.findIndex((item) => item.cardId === selectedCardId) : -1;
   const showMobileQueueToggle = isPhoneLayout && inboxCount > 1;
+  const showCondensedMobileChrome = isPhoneLayout && Boolean(currentCard || isLoadingCard || selectedCardId || selectedSessionId);
+  const showInstallBanner = !isInstalled && (canInstall || showIosHint);
+  const showPushBanner = loopPush.error || (loopPush.enabledInBackend && loopPush.supported) || loopPush.isEnabled;
 
   if (selectedSessionId && legacySessionQuery.data) {
     return <Navigate to={buildLoopCardPath(legacySessionQuery.data.cardId)} replace />;
@@ -398,83 +401,106 @@ export default function LoopInboxPage() {
     </section>
   );
 
+  const installBanner = showInstallBanner ? (
+    <section
+      className={`loop-install-banner${showCondensedMobileChrome ? " loop-install-banner--compact" : ""}`}
+      data-testid="loop-install-banner"
+    >
+      <div>
+        <strong>Install Loop</strong>
+        <p>
+          {showCondensedMobileChrome
+            ? "Save this view to your home screen for faster approvals."
+            : "Save this inbox to your home screen so approvals open fast even on weak mobile connections."}
+        </p>
+      </div>
+      <div className="loop-install-banner-actions">
+        {canInstall && (
+          <Button onClick={() => void install()} data-testid="loop-install-action">
+            Install app
+          </Button>
+        )}
+        {showIosHint && (
+          <p className="loop-install-hint">
+            On iPhone: tap Share, then <strong>Add to Home Screen</strong>.
+          </p>
+        )}
+      </div>
+    </section>
+  ) : null;
+
+  const pushBanner = showPushBanner ? (
+    <section
+      className={`loop-push-banner${showCondensedMobileChrome ? " loop-push-banner--compact" : ""}`}
+      data-testid="loop-push-banner"
+    >
+      <div>
+        <strong>Loop notifications</strong>
+        <p>
+          {showCondensedMobileChrome
+            ? "Turn on direct card alerts for this phone."
+            : "Get a direct nudge to the exact action card when a coding turn needs approval, instead of checking the desktop app."}
+        </p>
+        {loopPush.isEnabled && (
+          <p className="loop-push-status" data-testid="loop-push-enabled-copy">
+            Notifications are on for this install.
+          </p>
+        )}
+        {loopPush.error && (
+          <p className="loop-push-error" data-testid="loop-push-error">
+            {loopPush.error}
+          </p>
+        )}
+      </div>
+      <div className="loop-push-banner-actions">
+        {loopPush.canEnable && (
+          <Button
+            onClick={() => void loopPush.enable()}
+            disabled={loopPush.isBusy}
+            data-testid="loop-push-enable-action"
+          >
+            {loopPush.isBusy ? "Enabling…" : "Enable notifications"}
+          </Button>
+        )}
+        {loopPush.canDisable && (
+          <Button
+            variant="ghost"
+            onClick={() => void loopPush.disable()}
+            disabled={loopPush.isBusy}
+            data-testid="loop-push-disable-action"
+          >
+            {loopPush.isBusy ? "Updating…" : "Disable notifications"}
+          </Button>
+        )}
+      </div>
+    </section>
+  ) : null;
+
   return (
     <PageShell size="wide" className="loop-inbox-shell">
       <div className="loop-inbox-page">
-        <header className="loop-inbox-header">
-          <div className="loop-inbox-header-copy">
-            <span className="loop-inbox-eyebrow">Mobile approvals</span>
-            <h1>Loop Inbox</h1>
-            <p>Handle finished coding turns without opening the full desktop workspace.</p>
+        {showCondensedMobileChrome ? (
+          <div className="loop-inbox-mobile-header" data-testid="loop-mobile-header">
+            <div className="loop-inbox-mobile-header-label">Loop Inbox</div>
+            <Link className="ui-button ui-button--ghost ui-button--sm" to="/timeline">
+              Timeline
+            </Link>
           </div>
-          <Link className="ui-button ui-button--ghost ui-button--md" to="/timeline">
-            Open timeline
-          </Link>
-        </header>
-
-        {!isInstalled && (canInstall || showIosHint) && (
-          <section className="loop-install-banner" data-testid="loop-install-banner">
-            <div>
-              <strong>Install Loop</strong>
-              <p>Save this inbox to your home screen so approvals open fast even on weak mobile connections.</p>
+        ) : (
+          <header className="loop-inbox-header">
+            <div className="loop-inbox-header-copy">
+              <span className="loop-inbox-eyebrow">Mobile approvals</span>
+              <h1>Loop Inbox</h1>
+              <p>Handle finished coding turns without opening the full desktop workspace.</p>
             </div>
-            <div className="loop-install-banner-actions">
-              {canInstall && (
-                <Button onClick={() => void install()} data-testid="loop-install-action">
-                  Install app
-                </Button>
-              )}
-              {showIosHint && (
-                <p className="loop-install-hint">
-                  On iPhone: tap Share, then <strong>Add to Home Screen</strong>.
-                </p>
-              )}
-            </div>
-          </section>
+            <Link className="ui-button ui-button--ghost ui-button--md" to="/timeline">
+              Open timeline
+            </Link>
+          </header>
         )}
 
-        {(loopPush.error || (loopPush.enabledInBackend && loopPush.supported) || loopPush.isEnabled) && (
-          <section className="loop-push-banner" data-testid="loop-push-banner">
-            <div>
-              <strong>Loop notifications</strong>
-              <p>
-                Get a direct nudge to the exact action card when a coding turn needs approval, instead of checking the
-                desktop app.
-              </p>
-              {loopPush.isEnabled && (
-                <p className="loop-push-status" data-testid="loop-push-enabled-copy">
-                  Notifications are on for this install.
-                </p>
-              )}
-              {loopPush.error && (
-                <p className="loop-push-error" data-testid="loop-push-error">
-                  {loopPush.error}
-                </p>
-              )}
-            </div>
-            <div className="loop-push-banner-actions">
-              {loopPush.canEnable && (
-                <Button
-                  onClick={() => void loopPush.enable()}
-                  disabled={loopPush.isBusy}
-                  data-testid="loop-push-enable-action"
-                >
-                  {loopPush.isBusy ? "Enabling…" : "Enable notifications"}
-                </Button>
-              )}
-              {loopPush.canDisable && (
-                <Button
-                  variant="ghost"
-                  onClick={() => void loopPush.disable()}
-                  disabled={loopPush.isBusy}
-                  data-testid="loop-push-disable-action"
-                >
-                  {loopPush.isBusy ? "Updating…" : "Disable notifications"}
-                </Button>
-              )}
-            </div>
-          </section>
-        )}
+        {!showCondensedMobileChrome && installBanner}
+        {!showCondensedMobileChrome && pushBanner}
 
         {inboxQuery.isLoading && !currentCard && (
           <div className="loop-inbox-loading">
@@ -494,6 +520,8 @@ export default function LoopInboxPage() {
           isPhoneLayout ? (
             <>
               {cardPanel}
+              {pushBanner}
+              {installBanner}
 
               {showMobileQueueToggle && queueOpen && (
                 <div
