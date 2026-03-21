@@ -1,8 +1,12 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 // Performance monitoring hook
-export function usePerformanceMonitoring(componentName: string) {
+export function usePerformanceMonitoring(
+  componentName: string,
+  options: { includeBundleSizeWarning?: boolean } = {},
+) {
+  const { includeBundleSizeWarning = false } = options;
   const renderStartTime = useRef<number>(performance.now());
   const mountTimeRef = useRef<number | null>(null);
 
@@ -21,6 +25,23 @@ export function usePerformanceMonitoring(componentName: string) {
       console.warn(`Slow render detected: ${componentName} took ${renderTime.toFixed(2)}ms`);
     }
 
+    if (includeBundleSizeWarning && import.meta.env.MODE === 'development') {
+      const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+      const jsBundle = resources.find((resource) =>
+        resource.name.includes('assets/index-') && resource.name.endsWith('.js')
+      );
+
+      if (jsBundle?.transferSize) {
+        const sizeMB = jsBundle.transferSize / (1024 * 1024);
+
+        console.log(`📦 Main bundle size: ${sizeMB.toFixed(2)}MB`);
+
+        if (sizeMB > 1) {
+          console.warn(`⚠️  Bundle size is large (${sizeMB.toFixed(2)}MB). Consider code splitting.`);
+        }
+      }
+    }
+
     return () => {
       if (mountTimeRef.current) {
         const unmountTime = performance.now();
@@ -31,7 +52,7 @@ export function usePerformanceMonitoring(componentName: string) {
         }
       }
     };
-  }, [componentName]);
+  }, [componentName, includeBundleSizeWarning]);
 
   // Performance measurement utilities
   const measureAsync = async <T,>(
@@ -61,71 +82,9 @@ export function usePerformanceMonitoring(componentName: string) {
   };
 }
 
-// Simple memoization helper for React components
-const memoize = React.memo;
-
 // Debounce hook for performance optimization
 export function useDebounce<T>(value: T, delay: number): T {
   return useDebouncedValue(value, delay);
-}
-
-// Memory usage monitoring (development only)
-function useMemoryMonitoring(componentName: string) {
-  useEffect(() => {
-    if (import.meta.env.MODE !== 'development') return;
-
-    // Check if performance.memory is available
-    const perfMemory = (performance as unknown as {
-      memory?: {
-        usedJSHeapSize: number;
-        totalJSHeapSize: number;
-        jsHeapSizeLimit: number;
-      }
-    }).memory;
-    if (!perfMemory) return;
-
-    const logMemoryUsage = () => {
-      const usedJSHeapSize = Math.round(perfMemory.usedJSHeapSize / 1024 / 1024);
-      const totalJSHeapSize = Math.round(perfMemory.totalJSHeapSize / 1024 / 1024);
-      const jsHeapSizeLimit = Math.round(perfMemory.jsHeapSizeLimit / 1024 / 1024);
-
-      console.log(`🧠 Memory usage for ${componentName}:`, {
-        used: `${usedJSHeapSize}MB`,
-        total: `${totalJSHeapSize}MB`,
-        limit: `${jsHeapSizeLimit}MB`,
-        percentage: `${((usedJSHeapSize / jsHeapSizeLimit) * 100).toFixed(1)}%`,
-      });
-    };
-
-    // Log initial memory usage
-    logMemoryUsage();
-
-    // Set up periodic monitoring
-    const interval = setInterval(logMemoryUsage, 10000); // Every 10 seconds
-
-    return () => clearInterval(interval);
-  }, [componentName]);
-}
-
-// Bundle size warning (development only)
-export function useBundleSizeWarning() {
-  useEffect(() => {
-    if (import.meta.env.MODE !== 'development') return;
-
-    // Check bundle size through performance entries
-    const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
-    const jsBundle = resources.find(r => r.name.includes('assets/index-') && r.name.endsWith('.js'));
-
-    if (jsBundle && jsBundle.transferSize) {
-      const sizeMB = jsBundle.transferSize / (1024 * 1024);
-
-      console.log(`📦 Main bundle size: ${sizeMB.toFixed(2)}MB`);
-
-      if (sizeMB > 1) {
-        console.warn(`⚠️  Bundle size is large (${sizeMB.toFixed(2)}MB). Consider code splitting.`);
-      }
-    }
-  }, []);
 }
 
 export default usePerformanceMonitoring;
