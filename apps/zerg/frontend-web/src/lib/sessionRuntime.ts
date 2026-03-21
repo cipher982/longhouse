@@ -50,6 +50,20 @@ export interface SessionRuntimeState {
   tone: "inactive" | "live" | "running" | "needs-user" | "blocked" | "idle";
 }
 
+function overlayFreshnessMillis(overlay: Partial<TimelineRuntimeOverlay> & { last_activity_at?: string | null } | null | undefined): number {
+  const timestamp =
+    overlay?.last_live_at ??
+    overlay?.presence_updated_at ??
+    overlay?.timeline_anchor_at ??
+    overlay?.last_activity_at ??
+    null;
+  if (!timestamp) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const millis = new Date(timestamp).getTime();
+  return Number.isFinite(millis) ? millis : Number.NEGATIVE_INFINITY;
+}
+
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
   if (
     state === "thinking" ||
@@ -102,21 +116,30 @@ export function resolveSessionRuntimeState(
   session: TimelineRuntimeSession,
   activeSession?: TimelineRuntimeActiveSession | null,
 ): SessionRuntimeState {
-  const status = activeSession?.status ?? session.status ?? null;
+  const sessionIsFresher = overlayFreshnessMillis(session) >= overlayFreshnessMillis(activeSession);
+  const primaryOverlay = sessionIsFresher ? session : activeSession;
+  const secondaryOverlay = sessionIsFresher ? activeSession : session;
+
+  const status = primaryOverlay?.status ?? secondaryOverlay?.status ?? null;
   const presenceState = normalizePresenceState(
-    activeSession?.presence_state ?? session.presence_state ?? null,
+    primaryOverlay?.presence_state ?? secondaryOverlay?.presence_state ?? null,
   );
   const presenceTool =
-    activeSession?.presence_tool ??
-    session.active_tool ??
-    session.presence_tool ??
+    primaryOverlay?.active_tool ??
+    primaryOverlay?.presence_tool ??
+    secondaryOverlay?.active_tool ??
+    secondaryOverlay?.presence_tool ??
     null;
   const lastLiveAt =
-    activeSession?.presence_updated_at ??
-    session.presence_updated_at ??
-    session.last_live_at ??
-    (presenceState ? activeSession?.last_activity_at ?? session.last_activity_at ?? null : null);
-  const confidence = session.confidence ?? (activeSession ? "live" : null);
+    primaryOverlay?.last_live_at ??
+    primaryOverlay?.presence_updated_at ??
+    secondaryOverlay?.last_live_at ??
+    secondaryOverlay?.presence_updated_at ??
+    (presenceState ? primaryOverlay?.last_activity_at ?? secondaryOverlay?.last_activity_at ?? null : null);
+  const confidence =
+    primaryOverlay?.confidence ??
+    secondaryOverlay?.confidence ??
+    (activeSession ? "live" : null);
 
   const statusSuggestsLive =
     status === "working" || status === "thinking" || status === "active";
@@ -159,7 +182,7 @@ export function resolveSessionRuntimeState(
     presenceTool,
     status,
     activeSession?.ended_at ?? session.ended_at ?? null,
-    session.display_phase,
+    primaryOverlay?.display_phase ?? secondaryOverlay?.display_phase ?? null,
   );
 
   return {

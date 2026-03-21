@@ -394,4 +394,50 @@ describe("SessionsPage", () => {
     expect(projects[0]).toBe("alpha");
     expect(projects[1]).toBe("beta");
   });
+
+  it("prefers fresher timeline runtime over an older active poll snapshot", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            ended_at: null,
+            status: "active",
+            presence_state: "needs_user",
+            presence_updated_at: "2026-03-21T12:05:00Z",
+            last_live_at: "2026-03-21T12:05:00Z",
+            timeline_anchor_at: "2026-03-21T12:05:00Z",
+            display_phase: "Needs you",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseActiveSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeActiveSession({
+            timeline_anchor_at: "2026-03-21T12:03:00Z",
+            last_activity_at: "2026-03-21T12:03:00Z",
+            presence_updated_at: "2026-03-21T12:03:00Z",
+            presence_state: "running",
+            presence_tool: "bash",
+          }),
+        ],
+        total: 1,
+        last_refresh: "2026-03-21T12:03:00Z",
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Needs you")).toBeInTheDocument();
+    expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
+  });
 });
