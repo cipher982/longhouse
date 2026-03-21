@@ -25,7 +25,7 @@ export const APP_PAGES: PageDef[] = [
 ];
 
 export const PUBLIC_PAGES: PageDef[] = [
-  { name: "landing", path: `/landing?${BASE_QUERY}&fx=none`, ready: "domcontent" },
+  { name: "landing", path: `/landing?${BASE_QUERY}&fx=none&video=poster`, ready: "domcontent" },
   { name: "pricing", path: `/pricing?${BASE_QUERY}`, ready: "domcontent" },
   { name: "docs", path: `/docs?${BASE_QUERY}`, ready: "domcontent" },
   { name: "changelog", path: `/changelog?${BASE_QUERY}`, ready: "domcontent" },

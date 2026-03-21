@@ -5,6 +5,19 @@ import { getPlatformScopedSnapshotName, installDeterministicVisualFonts } from '
 async function waitForPublicPageReady(page: Page) {
   await page.waitForLoadState('load');
   await page.evaluate(async () => {
+    const nextFrame = () =>
+      new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    const getScrollHeight = () =>
+      Math.max(
+        document.documentElement?.scrollHeight ?? 0,
+        document.body?.scrollHeight ?? 0,
+        document.scrollingElement?.scrollHeight ?? 0,
+        document.documentElement?.offsetHeight ?? 0,
+        document.body?.offsetHeight ?? 0,
+      );
+
     if (document.fonts?.ready) {
       try {
         await document.fonts.ready;
@@ -56,6 +69,29 @@ async function waitForPublicPageReady(page: Page) {
       }
       video.removeAttribute('controls');
     }
+
+    // The landing/footer path can grow for a few frames after fonts and media
+    // report ready on Linux CI. Wait for document height to stop changing so
+    // full-page screenshots don't capture a half-settled footer.
+    let stableFrames = 0;
+    let previousHeight = -1;
+    const deadline = performance.now() + 4000;
+    while (performance.now() < deadline) {
+      await nextFrame();
+      const currentHeight = getScrollHeight();
+      if (currentHeight === previousHeight) {
+        stableFrames += 1;
+        if (stableFrames >= 8) {
+          break;
+        }
+      } else {
+        previousHeight = currentHeight;
+        stableFrames = 0;
+      }
+    }
+
+    await nextFrame();
+    await nextFrame();
   });
 }
 
@@ -63,9 +99,11 @@ async function captureBaseline(page: Page, path: string, name: string) {
   await page.goto(path);
   await installDeterministicVisualFonts(page);
   await waitForPublicPageReady(page);
-  await expect(page).toHaveScreenshot(`${getPlatformScopedSnapshotName(name)}.png`, {
+  const screenshot = await page.screenshot({
     fullPage: true,
     animations: 'disabled',
+  });
+  expect(screenshot).toMatchSnapshot(`${getPlatformScopedSnapshotName(name)}.png`, {
     maxDiffPixelRatio: 0.02,
   });
 }
