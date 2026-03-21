@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useParams } from "react-router-dom";
+import { SidebarIcon, XIcon } from "../components/icons";
 import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui";
 import {
   applyLoopInboxAction,
@@ -269,14 +270,11 @@ export default function LoopInboxPage() {
   const showCondensedMobileChrome = isPhoneLayout && Boolean(currentCard || isLoadingCard || selectedCardId || selectedSessionId);
   const showInstallBanner = !isInstalled && (canInstall || showIosHint);
   const showPushBanner = loopPush.error || (loopPush.enabledInBackend && loopPush.supported) || loopPush.isEnabled;
-  const queuePositionLabel =
-    showMobileQueueToggle && selectedQueueIndex >= 0 ? `${selectedQueueIndex + 1} of ${inboxCount}` : null;
+  const queueCountLabel = hasInboxItems ? formatFollowUpCount(inboxCount) : null;
+  const queuePositionLabel = selectedQueueIndex >= 0 ? `Viewing ${selectedQueueIndex + 1} of ${inboxCount}` : null;
+  const mobileHeaderDetail = showMobileQueueToggle ? queuePositionLabel ?? queueCountLabel : queueCountLabel;
   const queueSummaryLabel =
-    showMobileQueueToggle && selectedQueueIndex >= 0
-      ? `${formatFollowUpCount(inboxCount)} · ${queuePositionLabel}`
-      : showMobileQueueToggle
-        ? formatFollowUpCount(inboxCount)
-        : null;
+    queueCountLabel && queuePositionLabel ? `${queueCountLabel} · ${queuePositionLabel}` : queueCountLabel;
 
   useEffect(() => {
     if (!showMobileQueueToggle) {
@@ -473,30 +471,26 @@ export default function LoopInboxPage() {
           <div className="loop-inbox-mobile-header" data-testid="loop-mobile-header">
             <div className="loop-inbox-mobile-header-copy">
               <div className="loop-inbox-mobile-header-label">Loop Inbox</div>
-              {queueSummaryLabel && <div className="loop-inbox-mobile-header-detail">{queueSummaryLabel}</div>}
+              {mobileHeaderDetail && <div className="loop-inbox-mobile-header-detail">{mobileHeaderDetail}</div>}
             </div>
-            <div className="loop-inbox-mobile-header-actions">
-              {showMobileQueueToggle && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="loop-inbox-mobile-queue-trigger"
-                  onClick={() => setQueueOpen(true)}
-                  aria-haspopup="dialog"
-                  aria-controls="loop-mobile-queue-drawer"
-                  aria-expanded={queueOpen}
-                  data-testid="loop-mobile-queue-toggle"
-                >
-                  Queue
-                  <span className="loop-inbox-mobile-queue-trigger-count" aria-hidden="true">
-                    {inboxCount}
-                  </span>
-                </Button>
-              )}
-              <Link className="ui-button ui-button--ghost ui-button--sm" to="/timeline">
-                Timeline
-              </Link>
-            </div>
+            {showMobileQueueToggle && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="loop-inbox-mobile-followups-trigger"
+                onClick={() => setQueueOpen(true)}
+                aria-haspopup="dialog"
+                aria-controls="loop-mobile-queue-drawer"
+                aria-expanded={queueOpen}
+                data-testid="loop-mobile-queue-toggle"
+              >
+                <SidebarIcon width={16} height={16} />
+                <span className="loop-inbox-mobile-followups-trigger-label">Follow-ups</span>
+                <span className="loop-inbox-mobile-queue-trigger-count" aria-hidden="true">
+                  {inboxCount}
+                </span>
+              </Button>
+            )}
           </div>
         ) : (
           <header className="loop-inbox-header">
@@ -553,9 +547,9 @@ export default function LoopInboxPage() {
                   >
                     <div className="loop-inbox-queue-drawer-header">
                       <div>
-                        <div className="loop-inbox-list-label">Attention queue</div>
+                        <div className="loop-inbox-list-label">Loop Inbox</div>
                         <h2 id="loop-mobile-queue-drawer-title" className="loop-inbox-queue-drawer-title">
-                          Open follow-ups
+                          Follow-ups
                         </h2>
                         {queueSummaryLabel && (
                           <p className="loop-inbox-queue-drawer-summary">{queueSummaryLabel}</p>
@@ -566,9 +560,10 @@ export default function LoopInboxPage() {
                         size="sm"
                         className="loop-inbox-queue-drawer-close"
                         onClick={() => setQueueOpen(false)}
+                        aria-label="Close follow-ups"
                         data-testid="loop-mobile-queue-close"
                       >
-                        Close
+                        <XIcon width={18} height={18} />
                       </Button>
                     </div>
 
@@ -582,6 +577,16 @@ export default function LoopInboxPage() {
                           onSelect={() => setQueueOpen(false)}
                         />
                       ))}
+                    </div>
+
+                    <div className="loop-inbox-queue-drawer-footer">
+                      <Link
+                        className="ui-button ui-button--ghost ui-button--md loop-inbox-queue-drawer-footer-link"
+                        to="/timeline"
+                        onClick={() => setQueueOpen(false)}
+                      >
+                        Open timeline
+                      </Link>
                     </div>
                   </aside>
                 </>
