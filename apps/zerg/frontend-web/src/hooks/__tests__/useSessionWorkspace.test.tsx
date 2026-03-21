@@ -270,6 +270,28 @@ describe("useSessionWorkspace", () => {
     });
   });
 
+  it("derives highlight selection from the projection model without mutating manual selection", () => {
+    const { result, rerender } = renderHook(
+      ({ highlightEventId }: { highlightEventId: number | null }) =>
+        useSessionWorkspace(baseSession.id, { highlightEventId }),
+      {
+        initialProps: { highlightEventId: null },
+      },
+    );
+
+    act(() => {
+      result.current.selectKey("message:4");
+    });
+
+    expect(result.current.selectedKey).toBe("message:4");
+
+    rerender({ highlightEventId: 2 });
+    expect(result.current.selectedKey).toBe("message:2");
+
+    rerender({ highlightEventId: null });
+    expect(result.current.selectedKey).toBe("message:4");
+  });
+
   it("debounces search query updates through the shared debounce hook", () => {
     vi.useFakeTimers();
 

@@ -41,7 +41,7 @@ export function useSessionWorkspace(
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [manualSelectedKey, setManualSelectedKey] = useState<string | null>(null);
   const [timelineListElement, setTimelineListElement] = useState<HTMLDivElement | null>(null);
   const highlightedEventRef = useRef<number | null>(null);
   const autoScrolledSelectionRef = useRef(false);
@@ -151,6 +151,15 @@ export function useSessionWorkspace(
     return events.some((event) => event.id === highlightEventId);
   }, [highlightEventId, events]);
 
+  const highlightSelectionKey = useMemo(() => {
+    if (highlightEventId == null || !hasHighlightEvent) {
+      return null;
+    }
+    return model.eventIdToSelectionKey.get(highlightEventId) ?? null;
+  }, [highlightEventId, hasHighlightEvent, model.eventIdToSelectionKey]);
+
+  const selectedKey = highlightSelectionKey ?? manualSelectedKey;
+
   useEffect(() => {
     if (highlightEventId == null) return;
     if (hasHighlightEvent) return;
@@ -160,29 +169,24 @@ export function useSessionWorkspace(
 
   useEffect(() => {
     if (filteredItems.length === 0) {
-      setSelectedKey(null);
+      setManualSelectedKey(null);
       return;
     }
 
-    if (selectedKey == null) return;
+    if (manualSelectedKey == null) return;
 
-    const selectionIsVisible = filteredItems.some((item) => timelineItemContainsSelection(item, selectedKey));
+    const selectionIsVisible = filteredItems.some((item) => timelineItemContainsSelection(item, manualSelectedKey));
     if (selectionIsVisible) return;
 
-    setSelectedKey(null);
-  }, [filteredItems, selectedKey]);
+    setManualSelectedKey(null);
+  }, [filteredItems, manualSelectedKey]);
 
   useEffect(() => {
     if (highlightEventId == null) return;
     if (!hasHighlightEvent) return;
     if (highlightedEventRef.current === highlightEventId) return;
 
-    const selectionKey = model.eventIdToSelectionKey.get(highlightEventId);
     const rowId = model.eventIdToRowId.get(highlightEventId);
-
-    if (selectionKey) {
-      setSelectedKey(selectionKey);
-    }
 
     let frameId: number | null = null;
 
@@ -205,7 +209,7 @@ export function useSessionWorkspace(
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [highlightEventId, hasHighlightEvent, model.eventIdToRowId, model.eventIdToSelectionKey]);
+  }, [highlightEventId, hasHighlightEvent, model.eventIdToRowId]);
 
   useEffect(() => {
     if (highlightEventId != null) return;
@@ -273,7 +277,7 @@ export function useSessionWorkspace(
   );
 
   const selectKey = (key: string) => {
-    setSelectedKey(key);
+    setManualSelectedKey(key);
   };
 
   return {
