@@ -61,6 +61,29 @@ lh_hosted_require_env() {
   done
 }
 
+_lh_hosted_is_retryable_http_code() {
+  case "${1:-}" in
+    000|408|409|425|429|500|502|503|504|520|521|522|523|524|525|526)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+_lh_hosted_retry_sleep() {
+  local attempt="${1:-1}"
+  local delay=1
+  if [[ "$attempt" -gt 1 ]]; then
+    delay="$attempt"
+  fi
+  if [[ "$delay" -gt 3 ]]; then
+    delay=3
+  fi
+  sleep "$delay"
+}
+
 _lh_hosted_build_accept_token_redirect_url() {
   local token="$1"
   local return_to="${2:-}"
@@ -195,20 +218,37 @@ lh_hosted_resolve_instance() {
   local http_code=""
   local parsed=""
   local parse_status=0
+  local attempt=1
+  local max_attempts=5
 
   lh_hosted_prepare_control_plane_auth || return 1
 
-  response_file="$(mktemp)"
-  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
-    -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
-    "${CONTROL_PLANE_URL%/}/api/instances")"
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    response_file="$(mktemp)"
+    if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      --connect-timeout 10 --max-time 30 \
+      -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
+      "${CONTROL_PLANE_URL%/}/api/instances")"; then
+      http_code="000"
+    fi
 
-  if [[ "$http_code" != "200" ]]; then
+    if [[ "$http_code" == "200" ]]; then
+      break
+    fi
+
+    if [[ "$attempt" -lt "$max_attempts" ]] && _lh_hosted_is_retryable_http_code "$http_code"; then
+      echo "Transient control-plane instance lookup failure (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
+      rm -f "$response_file"
+      _lh_hosted_retry_sleep "$attempt"
+      attempt=$((attempt + 1))
+      continue
+    fi
+
     echo "Failed to list control-plane instances (HTTP ${http_code})" >&2
     cat "$response_file" >&2
     rm -f "$response_file"
     return 1
-  fi
+  done
 
   if parsed="$(_lh_hosted_parse_instance_row "$response_file" "$subdomain")"; then
     :
@@ -455,6 +495,8 @@ lh_hosted_issue_login_token() {
   local response_file=""
   local http_code=""
   local token=""
+  local attempt=1
+  local max_attempts=5
 
   if [[ -z "$instance_id" ]]; then
     echo "Missing instance id for login-token request" >&2
@@ -463,18 +505,33 @@ lh_hosted_issue_login_token() {
 
   lh_hosted_prepare_control_plane_auth || return 1
 
-  response_file="$(mktemp)"
-  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
-    -X POST \
-    -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
-    "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/login-token")"
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    response_file="$(mktemp)"
+    if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      --connect-timeout 10 --max-time 30 \
+      -X POST \
+      -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
+      "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/login-token")"; then
+      http_code="000"
+    fi
 
-  if [[ "$http_code" != "200" ]]; then
+    if [[ "$http_code" == "200" ]]; then
+      break
+    fi
+
+    if [[ "$attempt" -lt "$max_attempts" ]] && _lh_hosted_is_retryable_http_code "$http_code"; then
+      echo "Transient hosted login-token failure (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
+      rm -f "$response_file"
+      _lh_hosted_retry_sleep "$attempt"
+      attempt=$((attempt + 1))
+      continue
+    fi
+
     echo "Failed to issue login token for instance ${instance_id} (HTTP ${http_code})" >&2
     cat "$response_file" >&2
     rm -f "$response_file"
     return 1
-  fi
+  done
 
   token="$(_lh_hosted_parse_token "$response_file")" || {
     echo "Login-token response missing token for instance ${instance_id}" >&2
@@ -492,6 +549,8 @@ lh_hosted_exchange_login_token() {
   local http_code=""
   local access_token=""
   local payload=""
+  local attempt=1
+  local max_attempts=5
 
   if [[ -z "$token" || -z "$instance_url" ]]; then
     echo "Usage: lh_hosted_exchange_login_token <token> [instance_url]" >&2
@@ -499,18 +558,33 @@ lh_hosted_exchange_login_token() {
   fi
 
   payload="$(_lh_hosted_json_object token "$token")" || return 1
-  response_file="$(mktemp)"
-  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
-    -H "Content-Type: application/json" \
-    -d "$payload" \
-    "${instance_url%/}/api/auth/accept-token")"
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    response_file="$(mktemp)"
+    if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      --connect-timeout 10 --max-time 30 \
+      -H "Content-Type: application/json" \
+      -d "$payload" \
+      "${instance_url%/}/api/auth/accept-token")"; then
+      http_code="000"
+    fi
 
-  if [[ "$http_code" != "200" ]]; then
+    if [[ "$http_code" == "200" ]]; then
+      break
+    fi
+
+    if [[ "$attempt" -lt "$max_attempts" ]] && _lh_hosted_is_retryable_http_code "$http_code"; then
+      echo "Transient accept-token failure at ${instance_url} (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
+      rm -f "$response_file"
+      _lh_hosted_retry_sleep "$attempt"
+      attempt=$((attempt + 1))
+      continue
+    fi
+
     echo "Instance rejected login token at ${instance_url} (HTTP ${http_code})" >&2
     cat "$response_file" >&2
     rm -f "$response_file"
     return 1
-  fi
+  done
 
   access_token="$(_lh_hosted_parse_access_token "$response_file")" || {
     echo "Accept-token response missing access_token for instance ${instance_url}" >&2
@@ -530,6 +604,8 @@ lh_hosted_create_device_token() {
   local http_code=""
   local payload=""
   local parsed=""
+  local attempt=1
+  local max_attempts=5
 
   if [[ -z "$access_token" || -z "$api_url" ]]; then
     echo "Usage: lh_hosted_create_device_token <access_token> <api_url> [device_id]" >&2
@@ -537,20 +613,35 @@ lh_hosted_create_device_token() {
   fi
 
   payload="$(_lh_hosted_json_object device_id "$device_id")" || return 1
-  response_file="$(mktemp)"
-  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
-    -X POST \
-    -H "Authorization: Bearer ${access_token}" \
-    -H "Content-Type: application/json" \
-    -d "$payload" \
-    "${api_url%/}/api/devices/tokens")"
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    response_file="$(mktemp)"
+    if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      --connect-timeout 10 --max-time 30 \
+      -X POST \
+      -H "Authorization: Bearer ${access_token}" \
+      -H "Content-Type: application/json" \
+      -d "$payload" \
+      "${api_url%/}/api/devices/tokens")"; then
+      http_code="000"
+    fi
 
-  if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
+    if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+      break
+    fi
+
+    if [[ "$attempt" -lt "$max_attempts" ]] && _lh_hosted_is_retryable_http_code "$http_code"; then
+      echo "Transient device-token creation failure at ${api_url} (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
+      rm -f "$response_file"
+      _lh_hosted_retry_sleep "$attempt"
+      attempt=$((attempt + 1))
+      continue
+    fi
+
     echo "Failed to create device token at ${api_url} (HTTP ${http_code})" >&2
     cat "$response_file" >&2
     rm -f "$response_file"
     return 1
-  fi
+  done
 
   parsed="$(_lh_hosted_parse_device_token_payload "$response_file")" || {
     echo "Device-token response missing id/token for ${device_id}" >&2

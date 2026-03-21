@@ -534,6 +534,7 @@ def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
 
 
 def test_stream_claude_output_reports_persistence_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
     monkeypatch.delenv("TESTING", raising=False)
