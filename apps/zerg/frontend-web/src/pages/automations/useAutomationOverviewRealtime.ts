@@ -16,7 +16,14 @@ type PendingSubscription = {
   automationIds: number[];
 };
 
+type SubscriptionPlan = {
+  automationIdsToSubscribe: number[];
+  topicsToSubscribe: string[];
+  topicsToUnsubscribe: string[];
+};
+
 export type AutomationOverviewRealtimeManager = {
+  desiredAutomationIdsRef: MutableRefObject<Set<number>>;
   subscriptionRevision: number;
   handleConnect: () => void;
   handleControlMessage: (message: AutomationControlMessage) => boolean;
@@ -46,7 +53,67 @@ function clearPendingSubscriptions(pendingSubscriptions: Map<string, PendingSubs
   pendingSubscriptions.clear();
 }
 
+function planSubscriptionChanges(
+  activeIds: Set<number>,
+  subscribedAutomationIds: Set<number>,
+  pendingAutomationIds: Set<number>,
+): SubscriptionPlan {
+  const automationIdsToSubscribe: number[] = [];
+  const topicsToSubscribe: string[] = [];
+  for (const automationId of activeIds) {
+    if (!subscribedAutomationIds.has(automationId) && !pendingAutomationIds.has(automationId)) {
+      automationIdsToSubscribe.push(automationId);
+      topicsToSubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${automationId}`);
+    }
+  }
+
+  const topicsToUnsubscribe: string[] = [];
+  for (const automationId of Array.from(subscribedAutomationIds)) {
+    if (!activeIds.has(automationId)) {
+      subscribedAutomationIds.delete(automationId);
+      topicsToUnsubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${automationId}`);
+    }
+  }
+
+  return {
+    automationIdsToSubscribe,
+    topicsToSubscribe,
+    topicsToUnsubscribe,
+  };
+}
+
+function clearLocalSubscriptions(
+  pendingSubscriptions: Map<string, PendingSubscription>,
+  subscribedAutomationIds: Set<number>,
+  desiredAutomationIds: Set<number>,
+) {
+  clearPendingSubscriptions(pendingSubscriptions);
+  subscribedAutomationIds.clear();
+  desiredAutomationIds.clear();
+}
+
+function replaceSetContents(target: Set<number>, nextValues: Iterable<number>) {
+  target.clear();
+  for (const value of nextValues) {
+    target.add(value);
+  }
+}
+
+function sendUnsubscribeTopics(
+  topics: string[],
+  nextMessageId: () => string,
+  sendMessage: (message: WebSocketMessage) => void,
+) {
+  if (topics.length === 0) {
+    return;
+  }
+
+  const messageId = nextMessageId();
+  sendMessage(createEnvelope("unsubscribe", "system", { topics, message_id: messageId }, messageId));
+}
+
 export function useAutomationOverviewRealtimeManager(): AutomationOverviewRealtimeManager {
+  const desiredAutomationIdsRef = useRef<Set<number>>(new Set());
   const subscribedAutomationIdsRef = useRef<Set<number>>(new Set());
   const pendingSubscriptionsRef = useRef<Map<string, PendingSubscription>>(new Map());
   const messageIdCounterRef = useRef(0);
@@ -86,18 +153,25 @@ export function useAutomationOverviewRealtimeManager(): AutomationOverviewRealti
     pendingSubscriptionsRef.current.delete(messageId);
 
     if (message.type === "subscribe_ack") {
+      let needsReconcile = false;
       pending.automationIds.forEach((automationId) => {
         subscribedAutomationIdsRef.current.add(automationId);
+        if (!desiredAutomationIdsRef.current.has(automationId)) {
+          needsReconcile = true;
+        }
       });
+      if (needsReconcile) {
+        retrySubscriptions();
+      }
     } else {
       console.error("[WS] Subscription failed for topics:", pending.topics);
-      retrySubscriptions();
     }
 
     return true;
   }, [retrySubscriptions]);
 
   return {
+    desiredAutomationIdsRef,
     subscriptionRevision,
     handleConnect,
     handleControlMessage,
@@ -125,6 +199,7 @@ export function useAutomationOverviewRealtimeSubscriptions({
 }: UseAutomationOverviewRealtimeSubscriptionsOptions) {
   const sendMessageRef = useLatest(sendMessage);
   const {
+    desiredAutomationIdsRef,
     nextMessageId,
     pendingSubscriptionsRef,
     retrySubscriptions,
@@ -134,34 +209,37 @@ export function useAutomationOverviewRealtimeSubscriptions({
 
   useEffect(() => {
     if (!enabled) {
-      return;
-    }
-    if (connectionStatus !== ConnectionStatus.CONNECTED) {
+      const staleTopics = Array.from(subscribedAutomationIdsRef.current).map(
+        (automationId) => `${AUTOMATION_TOPIC_PREFIX}${automationId}`,
+      );
+      clearLocalSubscriptions(
+        pendingSubscriptionsRef.current,
+        subscribedAutomationIdsRef.current,
+        desiredAutomationIdsRef.current,
+      );
+      if (connectionStatus === ConnectionStatus.CONNECTED) {
+        sendUnsubscribeTopics(staleTopics, nextMessageId, sendMessageRef.current);
+      }
       return;
     }
 
     const activeIds = new Set(automationIds);
+    replaceSetContents(desiredAutomationIdsRef.current, activeIds);
+
+    if (connectionStatus !== ConnectionStatus.CONNECTED) {
+      return;
+    }
+
     const pendingAutomationIds = new Set<number>();
     pendingSubscriptionsRef.current.forEach((pending) => {
       pending.automationIds.forEach((automationId) => pendingAutomationIds.add(automationId));
     });
 
-    const topicsToSubscribe: string[] = [];
-    const automationIdsToSubscribe: number[] = [];
-    for (const automationId of activeIds) {
-      if (!subscribedAutomationIdsRef.current.has(automationId) && !pendingAutomationIds.has(automationId)) {
-        topicsToSubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${automationId}`);
-        automationIdsToSubscribe.push(automationId);
-      }
-    }
-
-    const topicsToUnsubscribe: string[] = [];
-    for (const automationId of Array.from(subscribedAutomationIdsRef.current)) {
-      if (!activeIds.has(automationId)) {
-        subscribedAutomationIdsRef.current.delete(automationId);
-        topicsToUnsubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${automationId}`);
-      }
-    }
+    const { automationIdsToSubscribe, topicsToSubscribe, topicsToUnsubscribe } = planSubscriptionChanges(
+      activeIds,
+      subscribedAutomationIdsRef.current,
+      pendingAutomationIds,
+    );
 
     if (topicsToSubscribe.length > 0) {
       const messageId = nextMessageId();
@@ -184,15 +262,11 @@ export function useAutomationOverviewRealtimeSubscriptions({
       );
     }
 
-    if (topicsToUnsubscribe.length > 0) {
-      const messageId = nextMessageId();
-      sendMessageRef.current(
-        createEnvelope("unsubscribe", "system", { topics: topicsToUnsubscribe, message_id: messageId }, messageId),
-      );
-    }
+    sendUnsubscribeTopics(topicsToUnsubscribe, nextMessageId, sendMessageRef.current);
   }, [
     automationIds,
     connectionStatus,
+    desiredAutomationIdsRef,
     enabled,
     nextMessageId,
     pendingSubscriptionsRef,
@@ -203,42 +277,12 @@ export function useAutomationOverviewRealtimeSubscriptions({
   ]);
 
   useEffect(() => {
-    if (enabled) {
-      return;
-    }
-
-    clearPendingSubscriptions(pendingSubscriptionsRef.current);
-
-    if (subscribedAutomationIdsRef.current.size === 0) {
-      return;
-    }
-
-    const topics = Array.from(subscribedAutomationIdsRef.current).map(
-      (automationId) => `${AUTOMATION_TOPIC_PREFIX}${automationId}`,
-    );
-    const messageId = nextMessageId();
-    sendMessageRef.current(
-      createEnvelope("unsubscribe", "system", { topics, message_id: messageId }, messageId),
-    );
-    subscribedAutomationIdsRef.current.clear();
-  }, [enabled, nextMessageId, pendingSubscriptionsRef, sendMessageRef, subscribedAutomationIdsRef]);
-
-  useEffect(() => {
     const pendingSubscriptions = pendingSubscriptionsRef.current;
     const subscribedAutomationIds = subscribedAutomationIdsRef.current;
-    const sendMessageLatest = sendMessageRef.current;
+    const desiredAutomationIds = desiredAutomationIdsRef.current;
 
     return () => {
-      clearPendingSubscriptions(pendingSubscriptions);
-
-      if (subscribedAutomationIds.size === 0) {
-        return;
-      }
-
-      const topics = Array.from(subscribedAutomationIds).map((automationId) => `${AUTOMATION_TOPIC_PREFIX}${automationId}`);
-      const messageId = nextMessageId();
-      sendMessageLatest(createEnvelope("unsubscribe", "system", { topics, message_id: messageId }, messageId));
-      subscribedAutomationIds.clear();
+      clearLocalSubscriptions(pendingSubscriptions, subscribedAutomationIds, desiredAutomationIds);
     };
-  }, [nextMessageId, pendingSubscriptionsRef, sendMessageRef, subscribedAutomationIdsRef]);
+  }, [desiredAutomationIdsRef, pendingSubscriptionsRef, subscribedAutomationIdsRef]);
 }

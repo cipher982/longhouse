@@ -29,8 +29,7 @@ export function MicButton({
   const { sharedMicStream } = useAppState()
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const visualizerRef = useRef<RadialVisualizer | null>(null)
-  const renderStateRef = useRef(0)
-  const renderColorRef = useRef('#5C4F3D')
+  const providedStreamRef = useRef<MediaStream | null>(null)
   const isConnected = status !== 'idle' && status !== 'connecting' && status !== 'error'
   const isConnecting = status === 'connecting'
   const isBusy = status === 'processing' || status === 'speaking'
@@ -44,22 +43,22 @@ export function MicButton({
     return () => {
       viz.destroy()
       visualizerRef.current = null
+      providedStreamRef.current = null
     }
   }, [])
 
   useEffect(() => {
-    if (visualizerRef.current) {
-      visualizerRef.current.provideStream(sharedMicStream)
-    }
-  }, [sharedMicStream])
-
-  useEffect(() => {
-    const micActive = status === 'listening'
-    renderStateRef.current = micActive ? 1 : 0
-    renderColorRef.current = micActive ? '#C9A66B' : '#5C4F3D'
-
     const viz = visualizerRef.current
     if (!viz) return
+
+    if (providedStreamRef.current !== sharedMicStream) {
+      viz.provideStream(sharedMicStream)
+      providedStreamRef.current = sharedMicStream
+    }
+
+    const micActive = status === 'listening'
+    const renderState = micActive ? 1 : 0
+    const renderColor = micActive ? '#C9A66B' : '#5C4F3D'
 
     if (micActive && sharedMicStream) {
       void viz.start()
@@ -67,7 +66,7 @@ export function MicButton({
       viz.stop()
     }
 
-    viz.render(normalizedLevel, renderColorRef.current, renderStateRef.current)
+    viz.render(normalizedLevel, renderColor, renderState)
   }, [normalizedLevel, sharedMicStream, status])
 
   const handleClick = () => {

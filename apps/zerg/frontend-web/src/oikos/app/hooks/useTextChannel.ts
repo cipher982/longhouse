@@ -15,7 +15,6 @@ import { timelineLogger } from '../../lib/timeline-logger'
 
 export interface UseTextChannelOptions {
   onMessageSent?: (message: ChatMessage) => void
-  onResponse?: (message: ChatMessage) => void
   onError?: (error: Error) => void
 }
 
@@ -158,14 +157,6 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
     },
     [dispatch, preferences]
   )
-
-  useEffect(() => {
-    const unsubscribe = eventBus.on('text_channel:send', (data) => {
-      void sendMessage(data.text)
-    })
-
-    return () => unsubscribe()
-  }, [sendMessage])
 
   // Clear all messages
   const clearMessages = useCallback(() => {

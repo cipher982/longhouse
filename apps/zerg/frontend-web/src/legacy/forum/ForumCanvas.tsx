@@ -1,13 +1,13 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import clsx from "clsx";
+import { useLatest } from "../../hooks/useLatest";
 import { gridToIso } from "./layout";
 import type { ForumAlert, ForumEntity, ForumMapLayout, ForumMarker, ForumRoom, ForumTask } from "./types";
 import type { ForumMapState } from "./state";
@@ -63,28 +63,33 @@ export function ForumCanvas({
   const dragRef = useRef({ dragging: false, moved: 0, lastX: 0, lastY: 0 });
   const pinchRef = useRef<{ distance: number | null }>({ distance: null });
   const rafRef = useRef<number | null>(null);
+  const latestStateRef = useLatest(state);
+  const latestSelectedEntityIdRef = useLatest(selectedEntityId);
   const [hudScale, setHudScale] = useState(1);
 
   const scheduleDraw = useCallback(() => {
     if (rafRef.current != null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
-      drawCanvas(canvasRef.current, state, viewportRef.current, sizeRef.current, selectedEntityId);
+      drawCanvas(
+        canvasRef.current,
+        latestStateRef.current,
+        viewportRef.current,
+        sizeRef.current,
+        latestSelectedEntityIdRef.current,
+      );
     });
-  }, [state, selectedEntityId]);
+  }, [latestSelectedEntityIdRef, latestStateRef]);
 
   useEffect(() => {
     scheduleDraw();
-  }, [scheduleDraw, state, selectedEntityId]);
-
-  useEffect(() => {
     return () => {
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
     };
-  }, []);
+  }, [scheduleDraw, selectedEntityId, state]);
 
   useEffect(() => {
     const container = containerRef.current;

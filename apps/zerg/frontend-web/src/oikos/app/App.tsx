@@ -57,7 +57,6 @@ export default function App({ embedded = false }: AppProps) {
 
   // Main Oikos app hook - handles initialization, connection, voice
   const oikosApp = useOikosApp({
-    autoConnect: false, // User must click Connect button
     onConnected: () => console.log('[App] Connected'),
     onDisconnected: () => console.log('[App] Disconnected'),
     onTranscript: (text, isFinal) => {
@@ -69,7 +68,6 @@ export default function App({ embedded = false }: AppProps) {
   // Text channel handling (always active)
   const textChannel = useTextChannel({
     onMessageSent: (msg) => console.log('[App] Message sent:', msg.content),
-    onResponse: (msg) => console.log('[App] Response received:', msg.content),
     onError: (error) => console.error('[App] Text channel error:', error),
   })
 
