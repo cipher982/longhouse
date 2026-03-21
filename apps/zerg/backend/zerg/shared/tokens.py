@@ -7,17 +7,17 @@ from __future__ import annotations
 
 import os
 
-import tiktoken
+from zerg.services.session_processing.tokens import _get_encoding
 
 # NOTE: As of tiktoken 0.12.0, `encoding_for_model("gpt-5.2")` is not mapped.
 # In practice, gpt-5 / o-series models use `o200k_base`, so we default to that.
 _DEFAULT_ENCODING = os.getenv("TIKTOKEN_ENCODING", "o200k_base")
 
 try:
-    _enc = tiktoken.get_encoding(_DEFAULT_ENCODING)
+    _enc = _get_encoding(_DEFAULT_ENCODING)
 except Exception:
     # Fall back to the most common legacy encoding.
-    _enc = tiktoken.get_encoding("cl100k_base")
+    _enc = _get_encoding("cl100k_base")
 
 
 def count_tokens(text: str) -> int:

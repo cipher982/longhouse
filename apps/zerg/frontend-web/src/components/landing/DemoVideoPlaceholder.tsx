@@ -43,6 +43,8 @@ export function DemoVideoPlaceholder({
   className = "",
 }: DemoVideoPlaceholderProps) {
   const [videoError, setVideoError] = useState(false);
+  const staticPosterMode =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("video") === "poster";
 
   // If no URL or video failed to load, render nothing instead of a placeholder
   if (!videoUrl || videoError) {
@@ -74,15 +76,28 @@ export function DemoVideoPlaceholder({
   return (
     <div className={`demo-video-placeholder ${className}`}>
       <div className="demo-video-frame">
-        <video
-          src={videoUrl}
-          poster={thumbnailUrl}
-          controls
-          className="demo-video-player"
-          onError={() => setVideoError(true)}
-        >
-          Your browser does not support the video tag.
-        </video>
+        <div className="demo-video-embed-wrap">
+          {staticPosterMode && thumbnailUrl ? (
+            <img
+              src={thumbnailUrl}
+              alt="Longhouse demo walkthrough preview"
+              className="demo-video-poster"
+              loading="eager"
+            />
+          ) : (
+            <video
+              src={videoUrl}
+              poster={thumbnailUrl}
+              controls
+              preload="none"
+              playsInline
+              className="demo-video-player"
+              onError={() => setVideoError(true)}
+            >
+              Your browser does not support the video tag.
+            </video>
+          )}
+        </div>
       </div>
     </div>
   );

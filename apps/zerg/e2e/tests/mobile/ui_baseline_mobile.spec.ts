@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '../fixtures';
 import { APP_PAGES, type PageDef } from '../helpers/page-list';
 import { waitForPageReady } from '../helpers/ready-signals';
+import { getPlatformScopedSnapshotName, installDeterministicVisualFonts } from '../helpers/visual-baseline';
 import { resetDatabase } from '../test-utils';
 
 const MOBILE_PAGES: Array<PageDef & { navOpen?: boolean }> = APP_PAGES.map((pageDef) => ({
@@ -33,8 +34,9 @@ async function captureBaseline(
   navOpen?: boolean
 ) {
   await page.goto(path);
+  await installDeterministicVisualFonts(page);
   await waitForAppReady(page, ready);
-  await expect(page).toHaveScreenshot(`${name}.png`, {
+  await expect(page).toHaveScreenshot(`${getPlatformScopedSnapshotName(name)}.png`, {
     fullPage: true,
     animations: 'disabled',
     maxDiffPixelRatio: 0.02,
@@ -46,7 +48,7 @@ async function captureBaseline(
       await toggle.waitFor({ state: 'visible', timeout: 3000 });
       await toggle.click();
       await expect(page.locator('.mobile-nav-drawer')).toHaveClass(/open/);
-      await expect(page).toHaveScreenshot(`${name}-nav.png`, {
+      await expect(page).toHaveScreenshot(`${getPlatformScopedSnapshotName(`${name}-nav`)}.png`, {
         fullPage: true,
         animations: 'disabled',
         maxDiffPixelRatio: 0.02,

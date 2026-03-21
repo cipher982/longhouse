@@ -193,7 +193,12 @@ class TTSService:
 
     async def _convert_openai(self, text: str, voice_id: str | None = None) -> TTSResult:
         """Convert text to speech using OpenAI Audio API."""
-        if not self._is_provider_available(TTSProvider.OPENAI):
+        api_key = self.config.openai_api_key
+        if not api_key:
+            settings = get_settings()
+            api_key = settings.openai_api_key
+
+        if not api_key:
             return TTSResult(success=False, error="OpenAI API key not configured")
 
         import time

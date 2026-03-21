@@ -14,6 +14,10 @@
 import { test, expect, type Page } from './fixtures';
 import { waitForPageReady } from './helpers/ready-signals';
 import { APP_PAGES, type PageDef } from './helpers/page-list';
+import {
+  getPlatformScopedDesktopSnapshotFile,
+  installDeterministicVisualFonts,
+} from './helpers/visual-baseline';
 import { resetDatabase } from './test-utils';
 import { execSync } from 'child_process';
 import path from 'path';
@@ -54,19 +58,22 @@ test.describe('Visual comparison: LLM-triaged', () => {
     }
 
     // Capture fresh screenshots
+    fs.rmSync(CURRENT_DIR, { recursive: true, force: true });
+    fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
     fs.mkdirSync(CURRENT_DIR, { recursive: true });
 
     for (const pageDef of APP_PAGES) {
       await page.goto(pageDef.path);
+      await installDeterministicVisualFonts(page);
       await waitForAppReady(page, pageDef.ready);
       const screenshot = await page.screenshot({ fullPage: true, animations: 'disabled' });
-      // Match baseline naming: {name}-chromium-darwin.png
-      fs.writeFileSync(path.join(CURRENT_DIR, `${pageDef.name}-chromium-darwin.png`), screenshot);
+      fs.writeFileSync(path.join(CURRENT_DIR, getPlatformScopedDesktopSnapshotFile(pageDef.name)), screenshot);
     }
 
     // Run comparison engine
+    const pageNames = APP_PAGES.map((pageDef) => pageDef.name).join(',');
     const skipLlm = process.env.SKIP_LLM === '1' ? '--skip-llm' : '';
-    const cmd = `bun run ${SCRIPT_PATH} --baseline-dir ${BASELINE_DIR} --current-dir ${CURRENT_DIR} --output-dir ${OUTPUT_DIR} --json ${skipLlm}`.trim();
+    const cmd = `bun run ${SCRIPT_PATH} --baseline-dir ${BASELINE_DIR} --current-dir ${CURRENT_DIR} --output-dir ${OUTPUT_DIR} --pages ${pageNames} --json ${skipLlm}`.trim();
 
     let stdout: string;
     try {

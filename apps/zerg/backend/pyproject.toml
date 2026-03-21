@@ -43,6 +43,7 @@ dependencies = [
     "mcp>=1.0",
     "pyyaml>=6.0",
     "zstandard>=0.23.0",
+    "pywebpush>=2.3.0",
 ]
 
 [project.optional-dependencies]
@@ -80,14 +81,20 @@ packages = ["zerg"]
 # Bundle the frontend dist into the package for pip install deployment
 # This allows `longhouse serve` to serve the UI without needing the repo
 "../frontend-web/dist" = "zerg/_frontend_dist"
+# Bundle shared auth redirect helpers used by hosted runtime and control plane.
+"../../control-plane/longhouse_shared" = "longhouse_shared"
 # Bundle the shared model routing config so source/wheel installs can start
 # without requiring a sibling monorepo checkout.
 "../../../config/models.json" = "zerg/_config/models.json"
+# Bundle the tiktoken cache so fresh installs do not need first-use network fetches.
+"zerg/_tiktoken_cache" = "zerg/_tiktoken_cache"
 
 [tool.hatch.build.targets.sdist.force-include]
 # Also include frontend in sdist so building from source works
 "../frontend-web/dist" = "zerg/_frontend_dist"
+"../../control-plane/longhouse_shared" = "longhouse_shared"
 "../../../config/models.json" = "zerg/_config/models.json"
+"zerg/_tiktoken_cache" = "zerg/_tiktoken_cache"
 
 [tool.uv]
 # Keep cache inside repo for hermetic test runs

@@ -2,7 +2,7 @@
 
 Status: In progress
 Spec: `docs/specs/mobile-loop-inbox.md`
-Last updated: 2026-03-19
+Last updated: 2026-03-21
 
 ## Goal
 
@@ -16,6 +16,8 @@ The canonical approval surface is `/loop`. Telegram is notification/fallback onl
 - `/loop` can open both active and stale cards without dropping into 404/empty behavior.
 - Same-session continue can be triggered from a card without the desktop workspace UI.
 - Telegram nudges are terse and do not show noisy page previews.
+- `/loop` is reachable from the main authenticated app.
+- Installed Loop can register for web push and receive loop nudges before Telegram in the common case.
 
 ## Checklist
 
@@ -26,6 +28,10 @@ The canonical approval surface is `/loop`. Telegram is notification/fallback onl
 - [x] Disable Telegram page previews for loop nudges
 - [x] Keep `/loop` card-centric and lightweight on phone
 - [x] Make `/loop` installable as a thin standalone PWA surface
+- [x] Ship the phone-only queue sheet so the selected card stays above the fold
+- [ ] Add an obvious `/loop` entry point from the authenticated app
+- [ ] Add Loop web-push subscription registration and storage
+- [ ] Prefer Loop web push over Telegram for loop nudges
 - [ ] Dogfood the traveling / away-from-keyboard flow end to end
 
 ## Notes
@@ -33,3 +39,6 @@ The canonical approval surface is `/loop`. Telegram is notification/fallback onl
 - Use `SessionTurnReview.id` as the first `card_id` to avoid extra schema churn.
 - Preserve same-session-only continuation.
 - Keep Telegram chat separate from the approval model.
+- Keep the push model minimal: one installed PWA can subscribe, receive a card link, and open `/loop/card/{id}`.
+- Current UI pass: keep the desktop/tablet split layout, but switch phone (`<768px`) to card-first with the queue behind an accessible bottom sheet.
+- 2026-03-21: phone queue sheet landed in the frontend with targeted Vitest coverage plus `make test` and `make test-e2e` passing in the worktree before ship.

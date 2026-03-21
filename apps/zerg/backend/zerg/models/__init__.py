@@ -14,6 +14,7 @@ from .conversation import ConversationMessage
 from .device_token import DeviceToken
 from .fiche import Fiche
 from .fiche import FicheMessage
+from .loop_push_subscription import LoopPushSubscription
 
 # Re-export remaining models from models.py
 from .models import AccountConnectorCredential
@@ -58,6 +59,7 @@ __all__ = [
     "DeviceToken",
     "Fiche",
     "FicheMessage",
+    "LoopPushSubscription",
     "Run",
     "RunEvent",
     "CommisBarrierJob",

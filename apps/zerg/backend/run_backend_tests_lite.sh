@@ -22,6 +22,14 @@ export TESTING=1
 # Always use in-memory SQLite for lite tests - zero disk I/O
 export DATABASE_URL="sqlite://"
 
+# Pin auth-related test env before pytest imports any modules. Some test files
+# call os.environ.setdefault(...) at import time, so leaving these unset makes
+# collection order change the effective secrets.
+export JWT_SECRET="${JWT_SECRET:-test-jwt-secret-1234}"
+export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-test-internal-secret-1234}"
+export GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-test-google-client-id}"
+export GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-test-google-client-secret}"
+
 # Required by zerg/utils/crypto.py at import time (module-level Fernet init).
 # Generate a throwaway Fernet-compatible key with the stdlib so CI does not
 # depend on cryptography before uv creates the test venv.
