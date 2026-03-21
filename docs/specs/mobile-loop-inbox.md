@@ -2,7 +2,7 @@
 
 Status: in progress
 Owner: David / Longhouse product direction
-Updated: 2026-03-20
+Updated: 2026-03-21
 
 ## Executive Summary
 
@@ -208,6 +208,23 @@ Default button patterns:
 - risky case:
   - `Review`
   - `Not now`
+
+### Current UI pass: phone queue sheet
+
+For the current frontend pass, keep the existing split inbox + card layout on desktop/tablet and change only the phone presentation:
+
+- phone uses a content-first layout where the selected card is visible immediately
+- the attention queue is hidden by default behind a compact queue toggle
+- the queue opens in an accessible modal bottom sheet instead of sitting inline above the card
+- selecting a queue item closes the sheet and swaps the active card
+- if there is only one active follow-up, the queue control stays hidden
+
+Implementation guardrails:
+
+- no backend/API contract changes
+- no redesign of the desktop/tablet split view
+- use a content-driven phone breakpoint aligned with the app's mobile nav threshold (`<768px`)
+- preserve direct deep-linking to `/loop/card/{id}` so notification-opened cards remain above the fold
 
 ### Surface 3: Details
 
