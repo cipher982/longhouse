@@ -7,6 +7,7 @@ import type {
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
 
 type TimelineRuntimeOverlay = {
+  timeline_anchor_at?: string | null;
   status?: AgentSessionStatus | string | null;
   presence_state?: string | null;
   presence_tool?: string | null;
@@ -17,12 +18,22 @@ type TimelineRuntimeOverlay = {
   confidence?: string | null;
 };
 
-export type TimelineRuntimeSession = Pick<AgentSession, "ended_at" | "last_activity_at"> &
+export type TimelineRuntimeSession = Pick<AgentSession, "ended_at" | "last_activity_at" | "timeline_anchor_at"> &
   Partial<TimelineRuntimeOverlay>;
 
 export type TimelineRuntimeActiveSession = Pick<
   AgentActiveSession,
-  "status" | "ended_at" | "presence_state" | "presence_tool" | "presence_updated_at" | "last_activity_at"
+  | "status"
+  | "ended_at"
+  | "presence_state"
+  | "presence_tool"
+  | "presence_updated_at"
+  | "last_activity_at"
+  | "timeline_anchor_at"
+  | "last_live_at"
+  | "display_phase"
+  | "active_tool"
+  | "confidence"
 >;
 
 export interface SessionRuntimeState {

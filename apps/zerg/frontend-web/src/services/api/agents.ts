@@ -26,6 +26,15 @@ export interface AgentSession {
   started_at: string;
   ended_at: string | null;
   last_activity_at: string | null;
+  timeline_anchor_at?: string | null;
+  status?: AgentSessionStatus | null;
+  presence_state?: PresenceState | null;
+  presence_tool?: string | null;
+  presence_updated_at?: string | null;
+  last_live_at?: string | null;
+  display_phase?: string | null;
+  active_tool?: string | null;
+  confidence?: string | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
@@ -123,7 +132,13 @@ export type AgentSessionStatus =
   | "active";
 export type AgentAttentionLevel = "hard" | "needs" | "soft" | "auto";
 
-export type PresenceState = "thinking" | "running" | "idle" | (string & {});
+export type PresenceState =
+  | "thinking"
+  | "running"
+  | "idle"
+  | "needs_user"
+  | "blocked"
+  | (string & {});
 
 export interface AgentActiveSession {
   id: string;
@@ -135,6 +150,7 @@ export interface AgentActiveSession {
   started_at: string;
   ended_at: string | null;
   last_activity_at: string;
+  timeline_anchor_at?: string;
   status: AgentSessionStatus;
   attention: AgentAttentionLevel;
   duration_minutes: number;
@@ -146,6 +162,10 @@ export interface AgentActiveSession {
   presence_state: PresenceState | null;
   presence_tool: string | null;
   presence_updated_at: string | null;
+  last_live_at?: string | null;
+  display_phase?: string | null;
+  active_tool?: string | null;
+  confidence?: string | null;
   // User-driven bucket
   user_state: "active" | "parked" | "snoozed" | "archived";
   loop_mode: SessionLoopMode;

@@ -23,6 +23,7 @@ import asyncio
 import gzip
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -95,7 +96,16 @@ class SessionResponse(UTCBaseModel):
     user_messages: int = Field(..., description="User message count")
     assistant_messages: int = Field(..., description="Assistant message count")
     tool_calls: int = Field(..., description="Tool call count")
-    last_activity_at: Optional[datetime] = Field(None, description="Most recent event timestamp")
+    last_activity_at: Optional[datetime] = Field(None, description="Most recent transcript activity timestamp")
+    timeline_anchor_at: Optional[datetime] = Field(None, description="Recency anchor used for timeline ordering")
+    status: Optional[str] = Field(None, description="Derived runtime status (working, idle, completed)")
+    presence_state: Optional[str] = Field(None, description="Fresh presence signal when available")
+    presence_tool: Optional[str] = Field(None, description="Tool currently executing (when applicable)")
+    presence_updated_at: Optional[datetime] = Field(None, description="When presence was last signalled")
+    last_live_at: Optional[datetime] = Field(None, description="Most recent live-signal timestamp")
+    display_phase: Optional[str] = Field(None, description="User-facing runtime phase label")
+    active_tool: Optional[str] = Field(None, description="Active tool label for runtime display")
+    confidence: Optional[str] = Field(None, description="Runtime confidence: live|inferred|stale")
     summary: Optional[str] = Field(None, description="Session summary")
     summary_title: Optional[str] = Field(None, description="Short session title")
     first_user_message: Optional[str] = Field(None, description="First user message (truncated)")
@@ -157,6 +167,131 @@ class SessionThreadResponse(BaseModel):
     sessions: List[SessionResponse]
 
 
+PRESENCE_STALE_THRESHOLD = timedelta(minutes=10)
+RECENT_ACTIVITY_WINDOW = timedelta(minutes=5)
+LIVE_PRESENCE_STATES = {"thinking", "running", "needs_user", "blocked"}
+
+
+@dataclass(frozen=True)
+class SessionRuntimeOverlay:
+    status: str
+    presence_state: str | None
+    presence_tool: str | None
+    presence_updated_at: datetime | None
+    last_live_at: datetime | None
+    display_phase: str
+    active_tool: str | None
+    confidence: str | None
+    timeline_anchor_at: datetime
+
+
+def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _latest_timestamp(*values: datetime | None) -> datetime | None:
+    normalized = [_normalize_utc_datetime(value) for value in values]
+    present = [value for value in normalized if value is not None]
+    return max(present) if present else None
+
+
+def _load_presence_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionPresence]:
+    if not session_ids:
+        return {}
+    str_session_ids = [str(session_id) for session_id in session_ids]
+    rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()
+    return {row.session_id: row for row in rows}
+
+
+def _build_display_phase(
+    *,
+    status: str,
+    presence_state: str | None,
+    presence_tool: str | None,
+    confidence: str | None,
+    ended_at: datetime | None,
+) -> str:
+    if presence_state == "running":
+        return f"Running {presence_tool}" if presence_tool else "Running"
+    if presence_state == "thinking":
+        return "Thinking"
+    if presence_state == "needs_user":
+        return "Needs you"
+    if presence_state == "blocked":
+        return f"Blocked on {presence_tool}" if presence_tool else "Needs permission"
+    if presence_state == "idle":
+        return "Idle"
+    if status == "working":
+        return "Active" if confidence == "inferred" else "Working"
+    if status == "idle":
+        return "Idle"
+    if status == "completed" or ended_at is not None:
+        return "Completed"
+    return "Recent"
+
+
+def _derive_session_runtime_overlay(
+    session: AgentSession,
+    *,
+    last_activity_at: datetime | None,
+    presence: SessionPresence | None,
+    now: datetime,
+) -> SessionRuntimeOverlay:
+    started_at = _normalize_utc_datetime(session.started_at) or now
+    ended_at = _normalize_utc_datetime(session.ended_at)
+    progress_at = _normalize_utc_datetime(last_activity_at) or ended_at or started_at
+    presence_updated_at = _normalize_utc_datetime(presence.updated_at if presence else None)
+    presence_state = None
+    presence_tool = None
+    if presence is not None and presence_updated_at is not None and (now - presence_updated_at) < PRESENCE_STALE_THRESHOLD:
+        presence_state = presence.state
+        presence_tool = presence.tool_name
+
+    timeline_anchor_at = _latest_timestamp(progress_at, presence_updated_at, started_at) or now
+    last_live_at = presence_updated_at
+    confidence: str | None = None
+
+    if presence_state in LIVE_PRESENCE_STATES:
+        status = "working"
+        confidence = "live"
+    elif presence_state == "idle":
+        status = "idle"
+        confidence = "live"
+    elif ended_at is None:
+        if (now - progress_at) <= RECENT_ACTIVITY_WINDOW:
+            status = "working"
+            confidence = "inferred"
+            last_live_at = last_live_at or progress_at
+        else:
+            status = "idle"
+            confidence = "stale" if presence_updated_at is not None else None
+    else:
+        status = "completed"
+        confidence = "stale" if presence_updated_at is not None else None
+
+    return SessionRuntimeOverlay(
+        status=status,
+        presence_state=presence_state,
+        presence_tool=presence_tool,
+        presence_updated_at=presence_updated_at,
+        last_live_at=last_live_at,
+        display_phase=_build_display_phase(
+            status=status,
+            presence_state=presence_state,
+            presence_tool=presence_tool,
+            confidence=confidence,
+            ended_at=ended_at,
+        ),
+        active_tool=presence_tool,
+        confidence=confidence,
+        timeline_anchor_at=timeline_anchor_at,
+    )
+
+
 def _get_thread_meta(store: AgentsStore, session: AgentSession, thread_cache: Dict[str, tuple[str, int]]) -> tuple[str, int]:
     root_id = str(session.thread_root_session_id or session.id)
     cached = thread_cache.get(root_id)
@@ -175,6 +310,7 @@ def _build_session_response(
     *,
     thread_cache: Dict[str, tuple[str, int]] | None = None,
     last_activity_at: datetime | None = None,
+    runtime_overlay: SessionRuntimeOverlay | None = None,
     first_user_message: str | None = None,
     match_event_id: int | None = None,
     match_snippet: str | None = None,
@@ -183,6 +319,7 @@ def _build_session_response(
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = _get_thread_meta(store, session, cache)
+    include_runtime = runtime_overlay is not None and (runtime_overlay.presence_updated_at is not None or session.ended_at is None)
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -198,6 +335,15 @@ def _build_session_response(
         assistant_messages=session.assistant_messages or 0,
         tool_calls=session.tool_calls or 0,
         last_activity_at=last_activity_at,
+        timeline_anchor_at=(runtime_overlay.timeline_anchor_at if runtime_overlay is not None else last_activity_at),
+        status=(runtime_overlay.status if include_runtime else None),
+        presence_state=(runtime_overlay.presence_state if include_runtime else None),
+        presence_tool=(runtime_overlay.presence_tool if include_runtime else None),
+        presence_updated_at=(runtime_overlay.presence_updated_at if include_runtime else None),
+        last_live_at=(runtime_overlay.last_live_at if include_runtime else None),
+        display_phase=(runtime_overlay.display_phase if include_runtime else None),
+        active_tool=(runtime_overlay.active_tool if include_runtime else None),
+        confidence=(runtime_overlay.confidence if include_runtime else None),
         summary=session.summary,
         summary_title=session.summary_title,
         first_user_message=first_user_message,
@@ -266,7 +412,8 @@ class ActiveSessionResponse(UTCBaseModel):
     git_branch: Optional[str] = Field(None, description="Git branch")
     started_at: datetime = Field(..., description="Session start time")
     ended_at: Optional[datetime] = Field(None, description="Session end time")
-    last_activity_at: datetime = Field(..., description="Most recent event timestamp")
+    last_activity_at: datetime = Field(..., description="Most recent transcript activity timestamp")
+    timeline_anchor_at: datetime = Field(..., description="Recency anchor used for live ordering")
     status: str = Field(..., description="Session status (working, idle, completed)")
     attention: str = Field(..., description="Attention level (auto by default)")
     duration_minutes: int = Field(..., description="Duration in minutes")
@@ -278,6 +425,10 @@ class ActiveSessionResponse(UTCBaseModel):
     presence_state: Optional[str] = Field(None, description="Real-time state: thinking|running|idle|needs_user|blocked")
     presence_tool: Optional[str] = Field(None, description="Tool currently executing (when state=running or blocked)")
     presence_updated_at: Optional[datetime] = Field(None, description="When presence was last signalled")
+    last_live_at: Optional[datetime] = Field(None, description="Most recent live-signal timestamp")
+    display_phase: Optional[str] = Field(None, description="User-facing runtime phase label")
+    active_tool: Optional[str] = Field(None, description="Active tool label for runtime display")
+    confidence: Optional[str] = Field(None, description="Runtime confidence: live|inferred|stale")
     # User-driven bucket
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
@@ -1880,7 +2031,10 @@ async def list_sessions(
                     except Exception:
                         pass  # Snippets are nice-to-have; degrade gracefully
 
-            activity_map = store.get_last_activity_map([s.id for s in fused])
+            session_ids = [s.id for s in fused]
+            activity_map = store.get_last_activity_map(session_ids)
+            presence_map = _load_presence_map(db, session_ids)
+            now = datetime.now(timezone.utc)
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
             sem_score_map = {s.id: score for s, score in sem_hits}
             thread_cache: dict[str, tuple[str, int]] = {}
@@ -1890,7 +2044,13 @@ async def list_sessions(
                     store,
                     s,
                     thread_cache=thread_cache,
-                    last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
+                    last_activity_at=_normalize_utc_datetime(activity_map.get(s.id) or s.ended_at or s.started_at),
+                    runtime_overlay=_derive_session_runtime_overlay(
+                        s,
+                        last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
+                        presence=presence_map.get(str(s.id)),
+                        now=now,
+                    ),
                     first_user_message=first_user_map.get(s.id),
                     match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                     match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(s.id),
@@ -1935,6 +2095,7 @@ async def list_sessions(
             offset=offset,
             hide_autonomous=hide_autonomous,
             context_mode=context_mode,
+            anchor_on_activity=effective_sort == "recency",
         )
 
         # Apply sort to lexical results
@@ -1947,15 +2108,23 @@ async def list_sessions(
         session_ids = [s.id for s in sessions]
         match_map = store.get_session_matches(session_ids, query, context_mode=context_mode) if query else {}
         activity_map = store.get_last_activity_map(session_ids)
+        presence_map = _load_presence_map(db, session_ids)
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
         thread_cache: dict[str, tuple[str, int]] = {}
+        now = datetime.now(timezone.utc)
 
         response_sessions = [
             _build_session_response(
                 store,
                 s,
                 thread_cache=thread_cache,
-                last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
+                last_activity_at=_normalize_utc_datetime(activity_map.get(s.id) or s.ended_at or s.started_at),
+                runtime_overlay=_derive_session_runtime_overlay(
+                    s,
+                    last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
+                    presence=presence_map.get(str(s.id)),
+                    now=now,
+                ),
                 first_user_message=first_user_map.get(s.id),
                 match_event_id=(match_map.get(s.id) or {}).get("event_id"),
                 match_snippet=(match_map.get(s.id) or {}).get("snippet"),
@@ -1967,7 +2136,7 @@ async def list_sessions(
         # For recency sort: order by last activity; for other sorts preserve apply_sort order
         if effective_sort == "recency":
             response_sessions.sort(
-                key=lambda r: r.last_activity_at or r.started_at,
+                key=lambda r: r.timeline_anchor_at or r.last_activity_at or r.started_at,
                 reverse=True,
             )
 
@@ -2036,6 +2205,7 @@ async def list_session_summaries(
             limit=limit,
             offset=offset,
             hide_autonomous=hide_autonomous,
+            anchor_on_activity=query is None,
         )
 
         session_ids = [s.id for s in sessions]
@@ -2102,56 +2272,29 @@ async def list_active_sessions(
             limit=limit,
             offset=0,
             exclude_user_states=["archived", "snoozed"],
+            anchor_on_activity=True,
         )
 
         session_ids = [s.id for s in sessions]
         last_activity = store.get_last_activity_map(session_ids)
         last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
-
-        # Load real-time presence signals (one row per session, may be absent).
-        # session_ids contains UUID objects; SessionPresence.session_id is String —
-        # convert to str so the IN comparison matches across types.
-        str_session_ids = [str(sid) for sid in session_ids]
-        presence_rows = (db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()) if str_session_ids else []
-        presence_map = {p.session_id: p for p in presence_rows}
-        presence_stale_threshold = timedelta(minutes=10)
+        presence_map = _load_presence_map(db, session_ids)
 
         now = datetime.now(timezone.utc)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
-            last_activity_at = last_activity.get(s.id) or s.ended_at or s.started_at
-            if not last_activity_at:
-                last_activity_at = now
-
-            presence = presence_map.get(str(s.id))
-            if presence is not None:
-                # updated_at may be naive (SQLite + func.now()) — normalize to UTC
-                updated_at = presence.updated_at
-                if updated_at.tzinfo is None:
-                    updated_at = updated_at.replace(tzinfo=timezone.utc)
-                presence_fresh = (now - updated_at) < presence_stale_threshold
-            else:
-                presence_fresh = False
-
-            # Normalize naive datetimes from SQLite to UTC for arithmetic
-            if last_activity_at.tzinfo is None:
-                last_activity_at = last_activity_at.replace(tzinfo=timezone.utc)
-
-            # Fresh presence takes priority over ended_at — ended_at is set after every
-            # response (Stop hook ships transcript), so a session with fresh presence is
-            # actively in progress even though ended_at is non-null.
-            if presence_fresh:
-                derived_status = "working" if presence.state in ("thinking", "running", "needs_user", "blocked") else "idle"
-            elif s.ended_at:
-                derived_status = "completed"
-            else:
-                idle_for = now - last_activity_at
-                derived_status = "working" if idle_for <= timedelta(minutes=5) else "idle"
+            last_activity_at = _normalize_utc_datetime(last_activity.get(s.id) or s.ended_at or s.started_at) or now
+            runtime_overlay = _derive_session_runtime_overlay(
+                s,
+                last_activity_at=last_activity.get(s.id) or s.ended_at or s.started_at,
+                presence=presence_map.get(str(s.id)),
+                now=now,
+            )
 
             attention_level = "auto"
 
-            if status_filter and derived_status != status_filter:
+            if status_filter and runtime_overlay.status != status_filter:
                 continue
             if attention and attention_level != attention:
                 continue
@@ -2172,16 +2315,21 @@ async def list_active_sessions(
                     started_at=s.started_at,
                     ended_at=s.ended_at,
                     last_activity_at=last_activity_at,
-                    status=derived_status,
+                    timeline_anchor_at=runtime_overlay.timeline_anchor_at,
+                    status=runtime_overlay.status,
                     attention=attention_level,
                     duration_minutes=duration_minutes,
                     last_user_message=last_user.get(s.id),
                     last_assistant_message=last_ai.get(s.id),
                     message_count=message_count,
                     tool_calls=s.tool_calls or 0,
-                    presence_state=presence.state if presence_fresh else None,
-                    presence_tool=presence.tool_name if presence_fresh else None,
-                    presence_updated_at=presence.updated_at if presence_fresh else None,
+                    presence_state=runtime_overlay.presence_state,
+                    presence_tool=runtime_overlay.presence_tool,
+                    presence_updated_at=runtime_overlay.presence_updated_at,
+                    last_live_at=runtime_overlay.last_live_at,
+                    display_phase=runtime_overlay.display_phase,
+                    active_tool=runtime_overlay.active_tool,
+                    confidence=runtime_overlay.confidence,
                     user_state=s.user_state or "active",
                     loop_mode=_coerce_session_loop_mode(getattr(s, "loop_mode", None)),
                 )

@@ -100,6 +100,12 @@ function getDateKey(dateStr: string): string {
   });
 }
 
+function getTimelineAnchor(
+  session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">,
+): string {
+  return session.timeline_anchor_at || session.last_activity_at || session.started_at;
+}
+
 interface SessionThreadCard {
   threadId: string;
   head: AgentSession;
@@ -167,7 +173,7 @@ function groupThreadCardsByDay(cards: SessionThreadCard[]): Map<string, SessionT
   const groups = new Map<string, SessionThreadCard[]>();
 
   for (const card of cards) {
-    const key = getDateKey(card.head.last_activity_at || card.head.started_at);
+    const key = getDateKey(getTimelineAnchor(card.head));
     const existing = groups.get(key) || [];
     existing.push(card);
     groups.set(key, existing);
@@ -598,7 +604,7 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
-        <span className="session-card-time">{formatRelativeTime(session.last_activity_at || session.started_at)}</span>
+        <span className="session-card-time">{formatRelativeTime(getTimelineAnchor(session))}</span>
       </div>
 
       <div className="session-card-meta">
@@ -880,7 +886,7 @@ export default function SessionsPage() {
     return [...list].sort((a, b) => {
       const groupDiff = sessionSortKey(a.status) - sessionSortKey(b.status);
       if (groupDiff !== 0) return groupDiff;
-      return parseUTC(b.last_activity_at).getTime() - parseUTC(a.last_activity_at).getTime();
+      return parseUTC(b.timeline_anchor_at || b.last_activity_at).getTime() - parseUTC(a.timeline_anchor_at || a.last_activity_at).getTime();
     });
   }, [activeSessionsData]);
 
@@ -1179,7 +1185,7 @@ export default function SessionsPage() {
                         </div>
                         <div className="sessions-live-row-meta">
                           {getLiveSessionScope(session)} · {session.provider} ·{" "}
-                          {formatRelativeTime(session.last_activity_at)}
+                          {formatRelativeTime(session.timeline_anchor_at || session.last_activity_at)}
                         </div>
                         <div className="sessions-live-row-presence">
                           <PresenceBadge

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy import and_
 from sqlalchemy import bindparam
+from sqlalchemy import case
 from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -34,6 +35,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
+from zerg.models.agents import SessionPresence
 
 logger = logging.getLogger(__name__)
 
@@ -1458,6 +1460,7 @@ class AgentsStore:
         hide_autonomous: bool = True,
         context_mode: str = "forensic",
         branch_mode: str = "head",
+        anchor_on_activity: bool = False,
     ) -> tuple[List[AgentSession], int]:
         """List sessions with optional filters.
 
@@ -1469,6 +1472,16 @@ class AgentsStore:
             Tuple of (sessions, total_count)
         """
         stmt = select(AgentSession)
+        activity_anchor = AgentSession.started_at
+        if anchor_on_activity:
+            last_activity_subq = self._last_activity_subquery()
+            presence_subq = self._presence_updated_subquery()
+            stmt = stmt.outerjoin(last_activity_subq, last_activity_subq.c.session_id == AgentSession.id)
+            stmt = stmt.outerjoin(presence_subq, presence_subq.c.session_id == AgentSession.id)
+            activity_anchor = self._recent_activity_anchor_expr(
+                last_activity_subq.c.last_activity_at,
+                presence_subq.c.presence_updated_at,
+            )
 
         # Environment filtering
         if environment:
@@ -1484,9 +1497,15 @@ class AgentsStore:
         if device_id:
             stmt = stmt.where(AgentSession.device_id == device_id)
         if since:
-            stmt = stmt.where(AgentSession.started_at >= since)
+            if anchor_on_activity:
+                stmt = stmt.where(activity_anchor >= since)
+            else:
+                stmt = stmt.where(AgentSession.started_at >= since)
         if until:
-            stmt = stmt.where(AgentSession.started_at <= until)
+            if anchor_on_activity:
+                stmt = stmt.where(activity_anchor <= until)
+            else:
+                stmt = stmt.where(AgentSession.started_at <= until)
 
         # Exclude autonomous agent runs (Task sub-agents and sessions with no user messages)
         if hide_autonomous:
@@ -1510,10 +1529,57 @@ class AgentsStore:
         total = self.db.execute(count_stmt).scalar() or 0
 
         # Apply ordering and pagination
-        stmt = stmt.order_by(AgentSession.started_at.desc()).limit(limit).offset(offset)
+        if anchor_on_activity:
+            stmt = stmt.order_by(activity_anchor.desc(), AgentSession.started_at.desc()).limit(limit).offset(offset)
+        else:
+            stmt = stmt.order_by(AgentSession.started_at.desc()).limit(limit).offset(offset)
 
         sessions = list(self.db.execute(stmt).scalars().all())
         return sessions, total
+
+    @staticmethod
+    def _recent_activity_anchor_expr(last_activity_expr, presence_updated_expr):
+        latest_signal = case(
+            (presence_updated_expr.is_(None), last_activity_expr),
+            (last_activity_expr.is_(None), presence_updated_expr),
+            (presence_updated_expr >= last_activity_expr, presence_updated_expr),
+            else_=last_activity_expr,
+        )
+        return func.coalesce(latest_signal, AgentSession.started_at)
+
+    def _last_activity_subquery(self):
+        heads_subq = (
+            select(
+                AgentSessionBranch.session_id.label("session_id"),
+                func.max(AgentSessionBranch.id).label("head_branch_id"),
+            )
+            .where(AgentSessionBranch.is_head == 1)
+            .group_by(AgentSessionBranch.session_id)
+            .subquery()
+        )
+        return (
+            select(
+                AgentEvent.session_id.label("session_id"),
+                func.max(AgentEvent.timestamp).label("last_activity_at"),
+            )
+            .select_from(AgentEvent)
+            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
+            .where(
+                or_(
+                    heads_subq.c.head_branch_id.is_(None),
+                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
+                )
+            )
+            .group_by(AgentEvent.session_id)
+            .subquery()
+        )
+
+    @staticmethod
+    def _presence_updated_subquery():
+        return select(
+            SessionPresence.session_id.label("session_id"),
+            SessionPresence.updated_at.label("presence_updated_at"),
+        ).subquery()
 
     def get_first_message_map(
         self,
