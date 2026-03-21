@@ -63,8 +63,12 @@ jobs:
         with:
           bun-version: '1.2.20'
 
+      - name: Setup Rust
+        if: contains(fromJSON('["unit","full"]'), inputs.suite)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y make
+        run: sudo apt-get update && sudo apt-get install -y make build-essential pkg-config
 
       - name: Install JS deps (repo root)
         if: contains('frontend e2e-core e2e-a11y e2e-single full', inputs.suite)
@@ -79,7 +83,7 @@ jobs:
         run: cd apps/zerg/backend && uv sync
 
       - name: Install Playwright browsers + deps
-        if: startsWith(inputs.suite, 'e2e-')
+        if: startsWith(inputs.suite, 'e2e-') || inputs.suite == 'full'
         run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
 
       - name: Run selected suite
@@ -128,7 +132,7 @@ jobs:
           esac
 
       - name: Upload E2E artifacts (on failure)
-        if: failure() && startsWith(inputs.suite, 'e2e-')
+        if: failure() && (startsWith(inputs.suite, 'e2e-') || inputs.suite == 'full')
         uses: actions/upload-artifact@v7
         with:
           name: ci-test-e2e-artifacts
