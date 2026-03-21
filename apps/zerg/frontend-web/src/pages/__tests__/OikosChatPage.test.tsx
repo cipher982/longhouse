@@ -19,6 +19,7 @@ import { oikosToolStore } from '../../oikos/lib/oikos-tool-store';
 const apiMocks = vi.hoisted(() => ({
   fetchThreadByTitle: vi.fn(),
   fetchThreadMessages: vi.fn(),
+  fetchSystemCapabilities: vi.fn(),
 }));
 
 vi.mock('../../services/api', async (importOriginal) => {
@@ -29,7 +30,11 @@ vi.mock('../../services/api', async (importOriginal) => {
   };
 });
 
-const { fetchThreadByTitle: mockFetchThreadByTitle, fetchThreadMessages: mockFetchThreadMessages } = apiMocks;
+const {
+  fetchThreadByTitle: mockFetchThreadByTitle,
+  fetchThreadMessages: mockFetchThreadMessages,
+  fetchSystemCapabilities: mockFetchSystemCapabilities,
+} = apiMocks;
 
 function renderOikosChatPage(initialEntry = '/chat') {
   const queryClient = new QueryClient({
@@ -56,6 +61,10 @@ describe('OikosChatPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     oikosToolStore.clearTools();
+    mockFetchSystemCapabilities.mockResolvedValue({
+      llm_available: true,
+      auth_disabled: false,
+    });
   });
 
   afterEach(() => {

@@ -8,7 +8,8 @@
  * - ?thread=<title> - Load a backend thread by title for display
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useSessionPicker } from '../components/SessionPickerProvider';
 import { eventBus } from '../oikos/lib/event-bus';
@@ -24,7 +25,13 @@ import { oikosToolStore, type OikosToolCall } from '../oikos/lib/oikos-tool-stor
 import { parseUTC } from '../lib/dateUtils';
 
 // API functions
-import { fetchThreadByTitle, fetchThreadMessages, request, fetchSystemCapabilities } from '../services/api';
+import {
+  fetchThreadByTitle,
+  fetchThreadMessages,
+  request,
+  fetchSystemCapabilities,
+  type ThreadMessage,
+} from '../services/api';
 
 // Components
 import { ApiKeyModal } from '../components/ApiKeyModal';
@@ -34,53 +41,141 @@ const DEMO_THREAD_TITLES: Record<string, string> = {
   'oikos-math': '[scenario:oikos-math] Oikos math (2+2)',
 };
 
+interface HydratedThreadBootstrap {
+  initialMessages: ChatMessage[];
+  toolsToLoad: OikosToolCall[];
+}
+
+function hydrateThreadBootstrap(messages: ThreadMessage[]): HydratedThreadBootstrap {
+  const toolsToLoad: OikosToolCall[] = [];
+
+  const initialMessages: ChatMessage[] = messages
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .map((message) => {
+      const apiToolCalls = (
+        message as { tool_calls?: Array<{ id: string; name: string; args: Record<string, unknown> }> }
+      ).tool_calls;
+
+      const toolCalls: StoredToolCall[] | undefined =
+        apiToolCalls && apiToolCalls.length > 0
+          ? apiToolCalls.map((toolCall) => ({
+              id: toolCall.id,
+              name: toolCall.name,
+              args: toolCall.args || {},
+            }))
+          : undefined;
+
+      const syntheticRunId = toolCalls ? -message.id : undefined;
+      const toolTimestamp = message.sent_at ? parseUTC(message.sent_at).getTime() : Date.now();
+
+      if (toolCalls && syntheticRunId !== undefined) {
+        for (const toolCall of toolCalls) {
+          toolsToLoad.push({
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            status: 'completed',
+            runId: syntheticRunId,
+            startedAt: toolTimestamp,
+            completedAt: toolTimestamp,
+            argsPreview: JSON.stringify(toolCall.args).slice(0, 100),
+            args: toolCall.args,
+            logs: [],
+          });
+        }
+      }
+
+      return {
+        id: String(message.id),
+        role: message.role as 'user' | 'assistant',
+        content: message.content || '',
+        timestamp: message.sent_at ? parseUTC(message.sent_at) : new Date(),
+        skipAnimation: true,
+        runId: syntheticRunId,
+        toolCalls,
+      };
+    });
+
+  return {
+    initialMessages,
+    toolsToLoad,
+  };
+}
+
 export default function OikosChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const threadTitle = searchParams.get('thread');
   const demoScenario = searchParams.get('demo');
-  const [initialMessages, setInitialMessages] = useState<ChatMessage[] | undefined>(undefined);
-  const [loading, setLoading] = useState(!!threadTitle || !!demoScenario);
+  const [isDemoSeeding, setIsDemoSeeding] = useState(Boolean(demoScenario));
   const { showSessionPicker } = useSessionPicker();
   const isE2E = import.meta.env.VITE_E2E === 'true';
+  const isReplay = !!(window as Window & { __REPLAY_SCENARIO?: string }).__REPLAY_SCENARIO;
 
   // API key availability state
-  const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
-  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [apiKeyModalDismissed, setApiKeyModalDismissed] = useState(false);
 
-  // Check system capabilities on mount
-  useEffect(() => {
-    let cancelled = false;
-
-    const checkCapabilities = async () => {
+  const capabilitiesQuery = useQuery({
+    queryKey: ['system-capabilities'],
+    queryFn: async () => {
       try {
-        const caps = await fetchSystemCapabilities();
-        if (!cancelled) {
-          setLlmAvailable(caps.llm_available);
-          // Show modal if LLM is not available
-          const isReplay = !!(window as Window & { __REPLAY_SCENARIO?: string }).__REPLAY_SCENARIO;
-          if (!caps.llm_available && !isE2E && !isReplay) {
-            setShowApiKeyModal(true);
-          }
-        }
+        return await fetchSystemCapabilities();
       } catch (error) {
-        // If capabilities endpoint fails, assume LLM is available (fail open)
         console.warn('Failed to fetch system capabilities:', error);
-        if (!cancelled) {
-          setLlmAvailable(true);
-        }
+        return {
+          llm_available: true,
+          auth_disabled: false,
+        };
       }
-    };
+    },
+    retry: false,
+    staleTime: 60_000,
+  });
 
-    void checkCapabilities();
+  const llmAvailable = capabilitiesQuery.data?.llm_available ?? null;
+  const showApiKeyModal =
+    llmAvailable === false && !isE2E && !isReplay && !apiKeyModalDismissed;
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const preloadedThreadQuery = useQuery({
+    queryKey: ['oikos-thread', threadTitle],
+    queryFn: () => fetchThreadByTitle(threadTitle as string),
+    enabled: Boolean(threadTitle),
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+  const preloadedThreadId = preloadedThreadQuery.data?.id ?? null;
+  const preloadedMessagesQuery = useQuery({
+    queryKey: ['oikos-thread-messages', preloadedThreadId],
+    queryFn: () => fetchThreadMessages(preloadedThreadId as number),
+    enabled: preloadedThreadId !== null,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+  const hydratedThreadBootstrap = useMemo<HydratedThreadBootstrap>(
+    () =>
+      preloadedMessagesQuery.data
+        ? hydrateThreadBootstrap(preloadedMessagesQuery.data)
+        : { initialMessages: [], toolsToLoad: [] },
+    [preloadedMessagesQuery.data],
+  );
+
+  const initialMessages =
+    threadTitle && preloadedMessagesQuery.data ? hydratedThreadBootstrap.initialMessages : undefined;
+
+  const appProviderKey = threadTitle
+    ? `oikos-thread:${preloadedThreadId ?? threadTitle}:${preloadedMessagesQuery.dataUpdatedAt}`
+    : 'oikos-live';
+
+  const loading =
+    isDemoSeeding
+    || (Boolean(threadTitle)
+      && (preloadedThreadQuery.isLoading || (preloadedThreadId !== null && preloadedMessagesQuery.isLoading)));
 
   const handleOpenIntegrations = useCallback(() => {
-    setShowApiKeyModal(false);
+    setApiKeyModalDismissed(true);
     navigate('/settings/integrations');
   }, [navigate]);
 
@@ -107,7 +202,10 @@ export default function OikosChatPage() {
   }, [handleShowSessionPicker]);
 
   useEffect(() => {
-    if (!demoScenario) return;
+    if (!demoScenario) {
+      setIsDemoSeeding(false);
+      return;
+    }
 
     const storageKey = `oikos-demo-seeded:${demoScenario}`;
     if (typeof window !== 'undefined' && window.sessionStorage.getItem(storageKey)) {
@@ -116,10 +214,12 @@ export default function OikosChatPage() {
         nextParams.set('thread', DEMO_THREAD_TITLES[demoScenario]);
         setSearchParams(nextParams, { replace: true });
       }
+      setIsDemoSeeding(false);
       return;
     }
 
     let cancelled = false;
+    setIsDemoSeeding(true);
 
     const seedScenario = async () => {
       try {
@@ -136,11 +236,10 @@ export default function OikosChatPage() {
           setSearchParams(nextParams, { replace: true });
         }
       } catch (error) {
-        // eslint-disable-next-line no-console
         console.warn('Oikos demo seeding failed:', error);
       } finally {
         if (!cancelled) {
-          setLoading(false);
+          setIsDemoSeeding(false);
         }
       }
     };
@@ -153,88 +252,19 @@ export default function OikosChatPage() {
   }, [demoScenario, threadTitle, searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!threadTitle) return;
-
-    async function loadThreadMessages() {
-      try {
-        const thread = await fetchThreadByTitle(threadTitle!);
-        if (!thread) {
-          console.warn(`Thread "${threadTitle}" not found`);
-          setLoading(false);
-          return;
-        }
-
-        const messages = await fetchThreadMessages(thread.id);
-
-        // Clear any existing tools from previous loads
-        oikosToolStore.clearTools();
-
-        // Collect tools to hydrate into the store
-        const toolsToLoad: OikosToolCall[] = [];
-
-        // Convert backend ThreadMessages to Oikos ChatMessages
-        // Filter to only user/assistant roles (skip system and tool messages)
-        const chatMessages: ChatMessage[] = messages
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => {
-            // Extract tool_calls if present (assistant messages with tool calls)
-            // The API returns tool_calls in LangChain format
-            const apiToolCalls = (m as { tool_calls?: Array<{ id: string; name: string; args: Record<string, unknown> }> }).tool_calls;
-            const toolCalls: StoredToolCall[] | undefined = apiToolCalls && apiToolCalls.length > 0
-              ? apiToolCalls.map(tc => ({
-                  id: tc.id,
-                  name: tc.name,
-                  args: tc.args || {},
-                }))
-              : undefined;
-
-            // Generate synthetic runId for messages with tool calls
-            // Use negative message ID to avoid collision with real run IDs
-            const syntheticRunId = toolCalls ? -m.id : undefined;
-
-            // Convert tool_calls to OikosToolCall format for the store
-            if (toolCalls && syntheticRunId !== undefined) {
-              for (const tc of toolCalls) {
-                toolsToLoad.push({
-                  toolCallId: tc.id,
-                  toolName: tc.name,
-                  status: 'completed', // Historical tools are always completed
-                  runId: syntheticRunId,
-                  startedAt: m.sent_at ? parseUTC(m.sent_at).getTime() : Date.now(),
-                  completedAt: m.sent_at ? parseUTC(m.sent_at).getTime() : Date.now(),
-                  argsPreview: JSON.stringify(tc.args).slice(0, 100),
-                  args: tc.args,
-                  logs: [],
-                });
-              }
-            }
-
-            return {
-              id: String(m.id),
-              role: m.role as 'user' | 'assistant',
-              content: m.content || '',
-              timestamp: m.sent_at ? parseUTC(m.sent_at) : new Date(),
-              skipAnimation: true, // Don't animate pre-loaded messages
-              runId: syntheticRunId,
-              toolCalls,
-            };
-          });
-
-        // Hydrate the tool store with historical tools
-        if (toolsToLoad.length > 0) {
-          oikosToolStore.loadTools(toolsToLoad);
-        }
-
-        setInitialMessages(chatMessages);
-      } catch (error) {
-        console.error('Failed to load thread:', error);
-      } finally {
-        setLoading(false);
-      }
+    if (preloadedThreadQuery.isLoading || preloadedMessagesQuery.isLoading) {
+      return;
     }
 
-    loadThreadMessages();
-  }, [threadTitle]);
+    oikosToolStore.clearTools();
+    if (hydratedThreadBootstrap.toolsToLoad.length > 0) {
+      oikosToolStore.loadTools(hydratedThreadBootstrap.toolsToLoad);
+    }
+  }, [
+    hydratedThreadBootstrap,
+    preloadedMessagesQuery.isLoading,
+    preloadedThreadQuery.isLoading,
+  ]);
 
   // Show loading state while fetching thread
   if (loading) {
@@ -246,13 +276,13 @@ export default function OikosChatPage() {
   }
 
   return (
-    <AppProvider initialMessages={initialMessages}>
+    <AppProvider key={appProviderKey} initialMessages={initialMessages}>
       <div className="oikos-container">
         <App embedded={true} />
       </div>
       <ApiKeyModal
         isOpen={showApiKeyModal}
-        onClose={() => setShowApiKeyModal(false)}
+        onClose={() => setApiKeyModalDismissed(true)}
         onOpenIntegrations={handleOpenIntegrations}
       />
     </AppProvider>
