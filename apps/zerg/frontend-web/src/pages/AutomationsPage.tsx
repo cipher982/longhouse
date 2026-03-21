@@ -72,7 +72,7 @@ export default function AutomationsPage() {
   // WebSocket state - must be declared before useQuery to avoid reference errors
   const subscribedAutomationIdsRef = useRef<Set<number>>(new Set());
   const [wsReconnectToken, setWsReconnectToken] = useState(0);
-  const sendMessageRef = useRef<((message: any) => void) | null>(null);
+  const sendMessageRef = useRef<((message: ReturnType<typeof createEnvelope>) => void) | null>(null);
   const messageIdCounterRef = useRef(0);
 
   // Track pending subscriptions to handle confirmations and timeouts
@@ -161,6 +161,7 @@ export default function AutomationsPage() {
       setWsReconnectToken((token) => token + 1);
     },
   });
+  sendMessageRef.current = sendMessage;
 
   const {
     data: modelsData,
@@ -216,11 +217,6 @@ export default function AutomationsPage() {
     // matches interactive readiness here.
     screenshotReady: !isLoading,
   });
-
-  // Keep sendMessage ref up-to-date for stable cleanup
-  useEffect(() => {
-    sendMessageRef.current = sendMessage;
-  }, [sendMessage]);
 
   // Mutation for starting an automation run (hybrid: optimistic + WebSocket)
   const startRunMutation = useMutation({

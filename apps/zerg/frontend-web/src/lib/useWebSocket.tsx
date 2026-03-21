@@ -1,11 +1,18 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
+import { useLatest } from '../hooks/useLatest';
 import { getWebSocketConfig } from './config';
 
 // Maximum number of messages to queue when disconnected
 // Prevents memory leak if user performs many actions while offline
 const MAX_QUEUED_MESSAGES = 100;
+const STREAMING_MESSAGE_TYPES = new Set([
+  'stream_start',
+  'stream_chunk',
+  'stream_end',
+  'assistant_id',
+]);
 
 export enum ConnectionStatus {
   DISCONNECTED = 'disconnected',
@@ -117,36 +124,14 @@ export function useWebSocket(
   const messageQueueRef = useRef<WebSocketMessage[]>([]);
   const connectRef = useRef<(() => void) | null>(null);
   const intentionalCloseRef = useRef(false);
-  const onMessageRef = useRef<typeof onMessage>(onMessage);
-  const onConnectRef = useRef<typeof onConnect>(onConnect);
-  const onDisconnectRef = useRef<typeof onDisconnect>(onDisconnect);
-  const onErrorRef = useRef<typeof onError>(onError);
-  const onStreamingMessageRef = useRef<typeof onStreamingMessage>(onStreamingMessage);
-  const invalidateQueriesRef = useRef<(string | number | object)[][]>(invalidateQueries);
-
-  useEffect(() => {
-    onMessageRef.current = onMessage;
-  }, [onMessage]);
-
-  useEffect(() => {
-    onConnectRef.current = onConnect;
-  }, [onConnect]);
-
-  useEffect(() => {
-    onDisconnectRef.current = onDisconnect;
-  }, [onDisconnect]);
-
-  useEffect(() => {
-    onErrorRef.current = onError;
-  }, [onError]);
-
-  useEffect(() => {
-    onStreamingMessageRef.current = onStreamingMessage;
-  }, [onStreamingMessage]);
-
-  useEffect(() => {
-    invalidateQueriesRef.current = invalidateQueries;
-  }, [invalidateQueries]);
+  const latestOptionsRef = useLatest({
+    invalidateQueries,
+    onConnect,
+    onDisconnect,
+    onError,
+    onMessage,
+    onStreamingMessage,
+  });
 
   const buildWebSocketUrl = useCallback(() => {
     const base = resolveWsBase().replace(/\/+$/, ''); // Strip trailing slashes
@@ -177,34 +162,32 @@ export function useWebSocket(
 
     // Handle heartbeat protocol — respond with envelope-format pong
     if (message.type === 'ping') {
-      sendMessage(createEnvelope('pong', 'system', { timestamp: Date.now() }));
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify(createEnvelope('pong', 'system', { timestamp: Date.now() })));
+      }
       return;
     }
 
     // Check if this is a streaming message
-    const streamingTypes = [
-      'stream_start', 'stream_chunk', 'stream_end', 'assistant_id',
-    ];
-    if (streamingTypes.includes(message.type)) {
+    if (STREAMING_MESSAGE_TYPES.has(message.type)) {
       // Only log non-chunk messages to avoid noise (chunks logged with sampling in ChatPage)
       // if (message.type !== 'stream_chunk') {
       //   console.log('[WS] 🌊', message.type.toUpperCase());
       // }
       // Call streaming message handler if provided
-      onStreamingMessageRef.current?.(message);
+      latestOptionsRef.current.onStreamingMessage?.(message);
     }
 
     // Call custom message handler if provided
-    onMessageRef.current?.(message);
+    latestOptionsRef.current.onMessage?.(message);
 
     // Invalidate specified queries (but not for streaming chunks to avoid flicker)
-    if (!streamingTypes.includes(message.type)) {
-      invalidateQueriesRef.current.forEach(queryKey => {
+    if (!STREAMING_MESSAGE_TYPES.has(message.type)) {
+      latestOptionsRef.current.invalidateQueries.forEach(queryKey => {
         queryClient.invalidateQueries({ queryKey });
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sendMessage is stable (defined via useCallback below)
-  }, [queryClient]);
+  }, [latestOptionsRef, queryClient]);
 
   const handleConnect = useCallback(() => {
     // console.log('[WS] ✅ WebSocket connected successfully');
@@ -220,12 +203,12 @@ export function useWebSocket(
       messageQueueRef.current = [];
     }
 
-    onConnectRef.current?.();
-  }, []);
+    latestOptionsRef.current.onConnect?.();
+  }, [latestOptionsRef]);
 
   const handleDisconnect = useCallback(() => {
     setConnectionStatus(ConnectionStatus.DISCONNECTED);
-    onDisconnectRef.current?.();
+    latestOptionsRef.current.onDisconnect?.();
 
     // Attempt reconnection if enabled and we haven't exceeded max attempts
     if (enabled && reconnectAttemptsRef.current < maxReconnectAttempts) {
@@ -235,7 +218,7 @@ export function useWebSocket(
         connectRef.current?.();
       }, reconnectInterval);
     }
-  }, [enabled, maxReconnectAttempts, reconnectInterval]);
+  }, [enabled, latestOptionsRef, maxReconnectAttempts, reconnectInterval]);
 
   const handleError = useCallback((error: Event) => {
     // Skip self-inflicted errors (StrictMode cleanup during handshake)
@@ -246,14 +229,14 @@ export function useWebSocket(
 
     console.error('[WS] ❌ WebSocket error:', error);
     setConnectionStatus(ConnectionStatus.ERROR);
-    onErrorRef.current?.(error);
+    latestOptionsRef.current.onError?.(error);
 
     if (reconnectAttemptsRef.current === 0) {
       toast.error("WebSocket connection failed. Real-time features disabled.", { duration: 5000 });
     } else if (reconnectAttemptsRef.current < maxReconnectAttempts) {
       toast.error("Connection lost. Attempting to reconnect...", { duration: 3000 });
     }
-  }, [maxReconnectAttempts]);
+  }, [latestOptionsRef, maxReconnectAttempts]);
 
   const connect = useCallback(() => {
     // Clean up existing connection
@@ -381,16 +364,6 @@ export function useWebSocket(
       disconnect();
     };
   }, [enabled, autoConnect, connect, disconnect]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      disconnect();
-    };
-  }, [disconnect]);
 
   // Expose sendMessage for E2E testing of queue behavior
   // This allows tests to directly call sendMessage to test queue bounds
