@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { Navigate, useSearchParams, useNavigate } from 'react-router-dom';
 import { useSessionPicker } from '../components/SessionPickerProvider';
 import { eventBus } from '../oikos/lib/event-bus';
 
@@ -40,6 +40,10 @@ import '../components/ApiKeyModal.css';
 const DEMO_THREAD_TITLES: Record<string, string> = {
   'oikos-math': '[scenario:oikos-math] Oikos math (2+2)',
 };
+
+function getDemoSeedStorageKey(demoScenario: string | null): string | null {
+  return demoScenario ? `oikos-demo-seeded:${demoScenario}` : null;
+}
 
 interface HydratedThreadBootstrap {
   initialMessages: ChatMessage[];
@@ -102,14 +106,19 @@ function hydrateThreadBootstrap(messages: ThreadMessage[]): HydratedThreadBootst
 }
 
 export default function OikosChatPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const threadTitle = searchParams.get('thread');
   const demoScenario = searchParams.get('demo');
-  const [isDemoSeeding, setIsDemoSeeding] = useState(Boolean(demoScenario));
   const { showSessionPicker } = useSessionPicker();
   const isE2E = import.meta.env.VITE_E2E === 'true';
   const isReplay = !!(window as Window & { __REPLAY_SCENARIO?: string }).__REPLAY_SCENARIO;
+  const demoThreadTitle = demoScenario ? DEMO_THREAD_TITLES[demoScenario] ?? null : null;
+  const demoStorageKey = getDemoSeedStorageKey(demoScenario);
+  const demoAlreadySeeded =
+    demoStorageKey !== null
+    && typeof window !== 'undefined'
+    && window.sessionStorage.getItem(demoStorageKey) === '1';
 
   // API key availability state
   const [apiKeyModalDismissed, setApiKeyModalDismissed] = useState(false);
@@ -134,6 +143,28 @@ export default function OikosChatPage() {
   const llmAvailable = capabilitiesQuery.data?.llm_available ?? null;
   const showApiKeyModal =
     llmAvailable === false && !isE2E && !isReplay && !apiKeyModalDismissed;
+
+  const demoSeedQuery = useQuery({
+    queryKey: ['oikos-demo-seed', demoScenario],
+    queryFn: async () => {
+      const scenarioName = demoScenario as string;
+      const storageKey = getDemoSeedStorageKey(scenarioName);
+
+      await request('/scenarios/seed', {
+        method: 'POST',
+        body: JSON.stringify({ name: scenarioName, clean: true }),
+      });
+
+      if (typeof window !== 'undefined' && storageKey) {
+        window.sessionStorage.setItem(storageKey, '1');
+      }
+
+      return true;
+    },
+    enabled: Boolean(demoScenario && !demoAlreadySeeded),
+    retry: false,
+    staleTime: Infinity,
+  });
 
   const preloadedThreadQuery = useQuery({
     queryKey: ['oikos-thread', threadTitle],
@@ -169,8 +200,22 @@ export default function OikosChatPage() {
     ? `oikos-thread:${preloadedThreadId ?? threadTitle}:${preloadedMessagesQuery.dataUpdatedAt}`
     : 'oikos-live';
 
+  const canonicalDemoSearch = useMemo(() => {
+    if (!demoThreadTitle || threadTitle) {
+      return null;
+    }
+
+    if (!demoAlreadySeeded && !demoSeedQuery.isSuccess) {
+      return null;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('thread', demoThreadTitle);
+    return `?${nextParams.toString()}`;
+  }, [demoAlreadySeeded, demoSeedQuery.isSuccess, demoThreadTitle, searchParams, threadTitle]);
+
   const loading =
-    isDemoSeeding
+    (Boolean(demoScenario) && !demoAlreadySeeded && demoSeedQuery.isPending)
     || (Boolean(threadTitle)
       && (preloadedThreadQuery.isLoading || (preloadedThreadId !== null && preloadedMessagesQuery.isLoading)));
 
@@ -202,56 +247,6 @@ export default function OikosChatPage() {
   }, [handleShowSessionPicker]);
 
   useEffect(() => {
-    if (!demoScenario) {
-      setIsDemoSeeding(false);
-      return;
-    }
-
-    const storageKey = `oikos-demo-seeded:${demoScenario}`;
-    if (typeof window !== 'undefined' && window.sessionStorage.getItem(storageKey)) {
-      if (!threadTitle && DEMO_THREAD_TITLES[demoScenario]) {
-        const nextParams = new URLSearchParams(searchParams);
-        nextParams.set('thread', DEMO_THREAD_TITLES[demoScenario]);
-        setSearchParams(nextParams, { replace: true });
-      }
-      setIsDemoSeeding(false);
-      return;
-    }
-
-    let cancelled = false;
-    setIsDemoSeeding(true);
-
-    const seedScenario = async () => {
-      try {
-        await request('/scenarios/seed', {
-          method: 'POST',
-          body: JSON.stringify({ name: demoScenario, clean: true }),
-        });
-        if (typeof window !== 'undefined') {
-          window.sessionStorage.setItem(storageKey, '1');
-        }
-        if (!threadTitle && DEMO_THREAD_TITLES[demoScenario]) {
-          const nextParams = new URLSearchParams(searchParams);
-          nextParams.set('thread', DEMO_THREAD_TITLES[demoScenario]);
-          setSearchParams(nextParams, { replace: true });
-        }
-      } catch (error) {
-        console.warn('Oikos demo seeding failed:', error);
-      } finally {
-        if (!cancelled) {
-          setIsDemoSeeding(false);
-        }
-      }
-    };
-
-    void seedScenario();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [demoScenario, threadTitle, searchParams, setSearchParams]);
-
-  useEffect(() => {
     if (preloadedThreadQuery.isLoading || preloadedMessagesQuery.isLoading) {
       return;
     }
@@ -273,6 +268,10 @@ export default function OikosChatPage() {
         <div className="oikos-loading-text">Loading conversation...</div>
       </div>
     );
+  }
+
+  if (canonicalDemoSearch) {
+    return <Navigate replace to={{ search: canonicalDemoSearch }} />;
   }
 
   return (
