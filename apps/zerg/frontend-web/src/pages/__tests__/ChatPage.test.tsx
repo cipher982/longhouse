@@ -164,6 +164,17 @@ describe("ChatPage", () => {
     });
   });
 
+  it("redirects a threadless route to the most recent chat thread", async () => {
+    renderChatPage("/automations/1/thread");
+
+    await waitFor(() => {
+      expect(mockFetchThreadMessages).toHaveBeenCalledWith(42);
+    });
+
+    const messages = await screen.findAllByText("Hello from storage");
+    expect(messages.length).toBeGreaterThan(0);
+  });
+
   it("shows timeline-focused recovery copy when automation context is missing", async () => {
     renderChatPage("/automations/not-a-number/thread/42");
 
@@ -190,6 +201,46 @@ describe("ChatPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Renamed")).toBeInTheDocument();
+    });
+  });
+
+  it("creates an initial thread for a threadless automation with no chat history", async () => {
+    const now = new Date().toISOString();
+    const createdThread: Thread = {
+      id: 100,
+      automation_id: 1,
+      title: "Thread 1",
+      automation_state: null,
+      active: true,
+      thread_type: "chat",
+      created_at: now,
+      updated_at: now,
+      messages: [],
+    };
+    let chatThreads: Thread[] = [];
+
+    mockFetchThreads.mockImplementation((_automationId: number, threadType?: string) => {
+      if (threadType === "chat" || threadType === undefined) {
+        return Promise.resolve(chatThreads);
+      }
+      return Promise.resolve([]);
+    });
+    mockCreateThread.mockImplementation(async () => {
+      chatThreads = [createdThread];
+      return createdThread;
+    });
+    mockFetchThreadMessages.mockResolvedValue([]);
+
+    renderChatPage("/automations/1/thread");
+
+    expect(await screen.findByText("Preparing chat...")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(mockCreateThread).toHaveBeenCalledWith(1, "Thread 1");
+    });
+
+    await waitFor(() => {
+      expect(mockFetchThreadMessages).toHaveBeenCalledWith(100);
     });
   });
 });
