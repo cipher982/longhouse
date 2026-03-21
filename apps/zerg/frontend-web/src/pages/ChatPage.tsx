@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
@@ -29,19 +29,52 @@ function buildThreadPath(automationId: number, threadId?: number | null): string
     : `/automations/${automationId}/thread/${threadId}`;
 }
 
+function isReloadNavigation() {
+  if (typeof performance === "undefined") {
+    return false;
+  }
+
+  const legacyNavigation = performance as Performance & {
+    navigation?: { type?: number; TYPE_RELOAD?: number };
+  };
+
+  if (
+    typeof legacyNavigation.navigation?.type === "number" &&
+    legacyNavigation.navigation.type === legacyNavigation.navigation.TYPE_RELOAD
+  ) {
+    return true;
+  }
+
+  if (typeof performance.getEntriesByType !== "function") {
+    return false;
+  }
+
+  const entries = performance.getEntriesByType("navigation");
+  const latest = entries[entries.length - 1] as PerformanceNavigationTiming | undefined;
+  return latest?.type === "reload";
+}
+
+type InitialThreadBootstrapState = {
+  automationId: number | null;
+  status: "idle" | "creating" | "failed";
+};
+
 export default function ChatPage() {
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { isShelfOpen, closeShelf, toggleShelf } = useShelf();
-  const creatingThreadRef = useRef(false);
+  const initialThreadAttemptRef = useRef<number | null>(null);
 
   const automationId = useRequiredNumber(params.automationId);
   const threadIdParam = useRequiredNumber(params.threadId ?? undefined);
   const [editingThreadId, setEditingThreadId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
-  const [initialThreadState, setInitialThreadState] = useState<"idle" | "creating" | "failed">("idle");
+  const [initialThreadBootstrap, setInitialThreadBootstrap] = useState<InitialThreadBootstrapState>({
+    automationId: null,
+    status: "idle",
+  });
 
   // Advanced features state
   const [draft, setDraft] = useState("");
@@ -56,29 +89,13 @@ export default function ChatPage() {
   usePageMeta({
     title: automation ? `${automation.name} - Longhouse` : "Longhouse",
   });
-
-  // Handle navigation reload
-  useEffect(() => {
-    if (typeof performance === "undefined") {
-      return;
-    }
-
-    const legacyNav = (performance as Performance & { navigation?: PerformanceNavigation }).navigation;
-    if (legacyNav && legacyNav.type === legacyNav.TYPE_RELOAD) {
-      navigate("/timeline", { replace: true });
-      return;
-    }
-
-    if (typeof performance.getEntriesByType === "function") {
-      const entries = performance.getEntriesByType("navigation");
-      const latest = entries[entries.length - 1] as PerformanceNavigationTiming | undefined;
-      if (latest?.type === "reload") {
-        navigate("/timeline", { replace: true });
-      }
-    }
-  }, [navigate]);
+  const shouldRedirectReload = useMemo(() => isReloadNavigation(), []);
 
   const needsThreadRoute = automationId != null && effectiveThreadId == null;
+  const initialThreadState =
+    effectiveThreadId == null && initialThreadBootstrap.automationId === automationId
+      ? initialThreadBootstrap.status
+      : "idle";
   const shouldAutoCreateInitialThread =
     needsThreadRoute &&
     !chatThreadsQuery.isLoading &&
@@ -86,25 +103,17 @@ export default function ChatPage() {
     initialThreadState === "idle";
 
   useEffect(() => {
-    setInitialThreadState("idle");
-    creatingThreadRef.current = false;
-  }, [automationId]);
-
-  useEffect(() => {
-    if (effectiveThreadId != null) {
-      setInitialThreadState("idle");
-      creatingThreadRef.current = false;
-    }
-  }, [effectiveThreadId]);
-
-  useEffect(() => {
     const initializeThread = async () => {
-      if (automationId == null || creatingThreadRef.current || !shouldAutoCreateInitialThread) {
+      if (
+        automationId == null ||
+        !shouldAutoCreateInitialThread ||
+        initialThreadAttemptRef.current === automationId
+      ) {
         return;
       }
 
-      creatingThreadRef.current = true;
-      setInitialThreadState("creating");
+      initialThreadAttemptRef.current = automationId;
+      setInitialThreadBootstrap({ automationId, status: "creating" });
 
       try {
         const thread = await createThread(automationId, "Thread 1");
@@ -112,15 +121,14 @@ export default function ChatPage() {
         navigate(buildThreadPath(automationId, thread.id), { replace: true });
       } catch (error) {
         console.error('[ChatPage] Failed to auto-create default thread:', error);
-        setInitialThreadState("failed");
+        setInitialThreadBootstrap({ automationId, status: "failed" });
+        initialThreadAttemptRef.current = null;
         toast.error('Failed to create default chat thread. Please try creating one manually.');
-      } finally {
-        creatingThreadRef.current = false;
       }
     };
 
     if (shouldAutoCreateInitialThread) {
-      initializeThread();
+      void initializeThread();
     }
   }, [automationId, navigate, queryClient, shouldAutoCreateInitialThread]);
 
@@ -262,6 +270,10 @@ export default function ChatPage() {
       toast.error("Failed to create thread", { duration: 6000 });
     }
   };
+
+  if (shouldRedirectReload) {
+    return <Navigate to="/timeline" replace />;
+  }
 
   if (needsThreadRoute && !chatThreadsQuery.isLoading && chatThreads.length > 0) {
     return <Navigate to={buildThreadPath(automationId, chatThreads[0].id)} replace />;
