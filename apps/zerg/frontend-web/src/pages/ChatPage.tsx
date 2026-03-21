@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import clsx from "clsx";
@@ -23,6 +23,12 @@ function useRequiredNumber(param?: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function buildThreadPath(automationId: number, threadId?: number | null): string {
+  return threadId == null
+    ? `/automations/${automationId}/thread`
+    : `/automations/${automationId}/thread/${threadId}`;
+}
+
 export default function ChatPage() {
   const params = useParams();
   const navigate = useNavigate();
@@ -32,30 +38,21 @@ export default function ChatPage() {
 
   const automationId = useRequiredNumber(params.automationId);
   const threadIdParam = useRequiredNumber(params.threadId ?? undefined);
-  const [selectedThreadId, setSelectedThreadId] = useState<number | null>(threadIdParam);
   const [editingThreadId, setEditingThreadId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
+  const [initialThreadState, setInitialThreadState] = useState<"idle" | "creating" | "failed">("idle");
 
   // Advanced features state
   const [draft, setDraft] = useState("");
 
-  // Sync selectedThreadId from URL parameter - one-way only (URL → state)
-  // This ensures state stays consistent with URL, but doesn't override when
-  // we're intentionally changing threads via state updates
-  useEffect(() => {
-    setSelectedThreadId(threadIdParam ?? null);
-  }, [threadIdParam]);
-
   // Use chat data hook - strict URL state (no fallback)
   const { automation, chatThreads, automationThreads, messages, isLoading, hasError, chatThreadsQuery } = useChatData({
     automationId,
-    effectiveThreadId: selectedThreadId,
+    effectiveThreadId: threadIdParam,
   });
 
-  // Strict URL model: effectiveThreadId is just selectedThreadId
-  // If no thread is selected, we handle it explicitly below
-  const effectiveThreadId = selectedThreadId;
+  const effectiveThreadId = threadIdParam;
   usePageMeta({
     title: automation ? `${automation.name} - Longhouse` : "Longhouse",
   });
@@ -81,63 +78,51 @@ export default function ChatPage() {
     }
   }, [navigate]);
 
-  // Handle URL navigation
-  useEffect(() => {
-    if (automationId != null && effectiveThreadId != null) {
-      navigate(`/automations/${automationId}/thread/${effectiveThreadId}`, { replace: true });
-    } else if (automationId != null) {
-      navigate(`/automations/${automationId}/thread/`, { replace: true });
-    }
-  }, [automationId, effectiveThreadId, navigate]);
+  const needsThreadRoute = automationId != null && effectiveThreadId == null;
+  const shouldAutoCreateInitialThread =
+    needsThreadRoute &&
+    !chatThreadsQuery.isLoading &&
+    chatThreads.length === 0 &&
+    initialThreadState === "idle";
 
-  // Auto-select most recent thread if threads exist but none selected
-  // This handles the case when navigating to the chat route with existing threads.
   useEffect(() => {
-    if (
-      automationId != null &&
-      selectedThreadId == null &&
-      !chatThreadsQuery.isLoading &&
-      chatThreads.length > 0
-    ) {
-      // Auto-select the first (most recent) thread
-      const mostRecentThread = chatThreads[0];
-      setSelectedThreadId(mostRecentThread.id);
-      navigate(`/automations/${automationId}/thread/${mostRecentThread.id}`, { replace: true });
-    }
-  }, [automationId, selectedThreadId, chatThreads, chatThreadsQuery.isLoading, navigate]);
+    setInitialThreadState("idle");
+    creatingThreadRef.current = false;
+  }, [automationId]);
 
-  // Auto-create a default thread on component mount if none exists
+  useEffect(() => {
+    if (effectiveThreadId != null) {
+      setInitialThreadState("idle");
+      creatingThreadRef.current = false;
+    }
+  }, [effectiveThreadId]);
+
   useEffect(() => {
     const initializeThread = async () => {
-      if (automationId == null || selectedThreadId != null || chatThreads.length > 0 || creatingThreadRef.current) {
+      if (automationId == null || creatingThreadRef.current || !shouldAutoCreateInitialThread) {
         return;
       }
 
       creatingThreadRef.current = true;
+      setInitialThreadState("creating");
 
       try {
-        // Auto-create a default thread for the automation.
         const thread = await createThread(automationId, "Thread 1");
         await queryClient.invalidateQueries({ queryKey: ["threads", automationId, "chat"] });
-        setSelectedThreadId(thread.id);
-        navigate(`/automations/${automationId}/thread/${thread.id}`, { replace: true });
+        navigate(buildThreadPath(automationId, thread.id), { replace: true });
       } catch (error) {
         console.error('[ChatPage] Failed to auto-create default thread:', error);
+        setInitialThreadState("failed");
         toast.error('Failed to create default chat thread. Please try creating one manually.');
       } finally {
         creatingThreadRef.current = false;
       }
     };
 
-    // Only create thread if:
-    // 1. We have an automation route id
-    // 2. No thread is selected
-    // 3. The query has finished loading (not in loading state)
-    // 4. There are no chat threads
-    if (automationId != null && selectedThreadId == null && !chatThreadsQuery.isLoading && chatThreads.length === 0) {
+    if (shouldAutoCreateInitialThread) {
       initializeThread();
     }
-  }, [automationId, selectedThreadId, chatThreads.length, chatThreadsQuery.isLoading, queryClient, navigate]);
+  }, [automationId, navigate, queryClient, shouldAutoCreateInitialThread]);
 
   // Use chat actions hook
   const { sendMutation, renameThreadMutation } = useChatActions({
@@ -153,8 +138,10 @@ export default function ChatPage() {
 
   // Event handlers
   const handleSelectThread = (thread: Thread) => {
-    setSelectedThreadId(thread.id);
-    navigate(`/automations/${automationId}/thread/${thread.id}`, { replace: true });
+    if (automationId == null) {
+      return;
+    }
+    navigate(buildThreadPath(automationId, thread.id), { replace: true });
   };
 
   const handleEditThreadTitle = (thread: Thread, e: React.MouseEvent) => {
@@ -270,13 +257,40 @@ export default function ChatPage() {
     try {
       const thread = await createThread(automationId, title);
       await queryClient.invalidateQueries({ queryKey: ["threads", automationId, "chat"] });
-      setSelectedThreadId(thread.id);
-      // Navigate to the new thread - strict URL state
-      navigate(`/automations/${automationId}/thread/${thread.id}`, { replace: true });
+      navigate(buildThreadPath(automationId, thread.id), { replace: true });
     } catch {
       toast.error("Failed to create thread", { duration: 6000 });
     }
   };
+
+  if (needsThreadRoute && !chatThreadsQuery.isLoading && chatThreads.length > 0) {
+    return <Navigate to={buildThreadPath(automationId, chatThreads[0].id)} replace />;
+  }
+
+  if (needsThreadRoute && chatThreads.length === 0 && initialThreadState === "failed") {
+    return (
+      <div className="chat-view-container" data-testid="chat-page">
+        <EmptyState
+          variant="error"
+          title="Could not open chat"
+          description="Longhouse could not create the initial chat thread automatically."
+          action={<Button variant="primary" onClick={handleCreateThread}>Create Thread</Button>}
+        />
+      </div>
+    );
+  }
+
+  if (needsThreadRoute && chatThreads.length === 0) {
+    return (
+      <div className="chat-view-container" data-testid="chat-page">
+        <EmptyState
+          icon={<Spinner size="lg" />}
+          title="Preparing chat..."
+          description="Setting up the first thread for this automation."
+        />
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
