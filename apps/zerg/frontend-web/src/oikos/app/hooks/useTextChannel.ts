@@ -13,19 +13,12 @@ import { logger } from '../../core'
 import { eventBus } from '../../lib/event-bus'
 import { timelineLogger } from '../../lib/timeline-logger'
 
-export interface UseTextChannelOptions {
-  onMessageSent?: (message: ChatMessage) => void
-  onError?: (error: Error) => void
-}
-
-export function useTextChannel(options: UseTextChannelOptions = {}) {
+export function useTextChannel() {
   const state = useAppState()
   const dispatch = useAppDispatch()
   const [isSending, setIsSending] = useState(false)
   const [lastError, setLastError] = useState<Error | null>(null)
   const sendCounterRef = useRef(0)
-  const optionsRef = useRef(options)
-  optionsRef.current = options
 
   // Initialize oikos chat controller
   const oikosChatRef = useRef<OikosChatController | null>(null)
@@ -74,7 +67,6 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       if (!oikosChatRef.current) {
         const err = new Error('Chat not initialized')
         setLastError(err)
-        optionsRef.current.onError?.(err)
         return
       }
 
@@ -106,7 +98,6 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       // Add to messages
       dispatch({ type: 'ADD_MESSAGE', message: userMessage })
       dispatch({ type: 'ADD_MESSAGE', message: assistantPlaceholder })
-      optionsRef.current.onMessageSent?.(userMessage)
 
       // Clear any previous error
       setLastError(null)
@@ -147,7 +138,6 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         // Surface error to UI
         const err = error as Error
         setLastError(err)
-        optionsRef.current.onError?.(err)
       } finally {
         if (sendCounterRef.current === sendId) {
           // Response arrives via Oikos SSE events; keep input unlocked after completion.

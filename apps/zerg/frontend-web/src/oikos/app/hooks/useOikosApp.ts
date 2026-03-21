@@ -75,13 +75,6 @@ export interface BootstrapData {
   preferences: ChatPreferences
 }
 
-export interface UseOikosAppOptions {
-  onConnected?: () => void
-  onDisconnected?: () => void
-  onTranscript?: (text: string, isFinal: boolean) => void
-  onError?: (error: Error) => void
-}
-
 interface OikosAppState {
   initialized: boolean
   connecting: boolean
@@ -98,11 +91,9 @@ export type OikosHistoryView = 'surface' | 'all'
 /**
  * Main hook for Oikos application
  */
-export function useOikosApp(options: UseOikosAppOptions = {}) {
+export function useOikosApp() {
   const dispatch = useAppDispatch()
   const appState = useAppState()
-  const optionsRef = useRef(options)
-  optionsRef.current = options
 
   // Local state (not in React context - these are internal implementation details)
   const [state, setState] = useState<OikosAppState>({
@@ -498,7 +489,6 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
     } catch (error) {
       logger.error('[useOikosApp] Initialization failed:', error)
       initStartedRef.current = false
-      optionsRef.current.onError?.(error as Error)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setupVoiceListeners defined below, circular dep intentional
   }, [state.initialized, initializeOikosClient, fetchBootstrap, initializeContext, loadOikosHistory, checkForActiveRun, reconnectToRun, updateState])
@@ -522,7 +512,6 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
         }
 
         case 'transcript':
-          optionsRef.current.onTranscript?.(event.text, event.isFinal)
           if (!event.isFinal) {
             dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: event.text })
           } else {
@@ -540,7 +529,6 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
 
         case 'error':
           setVoiceStatus('error')
-          optionsRef.current.onError?.(event.error)
           break
       }
     }
@@ -682,7 +670,6 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
 
       // Audio feedback
       feedbackSystem.playConnectChime()
-      optionsRef.current.onConnected?.()
 
       logger.info('[useOikosApp] Connected successfully')
     } catch (error: unknown) {
@@ -694,7 +681,6 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
       dispatch({ type: 'SET_CONNECTED', connected: false })
 
       feedbackSystem.playErrorTone()
-      optionsRef.current.onError?.(error as Error)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setupSessionEvents defined below, circular dep intentional
   }, [state.connecting, state.connected, state.currentContext, dispatch, updateState, setVoiceStatus, loadOikosHistory])
@@ -722,7 +708,6 @@ export function useOikosApp(options: UseOikosAppOptions = {}) {
       dispatch({ type: 'SET_CONNECTED', connected: false })
       dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: '' })
 
-      optionsRef.current.onDisconnected?.()
       logger.info('[useOikosApp] Disconnected')
     } catch (error) {
       logger.error('[useOikosApp] Disconnect error:', error)
