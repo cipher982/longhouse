@@ -303,6 +303,60 @@ describe("LoopInboxPage", () => {
     expect(within(card).getByText(/^Approve the runner rollout and resume the deploy\.$/i)).toBeInTheDocument();
   });
 
+  it("uses compact mobile chrome and keeps the push CTA below the card", async () => {
+    setViewportWidth(390);
+    const enableMock = vi.fn().mockResolvedValue(true);
+    useLoopPushNotificationsMock.mockReturnValue({
+      supported: true,
+      enabledInBackend: true,
+      permission: "default",
+      isEnabled: false,
+      isBusy: false,
+      error: null,
+      canEnable: true,
+      canDisable: false,
+      enable: enableMock,
+      disable: vi.fn(),
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-push-banner")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Handle finished coding turns without opening the full desktop workspace\./i)).not.toBeInTheDocument();
+
+    const card = screen.getByTestId("loop-inbox-card");
+    const pushBanner = screen.getByTestId("loop-push-banner");
+    expect(card.compareDocumentPosition(pushBanner) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
+
+  it("keeps the install CTA below the card on mobile selected routes", async () => {
+    setViewportWidth(390);
+    const installMock = vi.fn().mockResolvedValue(true);
+    useLoopInstallPromptMock.mockReturnValue({
+      canInstall: true,
+      showIosHint: false,
+      isInstalled: false,
+      install: installMock,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-install-banner")).toBeInTheDocument();
+    });
+
+    const card = screen.getByTestId("loop-inbox-card");
+    const installBanner = screen.getByTestId("loop-install-banner");
+    expect(card.compareDocumentPosition(installBanner) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
+
   it("shows the install banner when loop can be installed", async () => {
     const user = userEvent.setup();
     const installMock = vi.fn().mockResolvedValue(true);
