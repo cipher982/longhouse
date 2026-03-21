@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures';
 import { PUBLIC_PAGES } from './helpers/page-list';
+import { installDeterministicVisualFonts } from './helpers/visual-baseline';
 
 async function waitForPublicPageReady(page: Page) {
   await page.waitForLoadState('load');
@@ -60,6 +61,7 @@ async function waitForPublicPageReady(page: Page) {
 
 async function captureBaseline(page: Page, path: string, name: string) {
   await page.goto(path);
+  await installDeterministicVisualFonts(page);
   await waitForPublicPageReady(page);
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,

@@ -14,6 +14,7 @@
 import { test, expect, type Page } from './fixtures';
 import { waitForPageReady } from './helpers/ready-signals';
 import { APP_PAGES, type PageDef } from './helpers/page-list';
+import { installDeterministicVisualFonts } from './helpers/visual-baseline';
 import { resetDatabase } from './test-utils';
 import { execSync } from 'child_process';
 import path from 'path';
@@ -60,6 +61,7 @@ test.describe('Visual comparison: LLM-triaged', () => {
 
     for (const pageDef of APP_PAGES) {
       await page.goto(pageDef.path);
+      await installDeterministicVisualFonts(page);
       await waitForAppReady(page, pageDef.ready);
       const screenshot = await page.screenshot({ fullPage: true, animations: 'disabled' });
       // Match baseline naming: {name}-chromium-darwin.png

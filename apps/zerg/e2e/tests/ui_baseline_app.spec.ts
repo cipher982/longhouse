@@ -1,6 +1,7 @@
 import { test, expect, type Page } from './fixtures';
 import { waitForPageReady } from './helpers/ready-signals';
 import { APP_PAGES, type PageDef } from './helpers/page-list';
+import { installDeterministicVisualFonts } from './helpers/visual-baseline';
 import { resetDatabase } from './test-utils';
 
 test.beforeEach(async ({ request }) => {
@@ -22,6 +23,7 @@ async function waitForAppReady(page: Page, mode: PageDef['ready']) {
 
 async function captureBaseline(page: Page, path: string, name: string, ready: PageDef['ready']) {
   await page.goto(path);
+  await installDeterministicVisualFonts(page);
   await waitForAppReady(page, ready);
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
