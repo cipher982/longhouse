@@ -134,6 +134,12 @@ describe("AdminPage", () => {
           json: () => Promise.resolve({ message: "Reset triggered" }),
         });
       }
+      if (url.includes(`${config.apiBaseUrl}/admin/users?`)) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ users: [], total: 0, limit: 100, offset: 0 }),
+        });
+      }
       // No separate /api/ops/top call - top automations are included in summary.
       return Promise.resolve({
         ok: false,
@@ -291,5 +297,60 @@ describe("AdminPage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("123").length).toBeGreaterThan(0);
     });
+  });
+
+  it("renders admin user rows with the success role badge", async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.includes(`${config.apiBaseUrl}/ops/summary`)) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(buildOpsSummary("30d")),
+        });
+      }
+      if (url.includes(`${config.apiBaseUrl}/admin/super-admin-status`)) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ is_super_admin: true, requires_password: false }),
+        });
+      }
+      if (url.includes(`${config.apiBaseUrl}/admin/users?`)) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              users: [
+                {
+                  id: 9,
+                  email: "owner@example.com",
+                  display_name: "Owner",
+                  role: "ADMIN",
+                  is_active: true,
+                  created_at: "2024-01-01T00:00:00Z",
+                  usage: {
+                    today: { tokens: 10, cost_usd: 0.1, runs: 1 },
+                    seven_days: { tokens: 50, cost_usd: 0.5, runs: 5 },
+                    thirty_days: { tokens: 100, cost_usd: 1, runs: 10 },
+                  },
+                },
+              ],
+              total: 1,
+              limit: 100,
+              offset: 0,
+            }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: false,
+        text: () => Promise.resolve("Not found"),
+      });
+    });
+
+    renderAdminPage();
+
+    const adminBadge = await screen.findByText("ADMIN");
+    expect(adminBadge).toHaveClass("ui-badge--success");
   });
 });
