@@ -10,8 +10,8 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 
 ## Current focus
 
-- Rewrite `SessionsPage` and the remaining route-owned selection surfaces after landing `ChatPage`.
-- Collapse remaining URL/list selection effects in the smaller pages after the two big route surfaces move.
+- Collapse the remaining URL/list selection effects in the smaller pages now that `ChatPage` and `SessionsPage` are route/URL-owned.
+- Start replacing manual page-level `fetch -> setState` effects with React Query hooks on the next slice.
 - Keep pushing shared primitives only where they directly unlock effect deletion.
 
 ## Done when
@@ -39,4 +39,4 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - Oikos voice/media hooks are explicitly not phase-one rewrite targets unless they block the simpler page/state cleanup.
 - Slice 1 landed shared `useAuthMethods`, `usePageMeta`, `useReadinessFlag`, and `useDebouncedValue` primitives, plus first migrations and lint guardrails against direct page metadata/readiness writes.
 - Slice 2 landed shared auth query keys, a query-owned `AuthProvider`, and cache updates that now flow through the same `current-user` contract instead of mirrored provider state.
-- `ChatPage` now treats the route as the selected-thread source of truth; the remaining route-heavy rewrite is `SessionsPage` plus the smaller selection pages.
+- `ChatPage` and `SessionsPage` now treat the route/URL as the primary source of truth; the remaining route-heavy cleanup is in the smaller selection pages.
