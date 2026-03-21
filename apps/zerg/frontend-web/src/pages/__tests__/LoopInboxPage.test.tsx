@@ -241,7 +241,7 @@ describe("LoopInboxPage", () => {
       expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
     });
 
-    expect(screen.queryByTestId("loop-mobile-queue-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("loop-mobile-queue-peek-tab")).not.toBeInTheDocument();
   });
 
   it("opens the mobile queue drawer and selecting another follow-up swaps the card", async () => {
@@ -276,17 +276,17 @@ describe("LoopInboxPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
-      expect(screen.getByTestId("loop-mobile-queue-toggle")).toBeInTheDocument();
-      expect(screen.getByTestId("loop-mobile-header")).toHaveTextContent("Viewing 1 of 2");
+      expect(screen.getByTestId("loop-mobile-queue-peek-tab")).toBeInTheDocument();
     });
 
     expect(screen.queryByText(/^Attention queue$/i)).not.toBeInTheDocument();
-    expect(screen.getByTestId("loop-mobile-header")).toHaveTextContent("Open follow-ups");
+    expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-queue-peek-tab")).toHaveTextContent("Follow-ups");
+    expect(within(screen.getByTestId("loop-mobile-queue-peek-tab")).getByText("2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Open follow-ups/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Open timeline/i })).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId("loop-mobile-queue-toggle"));
+    await user.click(screen.getByTestId("loop-mobile-queue-peek-tab"));
 
     await waitFor(() => {
       expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
@@ -304,13 +304,13 @@ describe("LoopInboxPage", () => {
       expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId("loop-mobile-queue-toggle"));
+    await user.click(screen.getByTestId("loop-mobile-queue-peek-tab"));
     await user.click(screen.getByTestId("loop-inbox-row-99"));
 
     await waitFor(() => {
       expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/99");
       expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
-      expect(screen.getByTestId("loop-mobile-header")).toHaveTextContent("Viewing 2 of 2");
+      expect(screen.getByTestId("loop-mobile-queue-peek-tab")).toBeInTheDocument();
     });
 
     const card = screen.getByTestId("loop-inbox-card");
@@ -351,10 +351,8 @@ describe("LoopInboxPage", () => {
       expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
     });
 
-    const header = screen.getByTestId("loop-mobile-header");
-    expect(header).toHaveTextContent("Open follow-ups");
-    expect(header).toHaveTextContent("2 open follow-ups");
-    expect(header).toHaveTextContent("Viewing older card");
+    expect(screen.queryByTestId("loop-mobile-queue-peek-tab")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
 
     const statusBanner = screen.getByTestId("loop-inbox-card-status-banner");
     expect(within(statusBanner).getByRole("heading", { name: /Viewing older card/i })).toBeInTheDocument();
@@ -381,11 +379,11 @@ describe("LoopInboxPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
       expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
       expect(screen.getByTestId("loop-push-banner")).toBeInTheDocument();
     });
 
+    expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
     expect(screen.queryByText(/Handle finished coding turns without opening the full desktop workspace\./i)).not.toBeInTheDocument();
 
     const card = screen.getByTestId("loop-inbox-card");
@@ -406,11 +404,11 @@ describe("LoopInboxPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
       expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
       expect(screen.getByTestId("loop-install-banner")).toBeInTheDocument();
     });
 
+    expect(screen.queryByTestId("loop-mobile-header")).not.toBeInTheDocument();
     const card = screen.getByTestId("loop-inbox-card");
     const installBanner = screen.getByTestId("loop-install-banner");
     expect(card.compareDocumentPosition(installBanner) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
