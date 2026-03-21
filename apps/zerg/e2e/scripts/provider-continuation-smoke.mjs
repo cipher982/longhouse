@@ -330,7 +330,9 @@ async function main() {
     await page
       .locator(".session-chat-composer textarea")
       .fill(`Reply with exactly: ${seeded.followupToken}`);
-    await page.getByRole("button", { name: "Send" }).click();
+    await page
+      .locator('.session-chat-composer button[type="submit"]')
+      .click();
 
     await page.waitForFunction(
       (rootId) => window.location.pathname !== `/timeline/${rootId}`,
