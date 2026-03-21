@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LoopInboxPage from "../LoopInboxPage";
 import {
@@ -14,19 +15,6 @@ import {
 import { useLoopInstallPrompt } from "../../hooks/useLoopInstallPrompt";
 import { useLoopPushNotifications } from "../../hooks/useLoopPushNotifications";
 import { TestRouter } from "../../test/test-utils";
-
-const mockNavigate = vi.fn();
-let mockSessionId: string | undefined;
-let mockCardId = "42";
-
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-    useParams: () => ({ sessionId: mockSessionId, cardId: mockCardId }),
-  };
-});
 
 vi.mock("../../services/api/oikos", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/api/oikos")>();
@@ -47,12 +35,37 @@ vi.mock("../../hooks/useLoopPushNotifications", () => ({
   useLoopPushNotifications: vi.fn(),
 }));
 
+const DEFAULT_VIEWPORT_WIDTH = 1280;
+
 const fetchLoopInboxMock = vi.mocked(fetchLoopInbox);
 const fetchLoopActionCardMock = vi.mocked(fetchLoopActionCard);
 const fetchLoopActionCardForSessionMock = vi.mocked(fetchLoopActionCardForSession);
 const applyLoopInboxActionMock = vi.mocked(applyLoopInboxAction);
 const useLoopInstallPromptMock = vi.mocked(useLoopInstallPrompt);
 const useLoopPushNotificationsMock = vi.mocked(useLoopPushNotifications);
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="loop-location">{location.pathname}</div>;
+}
+
+function LoopInboxRoute() {
+  return (
+    <>
+      <LoopInboxPage />
+      <LocationProbe />
+    </>
+  );
+}
+
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+  window.dispatchEvent(new Event("resize"));
+}
 
 function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
   return {
@@ -91,7 +104,7 @@ function makeActionCard(overrides: Partial<LoopActionCard> = {}): LoopActionCard
   };
 }
 
-function renderPage() {
+function renderPage(initialEntry = "/loop/card/42") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -101,8 +114,13 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <TestRouter initialEntries={["/loop/card/42"]}>
-        <LoopInboxPage />
+      <TestRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/loop" element={<LoopInboxRoute />} />
+          <Route path="/loop/card/:cardId" element={<LoopInboxRoute />} />
+          <Route path="/loop/:sessionId" element={<LoopInboxRoute />} />
+          <Route path="/timeline/:sessionId" element={<LocationProbe />} />
+        </Routes>
       </TestRouter>
     </QueryClientProvider>,
   );
@@ -111,8 +129,7 @@ function renderPage() {
 describe("LoopInboxPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionId = undefined;
-    mockCardId = "42";
+    setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
     fetchLoopInboxMock.mockResolvedValue([makeInboxItem()]);
     fetchLoopActionCardMock.mockResolvedValue(makeActionCard());
     fetchLoopActionCardForSessionMock.mockResolvedValue(makeActionCard());
@@ -141,6 +158,27 @@ describe("LoopInboxPage", () => {
       canDisable: false,
       enable: vi.fn(),
       disable: vi.fn(),
+    });
+  });
+
+  it("redirects the base inbox route to the first card", async () => {
+    renderPage("/loop");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/42");
+    });
+
+    await waitFor(() => {
+      expect(fetchLoopActionCardMock).toHaveBeenCalledWith(42);
+    });
+  });
+
+  it("canonicalizes legacy session routes to the matching card", async () => {
+    renderPage("/loop/sess-1");
+
+    await waitFor(() => {
+      expect(fetchLoopActionCardForSessionMock).toHaveBeenCalledWith("sess-1");
+      expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/42");
     });
   });
 
@@ -192,6 +230,77 @@ describe("LoopInboxPage", () => {
 
     expect(screen.getByText("A newer turn replaced this follow-up.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open latest/i })).toHaveAttribute("href", "/loop/card/99");
+  });
+
+  it("hides the mobile queue toggle when only one active follow-up exists", async () => {
+    setViewportWidth(390);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId("loop-mobile-queue-toggle")).not.toBeInTheDocument();
+  });
+
+  it("opens the mobile queue sheet and selecting another follow-up swaps the card", async () => {
+    const user = userEvent.setup();
+    setViewportWidth(390);
+
+    fetchLoopInboxMock.mockResolvedValue([
+      makeInboxItem(),
+      makeInboxItem({
+        cardId: 99,
+        sessionId: "sess-2",
+        title: "Runner rollout",
+        summary: "The runner image is waiting for approval.",
+        followUpPrompt: "Approve the runner rollout and resume the deploy.",
+        lastTurnAt: "2026-03-19T12:05:00Z",
+      }),
+    ]);
+    fetchLoopActionCardMock.mockImplementation(async (requestedCardId) => {
+      if (requestedCardId === 99) {
+        return makeActionCard({
+          cardId: 99,
+          sessionId: "sess-2",
+          title: "Runner rollout",
+          summary: "The runner image is waiting for approval.",
+          followUpPrompt: "Approve the runner rollout and resume the deploy.",
+          lastAssistantText: "The runner image build passed. Approval is the remaining step.",
+        });
+      }
+      return makeActionCard();
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-queue-toggle")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("loop-mobile-queue-toggle"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-queue-sheet")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("loop-mobile-queue-close"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("loop-mobile-queue-sheet")).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("loop-mobile-queue-toggle"));
+    await user.click(screen.getByTestId("loop-inbox-row-99"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/99");
+      expect(screen.queryByTestId("loop-mobile-queue-sheet")).not.toBeInTheDocument();
+    });
+
+    const card = screen.getByTestId("loop-inbox-card");
+    expect(within(card).getByRole("heading", { name: "Runner rollout" })).toBeInTheDocument();
+    expect(within(card).getByText(/^Approve the runner rollout and resume the deploy\.$/i)).toBeInTheDocument();
   });
 
   it("shows the install banner when loop can be installed", async () => {
