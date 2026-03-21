@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useParams } from "react-router-dom";
-import { ChevronRightIcon, XIcon } from "../components/icons";
+import { XIcon } from "../components/icons";
 import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui";
 import {
   applyLoopInboxAction,
@@ -554,12 +554,6 @@ export default function LoopInboxPage() {
           >
             {inboxCount}
           </span>
-          <ChevronRightIcon
-            className="loop-inbox-mobile-peek-tab-chevron"
-            width={14}
-            height={14}
-            aria-hidden="true"
-          />
         </button>
       )}
       <div className="loop-inbox-page">

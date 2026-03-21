@@ -157,8 +157,10 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   const peekTabBox = await peekTab.boundingBox();
   expect(peekTabBox).toBeTruthy();
   expect(peekTabBox?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(4);
-  expect(peekTabBox?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(88);
-  expect(peekTabBox?.width ?? 0).toBeGreaterThan(34);
+  expect(peekTabBox?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(56);
+  expect(peekTabBox?.width ?? 0).toBeGreaterThan(24);
+  expect(peekTabBox?.height ?? 0).toBeGreaterThan(60);
+  expect((peekTabBox?.height ?? 0) > (peekTabBox?.width ?? Number.POSITIVE_INFINITY)).toBe(true);
   await saveScreenshot(page, testInfo, "loop-inbox-mobile-closed.png");
 
   await peekTab.click();

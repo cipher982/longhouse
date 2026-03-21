@@ -59,22 +59,25 @@
 .loop-inbox-mobile-peek-tab {
   appearance: none;
   position: fixed;
-  top: clamp(12rem, 42vh, 22rem);
-  left: max(calc(env(safe-area-inset-left, 0px) - 1.8rem), -1.8rem);
+  top: clamp(12.5rem, 45vh, 24rem);
+  left: max(calc(env(safe-area-inset-left, 0px) - 1.28rem), -1.28rem);
   z-index: calc(var(--z-modal) - 1);
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.45rem;
-  min-height: 46px;
-  padding: 0.66rem 0.56rem 0.66rem 0.82rem;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 2.55rem;
+  min-height: 4.9rem;
+  padding: 0.78rem 0.4rem 0.82rem 0.7rem;
   border: 1px solid rgba(212, 184, 122, 0.2);
   border-left: 0;
-  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+  border-radius: 0 1.5rem 1.5rem 0;
   background:
-    radial-gradient(circle at top left, rgba(238, 215, 160, 0.12), transparent 46%),
-    linear-gradient(180deg, rgb(42 33 24), rgb(25 17 12));
+    radial-gradient(circle at top right, rgba(238, 215, 160, 0.14), transparent 44%),
+    linear-gradient(180deg, rgb(44 34 24), rgb(23 15 11));
   box-shadow:
-    0 18px 36px rgba(18, 11, 9, 0.42),
+    0 18px 40px rgba(18, 11, 9, 0.4),
     inset 0 1px 0 rgba(255, 247, 229, 0.06);
   color: inherit;
   font: inherit;
@@ -91,58 +94,55 @@
 .loop-inbox-mobile-peek-tab::after {
   content: "";
   position: absolute;
-  inset: 8px 10px 8px auto;
-  width: 1px;
-  background: linear-gradient(180deg, transparent, rgba(212, 184, 122, 0.26), transparent);
+  inset: 10px 8px 10px auto;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(180deg, transparent, rgba(212, 184, 122, 0.24), transparent);
   pointer-events: none;
 }
 
 .loop-inbox-mobile-peek-tab:hover {
-  transform: translate(0.18rem, -50%);
+  transform: translate(0.14rem, -50%);
   border-color: rgba(212, 184, 122, 0.34);
   box-shadow:
-    0 18px 38px rgba(18, 11, 9, 0.4),
+    0 20px 42px rgba(18, 11, 9, 0.38),
     inset 0 1px 0 rgba(255, 247, 229, 0.08);
 }
 
 .loop-inbox-mobile-peek-tab:focus-visible {
   outline: 2px solid rgba(212, 184, 122, 0.72);
   outline-offset: 3px;
-  transform: translate(0.18rem, -50%);
+  transform: translate(0.14rem, -50%);
 }
 
 .loop-inbox-mobile-peek-tab.is-emphasized {
   border-color: rgba(212, 184, 122, 0.42);
   box-shadow:
-    0 20px 42px rgba(18, 11, 9, 0.48),
+    0 20px 44px rgba(18, 11, 9, 0.44),
     0 0 0 1px rgba(212, 184, 122, 0.08),
     inset 0 1px 0 rgba(255, 247, 229, 0.08);
 }
 
 .loop-inbox-mobile-peek-tab-handle {
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: 0.2rem;
   flex-shrink: 0;
 }
 
 .loop-inbox-mobile-peek-tab-handle span {
-  width: 2px;
-  height: 16px;
+  width: 0.9rem;
+  height: 2px;
   border-radius: var(--radius-full);
-  background: linear-gradient(180deg, rgba(212, 184, 122, 0.92), rgba(212, 184, 122, 0.36));
+  background: linear-gradient(90deg, rgba(212, 184, 122, 0.92), rgba(212, 184, 122, 0.38));
 }
 
 .loop-inbox-mobile-peek-tab-count {
-  min-width: 1.2rem;
-  height: 1.2rem;
-  padding: 0 0.28rem;
-  font-size: 0.66rem;
-}
-
-.loop-inbox-mobile-peek-tab-chevron {
-  flex-shrink: 0;
-  color: var(--color-text-muted);
+  min-width: 1.3rem;
+  height: 1.3rem;
+  padding: 0 0.24rem;
+  font-size: 0.68rem;
 }
 
 @keyframes loop-peek-tab-enter {
@@ -729,10 +729,11 @@
   }
 
   .loop-inbox-mobile-peek-tab {
-    top: clamp(10.5rem, 46vh, 18rem);
-    left: max(calc(env(safe-area-inset-left, 0px) - 1.55rem), -1.55rem);
-    min-height: 44px;
-    padding: 0.58rem 0.5rem 0.58rem 0.74rem;
+    top: clamp(11rem, 48vh, 19rem);
+    left: max(calc(env(safe-area-inset-left, 0px) - 1.1rem), -1.1rem);
+    width: 2.35rem;
+    min-height: 4.45rem;
+    padding: 0.72rem 0.34rem 0.76rem 0.62rem;
   }
 
   .loop-inbox-queue-drawer {
