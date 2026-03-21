@@ -547,13 +547,19 @@ export default function LoopInboxPage() {
             <span />
             <span />
           </span>
-          <span className="loop-inbox-mobile-peek-tab-copy">
-            <span className="loop-inbox-mobile-peek-tab-title">Follow-ups</span>
+          <span
+            className="loop-inbox-mobile-queue-trigger-count loop-inbox-mobile-peek-tab-count"
+            data-testid="loop-mobile-queue-peek-count"
+            aria-hidden="true"
+          >
+            {inboxCount}
           </span>
-          <span className="loop-inbox-mobile-peek-tab-meta" aria-hidden="true">
-            <span className="loop-inbox-mobile-queue-trigger-count">{inboxCount}</span>
-            <ChevronRightIcon width={16} height={16} />
-          </span>
+          <ChevronRightIcon
+            className="loop-inbox-mobile-peek-tab-chevron"
+            width={14}
+            height={14}
+            aria-hidden="true"
+          />
         </button>
       )}
       <div className="loop-inbox-page">
