@@ -46,6 +46,7 @@ export function useAgentSessions(
   return useQuery<AgentSessionsListResponse>({
     queryKey: ["agent-sessions", filters],
     queryFn: () => fetchAgentSessions(filters),
+    meta: { apiHealth: true },
     enabled: options.enabled !== false,
     refetchInterval: options.refetchInterval,
     staleTime: 30_000,
