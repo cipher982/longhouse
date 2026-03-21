@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
@@ -183,51 +183,52 @@ export default function SwarmOpsPage() {
   const filter = parseRunFilter(filterParam);
   const requestedRunId = parseRunId(runParam);
 
-  const runsQuery = useQuery({
-    queryKey: ["swarm-ops", "runs", RUN_LIMIT],
-    queryFn: () => request<RunSummary[]>(`/oikos/runs?limit=${RUN_LIMIT}`),
-    refetchInterval: 5000,
-  });
-
   const demoScenario = useMemo(() => {
     const value = searchParams.get("demo");
     return value && value.trim().length > 0 ? value.trim() : null;
   }, [searchParams]);
+  const demoStorageKey = useMemo(
+    () => (demoScenario ? `swarm-demo-seeded:${demoScenario}` : null),
+    [demoScenario],
+  );
+  const demoAlreadySeeded =
+    demoStorageKey !== null
+    && typeof window !== "undefined"
+    && window.sessionStorage.getItem(demoStorageKey) === "1";
 
-  useEffect(() => {
-    if (!demoScenario) return;
+  const demoSeedQuery = useQuery({
+    queryKey: ["swarm-demo-seed", demoScenario],
+    queryFn: async () => {
+      const scenarioName = demoScenario as string;
+      const storageKey = `swarm-demo-seeded:${scenarioName}`;
 
-    const storageKey = `swarm-demo-seeded:${demoScenario}`;
-    if (typeof window !== "undefined" && window.sessionStorage.getItem(storageKey)) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const seedScenario = async () => {
       try {
         await request(`/admin/seed-scenario`, {
           method: "POST",
-          body: JSON.stringify({ name: demoScenario, clean: true }),
+          body: JSON.stringify({ name: scenarioName, clean: true }),
         });
         if (typeof window !== "undefined") {
           window.sessionStorage.setItem(storageKey, "1");
-        }
-        if (!cancelled) {
-          void runsQuery.refetch();
         }
       } catch (error) {
         // Ignore demo seeding failures (prod blocks this endpoint).
         console.warn("Swarm demo seeding failed:", error);
       }
-    };
 
-    void seedScenario();
+      return true;
+    },
+    enabled: Boolean(demoScenario && !demoAlreadySeeded),
+    retry: false,
+    staleTime: Infinity,
+  });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [demoScenario, runsQuery]);
+  const runsQuery = useQuery({
+    queryKey: ["swarm-ops", "runs", RUN_LIMIT],
+    queryFn: () => request<RunSummary[]>(`/oikos/runs?limit=${RUN_LIMIT}`),
+    refetchInterval: 5000,
+    enabled: !demoScenario || demoAlreadySeeded || demoSeedQuery.isSuccess,
+  });
+  const isSeedingDemo = Boolean(demoScenario && !demoAlreadySeeded && demoSeedQuery.isPending);
 
   const handleSelectFilter = (nextFilter: RunFilter) => {
     const nextParams = new URLSearchParams(searchParams);
@@ -319,7 +320,7 @@ export default function SwarmOpsPage() {
     return counts;
   }, [runs]);
 
-  if (runsQuery.isLoading) {
+  if (isSeedingDemo || runsQuery.isLoading) {
     return (
       <div className="swarm-ops-loading">
         <Spinner size="lg" />

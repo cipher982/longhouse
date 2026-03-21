@@ -142,4 +142,59 @@ describe("SwarmOpsPage", () => {
     expect((await screen.findAllByText("Priority Inbox")).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Open thread" })).toBeEnabled();
   });
+
+  it("seeds demo routes through query ownership before loading runs", async () => {
+    requestMock.mockImplementation((path: string) => {
+      if (path === "/admin/seed-scenario") {
+        return Promise.resolve({ ok: true });
+      }
+
+      if (path === "/oikos/runs?limit=120") {
+        return Promise.resolve([
+          {
+            id: 7,
+            automation_id: 101,
+            thread_id: 501,
+            automation_name: "Priority Inbox",
+            status: "running",
+            summary: "Need your input",
+            signal: "Need your input",
+            signal_source: "summary",
+            created_at: "2026-03-17T12:05:00Z",
+            updated_at: "2026-03-17T12:05:00Z",
+            completed_at: null,
+          },
+        ]);
+      }
+
+      if (path === "/oikos/runs/7/events?limit=120") {
+        return Promise.resolve({
+          run_id: 7,
+          events: [],
+          total: 0,
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSwarmOps("/runs?demo=nightly-demo");
+
+    await waitFor(() => {
+      expect(requestMock).toHaveBeenNthCalledWith(
+        1,
+        "/admin/seed-scenario",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ name: "nightly-demo", clean: true }),
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(requestMock).toHaveBeenCalledWith("/oikos/runs?limit=120");
+    });
+
+    expect(window.sessionStorage.getItem("swarm-demo-seeded:nightly-demo")).toBe("1");
+  });
 });
