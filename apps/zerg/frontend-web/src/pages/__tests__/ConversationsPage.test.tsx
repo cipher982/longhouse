@@ -296,6 +296,16 @@ describe("ConversationsPage", () => {
     });
   });
 
+  it("canonicalizes a conversationless inbox URL to the first available thread", async () => {
+    renderConversationsPage("/conversations");
+
+    await waitFor(() => {
+      expect(mockFetchConversationMessages).toHaveBeenCalledWith(1, { limit: 200 });
+    });
+
+    expect(await screen.findByText("Can you book dinner for 7?")).toBeInTheDocument();
+  });
+
   it("lets the user connect Gmail from the inbox when it is not connected", async () => {
     mockUseAuth.mockReturnValue({
       user: {

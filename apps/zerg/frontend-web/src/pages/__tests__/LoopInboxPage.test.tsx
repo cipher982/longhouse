@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LoopInboxPage from "../LoopInboxPage";
 import {
@@ -13,19 +14,6 @@ import {
 } from "../../services/api/oikos";
 import { useLoopInstallPrompt } from "../../hooks/useLoopInstallPrompt";
 import { TestRouter } from "../../test/test-utils";
-
-const mockNavigate = vi.fn();
-let mockSessionId: string | undefined;
-let mockCardId = "42";
-
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-    useParams: () => ({ sessionId: mockSessionId, cardId: mockCardId }),
-  };
-});
 
 vi.mock("../../services/api/oikos", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/api/oikos")>();
@@ -47,6 +35,20 @@ const fetchLoopActionCardMock = vi.mocked(fetchLoopActionCard);
 const fetchLoopActionCardForSessionMock = vi.mocked(fetchLoopActionCardForSession);
 const applyLoopInboxActionMock = vi.mocked(applyLoopInboxAction);
 const useLoopInstallPromptMock = vi.mocked(useLoopInstallPrompt);
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="loop-location">{location.pathname}</div>;
+}
+
+function LoopInboxRoute() {
+  return (
+    <>
+      <LoopInboxPage />
+      <LocationProbe />
+    </>
+  );
+}
 
 function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
   return {
@@ -85,7 +87,7 @@ function makeActionCard(overrides: Partial<LoopActionCard> = {}): LoopActionCard
   };
 }
 
-function renderPage() {
+function renderPage(initialEntry = "/loop/card/42") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -95,8 +97,13 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <TestRouter initialEntries={["/loop/card/42"]}>
-        <LoopInboxPage />
+      <TestRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/loop" element={<LoopInboxRoute />} />
+          <Route path="/loop/card/:cardId" element={<LoopInboxRoute />} />
+          <Route path="/loop/:sessionId" element={<LoopInboxRoute />} />
+          <Route path="/timeline/:sessionId" element={<LocationProbe />} />
+        </Routes>
       </TestRouter>
     </QueryClientProvider>,
   );
@@ -105,8 +112,6 @@ function renderPage() {
 describe("LoopInboxPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSessionId = undefined;
-    mockCardId = "42";
     fetchLoopInboxMock.mockResolvedValue([makeInboxItem()]);
     fetchLoopActionCardMock.mockResolvedValue(makeActionCard());
     fetchLoopActionCardForSessionMock.mockResolvedValue(makeActionCard());
@@ -123,6 +128,27 @@ describe("LoopInboxPage", () => {
       showIosHint: false,
       isInstalled: false,
       install: vi.fn(),
+    });
+  });
+
+  it("redirects the base inbox route to the first card", async () => {
+    renderPage("/loop");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/42");
+    });
+
+    await waitFor(() => {
+      expect(fetchLoopActionCardMock).toHaveBeenCalledWith(42);
+    });
+  });
+
+  it("canonicalizes legacy session routes to the matching card", async () => {
+    renderPage("/loop/sess-1");
+
+    await waitFor(() => {
+      expect(fetchLoopActionCardForSessionMock).toHaveBeenCalledWith("sess-1");
+      expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/42");
     });
   });
 
