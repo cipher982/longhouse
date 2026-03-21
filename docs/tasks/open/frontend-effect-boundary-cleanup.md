@@ -42,7 +42,7 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - `ChatPage` and `SessionsPage` now treat the route/URL as the primary source of truth; the remaining route-heavy cleanup is in the smaller selection pages.
 - `ConversationsPage` and `LoopInboxPage` now use declarative route canonicalization instead of effect-driven selection redirects.
 - `TraceExplorerPage` now reads the route param directly, and `SwarmOpsPage` now treats `filter` and `run` as URL-owned state with declarative fallback selection.
-- The remaining selection cleanup is concentrated in the legacy forum surface.
+- `ForumPage` now treats `session` and `chat` query params as the source of truth and uses declarative canonicalization instead of effect-driven deep-link hydration.
 - `SessionDetailPage` now reads turn telemetry through React Query, `SessionChat` now reads lock status through a shared query contract, and `OikosChatPage` now uses query-owned capability + preload bootstrap state instead of manual fetch effects.
 - `SettingsPage` now uses a keyed draft form instead of syncing query data into local state, `SessionPickerModal` now resets by mount/unmount instead of open/close effects, and GitHub repo pagination in `AddKnowledgeSourceModal` now lives in the query layer instead of component-local accumulation.
 - `useWebSocket` now reads the latest callbacks and invalidation keys through a shared `useLatest` helper instead of six ref-sync effects, and its connection lifecycle now tears down through one cleanup path instead of duplicated disconnect effects.
