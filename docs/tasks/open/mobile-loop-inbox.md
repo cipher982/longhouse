@@ -28,7 +28,7 @@ The canonical approval surface is `/loop`. Telegram is notification/fallback onl
 - [x] Disable Telegram page previews for loop nudges
 - [x] Keep `/loop` card-centric and lightweight on phone
 - [x] Make `/loop` installable as a thin standalone PWA surface
-- [ ] Ship the phone-only queue sheet so the selected card stays above the fold
+- [x] Ship the phone-only queue sheet so the selected card stays above the fold
 - [ ] Add an obvious `/loop` entry point from the authenticated app
 - [ ] Add Loop web-push subscription registration and storage
 - [ ] Prefer Loop web push over Telegram for loop nudges
@@ -41,3 +41,4 @@ The canonical approval surface is `/loop`. Telegram is notification/fallback onl
 - Keep Telegram chat separate from the approval model.
 - Keep the push model minimal: one installed PWA can subscribe, receive a card link, and open `/loop/card/{id}`.
 - Current UI pass: keep the desktop/tablet split layout, but switch phone (`<768px`) to card-first with the queue behind an accessible bottom sheet.
+- 2026-03-21: phone queue sheet landed in the frontend with targeted Vitest coverage plus `make test` and `make test-e2e` passing in the worktree before ship.
