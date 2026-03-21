@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useParams } from "react-router-dom";
-import { ChevronRightIcon, SidebarIcon, XIcon } from "../components/icons";
+import { ChevronRightIcon, XIcon } from "../components/icons";
 import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui";
 import {
   applyLoopInboxAction,
@@ -308,12 +308,9 @@ export default function LoopInboxPage() {
   const currentCardNeedsQueueRecovery = currentCardIsStale && showMobileQueueToggle && selectedQueueIndex < 0;
   const queueSummaryLabel =
     queueCountLabel && queuePositionLabel ? `${queueCountLabel} · ${queuePositionLabel}` : queueCountLabel;
-  const mobileQueueDetail = currentCardNeedsQueueRecovery
-    ? [queueCountLabel, "Viewing older card"].filter(Boolean).join(" · ")
-    : queueSummaryLabel;
-  const staticMobileHeaderDetail = currentCardIsStale
-    ? cardStatusHeadline(currentCard as LoopActionCard)
-    : queueCountLabel;
+  const queuePeekAriaLabel = currentCardNeedsQueueRecovery
+    ? ["Open follow-ups", queueCountLabel, "Viewing older card"].filter(Boolean).join(". ")
+    : ["Open follow-ups", queueCountLabel, queuePositionLabel].filter(Boolean).join(". ");
 
   useEffect(() => {
     if (!showMobileQueueToggle) {
@@ -534,48 +531,33 @@ export default function LoopInboxPage() {
 
   return (
     <PageShell size="wide" className="loop-inbox-shell">
+      {showMobileQueueToggle && !queueOpen && (
+        <button
+          type="button"
+          className={`loop-inbox-mobile-peek-tab${currentCardNeedsQueueRecovery ? " is-emphasized" : ""}`}
+          onClick={() => setQueueOpen(true)}
+          aria-haspopup="dialog"
+          aria-controls="loop-mobile-queue-drawer"
+          aria-expanded={queueOpen}
+          aria-label={queuePeekAriaLabel}
+          data-testid="loop-mobile-queue-peek-tab"
+        >
+          <span className="loop-inbox-mobile-peek-tab-handle" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <span className="loop-inbox-mobile-peek-tab-copy">
+            <span className="loop-inbox-mobile-peek-tab-title">Follow-ups</span>
+          </span>
+          <span className="loop-inbox-mobile-peek-tab-meta" aria-hidden="true">
+            <span className="loop-inbox-mobile-queue-trigger-count">{inboxCount}</span>
+            <ChevronRightIcon width={16} height={16} />
+          </span>
+        </button>
+      )}
       <div className="loop-inbox-page">
-        {showCondensedMobileChrome ? (
-          <div
-            className={`loop-inbox-mobile-header${showMobileQueueToggle ? " loop-inbox-mobile-header--interactive" : ""}`}
-            data-testid="loop-mobile-header"
-          >
-            {showMobileQueueToggle && (
-              <button
-                type="button"
-                className="loop-inbox-mobile-queue-strip"
-                onClick={() => setQueueOpen(true)}
-                aria-haspopup="dialog"
-                aria-controls="loop-mobile-queue-drawer"
-                aria-expanded={queueOpen}
-                data-testid="loop-mobile-queue-toggle"
-              >
-                <div className="loop-inbox-mobile-queue-strip-copy">
-                  <div className="loop-inbox-mobile-queue-strip-label">Loop Inbox</div>
-                  <div className="loop-inbox-mobile-queue-strip-title">
-                    <SidebarIcon width={16} height={16} />
-                    <span>Open follow-ups</span>
-                  </div>
-                  {mobileQueueDetail && <div className="loop-inbox-mobile-queue-strip-detail">{mobileQueueDetail}</div>}
-                </div>
-                <div className="loop-inbox-mobile-queue-strip-meta">
-                  <span className="loop-inbox-mobile-queue-trigger-count" aria-hidden="true">
-                    {inboxCount}
-                  </span>
-                  <ChevronRightIcon width={16} height={16} aria-hidden="true" />
-                </div>
-              </button>
-            )}
-            {!showMobileQueueToggle && (
-              <div className="loop-inbox-mobile-header-copy loop-inbox-mobile-header-copy--static">
-                <div className="loop-inbox-mobile-header-label">Loop Inbox</div>
-                {staticMobileHeaderDetail && (
-                  <div className="loop-inbox-mobile-header-detail">{staticMobileHeaderDetail}</div>
-                )}
-              </div>
-            )}
-          </div>
-        ) : (
+        {!showCondensedMobileChrome && (
           <header className="loop-inbox-header">
             <div className="loop-inbox-header-copy">
               <span className="loop-inbox-eyebrow">Mobile approvals</span>

@@ -132,17 +132,14 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   await page.goto("/loop/card/42");
 
-  const header = page.getByTestId("loop-mobile-header");
   const card = page.getByTestId("loop-inbox-card");
-  const queueToggle = page.getByTestId("loop-mobile-queue-toggle");
+  const peekTab = page.getByTestId("loop-mobile-queue-peek-tab");
 
-  await expect(header).toBeVisible();
   await expect(card).toBeVisible();
-  await expect(queueToggle).toBeVisible();
-  await expect(header).toContainText("Open follow-ups");
-  await expect(header).toContainText("Viewing 1 of 2");
-  await expect(header).toContainText("2 open follow-ups");
-  await expect(queueToggle).toContainText("Open follow-ups");
+  await expect(peekTab).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-header")).toHaveCount(0);
+  await expect(peekTab).toContainText("Follow-ups");
+  await expect(peekTab.getByText("2", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open timeline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Candidate Interview Recaps and Hiring Pitches" })).toBeVisible();
   await expect(page.getByText(/^Attention queue$/)).toHaveCount(0);
@@ -154,10 +151,15 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   const cardBox = await card.boundingBox();
   expect(cardBox).toBeTruthy();
-  expect(cardBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(viewport.height * 0.23);
+  expect(cardBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(viewport.height * 0.18);
+
+  const peekTabBox = await peekTab.boundingBox();
+  expect(peekTabBox).toBeTruthy();
+  expect(peekTabBox?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(4);
+  expect((peekTabBox?.x ?? 0) + (peekTabBox?.width ?? 0)).toBeGreaterThan(88);
   await saveScreenshot(page, testInfo, "loop-inbox-mobile-closed.png");
 
-  await queueToggle.click();
+  await peekTab.click();
 
   const drawer = page.getByTestId("loop-mobile-queue-drawer");
   await expect(drawer).toBeVisible();
@@ -176,7 +178,7 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   await page.waitForURL("**/loop/card/99", { timeout: 10000 });
   await expect(page.getByTestId("loop-mobile-queue-drawer")).toHaveCount(0);
-  await expect(header).toContainText("Viewing 2 of 2");
+  await expect(page.getByTestId("loop-mobile-queue-peek-tab")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Settings and Modal Ownership Committed" })).toBeVisible();
 });
 
@@ -187,14 +189,11 @@ test("loop inbox auto-opens the queue when a stale mobile card is selected", asy
 
   await page.goto("/loop/card/390");
 
-  const header = page.getByTestId("loop-mobile-header");
   const drawer = page.getByTestId("loop-mobile-queue-drawer");
   const statusBanner = page.getByTestId("loop-inbox-card-status-banner");
 
-  await expect(header).toBeVisible();
-  await expect(header).toContainText("Open follow-ups");
-  await expect(header).toContainText("2 open follow-ups");
-  await expect(header).toContainText("Viewing older card");
+  await expect(page.getByTestId("loop-mobile-header")).toHaveCount(0);
+  await expect(page.getByTestId("loop-mobile-queue-peek-tab")).toHaveCount(0);
   await expect(drawer).toBeVisible();
   await expect(drawer.getByText("Settings and Modal Ownership Committed")).toBeVisible();
   await expect(statusBanner).toContainText("Viewing older card");

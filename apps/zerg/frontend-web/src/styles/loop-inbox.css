@@ -56,122 +56,114 @@
   color: var(--color-text-secondary);
 }
 
-.loop-inbox-mobile-header {
-  display: flex;
-  align-items: stretch;
-}
-
-.loop-inbox-mobile-header--interactive {
-  padding: 0;
-  border: 0;
-  background: none;
-}
-
-.loop-inbox-mobile-header-copy--static {
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(212, 184, 122, 0.12);
-  background:
-    linear-gradient(135deg, rgba(212, 184, 122, 0.06), rgba(33, 28, 21, 0.92)),
-    color-mix(in srgb, var(--surface-glass-1) 88%, transparent);
-  box-shadow: none;
-}
-
-.loop-inbox-mobile-header-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.loop-inbox-mobile-header-label {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.04em;
-  color: var(--color-text-primary);
-}
-
-.loop-inbox-mobile-header-detail {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-}
-
-.loop-inbox-mobile-queue-strip {
+.loop-inbox-mobile-peek-tab {
   appearance: none;
-  width: 100%;
-  display: flex;
+  position: fixed;
+  top: clamp(12rem, 42vh, 22rem);
+  left: max(calc(env(safe-area-inset-left, 0px) - 1.15rem), -1.15rem);
+  z-index: calc(var(--z-modal) - 1);
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(212, 184, 122, 0.14);
+  min-height: 50px;
+  padding: 0.72rem 0.76rem 0.72rem 0.9rem;
+  border: 1px solid rgba(212, 184, 122, 0.2);
+  border-left: 0;
+  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
   background:
-    linear-gradient(135deg, rgba(212, 184, 122, 0.08), rgba(33, 28, 21, 0.94)),
-    color-mix(in srgb, var(--surface-glass-1) 88%, transparent);
+    radial-gradient(circle at top left, rgba(238, 215, 160, 0.12), transparent 46%),
+    linear-gradient(180deg, rgb(42 33 24), rgb(25 17 12));
+  box-shadow:
+    0 18px 36px rgba(18, 11, 9, 0.42),
+    inset 0 1px 0 rgba(255, 247, 229, 0.06);
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transform: translateY(-50%);
   transition:
-    border-color var(--motion-duration-fast) var(--motion-easing-standard),
     transform var(--motion-duration-fast) var(--motion-easing-standard),
+    border-color var(--motion-duration-fast) var(--motion-easing-standard),
     box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
+  animation: loop-peek-tab-enter 320ms var(--motion-easing-emphasized);
 }
 
-.loop-inbox-mobile-queue-strip:hover {
-  transform: translateY(-1px);
-  border-color: rgba(212, 184, 122, 0.28);
-  box-shadow: var(--shadow-glow);
+.loop-inbox-mobile-peek-tab::after {
+  content: "";
+  position: absolute;
+  inset: 8px 10px 8px auto;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, rgba(212, 184, 122, 0.26), transparent);
+  pointer-events: none;
 }
 
-.loop-inbox-mobile-queue-strip:focus-visible {
+.loop-inbox-mobile-peek-tab:hover {
+  transform: translate(0.28rem, -50%);
+  border-color: rgba(212, 184, 122, 0.34);
+  box-shadow:
+    0 18px 38px rgba(18, 11, 9, 0.4),
+    inset 0 1px 0 rgba(255, 247, 229, 0.08);
+}
+
+.loop-inbox-mobile-peek-tab:focus-visible {
   outline: 2px solid rgba(212, 184, 122, 0.72);
-  outline-offset: 2px;
+  outline-offset: 3px;
+  transform: translate(0.28rem, -50%);
 }
 
-.loop-inbox-mobile-queue-strip-copy {
+.loop-inbox-mobile-peek-tab.is-emphasized {
+  border-color: rgba(212, 184, 122, 0.42);
+  box-shadow:
+    0 20px 42px rgba(18, 11, 9, 0.48),
+    0 0 0 1px rgba(212, 184, 122, 0.08),
+    inset 0 1px 0 rgba(255, 247, 229, 0.08);
+}
+
+.loop-inbox-mobile-peek-tab-handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.loop-inbox-mobile-peek-tab-handle span {
+  width: 3px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(180deg, rgba(212, 184, 122, 0.92), rgba(212, 184, 122, 0.36));
+}
+
+.loop-inbox-mobile-peek-tab-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
 }
 
-.loop-inbox-mobile-queue-strip-label {
-  font-size: var(--font-size-xs);
+.loop-inbox-mobile-peek-tab-title {
+  font-size: 0.82rem;
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-}
-
-.loop-inbox-mobile-queue-strip-title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
   color: var(--color-text-primary);
 }
 
-.loop-inbox-mobile-queue-strip-title svg {
-  flex-shrink: 0;
-  color: var(--color-brand-primary);
-}
-
-.loop-inbox-mobile-queue-strip-detail {
-  font-size: var(--font-size-xs);
-  line-height: 1.45;
-  color: var(--color-text-secondary);
-}
-
-.loop-inbox-mobile-queue-strip-meta {
+.loop-inbox-mobile-peek-tab-meta {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 0.35rem;
   flex-shrink: 0;
   color: var(--color-text-muted);
+}
+
+@keyframes loop-peek-tab-enter {
+  from {
+    opacity: 0;
+    transform: translate(-10px, -50%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(-50%);
+  }
 }
 
 .loop-inbox-mobile-queue-trigger-count {
@@ -729,7 +721,6 @@
     padding: var(--space-2) var(--space-3);
   }
 
-  .loop-inbox-mobile-header .ui-button,
   .loop-install-banner--compact .loop-install-banner-actions,
   .loop-push-banner--compact .loop-push-banner-actions {
     width: auto;
@@ -737,7 +728,6 @@
     align-items: center;
   }
 
-  .loop-inbox-mobile-header .ui-button,
   .loop-install-banner--compact .ui-button,
   .loop-push-banner--compact .ui-button {
     width: auto;
@@ -745,6 +735,17 @@
 
   .loop-inbox-card-context {
     grid-template-columns: 1fr;
+  }
+
+  .loop-inbox-mobile-peek-tab {
+    top: clamp(10.5rem, 46vh, 18rem);
+    left: max(calc(env(safe-area-inset-left, 0px) - 0.95rem), -0.95rem);
+    min-height: 48px;
+    padding: 0.64rem 0.7rem 0.64rem 0.82rem;
+  }
+
+  .loop-inbox-mobile-peek-tab-title {
+    font-size: 0.76rem;
   }
 
   .loop-inbox-queue-drawer {
