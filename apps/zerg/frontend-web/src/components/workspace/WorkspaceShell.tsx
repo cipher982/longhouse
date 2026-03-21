@@ -169,10 +169,7 @@ export function WorkspaceShell({
   const layoutRef = useRef<WorkspaceLayout>(readStoredLayout());
   const [layout, setLayout] = useState<WorkspaceLayout>(layoutRef.current);
   const [activePane, setActivePane] = useState<ResizePane | null>(null);
-
-  useEffect(() => {
-    layoutRef.current = layout;
-  }, [layout]);
+  layoutRef.current = layout;
 
   useEffect(() => {
     if (typeof localStorage === "undefined") return;
