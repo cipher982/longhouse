@@ -1,11 +1,14 @@
 import clsx from "clsx";
-import { useState, useEffect, useCallback, useRef, type PropsWithChildren } from "react";
+import { useState, useCallback, useRef, type PropsWithChildren } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useAuthMethods } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
 import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
+import { useClickOutside } from "../hooks/useClickOutside";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useConfirm } from "./confirm";
 import { fetchRunnerStatus } from "../services/api";
 import "../styles/layout.css";
@@ -18,41 +21,26 @@ function WelcomeHeader() {
   const location = useLocation();
   const navigate = useNavigate();
   const confirm = useConfirm();
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileNavState, setMobileNavState] = useState({
+    open: false,
+    pathname: location.pathname,
+  });
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const { data: authMethods } = useAuthMethods();
-
-  // Close mobile nav on route change
-  useEffect(() => {
-    setMobileNavOpen(false);
+  const mobileNavOpen =
+    mobileNavState.pathname === location.pathname && mobileNavState.open;
+  const closeMobileNav = useCallback(() => {
+    setMobileNavState({ open: false, pathname: location.pathname });
   }, [location.pathname]);
-
-  // Close mobile nav on escape key
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && mobileNavOpen) {
-        setMobileNavOpen(false);
+  const toggleMobileNav = useCallback(() => {
+    setMobileNavState((previous) => {
+      if (previous.pathname !== location.pathname) {
+        return { open: true, pathname: location.pathname };
       }
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [mobileNavOpen]);
-
-  // Prevent body scroll when mobile nav is open
-  useEffect(() => {
-    if (mobileNavOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, [mobileNavOpen]);
-
-  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
-  const toggleMobileNav = useCallback(() => setMobileNavOpen(prev => !prev), []);
+      return { open: !previous.open, pathname: location.pathname };
+    });
+  }, [location.pathname]);
   const closeUserMenu = useCallback(() => setUserMenuOpen(false), []);
   const toggleUserMenu = useCallback(() => setUserMenuOpen(prev => !prev), []);
   const handleOpenSettings = useCallback(() => {
@@ -60,16 +48,15 @@ function WelcomeHeader() {
     navigate("/settings");
   }, [closeUserMenu, navigate]);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (!userMenuOpen) return;
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
-        setUserMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [userMenuOpen]);
+  useEscapeKey(() => {
+    closeMobileNav();
+  }, mobileNavOpen);
+  useBodyScrollLock(mobileNavOpen);
+  useClickOutside({
+    enabled: userMenuOpen,
+    refs: [userMenuRef],
+    onClickOutside: closeUserMenu,
+  });
 
   // Only show the shelf toggle on routes that actually render the thread sidebar.
   const shouldShowShelfToggle =
@@ -454,8 +441,6 @@ function StatusFooter() {
 }
 
 export default function Layout({ children }: PropsWithChildren) {
-  const location = useLocation();
-
   return (
     <>
       <WelcomeHeader />

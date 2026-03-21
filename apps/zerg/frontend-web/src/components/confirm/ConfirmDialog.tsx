@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { useBodyScrollLock } from "../../hooks/useBodyScrollLock";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 import type { ConfirmVariant } from './types';
 import './ConfirmDialog.css';
 
@@ -37,6 +39,12 @@ export function ConfirmDialog({
   const cancelRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  useBodyScrollLock(isOpen);
+  useEscapeKey((event) => {
+    event.preventDefault();
+    onCancel();
+  }, isOpen);
+
   // Focus trap and initial focus on cancel button
   useEffect(() => {
     if (!isOpen) return;
@@ -44,13 +52,7 @@ export function ConfirmDialog({
     // Focus the cancel button (least destructive action)
     cancelRef.current?.focus();
 
-    // Handle Escape key
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onCancel();
-      }
-
       // Focus trap
       if (e.key === 'Tab' && dialogRef.current) {
         const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
@@ -71,18 +73,6 @@ export function ConfirmDialog({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onCancel]);
-
-  // Prevent body scroll when dialog is open
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => {
-      document.body.style.overflow = '';
-    };
   }, [isOpen]);
 
   if (!isOpen) return null;

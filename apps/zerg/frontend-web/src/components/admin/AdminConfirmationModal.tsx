@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { createPortal } from "react-dom";
+import { useBodyScrollLock } from "../../hooks/useBodyScrollLock";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 import { Button, Card } from "../ui";
 
 interface AdminConfirmationModalProps {
@@ -35,32 +37,10 @@ export default function AdminConfirmationModal({
     setPassword("");
   }, [onConfirm, password, requirePassword]);
 
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        handleClose();
-      }
-    };
-
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [handleClose, isOpen]);
+  useBodyScrollLock(isOpen);
+  useEscapeKey(() => {
+    handleClose();
+  }, isOpen);
 
   if (!isOpen) {
     return null;
