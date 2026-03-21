@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import {
   useGitHubRepos,
   useGitHubBranches,
@@ -12,79 +12,49 @@ interface AddKnowledgeSourceModalProps {
   onClose: () => void;
 }
 
-type SourceType = "github_repo" | "url";
 type Step = "type" | "github_repo" | "github_config" | "url_config";
 
-export function AddKnowledgeSourceModal({
-  isOpen,
-  onClose,
-}: AddKnowledgeSourceModalProps) {
+function AddKnowledgeSourceDialog({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<Step>("type");
-  const [_sourceType, setSourceType] = useState<SourceType | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
-  const [page, setPage] = useState(1);
   const [searchFilter, setSearchFilter] = useState("");
-  const [accumulatedRepos, setAccumulatedRepos] = useState<GitHubRepo[]>([]);
 
-  // GitHub config state
-  const [branch, setBranch] = useState<string>("");
+  const [branch, setBranch] = useState("");
   const [includePaths, setIncludePaths] = useState("**/*.md, **/*.mdx");
   const [sourceName, setSourceName] = useState("");
 
-  // URL config state
   const [url, setUrl] = useState("");
   const [authHeader, setAuthHeader] = useState("");
 
-  // Only fetch repos when modal is open AND we're on the github_repo step
-  const shouldFetchRepos = isOpen && step === "github_repo";
+  const shouldFetchRepos = step === "github_repo";
 
   const createMutation = useCreateKnowledgeSource();
-  const { data: reposData, isLoading: isLoadingRepos, error: reposError } = useGitHubRepos(page, 30, shouldFetchRepos);
+  const {
+    repositories,
+    isLoading: isLoadingRepos,
+    error: reposError,
+    hasMore,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useGitHubRepos(30, shouldFetchRepos);
   const { data: branchesData, isLoading: isLoadingBranches } = useGitHubBranches(
     selectedRepo?.owner || "",
-    selectedRepo?.name || ""
+    selectedRepo?.name || "",
   );
 
-  // Accumulate repos across pages
-  useEffect(() => {
-    if (reposData?.repositories) {
-      if (page === 1) {
-        // First page replaces
-        setAccumulatedRepos(reposData.repositories);
-      } else {
-        // Subsequent pages accumulate (avoiding duplicates by full_name)
-        setAccumulatedRepos((prev) => {
-          const existing = new Set(prev.map((r) => r.full_name));
-          const newRepos = reposData.repositories.filter((r) => !existing.has(r.full_name));
-          return [...prev, ...newRepos];
-        });
-      }
-    }
-  }, [reposData, page]);
+  const filteredRepos = useMemo(
+    () =>
+      repositories.filter(
+        (repo) =>
+          searchFilter === "" ||
+          repo.full_name.toLowerCase().includes(searchFilter.toLowerCase()) ||
+          (repo.description?.toLowerCase().includes(searchFilter.toLowerCase()) ?? false),
+      ),
+    [repositories, searchFilter],
+  );
 
-  const handleClose = () => {
-    // Reset state
-    setStep("type");
-    setSourceType(null);
-    setSelectedRepo(null);
-    setPage(1);
-    setSearchFilter("");
-    setAccumulatedRepos([]);
-    setBranch("");
-    setIncludePaths("**/*.md, **/*.mdx");
-    setSourceName("");
-    setUrl("");
-    setAuthHeader("");
-    onClose();
-  };
-
-  const handleTypeSelect = (type: SourceType) => {
-    setSourceType(type);
-    if (type === "github_repo") {
-      setStep("github_repo");
-    } else {
-      setStep("url_config");
-    }
+  const handleTypeSelect = (type: "github_repo" | "url") => {
+    setStep(type === "github_repo" ? "github_repo" : "url_config");
   };
 
   const handleRepoSelect = (repo: GitHubRepo) => {
@@ -97,8 +67,10 @@ export function AddKnowledgeSourceModal({
   const handleBack = () => {
     if (step === "github_repo" || step === "url_config") {
       setStep("type");
-      setSourceType(null);
-    } else if (step === "github_config") {
+      return;
+    }
+
+    if (step === "github_config") {
       setStep("github_repo");
       setSelectedRepo(null);
     }
@@ -109,9 +81,8 @@ export function AddKnowledgeSourceModal({
 
     const includePathsArray = includePaths
       .split(",")
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0);
-
+      .map((path) => path.trim())
+      .filter((path) => path.length > 0);
 
     await createMutation.mutateAsync({
       name: sourceName || selectedRepo.name,
@@ -121,40 +92,30 @@ export function AddKnowledgeSourceModal({
         repo: selectedRepo.name,
         branch: branch || selectedRepo.default_branch,
         include_paths: includePathsArray.length > 0 ? includePathsArray : undefined,
-      } as any,
+      } as Record<string, unknown>,
     });
 
-    handleClose();
+    onClose();
   };
 
   const handleSubmitUrl = async () => {
-    if (!url) return;
-
+    const normalizedUrl = url.trim();
+    if (!normalizedUrl) return;
 
     await createMutation.mutateAsync({
-      name: sourceName || new URL(url).hostname,
+      name: sourceName || new URL(normalizedUrl).hostname,
       source_type: "url",
       config: {
-        url,
+        url: normalizedUrl,
         ...(authHeader ? { auth_header: authHeader } : {}),
-      } as any,
+      } as Record<string, unknown>,
     });
 
-    handleClose();
+    onClose();
   };
 
-  // Filter accumulated repos by search
-  const filteredRepos = accumulatedRepos.filter(
-    (repo) =>
-      searchFilter === "" ||
-      repo.full_name.toLowerCase().includes(searchFilter.toLowerCase()) ||
-      (repo.description?.toLowerCase().includes(searchFilter.toLowerCase()) ?? false)
-  );
-
-  if (!isOpen) return null;
-
   return (
-    <div className="modal-overlay" onClick={handleClose}>
+    <div className="modal-overlay" onClick={onClose}>
       <div className="modal-container modal-large" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>
@@ -163,19 +124,15 @@ export function AddKnowledgeSourceModal({
             {step === "github_config" && "Configure Source"}
             {step === "url_config" && "Add URL Source"}
           </h2>
-          <button className="modal-close-button" onClick={handleClose} aria-label="Close">
+          <button className="modal-close-button" onClick={onClose} aria-label="Close">
             &times;
           </button>
         </div>
 
         <div className="modal-content">
-          {/* Step 1: Select Type */}
           {step === "type" && (
             <div className="source-type-grid">
-              <button
-                className="source-type-card"
-                onClick={() => handleTypeSelect("github_repo")}
-              >
+              <button className="source-type-card" onClick={() => handleTypeSelect("github_repo")}>
                 <div className="source-type-icon">
                   <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor">
                     <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
@@ -191,7 +148,14 @@ export function AddKnowledgeSourceModal({
                 data-testid="source-type-url"
               >
                 <div className="source-type-icon">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg
+                    width="32"
+                    height="32"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
                     <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
                     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
                   </svg>
@@ -202,7 +166,6 @@ export function AddKnowledgeSourceModal({
             </div>
           )}
 
-          {/* Step 2: Select GitHub Repo */}
           {step === "github_repo" && (
             <div className="repo-picker">
               <div className="repo-search">
@@ -215,8 +178,7 @@ export function AddKnowledgeSourceModal({
                 />
               </div>
 
-              {/* Show loading only on initial load (page 1 with no data yet) */}
-              {isLoadingRepos && accumulatedRepos.length === 0 && (
+              {isLoadingRepos && repositories.length === 0 && (
                 <p className="loading-text">Loading repositories...</p>
               )}
 
@@ -226,8 +188,7 @@ export function AddKnowledgeSourceModal({
                 </p>
               )}
 
-              {/* Show repos once we have any data */}
-              {accumulatedRepos.length > 0 && !reposError && (
+              {repositories.length > 0 && !reposError && (
                 <>
                   <div className="repo-list">
                     {filteredRepos.map((repo) => (
@@ -247,13 +208,13 @@ export function AddKnowledgeSourceModal({
                     ))}
                   </div>
 
-                  {reposData?.has_more && (
+                  {hasMore && (
                     <button
                       className="load-more-button"
-                      onClick={() => setPage((p) => p + 1)}
-                      disabled={isLoadingRepos}
+                      onClick={() => void fetchNextPage()}
+                      disabled={isFetchingNextPage}
                     >
-                      {isLoadingRepos ? "Loading..." : "Load More"}
+                      {isFetchingNextPage ? "Loading..." : "Load More"}
                     </button>
                   )}
                 </>
@@ -261,7 +222,6 @@ export function AddKnowledgeSourceModal({
             </div>
           )}
 
-          {/* Step 3: Configure GitHub Source */}
           {step === "github_config" && selectedRepo && (
             <div className="config-form">
               <div className="form-group">
@@ -270,7 +230,9 @@ export function AddKnowledgeSourceModal({
               </div>
 
               <div className="form-group">
-                <label className="form-label" htmlFor="source-name">Source Name</label>
+                <label className="form-label" htmlFor="source-name">
+                  Source Name
+                </label>
                 <input
                   type="text"
                   id="source-name"
@@ -282,7 +244,9 @@ export function AddKnowledgeSourceModal({
               </div>
 
               <div className="form-group">
-                <label className="form-label" htmlFor="branch">Branch</label>
+                <label className="form-label" htmlFor="branch">
+                  Branch
+                </label>
                 {isLoadingBranches ? (
                   <p className="loading-text">Loading branches...</p>
                 ) : (
@@ -292,9 +256,9 @@ export function AddKnowledgeSourceModal({
                     onChange={(e) => setBranch(e.target.value)}
                     className="form-input"
                   >
-                    {branchesData?.branches.map((b) => (
-                      <option key={b.name} value={b.name}>
-                        {b.name} {b.is_default ? "(default)" : ""}
+                    {branchesData?.branches.map((repoBranch) => (
+                      <option key={repoBranch.name} value={repoBranch.name}>
+                        {repoBranch.name} {repoBranch.is_default ? "(default)" : ""}
                       </option>
                     ))}
                   </select>
@@ -302,7 +266,9 @@ export function AddKnowledgeSourceModal({
               </div>
 
               <div className="form-group">
-                <label className="form-label" htmlFor="include-paths">Include Paths</label>
+                <label className="form-label" htmlFor="include-paths">
+                  Include Paths
+                </label>
                 <input
                   type="text"
                   id="include-paths"
@@ -318,11 +284,12 @@ export function AddKnowledgeSourceModal({
             </div>
           )}
 
-          {/* URL Config */}
           {step === "url_config" && (
             <div className="config-form">
               <div className="form-group">
-                <label className="form-label" htmlFor="url-name">Source Name</label>
+                <label className="form-label" htmlFor="url-name">
+                  Source Name
+                </label>
                 <input
                   type="text"
                   id="url-name"
@@ -334,7 +301,9 @@ export function AddKnowledgeSourceModal({
               </div>
 
               <div className="form-group">
-                <label className="form-label" htmlFor="url">URL</label>
+                <label className="form-label" htmlFor="url">
+                  URL
+                </label>
                 <input
                   type="url"
                   id="url"
@@ -373,7 +342,7 @@ export function AddKnowledgeSourceModal({
               Back
             </Button>
           )}
-          <Button variant="secondary" onClick={handleClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           {step === "github_config" && (
@@ -389,7 +358,7 @@ export function AddKnowledgeSourceModal({
             <Button
               variant="primary"
               onClick={handleSubmitUrl}
-              disabled={createMutation.isPending || !url}
+              disabled={createMutation.isPending || !url.trim()}
               data-testid="submit-url-source"
             >
               {createMutation.isPending ? "Adding..." : "Add Source"}
@@ -399,4 +368,12 @@ export function AddKnowledgeSourceModal({
       </div>
     </div>
   );
+}
+
+export function AddKnowledgeSourceModal({
+  isOpen,
+  onClose,
+}: AddKnowledgeSourceModalProps) {
+  if (!isOpen) return null;
+  return <AddKnowledgeSourceDialog onClose={onClose} />;
 }

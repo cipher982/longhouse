@@ -1,23 +1,17 @@
-/**
- * SessionPickerModal Tests
- *
- * Tests for the session picker modal, focusing on:
- * - Null/undefined filter handling (regression test for crash)
- */
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { describe, expect, it, beforeEach, vi } from "vitest";
+import { SessionPickerModal } from "../SessionPickerModal";
 
-import { render } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it, vi } from 'vitest';
-import { SessionPickerModal } from '../SessionPickerModal';
-
-// Mock the API calls - use hoisted pattern for proper module mocking
 const apiMocks = vi.hoisted(() => ({
-  fetchSessions: vi.fn().mockResolvedValue({ sessions: [] }),
-  fetchSessionPreview: vi.fn().mockResolvedValue({ messages: [], total_messages: 0 }),
+  fetchAgentSessionSummaries: vi.fn(),
+  fetchAgentSessionPreview: vi.fn(),
+  fetchAgentFilters: vi.fn(),
 }));
 
-vi.mock('../../services/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../services/api')>();
+vi.mock("../../services/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/api")>();
   return {
     ...actual,
     ...apiMocks,
@@ -31,7 +25,7 @@ function renderModal(props: Partial<React.ComponentProps<typeof SessionPickerMod
     },
   });
 
-  const defaultProps = {
+  const defaultProps: React.ComponentProps<typeof SessionPickerModal> = {
     isOpen: true,
     onClose: vi.fn(),
     onSelect: vi.fn(),
@@ -41,47 +35,127 @@ function renderModal(props: Partial<React.ComponentProps<typeof SessionPickerMod
   return render(
     <QueryClientProvider client={queryClient}>
       <SessionPickerModal {...defaultProps} />
-    </QueryClientProvider>
+    </QueryClientProvider>,
   );
 }
 
-describe('SessionPickerModal', () => {
-  describe('Filter handling', () => {
-    it('handles undefined initialFilters without crashing', () => {
-      // This should not throw
-      expect(() => renderModal({ initialFilters: undefined })).not.toThrow();
-    });
+describe("SessionPickerModal", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
 
-    it('handles null initialFilters without crashing (regression)', () => {
-      // This was the bug: null filters caused "Cannot read properties of null (reading 'query')"
-      // The backend can send filters: null which flows through the SSE handler
-      expect(() => renderModal({ initialFilters: null as any })).not.toThrow();
-    });
-
-    it('handles empty object initialFilters', () => {
-      expect(() => renderModal({ initialFilters: {} })).not.toThrow();
-    });
-
-    it('handles filters with values', () => {
-      expect(() => renderModal({
-        initialFilters: {
-          project: 'zerg',
-          query: 'test',
-          provider: 'claude',
+    apiMocks.fetchAgentSessionSummaries.mockResolvedValue({
+      sessions: [
+        {
+          id: "sess-1",
+          project: "zerg",
+          provider: "claude",
+          cwd: "/Users/davidrose/git/zerg",
+          git_repo: null,
+          git_branch: null,
+          started_at: "2026-03-20T12:00:00Z",
+          ended_at: null,
+          duration_minutes: 3,
+          turn_count: 4,
+          last_user_message: "First session",
+          last_ai_message: "Reply",
         },
-      })).not.toThrow();
+        {
+          id: "sess-2",
+          project: "zerg",
+          provider: "codex",
+          cwd: "/Users/davidrose/git/zerg",
+          git_repo: null,
+          git_branch: null,
+          started_at: "2026-03-19T12:00:00Z",
+          ended_at: null,
+          duration_minutes: 2,
+          turn_count: 2,
+          last_user_message: "Second session",
+          last_ai_message: "Reply",
+        },
+      ],
+      total: 2,
+    });
+    apiMocks.fetchAgentSessionPreview.mockResolvedValue({
+      messages: [{ role: "user", content: "Preview", timestamp: "2026-03-20T12:00:00Z" }],
+      total_messages: 1,
+    });
+    apiMocks.fetchAgentFilters.mockResolvedValue({
+      projects: ["zerg"],
+      providers: ["claude", "codex"],
+      machines: [],
     });
   });
 
-  describe('Rendering', () => {
-    it('does not render when isOpen is false', () => {
-      const { container } = renderModal({ isOpen: false });
-      expect(container.querySelector('.session-picker-modal')).toBeNull();
+  it("handles null initialFilters without crashing", () => {
+    expect(() => renderModal({ initialFilters: null as unknown as never })).not.toThrow();
+  });
+
+  it("resets the query draft when the modal closes and reopens", async () => {
+    const user = userEvent.setup();
+    const view = renderModal({
+      initialFilters: {
+        query: "from server",
+      },
     });
 
-    it('renders when isOpen is true', () => {
-      const { container } = renderModal({ isOpen: true });
-      expect(container.querySelector('.session-picker-modal')).not.toBeNull();
-    });
+    const searchInput = await screen.findByPlaceholderText("Search sessions...");
+    expect(searchInput).toHaveValue("from server");
+
+    await user.clear(searchInput);
+    await user.type(searchInput, "edited");
+    expect(searchInput).toHaveValue("edited");
+
+    view.rerender(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: {
+              queries: { retry: false },
+            },
+          })
+        }
+      >
+        <SessionPickerModal
+          isOpen={false}
+          initialFilters={{ query: "from server" }}
+          onClose={vi.fn()}
+          onSelect={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    view.rerender(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: {
+              queries: { retry: false },
+            },
+          })
+        }
+      >
+        <SessionPickerModal
+          isOpen={true}
+          initialFilters={{ query: "from server" }}
+          onClose={vi.fn()}
+          onSelect={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByPlaceholderText("Search sessions...")).toHaveValue("from server");
+  });
+
+  it("resumes the first visible session when no explicit selection was made", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+
+    renderModal({ onSelect });
+
+    await screen.findByText("First session");
+    await user.click(screen.getByRole("button", { name: "Resume" }));
+
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("sess-1"));
   });
 });
