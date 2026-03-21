@@ -38,7 +38,6 @@ import {
 } from "../components/ui";
 import { PresenceBadge } from "../components/PresenceBadge";
 import { parseUTC } from "../lib/dateUtils";
-import { reportApiError, clearApiError } from "../lib/apiHealth";
 import { getProviderColor, supportsCloudContinuation } from "../lib/providers";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { RecallPanel } from "../components/RecallPanel";
@@ -359,6 +358,7 @@ function truncateText(text: string, maxLength: number): string {
 }
 
 function parsePositiveIntParam(rawValue: string | null, fallback: number, min: number = 1): number {
+  if (rawValue == null || rawValue.trim() === "") return fallback;
   const parsed = Number(rawValue);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.floor(parsed));
@@ -905,7 +905,7 @@ export default function SessionsPage() {
     limit: Math.max(limit, PAGE_SIZE),
     days_back: daysBack,
     project: project || undefined,
-    enabled: true,
+    enabled: liveViewOpen,
   });
 
   const activeSessions = useMemo(() => {
@@ -917,28 +917,19 @@ export default function SessionsPage() {
     });
   }, [activeSessionsData]);
 
-  const liveTotal = activeSessions.length;
+  const liveOverlaySessions = liveViewOpen ? activeSessions : [];
+  const liveTotal = liveOverlaySessions.length;
   const liveCount = useMemo(
-    () => activeSessions.filter(isSessionLive).length,
-    [activeSessions]
+    () => liveOverlaySessions.filter(isSessionLive).length,
+    [liveOverlaySessions]
   );
 
   const liveAuthError = (activeSessionsError as { status?: number } | null)?.status === 401;
-  const liveList = useMemo(() => activeSessions.slice(0, 8), [activeSessions]);
+  const liveList = useMemo(() => liveOverlaySessions.slice(0, 8), [liveOverlaySessions]);
   const activeSessionsById = useMemo(
-    () => new Map(activeSessions.map((session) => [session.id, session])),
-    [activeSessions],
+    () => new Map(liveOverlaySessions.map((session) => [session.id, session])),
+    [liveOverlaySessions],
   );
-
-  // Report API health to footer indicator; clear on recovery or unmount
-  useEffect(() => {
-    if (error) {
-      reportApiError(error);
-    } else {
-      clearApiError(); // clear as soon as error is gone, not waiting for data
-    }
-    return () => clearApiError(); // ensure footer clears if user navigates away
-  }, [error]);
 
   const threadCards = useMemo(() => buildThreadCards(sessions, activeSessionsById), [sessions, activeSessionsById]);
   const groupedSessions = useMemo(
