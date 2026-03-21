@@ -34,7 +34,6 @@ from fastapi import Depends
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
-from pydantic import BaseModel
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -51,7 +50,13 @@ from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
 from zerg.services.oikos_wakeup_ledger import append_wakeup
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import coerce_session_uuid
+from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.session_runtime import phase_freshness_ms
+from zerg.services.session_runtime import runtime_key_for_session
 from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +77,7 @@ _OPERATOR_WAKE_STATES = {"blocked"}
 _OPERATOR_CONVERSATION_ID = "operator:main"
 
 
-class PresenceIn(BaseModel):
+class PresenceIn(UTCBaseModel):
     """Payload from a Claude Code hook."""
 
     session_id: str
@@ -80,6 +85,8 @@ class PresenceIn(BaseModel):
     tool_name: Optional[str] = None
     cwd: Optional[str] = None
     provider: Optional[str] = "claude"
+    occurred_at: Optional[datetime] = None
+    dedupe_key: Optional[str] = None
 
 
 def _effective_tool_name(payload: PresenceIn, previous: SessionPresence | None) -> str | None:
@@ -297,7 +304,7 @@ async def upsert_presence(
 
     previous = db.query(SessionPresence).filter(SessionPresence.session_id == payload.session_id).first()
 
-    now = datetime.now(timezone.utc)
+    now = payload.occurred_at.astimezone(timezone.utc) if payload.occurred_at is not None else datetime.now(timezone.utc)
 
     insert_tool_name = payload.tool_name if payload.state in _STATES_WITH_TOOL else None
 
@@ -342,6 +349,31 @@ async def upsert_presence(
         )
     )
     db.execute(stmt)
+
+    runtime_provider = payload.provider or "claude"
+    runtime_key = runtime_key_for_session(runtime_provider, payload.session_id)
+    runtime_dedupe_key = payload.dedupe_key or (
+        f"presence:{payload.session_id}:{payload.state}:{effective_tool_name or '-'}:{now.isoformat()}"
+    )
+    ingest_runtime_events(
+        db,
+        [
+            RuntimeEventIngest(
+                runtime_key=runtime_key,
+                session_id=coerce_session_uuid(payload.session_id),
+                provider=runtime_provider,
+                device_id=getattr(_token, "device_id", None),
+                source="claude_hook",
+                kind="phase_signal",
+                phase=payload.state,
+                tool_name=effective_tool_name,
+                occurred_at=now,
+                freshness_ms=phase_freshness_ms(payload.state),
+                dedupe_key=runtime_dedupe_key,
+                payload={},
+            )
+        ],
+    )
 
     # Auto-resume snoozed sessions on genuine work-restart signals only.
     # blocked/needs_user are pause states — user must come back deliberately.
