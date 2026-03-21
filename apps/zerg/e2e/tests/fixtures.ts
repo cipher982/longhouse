@@ -3,8 +3,9 @@ import { test as base, expect, BrowserContext, type Page } from '@playwright/tes
 export type { Page };
 
 // ---------------------------------------------------------------------------
-// Shared Playwright *test* object that injects the `X-Test-Commis` header *and*
-// appends `commis=<id>` to every WebSocket URL opened by the front-end.  All
+// Shared Playwright *test* object that injects the `X-Test-Commis` header into
+// local browser requests and appends `commis=<id>` to every WebSocket URL
+// opened by the front-end. All
 // existing spec files can simply switch their import to:
 //
 //   import { test, expect } from './fixtures';
@@ -28,6 +29,32 @@ type TestFixtures = {
   backendUrl: string;
   commisId: string;
 };
+
+function shouldInjectCommisHeader(requestUrl: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(requestUrl);
+    return (protocol === 'http:' || protocol === 'https:') && (hostname === '127.0.0.1' || hostname === 'localhost');
+  } catch {
+    return false;
+  }
+}
+
+async function installCommisHeaderRouting(context: BrowserContext, commisId: string): Promise<void> {
+  await context.route('**/*', async route => {
+    const request = route.request();
+    if (!shouldInjectCommisHeader(request.url())) {
+      await route.continue();
+      return;
+    }
+
+    await route.continue({
+      headers: {
+        ...request.headers(),
+        'X-Test-Commis': commisId,
+      },
+    });
+  });
+}
 
 async function mintDeviceToken(
   request: import('@playwright/test').APIRequestContext,
@@ -92,11 +119,8 @@ export const test = base.extend<TestFixtures>({
   context: async ({ browser }, use, testInfo) => {
     const commisId = String(testInfo.parallelIndex);
 
-    const context = await browser.newContext({
-      extraHTTPHeaders: {
-        'X-Test-Commis': commisId,
-      },
-    });
+    const context = await browser.newContext();
+    await installCommisHeaderRouting(context, commisId);
 
     const reactBaseUrl = process.env.PLAYWRIGHT_FRONTEND_BASE || 'http://localhost:3000';
 
@@ -125,11 +149,9 @@ export const test = base.extend<TestFixtures>({
     const originalNewContext = browser.newContext.bind(browser);
     // Type-cast via immediate IIFE to keep TypeScript happy.
     browser.newContext = (async (options: any = {}) => {
-      options.extraHTTPHeaders = {
-        ...(options.extraHTTPHeaders || {}),
-        'X-Test-Commis': commisId,
-      };
-      return originalNewContext(options);
+      const childContext = await originalNewContext(options);
+      await installCommisHeaderRouting(childContext, commisId);
+      return childContext;
     }) as any;
 
     // ---------------------------------------------------------------------

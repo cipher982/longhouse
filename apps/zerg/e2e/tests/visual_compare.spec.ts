@@ -54,6 +54,8 @@ test.describe('Visual comparison: LLM-triaged', () => {
     }
 
     // Capture fresh screenshots
+    fs.rmSync(CURRENT_DIR, { recursive: true, force: true });
+    fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
     fs.mkdirSync(CURRENT_DIR, { recursive: true });
 
     for (const pageDef of APP_PAGES) {
@@ -65,8 +67,9 @@ test.describe('Visual comparison: LLM-triaged', () => {
     }
 
     // Run comparison engine
+    const pageNames = APP_PAGES.map((pageDef) => pageDef.name).join(',');
     const skipLlm = process.env.SKIP_LLM === '1' ? '--skip-llm' : '';
-    const cmd = `bun run ${SCRIPT_PATH} --baseline-dir ${BASELINE_DIR} --current-dir ${CURRENT_DIR} --output-dir ${OUTPUT_DIR} --json ${skipLlm}`.trim();
+    const cmd = `bun run ${SCRIPT_PATH} --baseline-dir ${BASELINE_DIR} --current-dir ${CURRENT_DIR} --output-dir ${OUTPUT_DIR} --pages ${pageNames} --json ${skipLlm}`.trim();
 
     let stdout: string;
     try {
