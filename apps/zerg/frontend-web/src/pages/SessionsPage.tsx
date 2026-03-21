@@ -19,6 +19,7 @@ import { useActiveSessions, type ActiveSession } from "../hooks/useActiveSession
 import { useClickOutside } from "../hooks/useClickOutside";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useEscapeKey } from "../hooks/useEscapeKey";
+import { useTimelineSessionStream } from "../hooks/useTimelineSessionStream";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSession,
@@ -112,7 +113,12 @@ function getResolvedTimelineAnchor(
   session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">,
   activeSession?: Pick<ActiveSession, "timeline_anchor_at" | "last_activity_at"> | null,
 ): string {
-  return activeSession?.timeline_anchor_at || activeSession?.last_activity_at || getTimelineAnchor(session);
+  const sessionAnchor = getTimelineAnchor(session);
+  const activeAnchor = activeSession?.timeline_anchor_at || activeSession?.last_activity_at || null;
+  if (!activeAnchor) {
+    return sessionAnchor;
+  }
+  return parseUTC(activeAnchor).getTime() >= parseUTC(sessionAnchor).getTime() ? activeAnchor : sessionAnchor;
 }
 
 interface SessionThreadCard {
@@ -886,6 +892,9 @@ export default function SessionsPage() {
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
   const hasMore = sessions.length < total;
+  const timelineStreamEnabled = !debouncedQuery && !aiSearch;
+
+  useTimelineSessionStream(filters, { enabled: timelineStreamEnabled });
 
   const {
     data: activeSessionsData,

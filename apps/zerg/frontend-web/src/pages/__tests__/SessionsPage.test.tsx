@@ -17,6 +17,10 @@ const activeSessionMocks = vi.hoisted(() => ({
   useActiveSessions: vi.fn(),
 }));
 
+const timelineStreamMocks = vi.hoisted(() => ({
+  useTimelineSessionStream: vi.fn(),
+}));
+
 vi.mock("../../hooks/useAgentSessions", () => ({
   useAgentSessions: hookMocks.useAgentSessions,
   useAgentFilters: hookMocks.useAgentFilters,
@@ -24,6 +28,10 @@ vi.mock("../../hooks/useAgentSessions", () => ({
 
 vi.mock("../../hooks/useActiveSessions", () => ({
   useActiveSessions: activeSessionMocks.useActiveSessions,
+}));
+
+vi.mock("../../hooks/useTimelineSessionStream", () => ({
+  useTimelineSessionStream: timelineStreamMocks.useTimelineSessionStream,
 }));
 
 vi.mock("../../lib/readiness-contract", () => ({
@@ -38,6 +46,7 @@ vi.mock("../../lib/config", () => ({
 
 const { useAgentSessions: mockUseAgentSessions, useAgentFilters: mockUseAgentFilters } = hookMocks;
 const { useActiveSessions: mockUseActiveSessions } = activeSessionMocks;
+const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStreamMocks;
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = "2026-03-21T12:00:00Z";
@@ -168,6 +177,8 @@ describe("SessionsPage", () => {
       isLoading: false,
       error: null,
     });
+
+    mockUseTimelineSessionStream.mockImplementation(() => {});
   });
 
   afterEach(() => {
