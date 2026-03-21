@@ -1,18 +1,20 @@
-# Timeline Realtime Action Center
+# Timeline Realtime Desktop Control View
 
 Status: In progress
 Last updated: 2026-03-21
 
 ## Goal
 
-Make `/timeline` the one place users open to understand and manage all current agent sessions. Keep the existing single scrolling list, but make every row capable of answering:
+Make `/timeline` the primary desktop runtime/control view for current agent sessions. Keep the existing single scrolling list, but make every row capable of answering:
 
 - is this session active right now?
 - what phase is it in?
 - is it waiting on me, blocked, or quietly running?
 - how recently did real progress happen?
 
-The product target is still the same: replace terminal-tab juggling for local Claude and Codex work while keeping Timeline as the primary Longhouse surface.
+The product target is still the same: replace terminal-tab juggling for local Claude and Codex work while keeping Timeline as the primary Longhouse desktop surface.
+
+Timeline owns runtime observability and the desktop entry point. It does not define the canonical follow-up execution model, continuation transport, or mobile action semantics.
 
 ## Current Status
 
@@ -43,10 +45,21 @@ Phase 2 is the bridge from “truthier polling UI” to a real runtime system.
 
 - One page: `/timeline`
 - One primary layout: the existing scrolling card list
-- No separate live destination
+- No separate desktop live destination
 - Row ordering is driven by meaningful activity, not heartbeats
 - Frontend renders runtime state; backend owns runtime truth
 - Provider-specific raw signals are normalized before the UI sees them
+- Timeline phase is not the same thing as action availability
+
+## Boundary
+
+This spec is about runtime truth and live row rendering. It does not define:
+
+- what `Continue` means across source sessions, hosted sessions, or cloud takeover
+- how approvals/follow-ups are executed
+- a second attention queue or action protocol separate from Loop/follow-up cards
+
+Timeline may surface follow-up state, counts, and links, but it should consume the broader action model rather than inventing a new one.
 
 ## Design Principles
 
@@ -59,6 +72,8 @@ These are different facts:
 - `phase`: `thinking`, `running`, `blocked`, `needs_user`, `idle`, `finished`
 
 Any design that collapses them into one timestamp will lie.
+
+Runtime phase also does not imply a unique action policy. For example, `needs_user` means the runtime will not auto-advance on its own; it does not decide whether the user can reply on the source session, trigger hosted takeover, or use some other follow-up path.
 
 ### 2. One reducer
 
@@ -96,6 +111,7 @@ Phase 2 introduces a provider-agnostic runtime subsystem with four pieces:
 4. an SSE patch stream for Timeline
 
 Phase 2 does not yet require full PID/process-tree monitoring. That remains a later layer.
+Phase 2 also does not define Timeline-native continue/approve semantics. It only makes runtime state trustworthy and cheap to render.
 
 ## Runtime Identity
 
