@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ApiError } from "../services/api/base";
 import {
   deleteLoopPushSubscription,
   fetchLoopPushConfig,
@@ -174,7 +175,13 @@ export function useLoopPushNotifications({ isInstalled }: { isInstalled: boolean
         setIsEnabled(false);
         return true;
       }
-      await deleteLoopPushSubscription(subscription.endpoint);
+      try {
+        await deleteLoopPushSubscription(subscription.endpoint);
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.status !== 404) {
+          throw err;
+        }
+      }
       await subscription.unsubscribe();
       setIsEnabled(false);
       return true;

@@ -559,11 +559,7 @@ async def _send_turn_review_telegram_notification(
     review: SessionTurnReview,
     session: AgentSession,
 ) -> bool:
-    if review.owner_id is None:
-        return False
-    if review.execution_state not in {"awaiting_user_approval", "needs_human"}:
-        return False
-    if review.status not in {"recorded", "enqueued"}:
+    if not _review_requires_mobile_attention(review):
         return False
 
     user = db.query(User).filter(User.id == review.owner_id).first()
@@ -601,7 +597,7 @@ def _send_turn_review_push_notification(
     review: SessionTurnReview,
     session: AgentSession,
 ) -> bool:
-    if review.owner_id is None:
+    if not _review_requires_mobile_attention(review):
         return False
     from zerg.services.loop_push import send_loop_push_nudge
 
@@ -619,9 +615,21 @@ async def _send_turn_review_mobile_notification(
     review: SessionTurnReview,
     session: AgentSession,
 ) -> bool:
+    if not _review_requires_mobile_attention(review):
+        return False
     if _send_turn_review_push_notification(db=db, review=review, session=session):
         return True
     return await _send_turn_review_telegram_notification(db=db, review=review, session=session)
+
+
+def _review_requires_mobile_attention(review: SessionTurnReview) -> bool:
+    if review.owner_id is None:
+        return False
+    if review.execution_state not in {"awaiting_user_approval", "needs_human"}:
+        return False
+    if review.status not in {"recorded", "enqueued"}:
+        return False
+    return True
 
 
 async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[SessionTurnReview | None, bool]:
@@ -715,9 +723,15 @@ async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[
                 session.id,
                 turn.assistant_event_id,
             )
+            failure_rationale = " ".join(
+                [
+                    "The AI loop controller failed, so this session should stay conservative",
+                    "until the next explicit review.",
+                ]
+            )
             outcome = _failure_outcome(
                 "Loop controller could not decide this completed turn.",
-                ("The AI loop controller failed, so this session should stay conservative until the next " "explicit review."),
+                failure_rationale,
                 blocked_reason="Loop controller evaluation failed.",
             )
             review_status = "failed"

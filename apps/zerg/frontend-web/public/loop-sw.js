@@ -107,9 +107,13 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clients) => {
       const absoluteTargetUrl = new URL(targetUrl, self.location.origin).toString();
+      const loopClients = clients.filter((client) => {
+        if (!client.url.startsWith(self.location.origin)) return false;
+        const url = new URL(client.url);
+        return url.pathname === "/loop" || url.pathname.startsWith("/loop/");
+      });
 
-      for (const client of clients) {
-        if (!client.url.startsWith(self.location.origin)) continue;
+      for (const client of loopClients) {
         if ("navigate" in client) {
           await client.navigate(absoluteTargetUrl);
         }

@@ -398,6 +398,49 @@ async def test_turn_review_assist_prefers_loop_push_over_telegram(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_turn_review_autopilot_does_not_send_mobile_notification(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_no_mobile_notification.db")
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Only targeted verification remains.",
+            rationale="This is the routine continue case after a completed assistant turn.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=43,
+        )
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr(
+        "zerg.services.session_turn_reviews._send_turn_review_push_notification",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Push should not fire for acted reviews")),
+    )
+    monkeypatch.setattr(
+        "zerg.services.session_turn_reviews._send_turn_review_telegram_notification",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Telegram should not fire for acted reviews")),
+    )
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=True, telegram_chat_id="1234")
+        session_id = _seed_session(
+            db,
+            loop_mode="autopilot",
+            user_text="finish the verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+
+        assert review is not None
+        assert review.status == "acted"
+        assert review.reason == "continue_session"
+
+
+@pytest.mark.asyncio
 async def test_new_turn_review_supersedes_older_actionable_review(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_supersedes_older.db")
 
