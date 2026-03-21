@@ -10,9 +10,9 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 
 ## Current focus
 
-- Collapse the remaining URL/list selection effects in the smaller pages now that `ChatPage` and `SessionsPage` are route/URL-owned.
-- Start replacing manual page-level `fetch -> setState` effects with React Query hooks on the next slice.
+- Clean up form and modal state choreography now that the main route-ownership and query-ownership rewrites are landed.
 - Keep pushing shared primitives only where they directly unlock effect deletion.
+- Finish the remaining infra-level callback/ref synchronization so new effect glue stops creeping back in.
 
 ## Done when
 
@@ -27,8 +27,8 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - [x] Create persistent spec and tracking doc
 - [x] Slice 1: add shared frontend primitives (`useAuthMethods`, metadata/readiness helpers, sanctioned debounce path)
 - [x] Slice 2: rewrite auth/config consumers around shared query ownership
-- [ ] Slice 3: rewrite route-owned pages (`ChatPage`, `SessionsPage`, conversation/trace/swarm/loop selection)
-- [ ] Slice 4: move manual page fetch effects into React Query hooks
+- [x] Slice 3: rewrite route-owned pages (`ChatPage`, `SessionsPage`, conversation/trace/swarm/loop selection)
+- [x] Slice 4: move manual page fetch effects into React Query hooks
 - [ ] Slice 5: clean up form/modal state choreography (`SettingsPage`, `SessionPickerModal`, related modals)
 - [ ] Slice 6: collapse infra callback-sync effects and add lint ratchet
 
@@ -43,3 +43,4 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - `ConversationsPage` and `LoopInboxPage` now use declarative route canonicalization instead of effect-driven selection redirects.
 - `TraceExplorerPage` now reads the route param directly, and `SwarmOpsPage` now treats `filter` and `run` as URL-owned state with declarative fallback selection.
 - The remaining selection cleanup is concentrated in the legacy forum surface.
+- `SessionDetailPage` now reads turn telemetry through React Query, `SessionChat` now reads lock status through a shared query contract, and `OikosChatPage` now uses query-owned capability + preload bootstrap state instead of manual fetch effects.

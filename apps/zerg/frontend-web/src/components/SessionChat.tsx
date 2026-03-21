@@ -8,11 +8,12 @@
  * - Error handling with retry
  */
 
-import { useCallback, useRef, useState, type FormEvent, useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { buildUrl } from "../services/api/base";
 import { fetchWithRefresh } from "../lib/auth-refresh";
 import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
+import { fetchSessionLockStatus, type SessionLockInfo } from "../services/api";
 import { Badge, Button, Spinner } from "./ui";
 import type { ActiveSession } from "../hooks/useActiveSessions";
 import "../styles/session-chat.css";
@@ -108,11 +109,6 @@ export function SessionChat({
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
-  const [lockInfo, setLockInfo] = useState<{
-    locked: boolean;
-    holder?: string;
-    timeRemaining?: number;
-  } | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -130,7 +126,6 @@ export function SessionChat({
     setIsStreaming(false);
     setError(null);
     setBlockedKeyboardSubmit(false);
-    setLockInfo(null);
   }, [session.id]);
 
   useEffect(() => {
@@ -149,23 +144,32 @@ export function SessionChat({
     ]);
   }, [queryClient, session.id]);
 
-  // Check lock status on mount
-  useEffect(() => {
-    const checkLock = async () => {
+  const lockStatusQuery = useQuery<SessionLockInfo | null>({
+    queryKey: ["session-lock", session.id],
+    queryFn: async () => {
       try {
-        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/lock`), {
-          credentials: "include",
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setLockInfo(data);
-        }
-      } catch (e) {
-        // Ignore lock check errors
+        return await fetchSessionLockStatus(session.id);
+      } catch {
+        return null;
       }
-    };
-    checkLock();
-  }, [session.id]);
+    },
+    enabled: Boolean(session.id),
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 15_000,
+  });
+
+  const lockInfo = useMemo(
+    () =>
+      lockStatusQuery.data
+        ? {
+            locked: lockStatusQuery.data.locked,
+            holder: lockStatusQuery.data.holder ?? undefined,
+            timeRemaining: lockStatusQuery.data.time_remaining_seconds ?? undefined,
+          }
+        : null,
+    [lockStatusQuery.data],
+  );
 
   const handleCancel = useCallback(() => {
     if (abortControllerRef.current) {
@@ -227,10 +231,11 @@ export function SessionChat({
           if (response.status === 409) {
             // Session locked - backend nests lock_info under detail.lock_info
             const lockData = errorData?.detail?.lock_info;
-            setLockInfo({
+            queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
               locked: true,
               holder: lockData?.holder,
-              timeRemaining: lockData?.time_remaining_seconds,
+              time_remaining_seconds: lockData?.time_remaining_seconds,
+              fork_available: lockData?.fork_available,
             });
             throw new Error("Session is currently in use by another request");
           }
@@ -290,7 +295,7 @@ export function SessionChat({
         );
       }
     },
-    [draft, isStreaming, session.id],
+    [draft, isStreaming, queryClient, session.id],
   );
 
   const handleSSEEvent = useCallback(

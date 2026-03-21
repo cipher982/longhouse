@@ -71,6 +71,20 @@ function sseResponse(events: Array<{ event: string; data: unknown }>): Response 
   );
 }
 
+function mockSessionChatFetches(chatResponse: Response) {
+  fetchWithRefreshMock.mockImplementation((url: string) => {
+    if (url.endsWith("/lock")) {
+      return Promise.resolve(jsonResponse({ locked: false, fork_available: false }));
+    }
+
+    if (url.endsWith("/chat")) {
+      return Promise.resolve(chatResponse);
+    }
+
+    return Promise.reject(new Error(`Unexpected request: ${url}`));
+  });
+}
+
 function renderSessionChat(
   props: Partial<React.ComponentProps<typeof SessionChat>> = {},
   options: { queryClient?: QueryClient } = {},
@@ -137,28 +151,26 @@ describe("SessionChat", () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();
 
-    fetchWithRefreshMock
-      .mockResolvedValueOnce(jsonResponse({ locked: false, fork_available: false }))
-      .mockResolvedValueOnce(
-        sseResponse([
-          {
-            event: "assistant_delta",
-            data: { text: "Saved reply", accumulated: "Saved reply" },
+    mockSessionChatFetches(
+      sseResponse([
+        {
+          event: "assistant_delta",
+          data: { text: "Saved reply", accumulated: "Saved reply" },
+        },
+        {
+          event: "done",
+          data: {
+            session_id: "sess-2",
+            shipped_session_id: "sess-2",
+            created_continuation: true,
+            persisted_events: 4,
+            exit_code: 0,
+            total_text_length: 10,
+            timestamp: "2026-03-19T16:46:17Z",
           },
-          {
-            event: "done",
-            data: {
-              session_id: "sess-2",
-              shipped_session_id: "sess-2",
-              created_continuation: true,
-              persisted_events: 4,
-              exit_code: 0,
-              total_text_length: 10,
-              timestamp: "2026-03-19T16:46:17Z",
-            },
-          },
-        ]),
-      );
+        },
+      ]),
+    );
 
     renderSessionChat({ onSessionChanged });
 
@@ -173,30 +185,28 @@ describe("SessionChat", () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();
 
-    fetchWithRefreshMock
-      .mockResolvedValueOnce(jsonResponse({ locked: false, fork_available: false }))
-      .mockResolvedValueOnce(
-        sseResponse([
-          {
-            event: "assistant_delta",
-            data: { text: "Saved nowhere", accumulated: "Saved nowhere" },
+    mockSessionChatFetches(
+      sseResponse([
+        {
+          event: "assistant_delta",
+          data: { text: "Saved nowhere", accumulated: "Saved nowhere" },
+        },
+        {
+          event: "done",
+          data: {
+            session_id: "sess-2",
+            shipped_session_id: null,
+            created_continuation: true,
+            persisted_events: 0,
+            persistence_error:
+              "Response completed, but Longhouse could not save the continuation transcript to the timeline.",
+            exit_code: 0,
+            total_text_length: 12,
+            timestamp: "2026-03-19T16:46:17Z",
           },
-          {
-            event: "done",
-            data: {
-              session_id: "sess-2",
-              shipped_session_id: null,
-              created_continuation: true,
-              persisted_events: 0,
-              persistence_error:
-                "Response completed, but Longhouse could not save the continuation transcript to the timeline.",
-              exit_code: 0,
-              total_text_length: 12,
-              timestamp: "2026-03-19T16:46:17Z",
-            },
-          },
-        ]),
-      );
+        },
+      ]),
+    );
 
     renderSessionChat({ onSessionChanged });
 
@@ -218,28 +228,26 @@ describe("SessionChat", () => {
     });
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
-    fetchWithRefreshMock
-      .mockResolvedValueOnce(jsonResponse({ locked: false, fork_available: false }))
-      .mockResolvedValueOnce(
-        sseResponse([
-          {
-            event: "assistant_delta",
-            data: { text: "4", accumulated: "4" },
+    mockSessionChatFetches(
+      sseResponse([
+        {
+          event: "assistant_delta",
+          data: { text: "4", accumulated: "4" },
+        },
+        {
+          event: "done",
+          data: {
+            session_id: "sess-1",
+            shipped_session_id: "sess-1",
+            created_continuation: false,
+            persisted_events: 4,
+            exit_code: 0,
+            total_text_length: 1,
+            timestamp: "2026-03-19T16:46:17Z",
           },
-          {
-            event: "done",
-            data: {
-              session_id: "sess-1",
-              shipped_session_id: "sess-1",
-              created_continuation: false,
-              persisted_events: 4,
-              exit_code: 0,
-              total_text_length: 1,
-              timestamp: "2026-03-19T16:46:17Z",
-            },
-          },
-        ]),
-      );
+        },
+      ]),
+    );
 
     renderSessionChat({ onSessionChanged }, { queryClient });
 

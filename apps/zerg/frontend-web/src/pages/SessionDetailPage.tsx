@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button, EmptyState, Spinner } from "../components/ui";
@@ -50,9 +51,6 @@ export default function SessionDetailPage() {
   const workspace = useSessionWorkspace(sessionId || null, { highlightEventId });
   const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
   const [loopModePending, setLoopModePending] = useState(false);
-  const [latestTurnReview, setLatestTurnReview] = useState<SessionTurnReview | null>(null);
-  const [turnReviewLoading, setTurnReviewLoading] = useState(false);
-  const [turnReviewUnavailable, setTurnReviewUnavailable] = useState(false);
 
   const {
     session,
@@ -125,37 +123,18 @@ export default function SessionDetailPage() {
     setLoopModePending(false);
   }, [session?.id, session?.loop_mode]);
 
-  useEffect(() => {
-    if (!session?.id) {
-      setLatestTurnReview(null);
-      setTurnReviewLoading(false);
-      setTurnReviewUnavailable(false);
-      return;
-    }
+  const turnTelemetryQuery = useQuery({
+    queryKey: ["session-turn-telemetry", session?.id],
+    queryFn: () => fetchSessionTurnTelemetry(session?.id as string),
+    enabled: Boolean(session?.id),
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  });
 
-    let cancelled = false;
-    setTurnReviewLoading(true);
-    setTurnReviewUnavailable(false);
-
-    void fetchSessionTurnTelemetry(session.id)
-      .then((telemetry) => {
-        if (cancelled) return;
-        setLatestTurnReview(telemetry.latestReview);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setLatestTurnReview(null);
-        setTurnReviewUnavailable(true);
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setTurnReviewLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [session?.id]);
+  const latestTurnReview: SessionTurnReview | null = turnTelemetryQuery.data?.latestReview ?? null;
+  const turnReviewLoading = Boolean(session?.id) && turnTelemetryQuery.isLoading;
+  const turnReviewUnavailable = Boolean(session?.id) && turnTelemetryQuery.isError;
 
   if (sessionLoading) {
     return (
