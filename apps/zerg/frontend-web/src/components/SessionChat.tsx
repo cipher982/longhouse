@@ -18,19 +18,6 @@ import { Badge, Button, Spinner } from "./ui";
 import type { ActiveSession } from "../hooks/useActiveSessions";
 import "../styles/session-chat.css";
 
-// SSE Event types from backend
-interface SSESystemEvent {
-  type: string;
-  session_id?: string;
-  source_session_id?: string;
-  thread_root_session_id?: string;
-  continued_from_session_id?: string | null;
-  created_continuation?: boolean;
-  provider_session_id?: string;
-  workspace?: string;
-  timestamp?: string;
-}
-
 interface SSEAssistantDelta {
   text: string;
   accumulated: string;
@@ -119,19 +106,18 @@ export function SessionChat({
   }, [messages]);
 
   useEffect(() => {
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    setMessages([]);
-    setDraft("");
-    setIsStreaming(false);
-    setError(null);
-    setBlockedKeyboardSubmit(false);
-  }, [session.id]);
+    return () => {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+    };
+  }, []);
 
-  useEffect(() => {
-    if (draft.trim()) return;
-    setBlockedKeyboardSubmit(false);
-  }, [draft]);
+  const handleDraftChange = useCallback((nextDraft: string) => {
+    setDraft(nextDraft);
+    if (!nextDraft.trim()) {
+      setBlockedKeyboardSubmit(false);
+    }
+  }, []);
 
   const refreshCurrentSessionWorkspace = useCallback(async () => {
     await Promise.all([
@@ -143,6 +129,77 @@ export function SessionChat({
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),
     ]);
   }, [queryClient, session.id]);
+
+  const handleSSEEvent = useCallback(
+    (eventType: string, data: unknown, assistantId: string) => {
+      switch (eventType) {
+        case "assistant_delta": {
+          const delta = data as SSEAssistantDelta;
+          // Preserve tool notices by prepending them to accumulated text
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m;
+              const toolPrefix = m.toolNotices?.length
+                ? m.toolNotices.join("\n") + "\n\n"
+                : "";
+              return { ...m, content: toolPrefix + delta.accumulated };
+            }),
+          );
+          break;
+        }
+        case "tool_use": {
+          const tool = data as SSEToolUse;
+          // Track tool notices separately so they persist across assistant_delta overwrites
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m;
+              const notice = `[Using tool: ${tool.name}]`;
+              const toolNotices = [...(m.toolNotices || []), notice];
+              const toolPrefix = toolNotices.join("\n") + "\n\n";
+              // Update content to include the new notice
+              // Extract the accumulated text (content without tool prefix)
+              const existingToolPrefix = m.toolNotices?.length
+                ? m.toolNotices.join("\n") + "\n\n"
+                : "";
+              const accumulatedText = m.content.startsWith(existingToolPrefix)
+                ? m.content.slice(existingToolPrefix.length)
+                : m.content;
+              return { ...m, toolNotices, content: toolPrefix + accumulatedText };
+            }),
+          );
+          break;
+        }
+        case "error": {
+          const err = data as SSEError;
+          setError(err.error);
+          break;
+        }
+        case "done": {
+          const done = data as SSEDone;
+          if (done.persistence_error) {
+            setError(done.persistence_error);
+          }
+
+          const nextSessionId = done.shipped_session_id;
+          const persistedEvents = done.persisted_events ?? 0;
+          if (nextSessionId && persistedEvents > 0 && !done.persistence_error) {
+            if (nextSessionId === session.id) {
+              void refreshCurrentSessionWorkspace().finally(() => {
+                setMessages([]);
+              });
+            } else {
+              onSessionChanged?.(nextSessionId, Boolean(done.created_continuation));
+            }
+          }
+          break;
+        }
+        default:
+          // system, tool_result - ignore for now
+          break;
+      }
+    },
+    [onSessionChanged, refreshCurrentSessionWorkspace, session.id],
+  );
 
   const lockStatusQuery = useQuery<SessionLockInfo | null>({
     queryKey: ["session-lock", session.id],
@@ -295,83 +352,21 @@ export function SessionChat({
         );
       }
     },
-    [draft, isStreaming, queryClient, session.id],
-  );
-
-  const handleSSEEvent = useCallback(
-    (eventType: string, data: unknown, assistantId: string) => {
-      switch (eventType) {
-        case "assistant_delta": {
-          const delta = data as SSEAssistantDelta;
-          // Preserve tool notices by prepending them to accumulated text
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== assistantId) return m;
-              const toolPrefix = m.toolNotices?.length
-                ? m.toolNotices.join("\n") + "\n\n"
-                : "";
-              return { ...m, content: toolPrefix + delta.accumulated };
-            }),
-          );
-          break;
-        }
-        case "tool_use": {
-          const tool = data as SSEToolUse;
-          // Track tool notices separately so they persist across assistant_delta overwrites
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== assistantId) return m;
-              const notice = `[Using tool: ${tool.name}]`;
-              const toolNotices = [...(m.toolNotices || []), notice];
-              const toolPrefix = toolNotices.join("\n") + "\n\n";
-              // Update content to include the new notice
-              // Extract the accumulated text (content without tool prefix)
-              const existingToolPrefix = m.toolNotices?.length
-                ? m.toolNotices.join("\n") + "\n\n"
-                : "";
-              const accumulatedText = m.content.startsWith(existingToolPrefix)
-                ? m.content.slice(existingToolPrefix.length)
-                : m.content;
-              return { ...m, toolNotices, content: toolPrefix + accumulatedText };
-            }),
-          );
-          break;
-        }
-        case "error": {
-          const err = data as SSEError;
-          setError(err.error);
-          break;
-        }
-        case "done": {
-          const done = data as SSEDone;
-          if (done.persistence_error) {
-            setError(done.persistence_error);
-          }
-
-          const nextSessionId = done.shipped_session_id;
-          const persistedEvents = done.persisted_events ?? 0;
-          if (nextSessionId && persistedEvents > 0 && !done.persistence_error) {
-            if (nextSessionId === session.id) {
-              void refreshCurrentSessionWorkspace().finally(() => {
-                setMessages([]);
-              });
-            } else {
-              onSessionChanged?.(nextSessionId, Boolean(done.created_continuation));
-            }
-          }
-          break;
-        }
-        default:
-          // system, tool_result - ignore for now
-          break;
-      }
-    },
-    [onSessionChanged, refreshCurrentSessionWorkspace, session.id],
+    [draft, handleSSEEvent, isStreaming, queryClient, session.id],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (
+        requireClickForFirstSend &&
+        messages.length === 0 &&
+        draft.trim() &&
+        !blockedKeyboardSubmit
+      ) {
+        setBlockedKeyboardSubmit(true);
+        return;
+      }
       handleSend(e as unknown as FormEvent);
     }
   };
@@ -523,7 +518,7 @@ export function SessionChat({
         )}
         <textarea
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => handleDraftChange(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={composerPlaceholder || "Type a message..."}
           disabled={isStreaming || lockInfo?.locked}

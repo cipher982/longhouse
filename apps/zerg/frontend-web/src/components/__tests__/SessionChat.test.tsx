@@ -85,6 +85,10 @@ function mockSessionChatFetches(chatResponse: Response) {
   });
 }
 
+function getChatCallCount() {
+  return fetchWithRefreshMock.mock.calls.filter(([url]) => String(url).endsWith("/chat")).length;
+}
+
 function renderSessionChat(
   props: Partial<React.ComponentProps<typeof SessionChat>> = {},
   options: { queryClient?: QueryClient } = {},
@@ -270,5 +274,47 @@ describe("SessionChat", () => {
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-sessions"] });
     expect(onSessionChanged).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit click for the first branching message", async () => {
+    const user = userEvent.setup();
+
+    mockSessionChatFetches(
+      sseResponse([
+        {
+          event: "assistant_delta",
+          data: { text: "Saved reply", accumulated: "Saved reply" },
+        },
+        {
+          event: "done",
+          data: {
+            session_id: "sess-2",
+            shipped_session_id: "sess-2",
+            created_continuation: true,
+            persisted_events: 4,
+            exit_code: 0,
+            total_text_length: 10,
+            timestamp: "2026-03-19T16:46:17Z",
+          },
+        },
+      ]),
+    );
+
+    renderSessionChat({
+      requireClickForFirstSend: true,
+      keyboardHintText: "Click send to start the branch.",
+    });
+
+    await user.type(screen.getByRole("textbox"), "Continue in cloud");
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByTestId("session-chat-explicit-submit-hint")).toHaveTextContent(
+      "Click send to start the branch.",
+    );
+    expect(getChatCallCount()).toBe(0);
+
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(getChatCallCount()).toBe(1));
   });
 });
