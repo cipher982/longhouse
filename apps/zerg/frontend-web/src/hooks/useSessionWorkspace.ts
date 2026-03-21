@@ -158,7 +158,17 @@ export function useSessionWorkspace(
     return model.eventIdToSelectionKey.get(highlightEventId) ?? null;
   }, [highlightEventId, hasHighlightEvent, model.eventIdToSelectionKey]);
 
-  const selectedKey = highlightSelectionKey ?? manualSelectedKey;
+  const visibleManualSelectedKey = useMemo(() => {
+    if (filteredItems.length === 0 || manualSelectedKey == null) {
+      return null;
+    }
+
+    return filteredItems.some((item) => timelineItemContainsSelection(item, manualSelectedKey))
+      ? manualSelectedKey
+      : null;
+  }, [filteredItems, manualSelectedKey]);
+
+  const selectedKey = highlightSelectionKey ?? visibleManualSelectedKey;
 
   useEffect(() => {
     if (highlightEventId == null) return;
@@ -166,20 +176,6 @@ export function useSessionWorkspace(
     if (!hasNextPage || isFetchingNextPage) return;
     void fetchNextPage();
   }, [highlightEventId, hasHighlightEvent, hasNextPage, isFetchingNextPage, fetchNextPage]);
-
-  useEffect(() => {
-    if (filteredItems.length === 0) {
-      setManualSelectedKey(null);
-      return;
-    }
-
-    if (manualSelectedKey == null) return;
-
-    const selectionIsVisible = filteredItems.some((item) => timelineItemContainsSelection(item, manualSelectedKey));
-    if (selectionIsVisible) return;
-
-    setManualSelectedKey(null);
-  }, [filteredItems, manualSelectedKey]);
 
   useEffect(() => {
     if (highlightEventId == null) return;
