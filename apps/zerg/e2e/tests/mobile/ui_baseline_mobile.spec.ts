@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '../fixtures';
 import { APP_PAGES, type PageDef } from '../helpers/page-list';
 import { waitForPageReady } from '../helpers/ready-signals';
+import { installDeterministicVisualFonts } from '../helpers/visual-baseline';
 import { resetDatabase } from '../test-utils';
 
 const MOBILE_PAGES: Array<PageDef & { navOpen?: boolean }> = APP_PAGES.map((pageDef) => ({
@@ -33,6 +34,7 @@ async function captureBaseline(
   navOpen?: boolean
 ) {
   await page.goto(path);
+  await installDeterministicVisualFonts(page);
   await waitForAppReady(page, ready);
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
