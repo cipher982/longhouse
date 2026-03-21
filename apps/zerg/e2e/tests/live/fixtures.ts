@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { test as base, expect, type APIRequestContext, type BrowserContext } from '@playwright/test';
 
 type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: number }) => Promise<APIRequestContext> };
+const RETRYABLE_AUTH_STATUSES = new Set([408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526]);
 
 /**
  * Wait for the API to be healthy before running tests.
@@ -90,21 +91,43 @@ export async function exchangeLoginToken(
   });
 
   try {
-    const response = await authRequest.post('/api/auth/accept-token', {
-      data: { token: loginToken },
-    });
+    let lastError = 'accept-token failed';
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        const response = await authRequest.post('/api/auth/accept-token', {
+          data: { token: loginToken },
+        });
 
-    if (!response.ok()) {
-      const body = await response.text();
-      throw new Error(`accept-token failed: ${response.status()} ${body}`);
+        if (!response.ok()) {
+          const body = await response.text();
+          lastError = `accept-token failed: ${response.status()} ${body}`;
+          if (attempt < 5 && RETRYABLE_AUTH_STATUSES.has(response.status())) {
+            const delayMs = attempt * 1_500;
+            console.warn(`[auth] transient accept-token ${response.status()} on attempt ${attempt}/5; retrying in ${delayMs}ms`);
+            await new Promise((r) => setTimeout(r, delayMs));
+            continue;
+          }
+          throw new Error(lastError);
+        }
+
+        const payload = await response.json();
+        if (!payload?.access_token) {
+          throw new Error(`accept-token missing access_token: ${JSON.stringify(payload)}`);
+        }
+
+        return payload.access_token;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        if (attempt < 5) {
+          const delayMs = attempt * 1_500;
+          console.warn(`[auth] accept-token attempt ${attempt}/5 failed; retrying in ${delayMs}ms: ${lastError}`);
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw new Error(lastError);
+      }
     }
-
-    const payload = await response.json();
-    if (!payload?.access_token) {
-      throw new Error(`accept-token missing access_token: ${JSON.stringify(payload)}`);
-    }
-
-    return payload.access_token;
+    throw new Error(lastError);
   } finally {
     await authRequest.dispose();
   }
