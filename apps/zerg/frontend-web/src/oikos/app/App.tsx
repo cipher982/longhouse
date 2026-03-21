@@ -56,20 +56,10 @@ export default function App({ embedded = false }: AppProps) {
   }, [])
 
   // Main Oikos app hook - handles initialization, connection, voice
-  const oikosApp = useOikosApp({
-    onConnected: () => console.log('[App] Connected'),
-    onDisconnected: () => console.log('[App] Disconnected'),
-    onTranscript: (text, isFinal) => {
-      console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
-    },
-    onError: (error) => console.error('[App] Error:', error),
-  })
+  const oikosApp = useOikosApp()
 
   // Text channel handling (always active)
-  const textChannel = useTextChannel({
-    onMessageSent: (msg) => console.log('[App] Message sent:', msg.content),
-    onError: (error) => console.error('[App] Text channel error:', error),
-  })
+  const textChannel = useTextChannel()
 
   const turnBasedVoice = useTurnBasedVoice({
     onError: (error) => console.error('[App] Voice error:', error),
