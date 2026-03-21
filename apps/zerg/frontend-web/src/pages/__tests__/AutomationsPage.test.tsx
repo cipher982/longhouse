@@ -121,7 +121,7 @@ describe("AutomationsPage", () => {
       },
     });
 
-    return render(
+    const renderResult = render(
       <QueryClientProvider client={queryClient}>
         <ConfirmProvider>
           <TestRouter>
@@ -130,6 +130,11 @@ describe("AutomationsPage", () => {
         </ConfirmProvider>
       </QueryClientProvider>
     );
+
+    return {
+      queryClient,
+      ...renderResult,
+    };
   }
 
   test("renders automations header and automations table", async () => {
@@ -177,6 +182,20 @@ describe("AutomationsPage", () => {
     expect(automationRows).toHaveLength(2);
     expect(within(automationRows[0]).getByText("Alpha")).toBeInTheDocument();
     expect(within(automationRows[1]).getByText("Beta")).toBeInTheDocument();
+  });
+
+  test("hides the scope toggle for non-admin users", async () => {
+    renderAutomationsPage([
+      buildAutomation({
+        id: 1,
+        name: "Solo",
+        status: "idle",
+        owner_id: 1,
+      }),
+    ]);
+
+    await screen.findByText("Solo");
+    expect(screen.queryByTestId("automations-scope-toggle")).not.toBeInTheDocument();
   });
 
   test("expands an automation row and shows run history", async () => {
@@ -288,6 +307,128 @@ describe("AutomationsPage", () => {
 
     await userEvent.click(screen.getByText("Show all (6)"));
     expect(screen.getByText("Show less")).toBeInTheDocument();
+  });
+
+  test("collapses a stale expanded row when the automation disappears from the snapshot", async () => {
+    const automation = buildAutomation({
+      id: 1,
+      name: "Runner",
+      status: "idle",
+      owner_id: 1,
+      owner: null,
+    });
+
+    const runs: Run[] = [
+      {
+        id: 42,
+        automation_id: 1,
+        thread_id: 9,
+        status: "success",
+        trigger: "manual",
+        started_at: "2025-09-24T09:55:00.000Z",
+        finished_at: "2025-09-24T09:56:00.000Z",
+        duration_ms: 60000,
+        total_tokens: 120,
+        total_cost_usd: 0.12,
+        error: null,
+      },
+      {
+        id: 43,
+        automation_id: 1,
+        thread_id: 10,
+        status: "failed",
+        trigger: "schedule",
+        started_at: "2025-09-24T08:00:00.000Z",
+        finished_at: "2025-09-24T08:01:00.000Z",
+        duration_ms: 60000,
+        total_tokens: null,
+        total_cost_usd: null,
+        error: "Timed out",
+      },
+      {
+        id: 44,
+        automation_id: 1,
+        thread_id: 11,
+        status: "success",
+        trigger: "manual",
+        started_at: "2025-09-24T07:00:00.000Z",
+        finished_at: "2025-09-24T07:01:00.000Z",
+        duration_ms: 60000,
+        total_tokens: 95,
+        total_cost_usd: 0.09,
+        error: null,
+      },
+      {
+        id: 45,
+        automation_id: 1,
+        thread_id: 12,
+        status: "success",
+        trigger: "schedule",
+        started_at: "2025-09-24T06:00:00.000Z",
+        finished_at: "2025-09-24T06:01:00.000Z",
+        duration_ms: 60000,
+        total_tokens: 110,
+        total_cost_usd: 0.11,
+        error: null,
+      },
+      {
+        id: 46,
+        automation_id: 1,
+        thread_id: 13,
+        status: "running",
+        trigger: "manual",
+        started_at: "2025-09-24T05:00:00.000Z",
+        finished_at: null,
+        duration_ms: null,
+        total_tokens: null,
+        total_cost_usd: null,
+        error: null,
+      },
+      {
+        id: 47,
+        automation_id: 1,
+        thread_id: 14,
+        status: "success",
+        trigger: "manual",
+        started_at: "2025-09-24T04:00:00.000Z",
+        finished_at: "2025-09-24T04:01:00.000Z",
+        duration_ms: 60000,
+        total_tokens: 100,
+        total_cost_usd: 0.1,
+        error: null,
+      },
+    ];
+
+    const firstSnapshot: AutomationOverviewSnapshot = {
+      scope: "my",
+      fetchedAt: new Date().toISOString(),
+      runsLimit: 50,
+      automations: [automation],
+      runs: [{ automationId: automation.id, runs }],
+    };
+
+    const secondSnapshot: AutomationOverviewSnapshot = {
+      scope: "my",
+      fetchedAt: new Date().toISOString(),
+      runsLimit: 50,
+      automations: [],
+      runs: [],
+    };
+
+    fetchAutomationOverviewMock.mockResolvedValueOnce(firstSnapshot).mockResolvedValueOnce(secondSnapshot);
+
+    const { queryClient } = renderAutomationsPage([]);
+
+    const row = await screen.findByRole("row", { name: /Runner/ });
+    await userEvent.click(row);
+    await screen.findByText("Show all (6)");
+
+    await queryClient.invalidateQueries({ queryKey: ["automations-overview", "my", 50] });
+
+    await waitFor(() => {
+      expect(fetchAutomationOverviewMock).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Show all (6)")).not.toBeInTheDocument();
+    });
   });
 
   test("sorts automations by status and toggles sort direction", async () => {

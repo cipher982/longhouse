@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
+import { useCallback, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -8,19 +8,17 @@ import {
   runAutomation as runAutomationTask,
   updateAutomation as updateAutomationRecord,
   fetchModels,
-  type Run,
   type AutomationSummary,
   type AutomationOverviewSnapshot,
   type ModelConfig,
 } from "../services/api";
 import { useReadinessFlag } from "../lib/readiness-contract";
-import { ConnectionStatus, createEnvelope, useWebSocket } from "../lib/useWebSocket";
+import { ConnectionStatus, useWebSocket, type WebSocketMessage } from "../lib/useWebSocket";
 import { DEFAULT_TEXT_MODEL } from "../oikos/core/model-config";
 import { useAuth } from "../lib/auth";
 import { PlusIcon } from "../components/icons";
 import AutomationSettingsDrawer from "../components/automation-settings/AutomationSettingsDrawer";
 import UsageWidget from "../components/UsageWidget";
-import type { WebSocketMessage } from "../generated/ws-messages";
 import {
   Button,
   Table,
@@ -32,6 +30,10 @@ import { useConfirm } from "../components/confirm";
 import { AutomationTableRow } from "./automations/AutomationTableRow";
 import { sortAutomations, loadSortConfig, persistSortConfig, type SortKey, type SortConfig, type AutomationRunsState } from "./automations/sorting";
 import { applyRunUpdate, applyAutomationStateUpdate } from "./automations/websocketHandlers";
+import {
+  useAutomationOverviewRealtimeManager,
+  useAutomationOverviewRealtimeSubscriptions,
+} from "./automations/useAutomationOverviewRealtime";
 
 // App logo (served from public folder)
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
@@ -39,10 +41,9 @@ const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
 type Scope = "my" | "all";
 
 const RUNS_LIMIT = 50;
-const AUTOMATION_TOPIC_PREFIX = "automation:";
 
 function parseAutomationTopic(topic: string): number | null {
-  if (!topic.startsWith(AUTOMATION_TOPIC_PREFIX)) {
+  if (!topic.startsWith("automation:")) {
     return null;
   }
 
@@ -58,32 +59,22 @@ function isAutomationLifecycleEvent(eventType: string): boolean {
 export default function AutomationsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const confirm = useConfirm();
   const [scope, setScope] = useState<Scope>("my");
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => loadSortConfig());
   const [expandedAutomationId, setExpandedAutomationId] = useState<number | null>(null);
-  const automationOverviewQueryKey = useMemo(() => ["automations-overview", scope, RUNS_LIMIT] as const, [scope]);
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
   const [settingsAutomationId, setSettingsAutomationId] = useState<number | null>(null);
   const [editingAutomationId, setEditingAutomationId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState<string>("");
-
-  // WebSocket state - must be declared before useQuery to avoid reference errors
-  const subscribedAutomationIdsRef = useRef<Set<number>>(new Set());
-  const [wsReconnectToken, setWsReconnectToken] = useState(0);
-  const sendMessageRef = useRef<((message: ReturnType<typeof createEnvelope>) => void) | null>(null);
-  const messageIdCounterRef = useRef(0);
-
-  // Track pending subscriptions to handle confirmations and timeouts
-  // Don't mark as subscribed until we get subscribe_ack to enable automatic retry
-  const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number; automationIds: number[] }>>(new Map());
-
-  // Generate unique message IDs to prevent collision
-  const generateMessageId = useCallback(() => {
-    messageIdCounterRef.current += 1;
-    return `automations-${Date.now()}-${messageIdCounterRef.current}`;
-  }, []);
+  const canViewAllAutomations = user?.role === "ADMIN";
+  const effectiveScope: Scope = canViewAllAutomations ? scope : "my";
+  const automationOverviewQueryKey = useMemo(
+    () => ["automations-overview", effectiveScope, RUNS_LIMIT] as const,
+    [effectiveScope],
+  );
+  const realtimeManager = useAutomationOverviewRealtimeManager();
 
   const applyAutomationOverviewUpdate = useCallback(
     (updater: (current: AutomationOverviewSnapshot) => AutomationOverviewSnapshot) => {
@@ -97,32 +88,13 @@ export default function AutomationsPage() {
     [automationOverviewQueryKey, queryClient]
   );
 
-  // WebSocket message handler must be defined before useWebSocket hook
   const handleWebSocketMessage = useCallback(
-    (message: WebSocketMessage | { type: string; topic?: string; data?: any; message_id?: string }) => {
+    (message: WebSocketMessage) => {
       if (!message || typeof message !== "object") {
         return;
       }
 
-      if (message.type === "subscribe_ack" || message.type === "subscribe_error") {
-        const messageData = (message as any).data || message;
-        const messageId = typeof messageData.message_id === "string" ? messageData.message_id : "";
-        if (messageId && pendingSubscriptionsRef.current.has(messageId)) {
-          const pending = pendingSubscriptionsRef.current.get(messageId);
-          if (pending) {
-            clearTimeout(pending.timeoutId);
-            pendingSubscriptionsRef.current.delete(messageId);
-
-            if (message.type === "subscribe_ack") {
-              pending.automationIds.forEach((automationId) => {
-                subscribedAutomationIdsRef.current.add(automationId);
-              });
-            } else {
-              console.error("[WS] Subscription failed for topics:", pending.topics);
-              setWsReconnectToken((token) => token + 1);
-            }
-          }
-        }
+      if (realtimeManager.handleControlMessage(message)) {
         return;
       }
 
@@ -146,22 +118,13 @@ export default function AutomationsPage() {
         return;
       }
     },
-    [applyAutomationOverviewUpdate]
+    [applyAutomationOverviewUpdate, realtimeManager]
   );
 
   const { connectionStatus, sendMessage } = useWebSocket(isAuthenticated, {
     onMessage: handleWebSocketMessage,
-    onConnect: () => {
-      subscribedAutomationIdsRef.current.clear();
-      // Clear any pending subscriptions from previous connection
-      pendingSubscriptionsRef.current.forEach((pending) => {
-        clearTimeout(pending.timeoutId);
-      });
-      pendingSubscriptionsRef.current.clear();
-      setWsReconnectToken((token) => token + 1);
-    },
+    onConnect: realtimeManager.handleConnect,
   });
-  sendMessageRef.current = sendMessage;
 
   const {
     data: modelsData,
@@ -181,11 +144,17 @@ export default function AutomationsPage() {
     error,
   } = useQuery<AutomationOverviewSnapshot>({
     queryKey: automationOverviewQueryKey,
-    queryFn: () => fetchAutomationOverview({ scope, runsLimit: RUNS_LIMIT }),
+    queryFn: () => fetchAutomationOverview({ scope: effectiveScope, runsLimit: RUNS_LIMIT }),
     refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
   const automations: AutomationSummary[] = useMemo(() => automationOverviewData?.automations ?? [], [automationOverviewData]);
+  const automationIds = useMemo(() => automations.map((automation) => automation.id), [automations]);
+  const visibleAutomationIds = useMemo(() => new Set(automationIds), [automationIds]);
+  const activeExpandedAutomationId =
+    expandedAutomationId !== null && visibleAutomationIds.has(expandedAutomationId) ? expandedAutomationId : null;
+  const activeSettingsAutomationId =
+    settingsAutomationId !== null && visibleAutomationIds.has(settingsAutomationId) ? settingsAutomationId : null;
 
   const runsByAutomation: AutomationRunsState = useMemo(() => {
     if (!automationOverviewData) {
@@ -207,6 +176,14 @@ export default function AutomationsPage() {
   }, [automationOverviewData]);
 
   const runsDataLoading = isLoading && !automationOverviewData;
+
+  useAutomationOverviewRealtimeSubscriptions({
+    automationIds,
+    connectionStatus,
+    enabled: isAuthenticated,
+    manager: realtimeManager,
+    sendMessage,
+  });
 
   // Readiness Contract (see src/lib/readiness-contract.ts):
   // - data-ready="true": Page is INTERACTIVE (can click, type)
@@ -251,146 +228,6 @@ export default function AutomationsPage() {
       dispatchAutomationEvent("run", automationId);
     },
   });
-
-  useEffect(() => {
-    // Persist sort preferences whenever they change.
-    persistSortConfig(sortConfig);
-  }, [sortConfig]);
-
-  useEffect(() => {
-    if (!error) {
-      return;
-    }
-
-    if (error instanceof Error && error.message.includes("(403)")) {
-      setScope("my");
-    }
-  }, [error]);
-
-  useEffect(() => {
-    if (expandedAutomationId === null) {
-      return;
-    }
-    if (automations.some((automation) => automation.id === expandedAutomationId)) {
-      return;
-    }
-    setExpandedAutomationId(null);
-  }, [automations, expandedAutomationId]);
-
-  // Use unified WebSocket hook for real-time updates
-  // Only connect when authenticated to avoid auth failure spam
-  useEffect(() => {
-    if (!isAuthenticated) {
-      return;
-    }
-    if (connectionStatus !== ConnectionStatus.CONNECTED) {
-      return;
-    }
-
-    const activeIds = new Set(automations.map((automation) => automation.id));
-
-    // Find automations that need subscription (not currently subscribed AND not pending).
-    const pendingAutomationIds = new Set<number>();
-    pendingSubscriptionsRef.current.forEach((pending) => {
-      pending.automationIds.forEach((id) => pendingAutomationIds.add(id));
-    });
-
-    const topicsToSubscribe: string[] = [];
-    const automationIdsToSubscribe: number[] = [];
-    for (const id of activeIds) {
-      if (!subscribedAutomationIdsRef.current.has(id) && !pendingAutomationIds.has(id)) {
-        topicsToSubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${id}`);
-        automationIdsToSubscribe.push(id);
-      }
-    }
-
-    const topicsToUnsubscribe: string[] = [];
-    for (const id of Array.from(subscribedAutomationIdsRef.current)) {
-      if (!activeIds.has(id)) {
-        subscribedAutomationIdsRef.current.delete(id);
-        topicsToUnsubscribe.push(`${AUTOMATION_TOPIC_PREFIX}${id}`);
-      }
-    }
-
-    if (topicsToSubscribe.length > 0) {
-      const messageId = generateMessageId();
-
-      // Set timeout for subscription confirmation (5 seconds)
-      const timeoutId = window.setTimeout(() => {
-        if (pendingSubscriptionsRef.current.has(messageId)) {
-          console.warn("[WS] Subscription timeout for topics:", topicsToSubscribe);
-          pendingSubscriptionsRef.current.delete(messageId);
-          // Don't mark as subscribed - effect will retry on next render
-          // Force retry by incrementing reconnect token
-          setWsReconnectToken((token) => token + 1);
-        }
-      }, 5000);
-
-      // Track pending subscription (don't mark as subscribed yet)
-      pendingSubscriptionsRef.current.set(messageId, {
-        topics: topicsToSubscribe,
-        timeoutId,
-        automationIds: automationIdsToSubscribe
-      });
-
-      sendMessageRef.current?.(
-        createEnvelope("subscribe", "system", { topics: topicsToSubscribe, message_id: messageId }, messageId),
-      );
-    }
-
-    if (topicsToUnsubscribe.length > 0) {
-      const unsubMsgId = generateMessageId();
-      sendMessageRef.current?.(
-        createEnvelope("unsubscribe", "system", { topics: topicsToUnsubscribe, message_id: unsubMsgId }, unsubMsgId),
-      );
-    }
-  }, [automations, connectionStatus, isAuthenticated, wsReconnectToken, generateMessageId]);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      return;
-    }
-
-    if (subscribedAutomationIdsRef.current.size === 0) {
-      return;
-    }
-
-    const topics = Array.from(subscribedAutomationIdsRef.current).map((id) => `${AUTOMATION_TOPIC_PREFIX}${id}`);
-    const unsubId = generateMessageId();
-    sendMessageRef.current?.(
-      createEnvelope("unsubscribe", "system", { topics, message_id: unsubId }, unsubId),
-    );
-    subscribedAutomationIdsRef.current.clear();
-  }, [isAuthenticated, generateMessageId]);
-
-  // Cleanup effect - runs only on unmount to unsubscribe from all automations
-  /* eslint-disable react-hooks/exhaustive-deps -- Intentional: cleanup reads current values at unmount time */
-  useEffect(() => {
-    // Capture refs for cleanup (ESLint wants this pattern)
-    const pendingSubscriptions = pendingSubscriptionsRef.current;
-    const subscribedAutomationIds = subscribedAutomationIdsRef.current;
-    const sendMessage = sendMessageRef.current;
-    const msgId = generateMessageId; // Capture for cleanup
-
-    return () => {
-      // Clear pending subscription timeouts
-      pendingSubscriptions.forEach((pending) => {
-        clearTimeout(pending.timeoutId);
-      });
-      pendingSubscriptions.clear();
-
-      if (subscribedAutomationIds.size === 0) {
-        return;
-      }
-      const topics = Array.from(subscribedAutomationIds).map((id) => `${AUTOMATION_TOPIC_PREFIX}${id}`);
-      const cleanupMsgId = msgId();
-      sendMessage?.(
-        createEnvelope("unsubscribe", "system", { topics, message_id: cleanupMsgId }, cleanupMsgId),
-      );
-      subscribedAutomationIds.clear();
-    };
-  }, []);
-  /* eslint-enable react-hooks/exhaustive-deps */
 
   // Generate idempotency key per mutation to prevent double-creates
   const idempotencyKeyRef = useRef<string | null>(null);
@@ -490,14 +327,14 @@ export default function AutomationsPage() {
     );
   }
 
-  const includeOwner = scope === "all";
+  const includeOwner = effectiveScope === "all";
   const emptyColspan = includeOwner ? 8 : 7;
 
   return (
     <div id="automations-container" className="automations-page">
       <SectionHeader
         className="automations-hero"
-        title={scope === "all" ? "All automations" : "My automations"}
+        title={effectiveScope === "all" ? "All automations" : "My automations"}
         description="Monitor and manage your automations."
         actions={
           <div className="automations-actions">
@@ -505,22 +342,24 @@ export default function AutomationsPage() {
               <UsageWidget />
             </div>
             <div className="automations-actions__controls">
-              <div className="scope-wrapper">
-                <label className="scope-toggle">
-                  <input
-                    type="checkbox"
-                    id="automations-scope-toggle"
-                    data-testid="automations-scope-toggle"
-                    aria-label="Toggle between my automations and all automations"
-                    checked={scope === "all"}
-                    onChange={(e) => {
-                      const newScope = e.target.checked ? "all" : "my";
-                      setScope(newScope);
-                    }}
-                  />
-                  <span className="slider"></span>
-                </label>
-              </div>
+              {canViewAllAutomations && (
+                <div className="scope-wrapper">
+                  <label className="scope-toggle">
+                    <input
+                      type="checkbox"
+                      id="automations-scope-toggle"
+                      data-testid="automations-scope-toggle"
+                      aria-label="Toggle between my automations and all automations"
+                      checked={effectiveScope === "all"}
+                      onChange={(e) => {
+                        const newScope = e.target.checked ? "all" : "my";
+                        setScope(newScope);
+                      }}
+                    />
+                    <span className="slider"></span>
+                  </label>
+                </div>
+              )}
               <Button
                 variant="primary"
                 onClick={() => createAutomationMutation.mutate()}
@@ -562,7 +401,7 @@ export default function AutomationsPage() {
                 automation={automation}
                 runs={runsByAutomation[automation.id] || []}
                 includeOwner={includeOwner}
-                isExpanded={expandedAutomationId === automation.id}
+                isExpanded={activeExpandedAutomationId === automation.id}
                 isRunHistoryExpanded={expandedRunHistory.has(automation.id)}
                 isPendingRun={startRunMutation.isPending && startRunMutation.variables === automation.id}
                 runsDataLoading={runsDataLoading}
@@ -595,10 +434,10 @@ export default function AutomationsPage() {
           </Table.Body>
         </Table>
       </div>
-      {settingsAutomationId != null && (
+      {activeSettingsAutomationId != null && (
         <AutomationSettingsDrawer
-          automationId={settingsAutomationId}
-          isOpen={settingsAutomationId != null}
+          automationId={activeSettingsAutomationId}
+          isOpen={activeSettingsAutomationId != null}
           onClose={() => setSettingsAutomationId(null)}
         />
       )}
@@ -624,10 +463,10 @@ export default function AutomationsPage() {
 
   function handleSort(key: SortKey) {
     setSortConfig((prev) => {
-      if (prev.key === key) {
-        return { key, ascending: !prev.ascending };
-      }
-      return { key, ascending: true };
+      const next =
+        prev.key === key ? { key, ascending: !prev.ascending } : { key, ascending: true };
+      persistSortConfig(next);
+      return next;
     });
   }
 
