@@ -121,6 +121,25 @@ function getResolvedTimelineAnchor(
   return parseUTC(activeAnchor).getTime() >= parseUTC(sessionAnchor).getTime() ? activeAnchor : sessionAnchor;
 }
 
+function useDocumentVisible(): boolean {
+  const [isVisible, setIsVisible] = useState(() => typeof document === "undefined" || !document.hidden);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const handleVisibilityChange = () => {
+      setIsVisible(!document.hidden);
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  return isVisible;
+}
+
 interface SessionThreadCard {
   threadId: string;
   head: AgentSession;
@@ -857,6 +876,7 @@ export default function SessionsPage() {
     [updateFilterState]
   );
 
+  const documentVisible = useDocumentVisible();
   const debouncedQuery = useDebouncedValue(searchQuery, aiSearch ? 700 : 300);
   const aiSearchPending = aiSearch && searchQuery !== debouncedQuery;
 
@@ -877,11 +897,12 @@ export default function SessionsPage() {
     [project, provider, environment, daysBack, debouncedQuery, limit, aiSearch, sortOrder, hideAutonomous]
   );
 
-  const timelineStreamEnabled = !debouncedQuery && !aiSearch;
+  const timelineStreamEligible = !debouncedQuery && !aiSearch;
+  const timelineStreamEnabled = timelineStreamEligible && documentVisible;
 
   // Single unified query — use SSE for live rows and keep a slow polling backstop.
   const activeResult = useAgentSessions(filters, {
-    refetchInterval: timelineStreamEnabled
+    refetchInterval: timelineStreamEligible
       ? TIMELINE_RECONCILIATION_MS
       : (query) => {
           const pendingSessions = query.state.data?.sessions?.some((session) => !session.summary_title && !session.summary);

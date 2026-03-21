@@ -154,15 +154,29 @@ function LocationProbe() {
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
+function setDocumentVisibility(state: "visible" | "hidden") {
+  Object.defineProperty(document, "hidden", {
+    configurable: true,
+    value: state === "hidden",
+  });
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: state,
+  });
+}
+
 describe("SessionsPage", () => {
   let latestFilters: AgentSessionFilters | undefined;
   let latestSessionOptions: { refetchInterval?: unknown } | undefined;
+  let latestTimelineStreamOptions: { enabled?: boolean } | undefined;
 
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
     latestFilters = undefined;
     latestSessionOptions = undefined;
+    latestTimelineStreamOptions = undefined;
+    setDocumentVisibility("visible");
 
     mockUseAgentSessions.mockImplementation((filters: AgentSessionFilters, options?: { refetchInterval?: unknown }) => {
       latestFilters = filters;
@@ -194,11 +208,14 @@ describe("SessionsPage", () => {
       error: null,
     });
 
-    mockUseTimelineSessionStream.mockImplementation(() => {});
+    mockUseTimelineSessionStream.mockImplementation((_filters: AgentSessionFilters, options?: { enabled?: boolean }) => {
+      latestTimelineStreamOptions = options;
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    setDocumentVisibility("visible");
   });
 
   it("hydrates timeline filters directly from the URL", async () => {
@@ -226,6 +243,24 @@ describe("SessionsPage", () => {
 
     await waitFor(() => {
       expect(latestSessionOptions?.refetchInterval).toBe(120000);
+    });
+  });
+
+  it("pauses the timeline SSE stream while the page is hidden", async () => {
+    setDocumentVisibility("hidden");
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(false);
+    });
+
+    act(() => {
+      setDocumentVisibility("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(true);
     });
   });
 
