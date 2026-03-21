@@ -40,4 +40,6 @@ Rewrite the obvious effect-heavy frontend surfaces so state has one owner, data 
 - Slice 1 landed shared `useAuthMethods`, `usePageMeta`, `useReadinessFlag`, and `useDebouncedValue` primitives, plus first migrations and lint guardrails against direct page metadata/readiness writes.
 - Slice 2 landed shared auth query keys, a query-owned `AuthProvider`, and cache updates that now flow through the same `current-user` contract instead of mirrored provider state.
 - `ChatPage` and `SessionsPage` now treat the route/URL as the primary source of truth; the remaining route-heavy cleanup is in the smaller selection pages.
-- `ConversationsPage` and `LoopInboxPage` now use declarative route canonicalization instead of effect-driven selection redirects; the remaining selection cleanup is in `TraceExplorerPage`, `SwarmOpsPage`, and the legacy forum surface.
+- `ConversationsPage` and `LoopInboxPage` now use declarative route canonicalization instead of effect-driven selection redirects.
+- `TraceExplorerPage` now reads the route param directly, and `SwarmOpsPage` now treats `filter` and `run` as URL-owned state with declarative fallback selection.
+- The remaining selection cleanup is concentrated in the legacy forum surface.

@@ -15,6 +15,7 @@ export const Table: React.FC<TableProps> & {
     onClick?: () => void;
     onKeyDown?: (e: React.KeyboardEvent<HTMLTableRowElement>) => void;
     style?: React.CSSProperties;
+    'data-testid'?: string;
     'data-automation-id'?: number;
   }>;
   Cell: React.FC<{ children: React.ReactNode; className?: string; isHeader?: boolean; colSpan?: number; onClick?: () => void; style?: React.CSSProperties; 'data-label'?: string }>;
