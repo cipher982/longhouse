@@ -4,12 +4,23 @@
  * Pages call reportApiError / clearApiError; the StatusFooter subscribes via
  * useApiHealth() to reflect degraded state without requiring Context threading.
  */
-import { useState, useEffect } from "react";
+import { useSyncExternalStore } from "react";
 
 type Listener = (error: Error | null) => void;
 
 let _currentError: Error | null = null;
 const _listeners = new Set<Listener>();
+
+function subscribe(listener: Listener): () => void {
+  _listeners.add(listener);
+  return () => {
+    _listeners.delete(listener);
+  };
+}
+
+function getSnapshot(): Error | null {
+  return _currentError;
+}
 
 export function reportApiError(error: Error): void {
   _currentError = error;
@@ -23,12 +34,5 @@ export function clearApiError(): void {
 }
 
 export function useApiHealth(): Error | null {
-  const [error, setError] = useState<Error | null>(_currentError);
-  useEffect(() => {
-    _listeners.add(setError);
-    return () => {
-      _listeners.delete(setError);
-    };
-  }, []);
-  return error;
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
