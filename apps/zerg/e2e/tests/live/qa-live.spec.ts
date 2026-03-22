@@ -66,44 +66,19 @@ async function failWithScreenshot(
   throw new Error(`${message}\nScreenshot saved: ${path}`);
 }
 
-async function findRecentSessionWithEvents(
-  request: APIRequestContext,
-): Promise<string | null> {
-  const sessionsRes = await request.get("/api/agents/sessions?limit=5");
-  expect(
-    sessionsRes.ok(),
-    `GET /api/agents/sessions failed: ${sessionsRes.status()}`,
-  ).toBe(true);
+async function findVisibleTimelineSessionId(page: Page): Promise<string | null> {
+  const cards = page.locator(".session-card[data-session-id]");
+  await cards.first().waitFor({ timeout: 12_000 });
+  const count = await cards.count();
 
-  const sessionsData = await sessionsRes.json();
-  const sessions = sessionsData?.sessions ?? sessionsData ?? [];
-  if (!Array.isArray(sessions) || sessions.length === 0) {
-    return null;
-  }
-
-  for (const session of sessions) {
-    const sessionId = typeof session?.id === "string" ? session.id : null;
-    if (!sessionId) continue;
-
-    const eventsRes = await request.get(
-      `/api/agents/sessions/${sessionId}/events?limit=1&branch_mode=head`,
-    );
-    if (!eventsRes.ok()) continue;
-
-    const eventsData = await eventsRes.json();
-    const total =
-      typeof eventsData?.total === "number"
-        ? eventsData.total
-        : Array.isArray(eventsData?.events)
-          ? eventsData.events.length
-          : 0;
-    if (total > 0) {
+  for (let index = 0; index < count; index += 1) {
+    const sessionId = await cards.nth(index).getAttribute("data-session-id");
+    if (sessionId) {
       return sessionId;
     }
   }
 
-  const fallbackId = sessions[0]?.id;
-  return typeof fallbackId === "string" ? fallbackId : null;
+  return null;
 }
 
 function isLoopPath(pathname: string): boolean {
@@ -315,22 +290,19 @@ test("forum route redirects to timeline without auth errors", async ({
 // Test 3: Session detail loads events
 // ---------------------------------------------------------------------------
 
-test("session detail renders event timeline", async ({
-  agentsRequest,
-  context,
-}) => {
+test("session detail renders event timeline", async ({ context }) => {
   test.setTimeout(20_000);
 
-  // Keep discovery on the agents API fixture for now. The smoke still validates the
-  // browser-rendered detail page through the cookie-authenticated context below.
-  const sessionId = await findRecentSessionWithEvents(agentsRequest);
+  const page = await context.newPage();
+
+  await page.goto("/timeline", { waitUntil: "domcontentloaded" });
+  const sessionId = await findVisibleTimelineSessionId(page).catch(() => null);
   if (!sessionId) {
-    // No sessions at all — skip (instance may be newly provisioned)
+    await page.close();
     test.skip(true, "No sessions available to test detail view");
     return;
   }
 
-  const page = await context.newPage();
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
   const authErrors: string[] = [];
   const detailPath = `/api/timeline/sessions/${sessionId}`;
