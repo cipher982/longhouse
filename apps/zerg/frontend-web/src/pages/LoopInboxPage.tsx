@@ -310,6 +310,8 @@ export default function LoopInboxPage() {
   const queuePositionLabel = selectedQueueIndex >= 0 ? `Viewing ${selectedQueueIndex + 1} of ${inboxCount}` : null;
   const currentCardIsStale = Boolean(currentCard && currentCard.cardState !== "active");
   const currentCardNeedsQueueRecovery = currentCardIsStale && hasInboxItems && selectedQueueIndex < 0;
+  const currentRecoveryCardId =
+    currentCard?.supersededByCardId ?? (currentCardNeedsQueueRecovery ? inboxItems[0]?.cardId ?? null : null);
   const showMobileTopBar = isPhoneLayout;
   const showMobileStatusNotice = isPhoneLayout && currentCardIsStale;
   const queueSummaryLabel =
@@ -362,10 +364,10 @@ export default function LoopInboxPage() {
                 <h3>{cardStatusHeadline(currentCard)}</h3>
                 {currentCard.cardStateReason && <p>{currentCard.cardStateReason}</p>}
               </div>
-              {currentCard.cardState === "superseded" && currentCard.supersededByCardId && (
+              {currentRecoveryCardId != null && currentRecoveryCardId !== selectedCardId && (
                 <Link
                   className="ui-button ui-button--secondary ui-button--sm"
-                  to={`/loop/card/${currentCard.supersededByCardId}`}
+                  to={`/loop/card/${currentRecoveryCardId}`}
                   onClick={() => setQueueOpen(false)}
                 >
                   Open current
@@ -681,10 +683,10 @@ export default function LoopInboxPage() {
                     <h3>{cardStatusHeadline(currentCard)}</h3>
                     {currentCard.cardStateReason && <p>{currentCard.cardStateReason}</p>}
                   </div>
-                  {currentCard.cardState === "superseded" && currentCard.supersededByCardId && (
+                  {currentRecoveryCardId != null && currentRecoveryCardId !== selectedCardId && (
                     <Link
                       className="ui-button ui-button--secondary ui-button--sm"
-                      to={`/loop/card/${currentCard.supersededByCardId}`}
+                      to={`/loop/card/${currentRecoveryCardId}`}
                       onClick={() => setQueueOpen(false)}
                     >
                       Open current

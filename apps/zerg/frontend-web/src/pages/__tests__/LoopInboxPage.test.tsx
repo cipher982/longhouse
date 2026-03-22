@@ -410,6 +410,46 @@ describe("LoopInboxPage", () => {
     expect(within(statusBanner).getByRole("link", { name: /Open current/i })).toHaveAttribute("href", "/loop/card/99");
   });
 
+  it("offers a direct recovery link for non-superseded stale cards when one follow-up remains", async () => {
+    setViewportWidth(390);
+
+    fetchLoopInboxMock.mockResolvedValue([
+      makeInboxItem({
+        cardId: 99,
+        sessionId: "sess-2",
+        title: "Latest follow-up",
+        summary: "The current approval moved to a newer card.",
+        followUpPrompt: "Open the latest follow-up and decide there.",
+        lastTurnAt: "2026-03-19T12:05:00Z",
+      }),
+    ]);
+    fetchLoopActionCardMock.mockResolvedValue(
+      makeActionCard({
+        cardId: 390,
+        sessionId: "sess-stale",
+        title: "Already handled card",
+        summary: "This older card was already handled.",
+        cardState: "acted",
+        cardStateReason: "This older card has already been handled. Use the current follow-up instead.",
+        supersededByCardId: null,
+        availableActions: [],
+      }),
+    );
+
+    renderPage("/loop/card/390");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-count")).toHaveTextContent("1");
+    });
+
+    const statusBanner = screen.getByTestId("loop-inbox-card-status-banner");
+    expect(
+      within(statusBanner).getByText("This older card has already been handled. Use the current follow-up instead."),
+    ).toBeInTheDocument();
+    expect(within(statusBanner).getByRole("link", { name: /Open current/i })).toHaveAttribute("href", "/loop/card/99");
+  });
+
   it("uses compact mobile chrome and keeps the push CTA below the card", async () => {
     setViewportWidth(390);
     const enableMock = vi.fn().mockResolvedValue(true);
