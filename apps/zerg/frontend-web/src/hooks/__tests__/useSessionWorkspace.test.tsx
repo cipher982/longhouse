@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionWorkspace } from "../useSessionWorkspace";
 
 const agentSessionMocks = vi.hoisted(() => ({
-  useAgentSession: vi.fn(),
-  useAgentSessionThread: vi.fn(),
+  useAgentSessionWithOptions: vi.fn(),
+  useAgentSessionThreadWithOptions: vi.fn(),
   useAgentSessionProjectionInfinite: vi.fn(),
 }));
 
@@ -34,12 +34,12 @@ function makeEvents(count: number) {
 
 function seedHookMocks(eventCount: number = 80) {
   const events = makeEvents(eventCount);
-  agentSessionMocks.useAgentSession.mockReturnValue({
+  agentSessionMocks.useAgentSessionWithOptions.mockReturnValue({
     data: baseSession,
     isLoading: false,
     error: null,
   });
-  agentSessionMocks.useAgentSessionThread.mockReturnValue({
+  agentSessionMocks.useAgentSessionThreadWithOptions.mockReturnValue({
     data: {
       sessions: [baseSession],
       head_session_id: baseSession.id,
@@ -138,6 +138,17 @@ describe("useSessionWorkspace", () => {
     });
   });
 
+  it("polls the session and thread queries to keep workspace runtime metadata fresh", () => {
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(agentSessionMocks.useAgentSessionWithOptions).toHaveBeenCalledWith(baseSession.id, {
+      refetchInterval: 5_000,
+    });
+    expect(agentSessionMocks.useAgentSessionThreadWithOptions).toHaveBeenCalledWith(baseSession.id, {
+      refetchInterval: 5_000,
+    });
+  });
+
   it("retries auto-scroll until the timeline list becomes scrollable", async () => {
     const queuedFrames = new Map<number, FrameRequestCallback>();
     let nextFrameId = 1;
@@ -210,12 +221,12 @@ describe("useSessionWorkspace", () => {
       started_at: "2026-03-19T16:45:00Z",
     };
 
-    agentSessionMocks.useAgentSession.mockReturnValue({
+    agentSessionMocks.useAgentSessionWithOptions.mockReturnValue({
       data: childSession,
       isLoading: false,
       error: null,
     });
-    agentSessionMocks.useAgentSessionThread.mockReturnValue({
+    agentSessionMocks.useAgentSessionThreadWithOptions.mockReturnValue({
       data: {
         sessions: [parentSession, childSession],
         head_session_id: childSession.id,

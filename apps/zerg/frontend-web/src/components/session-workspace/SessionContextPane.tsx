@@ -1,5 +1,7 @@
 import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
+import { getExecutionHomeLabel } from "../../lib/sessionExecutionHome";
+import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 import type { SessionTurnReview } from "../../services/api/oikos";
 import {
   formatContinuationStamp,
@@ -107,6 +109,14 @@ export function SessionContextPane({
   const recommendedAction = formatRecommendedAction(latestTurnReview?.recommendedAction ?? null);
   const actualOutcome = formatRecommendedAction(latestTurnReview?.actualOutcome ?? null);
   const followUpPrompt = latestTurnReview?.followUpPrompt?.trim() || null;
+  const runtime = resolveSessionRuntimeState(session);
+  const executionHomeLabel =
+    session.execution_home === "legacy" ? null : getExecutionHomeLabel(session.execution_home);
+  const runtimeBadgeVariant = runtime.isExecuting
+    ? "success"
+    : runtime.needsAttention
+      ? "warning"
+      : "neutral";
 
   return (
     <div className="session-context-pane">
@@ -121,11 +131,13 @@ export function SessionContextPane({
             />
             {formatProviderLabel(session.provider)}
           </span>
-          <span>{session.ended_at ? "Completed" : "In Progress"}</span>
+          <span>{runtime.displayPhase}</span>
         </div>
         <div className="session-context-badges">
+          <Badge variant={runtimeBadgeVariant}>{runtime.displayPhase}</Badge>
           <Badge variant="neutral">{turnCount} turns</Badge>
           <Badge variant="neutral">{session.tool_calls} tools</Badge>
+          {executionHomeLabel ? <Badge variant="neutral">{executionHomeLabel}</Badge> : null}
           {session.environment && session.environment !== "production" ? (
             <Badge variant="warning">{session.environment}</Badge>
           ) : null}

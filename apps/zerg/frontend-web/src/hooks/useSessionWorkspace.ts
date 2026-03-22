@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAgentSession, useAgentSessionProjectionInfinite, useAgentSessionThread } from "./useAgentSessions";
+import {
+  useAgentSessionProjectionInfinite,
+  useAgentSessionThreadWithOptions,
+  useAgentSessionWithOptions,
+} from "./useAgentSessions";
 import { useDebouncedValue } from "./useDebouncedValue";
 import {
   buildTimelineModel,
@@ -11,6 +15,7 @@ import {
 const EVENTS_PAGE_SIZE = 1000;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
+const WORKSPACE_RUNTIME_REFRESH_MS = 5_000;
 
 interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
@@ -22,8 +27,13 @@ export function useSessionWorkspace(
 ) {
   const highlightEventId = options.highlightEventId ?? null;
 
-  const { data: session, isLoading: sessionLoading, error: sessionError } = useAgentSession(sessionId);
-  const { data: threadData } = useAgentSessionThread(sessionId);
+  const { data: session, isLoading: sessionLoading, error: sessionError } = useAgentSessionWithOptions(
+    sessionId,
+    { refetchInterval: WORKSPACE_RUNTIME_REFRESH_MS },
+  );
+  const { data: threadData } = useAgentSessionThreadWithOptions(sessionId, {
+    refetchInterval: WORKSPACE_RUNTIME_REFRESH_MS,
+  });
 
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
   const {
