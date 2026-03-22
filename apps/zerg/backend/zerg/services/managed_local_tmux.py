@@ -52,11 +52,13 @@ def _normalize_tmux_tmpdir(value: str | None) -> str | None:
 def build_managed_local_shell_prelude(*, tmux_tmpdir: str | None = None, require_tmux: bool = True) -> str:
     """Shell bootstrap shared by preflight and tmux follow-up commands."""
     commands = ["source ~/.zshrc >/dev/null 2>&1"]
+    missing_tmux_message = _quote(TMUX_NOT_INSTALLED_MESSAGE)
+    missing_tmux_guard = f"command -v tmux >/dev/null 2>&1 || {{ echo {missing_tmux_message} >&2; exit 11; }}"
     normalized_tmpdir = _normalize_tmux_tmpdir(tmux_tmpdir)
     if normalized_tmpdir:
         commands.append(f"export TMUX_TMPDIR={_quote(normalized_tmpdir)}")
     if require_tmux:
-        commands.append("command -v tmux >/dev/null 2>&1" f" || {{ echo {_quote(TMUX_NOT_INSTALLED_MESSAGE)} >&2; exit 11; }}")
+        commands.append(missing_tmux_guard)
     return "; ".join(commands)
 
 
@@ -88,9 +90,28 @@ def build_tmux_launch_command(
     name = normalize_tmux_session_name(session_name, prefix="")
     working_dir = _require_non_empty("cwd", cwd)
     entry = _require_non_empty("launch_command", launch_command)
-    inner = f"cd {_quote(working_dir)} && exec {entry}"
-    tmux_command = f"{_tmux_prefix()} set-option -g remain-on-exit failed \\; " f"new-session -d -s {_quote(name)} {_quote(inner)}"
-    return _wrap_managed_local_shell_command(tmux_command, tmux_tmpdir=tmux_tmpdir)
+    script_path = f"/tmp/longhouse-managed-{name}.zsh"
+    script_body = "\n".join(
+        [
+            "#!/bin/zsh",
+            "set -e",
+            f"exec {entry}",
+        ]
+    )
+    write_script = "\n".join(
+        [
+            f"cat > {_quote(script_path)} <<'__LONGHOUSE_MANAGED_LOCAL__'",
+            script_body,
+            "__LONGHOUSE_MANAGED_LOCAL__",
+            f"chmod +x {_quote(script_path)}",
+        ]
+    )
+    tmux_command = (
+        f"{_tmux_prefix()} start-server \\; "
+        "set-option -g remain-on-exit failed \\; "
+        f"new-session -d -s {_quote(name)} -c {_quote(working_dir)} {_quote(script_path)}"
+    )
+    return _wrap_managed_local_shell_command("\n".join([write_script, tmux_command]), tmux_tmpdir=tmux_tmpdir)
 
 
 def build_tmux_has_session_command(*, session_name: str, tmux_tmpdir: str | None = None) -> str:

@@ -97,10 +97,19 @@ def _seed_user_and_runner(db):
 
 
 class _FakeDispatcher:
-    def __init__(self, verify_exit_code: int = 0, *, preflight_tmux_tmpdir: str | None = None):
+    def __init__(
+        self,
+        verify_exit_code: int = 0,
+        *,
+        preflight_tmux_tmpdir: str | None = None,
+        pane_command: str = "claude",
+        capture_stdout: str = "Claude ready",
+    ):
         self.calls: list[dict] = []
         self.verify_exit_code = verify_exit_code
         self.preflight_tmux_tmpdir = preflight_tmux_tmpdir
+        self.pane_command = pane_command
+        self.capture_stdout = capture_stdout
 
     async def dispatch_job(self, *, db, owner_id, runner_id, command, timeout_secs, commis_id, run_id):
         self.calls.append(
@@ -135,7 +144,16 @@ class _FakeDispatcher:
                 "ok": True,
                 "data": {
                     "exit_code": 0,
-                    "stdout": "claude",
+                    "stdout": self.pane_command,
+                    "stderr": "",
+                },
+            }
+        if f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} capture-pane" in inner:
+            return {
+                "ok": True,
+                "data": {
+                    "exit_code": 0,
+                    "stdout": self.capture_stdout,
                     "stderr": "",
                 },
             }
@@ -216,9 +234,12 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert "command -v tmux" in preflight_inner
             assert "command -v claude-code" in preflight_inner
             assert "printf '__LONGHOUSE_TMUX_TMPDIR__=%s\\n' \"${TMUX_TMPDIR:-}\"" in preflight_inner
+            assert "cat > /tmp/longhouse-managed-" in launch_inner
+            assert "__LONGHOUSE_MANAGED_LOCAL__" in launch_inner
             assert (
-                f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} set-option -g remain-on-exit failed \\; "
-                "new-session -d -s"
+                f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; "
+                "set-option -g remain-on-exit failed \\; "
+                f"new-session -d -s"
             ) in launch_inner
             assert "claude-code --session-id" in launch_inner
             assert (
@@ -230,6 +251,70 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
                 f"{session.managed_session_name} '#{{pane_current_command}}'"
                 in display_inner
             )
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_session_accepts_shell_wrapper_when_capture_has_output(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+        dispatcher = _FakeDispatcher(pane_command="zsh", capture_stdout="Welcome to Claude Code")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zeta/hiring",
+                    "project": "hiring",
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert len(dispatcher.calls) == 5
+            assert "capture-pane" in _inner_command(dispatcher.calls[4]["command"])
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_session_rejects_shell_wrapper_startup_error(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+        dispatcher = _FakeDispatcher(pane_command="zsh", capture_stdout="zsh: command not found: claude-code")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zeta/hiring",
+                },
+            )
+            assert response.status_code == 502, response.text
+            assert "failed to start Claude" in response.json()["detail"]
         finally:
             api_app_ref.dependency_overrides = {}
 
