@@ -105,46 +105,14 @@ def _seed_managed_local_session(db, *, runner: Runner) -> AgentSession:
     return session
 
 
-class _FakeDispatcher:
-    def __init__(self, *, ok: bool = True, exit_code: int = 0):
-        self.calls: list[dict] = []
-        self.ok = ok
-        self.exit_code = exit_code
-
-    async def dispatch_job(self, *, db, owner_id, runner_id, command, timeout_secs, commis_id, run_id):
-        self.calls.append(
-            {
-                "owner_id": owner_id,
-                "runner_id": runner_id,
-                "command": command,
-                "timeout_secs": timeout_secs,
-                "commis_id": commis_id,
-                "run_id": run_id,
-            }
-        )
-        if not self.ok:
-            return {
-                "ok": False,
-                "error": {"message": "Runner send failed"},
-            }
-        return {
-            "ok": True,
-            "data": {
-                "exit_code": self.exit_code,
-                "stdout": "",
-                "stderr": "" if self.exit_code == 0 else "tmux send failed",
-            },
-        }
-
-
 def test_chat_with_session_routes_managed_local_without_cloud_continuation(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
+    calls: list[dict[str, object]] = []
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
         source_session = _seed_managed_local_session(db, runner=runner)
         client, api_app_ref = _make_client(db, user)
-        dispatcher = _FakeDispatcher()
 
         async def fake_wait_for_events(**_kwargs):
             return [
@@ -160,10 +128,20 @@ def test_chat_with_session_routes_managed_local_without_cloud_continuation(monke
         def fail_cloud_target(*_args, **_kwargs):
             raise AssertionError("managed_local chat should not create cloud continuations")
 
-        monkeypatch.setattr(
-            "zerg.routers.session_chat.get_runner_job_dispatcher",
-            lambda: dispatcher,
-        )
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            calls.append(
+                {
+                    "owner_id": owner_id,
+                    "session_id": str(session.id),
+                    "runner_id": session.source_runner_id,
+                    "text": text,
+                    "commis_id": commis_id,
+                    "timeout_secs": timeout_secs,
+                }
+            )
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
         monkeypatch.setattr(
             "zerg.routers.session_chat._await_managed_local_turn_events",
             fake_wait_for_events,
@@ -185,12 +163,11 @@ def test_chat_with_session_routes_managed_local_without_cloud_continuation(monke
             assert '"created_continuation": false' in body
             assert f'"session_id": "{source_session.id}"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
-            assert len(dispatcher.calls) == 1
-            assert dispatcher.calls[0]["runner_id"] == runner.id
-            assert dispatcher.calls[0]["owner_id"] == user.id
-            assert dispatcher.calls[0]["command"].startswith(
-                f"tmux send-keys -t {source_session.managed_session_name}"
-            )
+            assert len(calls) == 1
+            assert calls[0]["runner_id"] == runner.id
+            assert calls[0]["owner_id"] == user.id
+            assert calls[0]["session_id"] == str(source_session.id)
+            assert calls[0]["text"] == "continue"
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -202,12 +179,11 @@ def test_chat_with_session_reports_managed_local_send_failure(monkeypatch, tmp_p
         user, runner = _seed_user_and_runner(db)
         source_session = _seed_managed_local_session(db, runner=runner)
         client, api_app_ref = _make_client(db, user)
-        dispatcher = _FakeDispatcher(ok=False)
 
-        monkeypatch.setattr(
-            "zerg.routers.session_chat.get_runner_job_dispatcher",
-            lambda: dispatcher,
-        )
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed")
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
 
         try:
             response = client.post(

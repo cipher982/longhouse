@@ -39,11 +39,10 @@ from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentEvent
 from zerg.models.user import User
 from zerg.services.agents_store import AgentsStore
+from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
-from zerg.services.managed_local_tmux import build_tmux_send_text_command
-from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
@@ -338,23 +337,18 @@ async def _stream_managed_local_output(
         ),
     ).encode()
 
-    dispatcher = get_runner_job_dispatcher()
     baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
-    send_result = await dispatcher.dispatch_job(
+    send_result = await send_text_to_managed_local_session(
         db=db,
         owner_id=owner_id,
-        runner_id=int(source_session.source_runner_id),
-        command=build_tmux_send_text_command(
-            session_name=source_session.managed_session_name,
-            text=message,
-        ),
-        timeout_secs=15,
+        session=source_session,
+        text=message,
         commis_id=request_id,
-        run_id=None,
+        timeout_secs=15,
     )
 
-    if not send_result.get("ok"):
-        error_message = send_result.get("error", {}).get("message", "Failed to send text to managed local session")
+    if not send_result.ok:
+        error_message = str(send_result.error or "Failed to send text to managed local session")
         yield SSEEvent(
             event="error",
             data=json.dumps({"error": error_message}),
@@ -377,39 +371,13 @@ async def _stream_managed_local_output(
         ).encode()
         return
 
-    send_data = send_result.get("data", {})
-    if int(send_data.get("exit_code", 1)) != 0:
-        detail = (send_data.get("stderr") or "").strip() or (send_data.get("stdout") or "").strip()
-        error_message = detail or "Managed local send-text command failed"
-        yield SSEEvent(
-            event="error",
-            data=json.dumps({"error": error_message}),
-        ).encode()
-        yield SSEEvent(
-            event="done",
-            data=json.dumps(
-                {
-                    "session_id": str(source_session.id),
-                    "source_session_id": str(source_session.id),
-                    "shipped_session_id": None,
-                    "created_continuation": False,
-                    "exit_code": int(send_data.get("exit_code", 1)),
-                    "total_text_length": 0,
-                    "persisted_events": 0,
-                    "persistence_error": error_message,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            ),
-        ).encode()
-        return
-
     new_events = await _await_managed_local_turn_events(
         db_bind=db.get_bind(),
         session_id=source_session.id,
         after_event_id=baseline_event_id,
     )
     if not new_events:
-        persistence_error = "Message was sent to the managed local session, but Longhouse did not observe a completed turn yet."
+        persistence_error = "Message was sent to the managed local session, " "but Longhouse did not observe a completed turn yet."
         yield SSEEvent(
             event="error",
             data=json.dumps({"error": persistence_error}),
@@ -541,7 +509,7 @@ async def _stream_fake_claude_output(
     except Exception as exc:
         logger.warning("Failed to persist fake continuation turn for %s: %s", target_session_id, exc)
         ship_result = None
-        persistence_error = "Response completed, but Longhouse could not save the continuation transcript to the timeline."
+        persistence_error = "Response completed, but Longhouse could not save " "the continuation transcript to the timeline."
 
     if ship_result is not None and ship_result.events_inserted <= 0 and persistence_error is None:
         persistence_error = (
@@ -881,9 +849,9 @@ async def stream_claude_output(
                         )
                         logger.warning("[%s] Shipped continuation contained no new events", request_id)
                 else:
-                    persistence_error = "Response completed, but Longhouse could not save the continuation transcript to the timeline."
+                    persistence_error = "Response completed, but Longhouse could not save " "the continuation transcript to the timeline."
             except Exception as e:
-                persistence_error = "Response completed, but Longhouse could not save the continuation transcript to the timeline."
+                persistence_error = "Response completed, but Longhouse could not save " "the continuation transcript to the timeline."
                 logger.warning(f"[{request_id}] Failed to ship session to Longhouse: {e}")
 
         yield SSEEvent(

@@ -23,6 +23,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import UserRole
+from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.models.work import OikosWakeup
 from zerg.services.session_loop_controller import LoopControllerDecision
@@ -106,6 +107,22 @@ def _seed_session(
     return session_id
 
 
+def _create_runner(db, *, owner_id: int, name: str = "cinder") -> Runner:
+    runner = Runner(
+        owner_id=owner_id,
+        name=name,
+        availability_policy="always_on",
+        capabilities=["exec.full"],
+        status="online",
+        auth_secret_hash="secret-hash",
+        runner_metadata={"install_mode": "desktop"},
+    )
+    db.add(runner)
+    db.commit()
+    db.refresh(runner)
+    return runner
+
+
 @pytest.mark.asyncio
 async def test_turn_review_autopilot_enqueues_same_session_continue_job(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_autopilot_enqueue.db")
@@ -154,6 +171,74 @@ async def test_turn_review_autopilot_enqueues_same_session_continue_job(monkeypa
         assert jobs[0].config["backend"] == "zai"
         assert jobs[0].config["trigger"] == "turn_loop"
         assert jobs[0].config["assistant_event_id"] == review.assistant_event_id
+
+
+@pytest.mark.asyncio
+async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud_job(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local.db")
+    calls: list[dict[str, object]] = []
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="The next step is a bounded same-session continue.",
+            rationale="The assistant left exactly one obvious follow-up.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=51,
+        )
+
+    async def _fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+
+    with SessionLocal() as db:
+        user = _create_user(db, allow_continue=True)
+        runner = _create_runner(db, owner_id=user.id, name="cinder")
+        session_id = _seed_session(
+            db,
+            loop_mode="autopilot",
+            user_text="finish the session detail page",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        session.managed_transport = "tmux"
+        session.source_runner_id = runner.id
+        session.source_runner_name = runner.name
+        session.managed_session_name = "lh-autopilot-managed-local"
+        db.commit()
+        db.refresh(session)
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.execution_state == "would_auto_continue"
+        assert review.status == "acted"
+        assert review.reason == "continue_session"
+        assert review.actual_outcome == "continue_session"
+
+        jobs = db.query(CommisJob).all()
+        assert jobs == []
+
+        assert len(calls) == 1
+        assert calls[0]["owner_id"] == user.id
+        assert calls[0]["session_id"] == str(session_id)
+        assert calls[0]["text"] == "Run the pending targeted tests."
+        assert calls[0]["commis_id"] == f"turn-review-{review.id}"
 
 
 @pytest.mark.asyncio

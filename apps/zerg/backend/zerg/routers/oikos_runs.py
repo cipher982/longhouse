@@ -712,7 +712,7 @@ def get_loop_inbox_action_card_for_session(
 
 
 @router.post("/loop-inbox/cards/{card_id}/actions", response_model=LoopInboxActionResult)
-def act_on_loop_inbox_item(
+async def act_on_loop_inbox_item(
     card_id: int,
     request: LoopInboxActionRequest,
     db: Session = Depends(get_db),
@@ -732,7 +732,7 @@ def act_on_loop_inbox_item(
         if review.execution_state != "awaiting_user_approval" or review.recommended_action != "continue_session":
             raise HTTPException(status_code=409, detail="This turn review cannot be approved for continuation")
         try:
-            job = approve_pending_turn_review(db=db, review=review)
+            job = await approve_pending_turn_review(db=db, review=review)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -744,7 +744,7 @@ def act_on_loop_inbox_item(
             action=request.action,
             status=review.status,
             reason=review.reason,
-            queued_job_id=int(job.id),
+            queued_job_id=int(job.id) if job is not None else None,
         )
 
     try:
