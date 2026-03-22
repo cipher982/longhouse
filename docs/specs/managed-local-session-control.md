@@ -170,6 +170,12 @@ For v1, that stack is sufficient to transport `tmux` commands to the source mach
 **Rationale:** Lower complexity, higher fidelity, and it keeps managed-local chat on the same transcript source of truth Longhouse already uses.
 **Revisit if:** The shipper path proves too latent or unreliable for same-turn response UX.
 
+### Decision: Route Loop `Continue` through the same managed-local tmux transport
+**Context:** The Loop mobile inbox previously assumed that approving `Continue` meant creating a cloud/workspace continuation job.
+**Choice:** For `managed_local` sessions, Loop approval now sends the follow-up prompt into the same tmux-backed source session instead of queueing cloud work.
+**Rationale:** `Continue` should preserve venue trust. For a session labeled `On this Mac`, approval must act on that exact laptop session.
+**Revisit if:** We later add explicit hosted/cloud takeover as a separate user action.
+
 ## Architecture
 
 ### Session homes

@@ -22,10 +22,12 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
+from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.session_loop_controller import build_loop_controller_payload
 from zerg.services.session_loop_controller import evaluate_session_turn_with_llm
+from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 
 logger = logging.getLogger(__name__)
@@ -933,7 +935,7 @@ async def maybe_enqueue_turn_review_operator_wakeup(*, db: Session, review: Sess
     return run_id
 
 
-def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurnReview) -> CommisJob | None:
+async def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurnReview) -> CommisJob | None:
     if review.status != "recorded":
         return None
     if review.execution_state != "would_auto_continue":
@@ -941,7 +943,11 @@ def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurnReview
     if review.recommended_action != "continue_session":
         return None
     try:
-        return approve_pending_turn_review(db=db, review=review, expected_execution_state="would_auto_continue")
+        return await approve_pending_turn_review(
+            db=db,
+            review=review,
+            expected_execution_state="would_auto_continue",
+        )
     except (ValueError, RuntimeError):
         return None
 
@@ -1013,12 +1019,67 @@ def _enqueue_same_session_continue_job(
     return job
 
 
-def approve_pending_turn_review(
+async def _continue_managed_local_session(
+    *,
+    db: Session,
+    review: SessionTurnReview,
+    session: AgentSession,
+) -> bool:
+    if review.owner_id is None:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="missing_owner",
+            actual_outcome="failed",
+        )
+        return False
+
+    follow_up_prompt = str(review.follow_up_prompt or "").strip()
+    if not follow_up_prompt:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="missing_follow_up_prompt",
+            actual_outcome="failed",
+        )
+        return False
+
+    send_result = await send_text_to_managed_local_session(
+        db=db,
+        owner_id=int(review.owner_id),
+        session=session,
+        text=follow_up_prompt,
+        commis_id=f"turn-review-{review.id}",
+        timeout_secs=15,
+    )
+    if send_result.ok:
+        return True
+
+    error_reason = str(send_result.error or "managed_local_send_failed")
+    logger.warning(
+        "Managed local continue failed for review %s session %s: %s",
+        review.id,
+        review.session_id,
+        error_reason,
+    )
+    _mark_review_outcome(
+        db,
+        review=review,
+        status="failed",
+        reason="managed_local_send_failed",
+        actual_outcome="failed",
+    )
+    return False
+
+
+async def approve_pending_turn_review(
     *,
     db: Session,
     review: SessionTurnReview,
     expected_execution_state: str = "awaiting_user_approval",
-) -> CommisJob:
+) -> CommisJob | None:
     if review.status not in {"recorded", "enqueued"}:
         raise ValueError("turn review is no longer actionable")
     if review.execution_state != expected_execution_state:
@@ -1037,17 +1098,24 @@ def approve_pending_turn_review(
         )
         raise RuntimeError("missing_session")
 
-    job = _enqueue_same_session_continue_job(db=db, review=review, session=session)
-    if job is None:
-        if review.status != "failed":
-            _mark_review_outcome(
-                db,
-                review=review,
-                status="failed",
-                reason="enqueue_failed",
-                actual_outcome="failed",
-            )
-        raise RuntimeError(str(review.reason or "enqueue_failed"))
+    job: CommisJob | None
+    if str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value:
+        sent = await _continue_managed_local_session(db=db, review=review, session=session)
+        if not sent:
+            raise RuntimeError(str(review.reason or "managed_local_send_failed"))
+        job = None
+    else:
+        job = _enqueue_same_session_continue_job(db=db, review=review, session=session)
+        if job is None:
+            if review.status != "failed":
+                _mark_review_outcome(
+                    db,
+                    review=review,
+                    status="failed",
+                    reason="enqueue_failed",
+                    actual_outcome="failed",
+                )
+            raise RuntimeError(str(review.reason or "enqueue_failed"))
 
     if review.run_id is not None:
         from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ACTED
@@ -1060,7 +1128,7 @@ def approve_pending_turn_review(
             reason="continue_session",
             payload_updates={
                 "outcome": _EXPECTED_CONTINUE_OUTCOME,
-                "job_ids": [int(job.id)],
+                "job_ids": [int(job.id)] if job is not None else [],
                 "resume_session_ids": [str(session.id)],
             },
         )
@@ -1106,7 +1174,7 @@ async def maybe_process_session_turn_loop(*, db: Session, session_id: str) -> Se
     review, created = await _record_session_turn_review(db=db, session_id=session_id)
     if review is None:
         return None
-    maybe_execute_recorded_turn_review(db=db, review=review)
+    await maybe_execute_recorded_turn_review(db=db, review=review)
     await maybe_enqueue_turn_review_operator_wakeup(db=db, review=review)
     if created:
         session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()

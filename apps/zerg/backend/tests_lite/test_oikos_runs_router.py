@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
@@ -37,6 +38,7 @@ from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
 from zerg.models.enums import UserRole
+from zerg.models.models import Runner
 from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 
@@ -198,6 +200,11 @@ def _create_session(
     project: str = "zerg",
     device_id: str | None = "cinder",
     provider: str = "claude",
+    execution_home: str = "legacy",
+    managed_transport: str | None = None,
+    source_runner_id: int | None = None,
+    source_runner_name: str | None = None,
+    managed_session_name: str | None = None,
 ):
     started_at = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
     session = AgentSession(
@@ -211,6 +218,11 @@ def _create_session(
         ended_at=started_at,
         summary_title=summary_title,
         loop_mode=loop_mode,
+        execution_home=execution_home,
+        managed_transport=managed_transport,
+        source_runner_id=source_runner_id,
+        source_runner_name=source_runner_name,
+        managed_session_name=managed_session_name,
     )
     db.add(session)
     db.commit()
@@ -280,6 +292,22 @@ def _add_review(
     db.commit()
     db.refresh(review)
     return review
+
+
+def _create_runner(db, *, owner_id: int, name: str = "cinder") -> Runner:
+    runner = Runner(
+        owner_id=owner_id,
+        name=name,
+        availability_policy="always_on",
+        capabilities=["exec.full"],
+        status="online",
+        auth_secret_hash="secret-hash",
+        runner_metadata={"install_mode": "desktop"},
+    )
+    db.add(runner)
+    db.commit()
+    db.refresh(runner)
+    return runner
 
 
 def test_loop_inbox_returns_latest_attention_reviews_only(tmp_path):
@@ -594,6 +622,103 @@ def test_loop_inbox_approve_action_queues_same_session_continue_and_clears_item(
             inbox_after = client.get("/api/oikos/loop-inbox")
             assert inbox_after.status_code == 200
             assert inbox_after.json() == []
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_loop_inbox_approve_action_routes_managed_local_continue_without_cloud_job(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    async def _fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+
+    with session_local() as db:
+        owner = User(
+            email="owner@local",
+            role=UserRole.USER.value,
+            context={
+                "preferences": {
+                    "operator_mode": {
+                        "enabled": True,
+                        "allow_continue": True,
+                        "allow_notify": True,
+                    }
+                }
+            },
+        )
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+        runner = _create_runner(db, owner_id=owner.id, name="cinder")
+
+        session = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Mac Continue",
+            project="zerg",
+            device_id=runner.name,
+            execution_home="managed_local",
+            managed_transport="tmux",
+            source_runner_id=runner.id,
+            source_runner_name=runner.name,
+            managed_session_name="lh-mac-continue",
+        )
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="finish targeted verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+        review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
+            execution_state="awaiting_user_approval",
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            response = client.post(
+                f"/api/oikos/loop-inbox/cards/{review.id}/actions",
+                json={"action": "approve_recommended_action"},
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+
+            assert payload["session_id"] == str(session.id)
+            assert payload["review_id"] == review.id
+            assert payload["action"] == "approve_recommended_action"
+            assert payload["status"] == "acted"
+            assert payload["reason"] == "continue_session"
+            assert payload["queued_job_id"] is None
+
+            queued_jobs = db.query(CommisJob).all()
+            assert queued_jobs == []
+
+            review_row = db.query(SessionTurnReview).filter(SessionTurnReview.id == review.id).one()
+            assert review_row.actual_outcome == "continue_session"
+            assert review_row.status == "acted"
+
+            assert len(calls) == 1
+            assert calls[0]["owner_id"] == owner.id
+            assert calls[0]["session_id"] == str(session.id)
+            assert calls[0]["text"] == "Run the pending targeted tests."
+            assert calls[0]["commis_id"] == f"turn-review-{review.id}"
+            assert calls[0]["timeout_secs"] == 15
         finally:
             api_app_ref.dependency_overrides = {}
 
