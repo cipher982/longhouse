@@ -392,10 +392,17 @@ describe("SessionsPage", () => {
     });
   });
 
-  it("marks open sessions as inferred when live overlay is unavailable", async () => {
+  it("marks recent-progress sessions without semantic live signals honestly", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
-        sessions: [makeSession({ ended_at: null })],
+        sessions: [
+          makeSession({
+            ended_at: null,
+            status: "working",
+            confidence: "inferred",
+            display_phase: "Working",
+          }),
+        ],
         total: 1,
         has_real_sessions: true,
       },
@@ -406,9 +413,40 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Active")).toBeInTheDocument();
-    expect(screen.getByText("Inferred")).toBeInTheDocument();
+    expect(await screen.findByText("Working")).toBeInTheDocument();
+    expect(screen.getByText("Recent progress")).toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
+  });
+
+  it("does not treat a merely open session as live without runtime evidence", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            ended_at: null,
+            status: undefined,
+            confidence: undefined,
+            display_phase: undefined,
+            last_live_at: undefined,
+            presence_state: undefined,
+            presence_tool: undefined,
+            presence_updated_at: undefined,
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Cleanup sessions page")).toBeInTheDocument();
+    expect(screen.queryByText("Working")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recent progress")).not.toBeInTheDocument();
+    expect(screen.queryByText("Live now")).not.toBeInTheDocument();
   });
 
   it("uses the session timeline anchor for the card timestamp", async () => {
