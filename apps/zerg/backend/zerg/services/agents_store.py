@@ -1518,56 +1518,33 @@ class AgentsStore:
         if anchor_on_activity:
             last_activity_subq = self._last_activity_subquery()
             presence_subq = self._presence_updated_subquery()
-            runtime_anchor_subq = self._runtime_anchor_subquery()
+            runtime_signal_subq = self._runtime_signal_subquery()
             stmt = stmt.outerjoin(last_activity_subq, last_activity_subq.c.session_id == AgentSession.id)
             stmt = stmt.outerjoin(presence_subq, presence_subq.c.session_id == AgentSession.id)
-            stmt = stmt.outerjoin(runtime_anchor_subq, runtime_anchor_subq.c.session_id == AgentSession.id)
+            stmt = stmt.outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == AgentSession.id)
             activity_anchor = self._recent_activity_anchor_expr(
                 last_activity_subq.c.last_activity_at,
                 presence_subq.c.presence_updated_at,
-                runtime_anchor_subq.c.runtime_timeline_anchor_at,
+                runtime_signal_subq.c.runtime_timeline_anchor_at,
             )
-
-        # Environment filtering
-        if environment:
-            stmt = stmt.where(AgentSession.environment == environment)
-        elif not include_test:
-            # By default, exclude test and e2e sessions
-            stmt = stmt.where(AgentSession.environment.notin_(["test", "e2e"]))
-
-        if project:
-            stmt = stmt.where(AgentSession.project.ilike(f"%{project}%"))
-        if provider:
-            stmt = stmt.where(AgentSession.provider == provider)
-        if device_id:
-            stmt = stmt.where(AgentSession.device_id == device_id)
-        if since:
-            if anchor_on_activity:
-                stmt = stmt.where(activity_anchor >= since)
-            else:
-                stmt = stmt.where(AgentSession.started_at >= since)
-        if until:
-            if anchor_on_activity:
-                stmt = stmt.where(activity_anchor <= until)
-            else:
-                stmt = stmt.where(AgentSession.started_at <= until)
-
-        # Exclude autonomous agent runs (Task sub-agents and sessions with no user messages)
-        if hide_autonomous:
-            stmt = stmt.where(AgentSession.user_messages > 0).where(AgentSession.is_sidechain == 0)
-
-        # Exclude sessions by user_state bucket (archived, snoozed, etc.)
-        # NULL user_state is treated as 'active' (legacy rows pre-dating the column).
-        if exclude_user_states:
-            stmt = stmt.where((AgentSession.user_state.notin_(exclude_user_states)) | (AgentSession.user_state.is_(None)))
-
-        # Content search requires joining events
-        if query:
-            session_ids = self._fts_session_ids(query, context_mode=context_mode, branch_mode=branch_mode)
-            if session_ids is not None:
-                if not session_ids:
-                    return [], 0
-                stmt = stmt.where(AgentSession.id.in_(session_ids))
+        stmt = self._apply_session_listing_filters(
+            stmt,
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            query=query,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+            context_mode=context_mode,
+            branch_mode=branch_mode,
+            time_anchor=activity_anchor if anchor_on_activity else AgentSession.started_at,
+        )
+        if stmt is None:
+            return [], 0
 
         # Get total count
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -1581,6 +1558,89 @@ class AgentsStore:
 
         sessions = list(self.db.execute(stmt).scalars().all())
         return sessions, total
+
+    def list_session_window_signature(
+        self,
+        *,
+        project: Optional[str] = None,
+        provider: Optional[str] = None,
+        environment: Optional[str] = None,
+        include_test: bool = False,
+        device_id: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        query: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+        exclude_user_states: Optional[list[str]] = None,
+        hide_autonomous: bool = True,
+        context_mode: str = "forensic",
+        branch_mode: str = "head",
+    ) -> tuple[int, tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]]:
+        """Return a lightweight recency window signature for timeline SSE preflight."""
+
+        last_activity_subq = self._last_activity_subquery()
+        presence_subq = self._presence_updated_subquery()
+        runtime_signal_subq = self._runtime_signal_subquery()
+        activity_anchor = self._recent_activity_anchor_expr(
+            last_activity_subq.c.last_activity_at,
+            presence_subq.c.presence_updated_at,
+            runtime_signal_subq.c.runtime_timeline_anchor_at,
+        )
+
+        stmt = (
+            select(
+                AgentSession.id.label("session_id"),
+                AgentSession.updated_at.label("session_updated_at"),
+                last_activity_subq.c.last_activity_at.label("last_activity_at"),
+                presence_subq.c.presence_updated_at.label("presence_updated_at"),
+                runtime_signal_subq.c.runtime_updated_at.label("runtime_updated_at"),
+                runtime_signal_subq.c.runtime_version.label("runtime_version"),
+                runtime_signal_subq.c.runtime_timeline_anchor_at.label("runtime_timeline_anchor_at"),
+            )
+            .select_from(AgentSession)
+            .outerjoin(last_activity_subq, last_activity_subq.c.session_id == AgentSession.id)
+            .outerjoin(presence_subq, presence_subq.c.session_id == AgentSession.id)
+            .outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == AgentSession.id)
+        )
+
+        stmt = self._apply_session_listing_filters(
+            stmt,
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            query=query,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+            context_mode=context_mode,
+            branch_mode=branch_mode,
+            time_anchor=activity_anchor,
+        )
+        if stmt is None:
+            return 0, ()
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = self.db.execute(count_stmt).scalar() or 0
+
+        stmt = stmt.order_by(activity_anchor.desc(), AgentSession.started_at.desc()).limit(limit).offset(offset)
+        rows = self.db.execute(stmt).all()
+        signature_rows = tuple(
+            (
+                str(row.session_id),
+                row.session_updated_at,
+                row.last_activity_at,
+                row.presence_updated_at,
+                row.runtime_updated_at,
+                int(row.runtime_version or 0),
+                row.runtime_timeline_anchor_at,
+            )
+            for row in rows
+        )
+        return total, signature_rows
 
     @staticmethod
     def _latest_non_null_expr(lhs, rhs):
@@ -1633,16 +1693,67 @@ class AgentsStore:
         ).subquery()
 
     @staticmethod
-    def _runtime_anchor_subquery():
+    def _runtime_signal_subquery():
         return (
             select(
                 SessionRuntimeState.session_id.label("session_id"),
+                func.max(SessionRuntimeState.updated_at).label("runtime_updated_at"),
+                func.max(SessionRuntimeState.runtime_version).label("runtime_version"),
                 func.max(SessionRuntimeState.timeline_anchor_at).label("runtime_timeline_anchor_at"),
             )
             .where(SessionRuntimeState.session_id.is_not(None))
             .group_by(SessionRuntimeState.session_id)
             .subquery()
         )
+
+    def _apply_session_listing_filters(
+        self,
+        stmt,
+        *,
+        project: Optional[str],
+        provider: Optional[str],
+        environment: Optional[str],
+        include_test: bool,
+        device_id: Optional[str],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        query: Optional[str],
+        exclude_user_states: Optional[list[str]],
+        hide_autonomous: bool,
+        context_mode: str,
+        branch_mode: str,
+        time_anchor,
+    ):
+        if environment:
+            stmt = stmt.where(AgentSession.environment == environment)
+        elif not include_test:
+            stmt = stmt.where(AgentSession.environment.notin_(["test", "e2e"]))
+
+        if project:
+            stmt = stmt.where(AgentSession.project.ilike(f"%{project}%"))
+        if provider:
+            stmt = stmt.where(AgentSession.provider == provider)
+        if device_id:
+            stmt = stmt.where(AgentSession.device_id == device_id)
+        if since:
+            stmt = stmt.where(time_anchor >= since)
+        if until:
+            stmt = stmt.where(time_anchor <= until)
+
+        if hide_autonomous:
+            stmt = stmt.where(AgentSession.user_messages > 0).where(AgentSession.is_sidechain == 0)
+
+        if exclude_user_states:
+            stmt = stmt.where((AgentSession.user_state.notin_(exclude_user_states)) | (AgentSession.user_state.is_(None)))
+
+        if query:
+            session_ids = self._fts_session_ids(query, context_mode=context_mode, branch_mode=branch_mode)
+            if session_ids is not None:
+                if not session_ids:
+                    return None
+                stmt = stmt.where(AgentSession.id.in_(session_ids))
+
+        return stmt
 
     def get_first_message_map(
         self,

@@ -14,6 +14,7 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.agents_store import AgentsStore
 
 browser_auth_stub = types.ModuleType("zerg.dependencies.browser_auth")
 browser_auth_stub.get_current_browser_user = lambda *args, **kwargs: None
@@ -131,6 +132,66 @@ def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
     assert "Timeline session stream connected" in events[0]["data"]
     assert upsert_payload["session"]["project"] == "old-runtime-stream"
     assert upsert_payload["session"]["display_phase"] == "Running bash"
+
+
+def test_session_window_signature_prefers_runtime_activity_anchor(tmp_path):
+    session_local = _make_db(tmp_path, "timeline_stream_window_signature.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        old_runtime = _seed_session(
+            db,
+            started_at=now - timedelta(days=30),
+            ended_at=None,
+            project="old-runtime-window",
+        )
+        _seed_session(
+            db,
+            started_at=now - timedelta(hours=1),
+            ended_at=now - timedelta(minutes=30),
+            project="recent-history-window",
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{old_runtime.id}",
+                session_id=old_runtime.id,
+                provider="claude",
+                device_id="cinder",
+                phase="running",
+                phase_source="semantic",
+                active_tool="bash",
+                phase_started_at=now - timedelta(seconds=20),
+                last_runtime_signal_at=now - timedelta(seconds=20),
+                last_progress_at=now - timedelta(seconds=10),
+                last_live_at=now - timedelta(seconds=20),
+                timeline_anchor_at=now - timedelta(seconds=10),
+                freshness_expires_at=now + timedelta(minutes=5),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=7,
+            )
+        )
+        db.commit()
+
+        store = AgentsStore(db)
+        total, rows = store.list_session_window_signature(
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            device_id=None,
+            since=now - timedelta(days=14),
+            query=None,
+            limit=1,
+            offset=0,
+            hide_autonomous=True,
+            context_mode="forensic",
+        )
+
+    assert total == 2
+    assert rows[0][0] == str(old_runtime.id)
+    assert rows[0][5] == 7
+    assert rows[0][6] is not None
 
 
 def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
