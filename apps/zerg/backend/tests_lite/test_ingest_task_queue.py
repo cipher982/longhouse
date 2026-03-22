@@ -492,6 +492,82 @@ async def test_turn_loop_task_wakes_operator_for_recent_completed_idle_session(t
 
 
 @pytest.mark.asyncio
+async def test_turn_loop_task_uses_latest_assistant_turn_timestamp_when_session_ended_at_is_stale(tmp_path, monkeypatch):
+    """Fresh assistant turns should still produce reviews even when session metadata lags behind."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    factory = _make_db(tmp_path, "worker_turn_loop_stale_ended_at.db")
+    stale_ended_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+    fresh_turn_at = datetime.now(timezone.utc)
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
+        factory,
+        ended_at=stale_ended_at,
+        presence_state="idle",
+        presence_updated_at=fresh_turn_at,
+        loop_mode=SessionLoopMode.ASSIST,
+        user_context={
+            "preferences": {
+                "operator_mode": {
+                    "enabled": True,
+                    "shadow_mode": True,
+                    "allow_continue": False,
+                    "allow_notify": True,
+                }
+            }
+        },
+    )
+
+    db = factory()
+    try:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.ended_at = stale_ended_at
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="continue from the current managed-local turn",
+                timestamp=fresh_turn_at,
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="Only targeted verification remains. Run the pending targeted tests.",
+                timestamp=fresh_turn_at,
+            )
+        )
+        db.commit()
+        latest_assistant_event = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id, AgentEvent.role == "assistant")
+            .order_by(AgentEvent.id.desc())
+            .first()
+        )
+    finally:
+        db.close()
+
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch(
+            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+            new=AsyncMock(return_value=_continue_decision()),
+        ):
+            with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=777)) as invoke_oikos:
+                await _execute_task(task_id, session_id, "turn_loop")
+
+    reviews = _get_turn_reviews(factory)
+    tasks = _get_tasks(factory, status="done")
+    assert len(tasks) == 1
+    assert len(reviews) == 1
+    assert latest_assistant_event is not None
+    assert reviews[0].assistant_event_id == latest_assistant_event.id
+    assert reviews[0].status == "enqueued"
+    assert reviews[0].run_id == 777
+    invoke_oikos.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("presence_state", ["thinking", "running"])
 async def test_turn_loop_task_skips_operator_when_session_is_still_active(tmp_path, monkeypatch, presence_state):
     """Fresh active presence suppresses completed-turn evaluation."""

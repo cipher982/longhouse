@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import UUID
@@ -800,6 +801,69 @@ async def test_turn_review_dedupes_same_completed_assistant_turn(monkeypatch, tm
         assert first.id == second.id
         count = db.query(SessionTurnReview).filter(SessionTurnReview.session_id == session_id).count()
         assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_turn_review_uses_latest_assistant_turn_timestamp_when_session_ended_at_is_stale(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_stale_session_ended_at.db")
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Continue the fresh managed-local turn.",
+            rationale="The latest assistant turn just completed and still has one bounded next step.",
+            recommended_action="continue_session",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=15,
+        )
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="finish the verification",
+            assistant_text="The earlier turn finished a while ago.",
+        )
+        stale_ended_at = _now() - timedelta(minutes=20)
+        fresh_turn_at = _now()
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.ended_at = stale_ended_at
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="continue from the same managed-local session",
+                timestamp=fresh_turn_at,
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="Only targeted verification remains. Run the pending targeted tests.",
+                timestamp=fresh_turn_at,
+            )
+        )
+        db.commit()
+        latest_assistant_event = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id, AgentEvent.role == "assistant")
+            .order_by(AgentEvent.id.desc())
+            .first()
+        )
+
+        review = await maybe_record_session_turn_review(db=db, session_id=str(session_id))
+
+        assert review is not None
+        assert latest_assistant_event is not None
+        assert review.assistant_event_id == latest_assistant_event.id
+        assert review.execution_state == "awaiting_user_approval"
+        assert review.status == "recorded"
 
 
 @pytest.mark.asyncio
