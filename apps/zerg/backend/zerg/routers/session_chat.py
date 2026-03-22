@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -35,11 +36,14 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.models.agents import AgentEvent
 from zerg.models.user import User
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
+from zerg.services.managed_local_tmux import build_tmux_send_text_command
+from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
@@ -74,6 +78,9 @@ SUPPORTED_SESSION_CHAT_BACKENDS = {
     SESSION_CHAT_BACKEND_BEDROCK,
     SESSION_CHAT_BACKEND_ANTHROPIC,
 }
+MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
+MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
+MANAGED_LOCAL_STABLE_POLLS = 1
 
 
 def _truthy_env(name: str) -> bool:
@@ -245,6 +252,221 @@ def _lock_scope_id_for_session(db: Session, session_id: str) -> str:
     if session is None:
         return session_id
     return str(session.thread_root_session_id or session.id)
+
+
+def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_id: int) -> list[AgentEvent]:
+    with Session(bind=db_bind) as poll_db:
+        return (
+            poll_db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.id > after_event_id)
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .all()
+        )
+
+
+def _get_managed_local_latest_event_id(*, db_bind, session_id: UUID) -> int:
+    with Session(bind=db_bind) as poll_db:
+        latest = AgentsStore(poll_db).get_latest_event_id(session_id)
+        return int(latest or 0)
+
+
+async def _await_managed_local_turn_events(
+    *,
+    db_bind,
+    session_id: UUID,
+    after_event_id: int,
+    timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
+    poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
+) -> list[AgentEvent]:
+    deadline = time.monotonic() + timeout_secs
+    latest_seen = after_event_id
+    stable_polls = 0
+
+    while time.monotonic() < deadline:
+        latest_event_id = _get_managed_local_latest_event_id(db_bind=db_bind, session_id=session_id)
+        if latest_event_id > after_event_id:
+            if latest_event_id == latest_seen:
+                stable_polls += 1
+            else:
+                latest_seen = latest_event_id
+                stable_polls = 0
+
+            if stable_polls >= MANAGED_LOCAL_STABLE_POLLS:
+                return _fetch_managed_local_events_since(
+                    db_bind=db_bind,
+                    session_id=session_id,
+                    after_event_id=after_event_id,
+                )
+
+        await asyncio.sleep(poll_interval_secs)
+
+    return []
+
+
+async def _stream_managed_local_output(
+    *,
+    source_session,
+    owner_id: int,
+    message: str,
+    request_id: str,
+    db: Session | None = None,
+) -> AsyncIterator[str]:
+    if db is None:
+        raise RuntimeError("Managed local chat requires a database session")
+    if not source_session.source_runner_id or not source_session.managed_session_name:
+        raise RuntimeError("Managed local session is missing runner or tmux metadata")
+
+    yield SSEEvent(
+        event="system",
+        data=json.dumps(
+            {
+                "type": "session_started",
+                "session_id": str(source_session.id),
+                "source_session_id": str(source_session.id),
+                "thread_root_session_id": str(source_session.thread_root_session_id or source_session.id),
+                "continued_from_session_id": (
+                    str(source_session.continued_from_session_id) if source_session.continued_from_session_id else None
+                ),
+                "created_continuation": False,
+                "provider_session_id": source_session.provider_session_id,
+                "execution_home": source_session.execution_home,
+                "origin_label": source_session.origin_label,
+                "runner_name": source_session.source_runner_name,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+    ).encode()
+
+    dispatcher = get_runner_job_dispatcher()
+    baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
+    send_result = await dispatcher.dispatch_job(
+        db=db,
+        owner_id=owner_id,
+        runner_id=int(source_session.source_runner_id),
+        command=build_tmux_send_text_command(
+            session_name=source_session.managed_session_name,
+            text=message,
+        ),
+        timeout_secs=15,
+        commis_id=request_id,
+        run_id=None,
+    )
+
+    if not send_result.get("ok"):
+        error_message = send_result.get("error", {}).get("message", "Failed to send text to managed local session")
+        yield SSEEvent(
+            event="error",
+            data=json.dumps({"error": error_message}),
+        ).encode()
+        yield SSEEvent(
+            event="done",
+            data=json.dumps(
+                {
+                    "session_id": str(source_session.id),
+                    "source_session_id": str(source_session.id),
+                    "shipped_session_id": None,
+                    "created_continuation": False,
+                    "exit_code": 1,
+                    "total_text_length": 0,
+                    "persisted_events": 0,
+                    "persistence_error": error_message,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+        ).encode()
+        return
+
+    send_data = send_result.get("data", {})
+    if int(send_data.get("exit_code", 1)) != 0:
+        detail = (send_data.get("stderr") or "").strip() or (send_data.get("stdout") or "").strip()
+        error_message = detail or "Managed local send-text command failed"
+        yield SSEEvent(
+            event="error",
+            data=json.dumps({"error": error_message}),
+        ).encode()
+        yield SSEEvent(
+            event="done",
+            data=json.dumps(
+                {
+                    "session_id": str(source_session.id),
+                    "source_session_id": str(source_session.id),
+                    "shipped_session_id": None,
+                    "created_continuation": False,
+                    "exit_code": int(send_data.get("exit_code", 1)),
+                    "total_text_length": 0,
+                    "persisted_events": 0,
+                    "persistence_error": error_message,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+        ).encode()
+        return
+
+    new_events = await _await_managed_local_turn_events(
+        db_bind=db.get_bind(),
+        session_id=source_session.id,
+        after_event_id=baseline_event_id,
+    )
+    if not new_events:
+        persistence_error = "Message was sent to the managed local session, but Longhouse did not observe a completed turn yet."
+        yield SSEEvent(
+            event="error",
+            data=json.dumps({"error": persistence_error}),
+        ).encode()
+        yield SSEEvent(
+            event="done",
+            data=json.dumps(
+                {
+                    "session_id": str(source_session.id),
+                    "source_session_id": str(source_session.id),
+                    "shipped_session_id": None,
+                    "created_continuation": False,
+                    "exit_code": 0,
+                    "total_text_length": 0,
+                    "persisted_events": 0,
+                    "persistence_error": persistence_error,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+        ).encode()
+        return
+
+    assistant_text = ""
+    for event in new_events:
+        if event.tool_name:
+            yield SSEEvent(
+                event="tool_use",
+                data=json.dumps(
+                    {
+                        "name": event.tool_name,
+                        "id": event.tool_call_id or str(event.id),
+                    }
+                ),
+            ).encode()
+        if event.role == "assistant" and event.content_text:
+            assistant_text += event.content_text
+            yield SSEEvent(
+                event="assistant_delta",
+                data=json.dumps({"text": event.content_text, "accumulated": assistant_text}),
+            ).encode()
+
+    yield SSEEvent(
+        event="done",
+        data=json.dumps(
+            {
+                "session_id": str(source_session.id),
+                "source_session_id": str(source_session.id),
+                "shipped_session_id": str(source_session.id),
+                "created_continuation": False,
+                "exit_code": 0,
+                "total_text_length": len(assistant_text),
+                "persisted_events": len(new_events),
+                "persistence_error": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+    ).encode()
 
 
 # ---------------------------------------------------------------------------
@@ -714,7 +936,7 @@ async def chat_with_session(
     session_id: str,
     body: SessionChatRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_oikos_user),
+    current_user: User = Depends(get_current_oikos_user),
 ):
     """Chat with a Claude Code session.
 
@@ -772,6 +994,37 @@ async def chat_with_session(
     resolved_workspace = None
 
     try:
+        if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
+            if source_session.managed_transport != ManagedSessionTransport.TMUX.value:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unsupported managed local transport: {source_session.managed_transport}",
+                )
+
+            async def generate_managed_local():
+                try:
+                    async for event in _stream_managed_local_output(
+                        source_session=source_session,
+                        owner_id=current_user.id,
+                        message=body.message,
+                        request_id=request_id,
+                        db=db,
+                    ):
+                        yield event
+                finally:
+                    await session_lock_manager.release(lock_scope_id, request_id)
+                    logger.info(f"[{request_id}] Managed local chat complete, lock released")
+
+            return StreamingResponse(
+                generate_managed_local(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
         target_session, created_continuation = store.ensure_cloud_continuation_target(source_session.id)
         db.commit()
 
