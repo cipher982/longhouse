@@ -451,7 +451,7 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
         assert row["status"] == "working"
-        assert row["display_phase"] == "Working"
+        assert row["display_phase"] == "Recent progress"
         assert row["runtime_phase"] == "idle"
         assert row["runtime_source"] == "progress"
         assert row["presence_state"] is None

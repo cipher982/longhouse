@@ -258,17 +258,15 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
       );
     }
 
-    // Dim pulsing green dot — weaker signal than real presence
+    // Steady muted dot — recent progress is weaker than a real live signal.
     const heuristicDotStyle: React.CSSProperties = {
       display: "inline-block",
       width: compact ? 8 : 10,
       height: compact ? 8 : 10,
       borderRadius: "50%",
       flexShrink: 0,
-      background: "radial-gradient(circle, #4ade80 30%, #22c55e 100%)",
-      opacity: 0.7,
-      animation: "presence-pulse 2s ease-in-out infinite",
-      ["--presence-glow" as string]: "rgba(74, 222, 128, 0.4)",
+      background: "radial-gradient(circle, #94a3b8 35%, #64748b 100%)",
+      opacity: 0.72,
     };
 
     if (compact) {

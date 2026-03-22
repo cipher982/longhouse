@@ -345,17 +345,10 @@ function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeSta
   if (runtime.truthTier === "managed-local") {
     return "Local runtime";
   }
-  if (runtime.truthTier === "fresh") {
-    return "Fresh signal";
-  }
-  if (runtime.truthTier === "inferred") {
-    return "Recent progress";
-  }
   if (runtime.lastLiveAt) {
-    return `Seen ${formatRelativeTime(runtime.lastLiveAt)}`;
-  }
-  if (runtime.truthTier === "stale" || runtime.confidence === "stale") {
-    return "Stale";
+    if (runtime.truthTier === "stale" || runtime.confidence === "stale") {
+      return `Seen ${formatRelativeTime(runtime.lastLiveAt)}`;
+    }
   }
   return null;
 }
@@ -584,9 +577,10 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: Sess
   const primaryActionLabel = supportsCloudContinuation(session.provider) ? "Continue in cloud" : "Latest context";
   const cardClassName = [
     "session-card",
-    runtime.isLive ? "session-card--live" : "",
+    runtime.isExecuting ? "session-card--live" : "",
     runtime.isIdle ? "session-card--idle" : "",
-    runtime.heuristicActive ? "session-card--inferred" : "",
+    runtime.tone === "inferred" ? "session-card--inferred" : "",
+    runtime.tone === "thinking" ? "session-card--thinking" : "",
     runtime.tone === "running" ? "session-card--running" : "",
     runtime.tone === "needs-user" ? "session-card--needs-user" : "",
     runtime.tone === "blocked" ? "session-card--blocked" : "",

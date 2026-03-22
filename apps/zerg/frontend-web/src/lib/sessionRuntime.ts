@@ -58,11 +58,13 @@ export interface SessionRuntimeState {
   truthTier: RuntimeTruthTier;
   displayPhase: string;
   isLive: boolean;
+  isExecuting: boolean;
+  needsAttention: boolean;
   isIdle: boolean;
   heuristicActive: boolean;
   isManagedLocalTruth: boolean;
   hasSignal: boolean;
-  tone: "inactive" | "live" | "running" | "needs-user" | "blocked" | "idle";
+  tone: "inactive" | "thinking" | "running" | "needs-user" | "blocked" | "idle" | "inferred";
 }
 
 function overlayFreshnessMillis(overlay: Partial<TimelineRuntimeOverlay> & { last_activity_at?: string | null } | null | undefined): number {
@@ -170,9 +172,9 @@ function getDisplayPhase(
     return "Idle";
   }
 
-  if (status === "working") return "Working";
+  if (status === "working") return "Recent progress";
   if (status === "thinking") return "Thinking";
-  if (status === "active") return "Working";
+  if (status === "active") return "Recent progress";
   if (status === "idle") return "Idle";
   if (status === "completed" || fallbackEndedAt != null) return "Completed";
   return "Recent";
@@ -218,14 +220,11 @@ export function resolveSessionRuntimeState(
   const truthTier = sessionWins ? sessionTruthTier : activeTruthTier;
 
   const heuristicActive = presenceState == null && truthTier === "inferred";
+  const isExecuting = presenceState === "thinking" || presenceState === "running";
+  const needsAttention = presenceState === "needs_user" || presenceState === "blocked";
 
-  const isLive =
-    presenceState === "thinking" ||
-    presenceState === "running" ||
-    presenceState === "needs_user" ||
-    presenceState === "blocked" ||
-    heuristicActive;
-  const isIdle = presenceState === "idle" || (!isLive && status === "idle");
+  const isLive = isExecuting;
+  const isIdle = presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle");
   const hasSignal =
     truthTier !== "none" ||
     presenceState != null ||
@@ -240,8 +239,10 @@ export function resolveSessionRuntimeState(
     tone = "needs-user";
   } else if (presenceState === "running") {
     tone = "running";
-  } else if (isLive) {
-    tone = "live";
+  } else if (presenceState === "thinking") {
+    tone = "thinking";
+  } else if (heuristicActive) {
+    tone = "inferred";
   } else if (isIdle) {
     tone = "idle";
   }
@@ -264,6 +265,8 @@ export function resolveSessionRuntimeState(
     truthTier,
     displayPhase,
     isLive,
+    isExecuting,
+    needsAttention,
     isIdle,
     heuristicActive,
     isManagedLocalTruth: truthTier === "managed-local",

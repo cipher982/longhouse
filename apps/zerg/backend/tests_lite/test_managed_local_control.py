@@ -68,6 +68,7 @@ def _seed_user_runner_and_session(db):
         source_runner_id=runner.id,
         source_runner_name=runner.name,
         managed_session_name="lh-zerg-managed-local",
+        managed_tmux_tmpdir="/tmp/lh-managed-control",
         loop_mode="manual",
     )
     db.add(session)
@@ -128,3 +129,5 @@ def test_send_text_to_managed_local_session_emits_thinking_runtime_signal(monkey
         assert len(dispatcher.calls) == 1
         assert dispatcher.calls[0]["runner_id"] == runner.id
         assert dispatcher.calls[0]["commis_id"] == "managed-local-control-test"
+        assert "export TMUX_TMPDIR=/tmp/lh-managed-control" in str(dispatcher.calls[0]["command"])
+        assert "send-keys -t lh-zerg-managed-local -l -- continue" in str(dispatcher.calls[0]["command"])

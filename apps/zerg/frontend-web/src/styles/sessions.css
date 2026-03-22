@@ -562,6 +562,11 @@
     border-color: color-mix(in srgb, var(--color-intent-success) 28%, transparent);
   }
 
+  .session-card-runtime--thinking {
+    background: color-mix(in srgb, #fb923c 12%, transparent);
+    border-color: color-mix(in srgb, #fb923c 28%, transparent);
+  }
+
   .session-card-runtime--running {
     background: color-mix(in srgb, #38bdf8 10%, transparent);
     border-color: color-mix(in srgb, #38bdf8 28%, transparent);
@@ -579,6 +584,11 @@
 
   .session-card-runtime--idle {
     opacity: 0.84;
+  }
+
+  .session-card-runtime--inferred {
+    background: color-mix(in srgb, #94a3b8 12%, transparent);
+    border-color: color-mix(in srgb, #94a3b8 22%, transparent);
   }
 
   .session-card-runtime-phase {
@@ -1658,6 +1668,12 @@
       0 18px 40px -28px color-mix(in srgb, var(--color-intent-success) 55%, transparent);
   }
 
+  .session-card--thinking {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, #fb923c 32%, transparent),
+      0 18px 40px -28px rgba(251, 146, 60, 0.30);
+  }
+
   .session-card--running {
     box-shadow:
       0 0 0 1px color-mix(in srgb, #38bdf8 28%, transparent),
@@ -1677,7 +1693,7 @@
   }
 
   .session-card--inferred {
-    background: color-mix(in srgb, var(--color-intent-success) 3%, transparent);
+    background: color-mix(in srgb, #94a3b8 6%, transparent);
   }
 
   .session-card--idle {
@@ -1685,6 +1701,7 @@
   }
 
   .session-card--live:hover,
+  .session-card--thinking:hover,
   .session-card--running:hover,
   .session-card--needs-user:hover,
   .session-card--blocked:hover {

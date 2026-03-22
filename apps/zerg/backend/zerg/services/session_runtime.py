@@ -136,7 +136,7 @@ def _display_phase_for_state(
     if terminal_state is not None or phase == "finished" or status == "completed":
         return "Completed"
     if confidence == "inferred":
-        return "Working"
+        return "Recent progress"
     if phase == "running":
         return f"Running {active_tool}" if active_tool else "Running"
     if phase == "thinking":
