@@ -1,6 +1,7 @@
 """Tests for Oikos run history endpoint."""
 
 import asyncio
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -10,6 +11,8 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+
+import zerg.routers.oikos_runs as oikos_runs_router
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -446,6 +449,95 @@ def test_loop_inbox_returns_latest_attention_reviews_only(tmp_path):
             assert payload[1]["card_state"] == "active"
         finally:
             api_app_ref.dependency_overrides = {}
+
+
+class _ConnectedLoopRequest:
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+def test_loop_inbox_stream_emits_initial_snapshot_and_updates(tmp_path, monkeypatch):
+    session_local = _make_db(tmp_path)
+    base_time = datetime(2026, 3, 18, 9, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(oikos_runs_router, "_LOOP_INBOX_STREAM_POLL_INTERVAL_SECONDS", 0)
+
+    with session_local() as db:
+        owner = User(email="owner@local", role=UserRole.USER.value)
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Realtime Loop",
+            project="zerg",
+            device_id="cinder",
+        )
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="finish auth refresh",
+            assistant_text="Run the pending targeted tests next.",
+        )
+        initial_review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=base_time,
+            execution_state="awaiting_user_approval",
+        )
+
+    async def _collect_events():
+        stream = oikos_runs_router._loop_inbox_stream(
+            _ConnectedLoopRequest(),
+            owner_id=owner.id,
+            session_factory=session_local,
+            limit=25,
+        )
+        connected = await anext(stream)
+        initial_snapshot = await anext(stream)
+
+        with session_local() as db:
+            _, assistant_event_2 = _add_turn(
+                db,
+                session_id=session.id,
+                user_text="continue after tests",
+                assistant_text="Need your approval for the migration step.",
+                timestamp=base_time + timedelta(minutes=1),
+            )
+            updated_review = _add_review(
+                db,
+                owner_id=owner.id,
+                session=session,
+                assistant_event_id=assistant_event_2.id,
+                created_at=base_time + timedelta(minutes=1),
+                execution_state="needs_human",
+                decision="escalate",
+                summary="Approve the migration step.",
+                rationale="The next step is riskier and needs human confirmation.",
+                recommended_action="escalate",
+                follow_up_prompt=None,
+            )
+
+        updated_snapshot = await anext(stream)
+        await stream.aclose()
+        return connected, initial_snapshot, updated_snapshot, initial_review, updated_review
+
+    connected, initial_snapshot, updated_snapshot, initial_review, updated_review = asyncio.run(_collect_events())
+
+    initial_payload = json.loads(initial_snapshot["data"])
+    updated_payload = json.loads(updated_snapshot["data"])
+
+    assert connected["event"] == "connected"
+    assert initial_snapshot["event"] == "inbox_snapshot"
+    assert updated_snapshot["event"] == "inbox_snapshot"
+    assert initial_payload["items"][0]["card_id"] == initial_review.id
+    assert initial_payload["items"][0]["execution_state"] == "awaiting_user_approval"
+    assert updated_payload["items"][0]["card_id"] == updated_review.id
+    assert updated_payload["items"][0]["execution_state"] == "needs_human"
 
 
 def test_loop_inbox_action_card_returns_compact_turn_context(tmp_path):

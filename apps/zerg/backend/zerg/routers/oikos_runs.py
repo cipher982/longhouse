@@ -1,11 +1,13 @@
 """Oikos run history endpoints."""
 
+import asyncio
 import json
 import logging
 import os
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from typing import Callable
 from typing import Dict
 from typing import List
 from typing import Literal
@@ -14,6 +16,7 @@ from typing import Optional
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -44,6 +47,10 @@ from zerg.utils.time import UTCBaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["oikos"])
+
+_LOOP_INBOX_STREAM_LIMIT = 25
+_LOOP_INBOX_STREAM_POLL_INTERVAL_SECONDS = 1.0
+_LOOP_INBOX_STREAM_HEARTBEAT_SECONDS = 10.0
 
 
 class OikosRunSummary(UTCBaseModel):
@@ -610,6 +617,71 @@ def _build_loop_inbox_item(
     )
 
 
+def _list_loop_inbox_rows(
+    db: Session,
+    *,
+    owner_id: int,
+    limit: int,
+) -> List[LoopInboxItem]:
+    rows = _load_latest_attention_reviews(db, owner_id=owner_id, limit=limit)
+    session_map = _load_session_map(db, [row.session_id for row in rows])
+    return [_build_loop_inbox_item(row, session_map.get(str(row.session_id))) for row in rows]
+
+
+def _serialize_loop_inbox_snapshot(items: List[LoopInboxItem]) -> str:
+    return json.dumps(
+        [item.model_dump(mode="json") for item in items],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+async def _loop_inbox_stream(
+    request: Request,
+    *,
+    owner_id: int,
+    session_factory: Callable[[], Session],
+    limit: int = _LOOP_INBOX_STREAM_LIMIT,
+):
+    with session_factory() as db:
+        initial_items = _list_loop_inbox_rows(db, owner_id=owner_id, limit=limit)
+    last_snapshot = _serialize_loop_inbox_snapshot(initial_items)
+    last_heartbeat = datetime.now(timezone.utc)
+
+    yield {
+        "event": "connected",
+        "data": json.dumps({"timestamp": last_heartbeat.isoformat()}),
+    }
+    yield {
+        "event": "inbox_snapshot",
+        "data": json.dumps({"items": [item.model_dump(mode="json") for item in initial_items]}),
+    }
+
+    while True:
+        if await request.is_disconnected():
+            break
+
+        await asyncio.sleep(_LOOP_INBOX_STREAM_POLL_INTERVAL_SECONDS)
+
+        with session_factory() as db:
+            items = _list_loop_inbox_rows(db, owner_id=owner_id, limit=limit)
+        snapshot = _serialize_loop_inbox_snapshot(items)
+        if snapshot != last_snapshot:
+            last_snapshot = snapshot
+            yield {
+                "event": "inbox_snapshot",
+                "data": json.dumps({"items": [item.model_dump(mode="json") for item in items]}),
+            }
+
+        now = datetime.now(timezone.utc)
+        if (now - last_heartbeat).total_seconds() >= _LOOP_INBOX_STREAM_HEARTBEAT_SECONDS:
+            last_heartbeat = now
+            yield {
+                "event": "heartbeat",
+                "data": json.dumps({"timestamp": now.isoformat()}),
+            }
+
+
 @router.get("/turn-reviews", response_model=List[SessionTurnReviewSummary])
 def list_session_turn_reviews(
     limit: int = 50,
@@ -663,10 +735,28 @@ def list_loop_inbox(
     current_user=Depends(get_current_oikos_user),
 ) -> List[LoopInboxItem]:
     """List latest per-session turn reviews that still need phone-friendly attention."""
+    return _list_loop_inbox_rows(db, owner_id=current_user.id, limit=limit)
 
-    rows = _load_latest_attention_reviews(db, owner_id=current_user.id, limit=limit)
-    session_map = _load_session_map(db, [row.session_id for row in rows])
-    return [_build_loop_inbox_item(row, session_map.get(str(row.session_id))) for row in rows]
+
+@router.get("/loop-inbox/stream")
+async def stream_loop_inbox(
+    request: Request,
+    limit: int = _LOOP_INBOX_STREAM_LIMIT,
+    current_user=Depends(get_current_oikos_user),
+):
+    """Stream loop inbox snapshots for the authenticated owner."""
+    from zerg.database import db_session
+
+    owner_id = int(current_user.id)
+
+    return EventSourceResponse(
+        _loop_inbox_stream(
+            request,
+            owner_id=owner_id,
+            session_factory=db_session,
+            limit=limit,
+        )
+    )
 
 
 @router.get("/loop-inbox/cards/{card_id}", response_model=LoopActionCard)
