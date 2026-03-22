@@ -615,6 +615,19 @@
   z-index: var(--z-modal);
   background: rgba(18, 11, 9, 0.44);
   backdrop-filter: blur(8px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--motion-duration-fast) var(--motion-easing-standard),
+    visibility 0s linear var(--motion-duration-fast);
+}
+
+.loop-inbox-queue-drawer-scrim.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
 }
 
 .loop-inbox-queue-drawer {
@@ -634,18 +647,23 @@
     radial-gradient(circle at top left, rgba(212, 184, 122, 0.1), transparent 40%),
     linear-gradient(180deg, rgb(33 28 21), rgb(18 11 9));
   box-shadow: 24px 0 48px rgba(18, 11, 9, 0.48);
-  animation: loop-queue-drawer-enter var(--motion-duration-fast) var(--motion-easing-emphasized);
   overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate3d(-100%, 0, 0);
+  transition:
+    transform var(--motion-duration-normal) var(--motion-easing-standard),
+    opacity var(--motion-duration-fast) var(--motion-easing-standard),
+    visibility 0s linear var(--motion-duration-normal);
 }
 
-@keyframes loop-queue-drawer-enter {
-  from {
-    transform: translateX(-24px);
-  }
-
-  to {
-    transform: translateX(0);
-  }
+.loop-inbox-queue-drawer.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0);
+  transition-delay: 0s;
 }
 
 .loop-inbox-queue-drawer-header {
@@ -723,6 +741,13 @@
 
 .loop-inbox-queue-drawer-footer-link.ui-button {
   justify-content: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loop-inbox-queue-drawer-scrim,
+  .loop-inbox-queue-drawer {
+    transition: none;
+  }
 }
 
 .loop-inbox-bullets {

@@ -92,7 +92,7 @@ async function mockLoopInboxApi(
     cardMap?: Record<number, unknown>;
   } = {},
 ): Promise<void> {
-  await page.route("**/api/oikos/loop-inbox**", async (route) => {
+  const handleLoopInboxRoute = async (route: import("@playwright/test").Route): Promise<void> => {
     const url = new URL(route.request().url());
     const pathname = url.pathname;
 
@@ -126,7 +126,10 @@ async function mockLoopInboxApi(
     }
 
     await route.continue();
-  });
+  };
+
+  await page.route("**/api/oikos/loop-inbox", handleLoopInboxRoute);
+  await page.route("**/api/oikos/loop-inbox/**", handleLoopInboxRoute);
 }
 
 async function saveScreenshot(
@@ -203,7 +206,8 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   await drawer.getByTestId("loop-inbox-row-99").click();
 
   await page.waitForURL("**/loop/card/99", { timeout: 10000 });
-  await expect(page.getByTestId("loop-mobile-queue-drawer")).toHaveCount(0);
+  await expect(page.getByTestId("loop-mobile-queue-drawer")).not.toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-scrim")).not.toBeVisible();
   await expect(page.getByTestId("loop-mobile-header")).toBeVisible();
   await expect(page.getByTestId("loop-mobile-queue-button")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Settings and Modal Ownership Committed" })).toBeVisible();
