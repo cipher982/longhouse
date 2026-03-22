@@ -290,3 +290,180 @@ def test_agents_store_ingest_mirrors_binding_and_progress_runtime_signals(tmp_pa
         assert event_kinds == {"binding_signal", "progress_signal"}
 
     engine.dispose()
+
+
+def test_runtime_reducer_ignores_out_of_order_events(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_out_of_order.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=1))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        result = ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="needs_user",
+                    occurred_at=now - timedelta(seconds=5),
+                    freshness_ms=phase_freshness_ms("needs_user"),
+                    dedupe_key="phase-needs-user-new",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=35),
+                    dedupe_key="progress-old",
+                    payload={"progress_kind": "assistant_message"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="running",
+                    tool_name="bash",
+                    occurred_at=now - timedelta(seconds=30),
+                    freshness_ms=phase_freshness_ms("running"),
+                    dedupe_key="phase-running-old",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="terminal_signal",
+                    occurred_at=now - timedelta(seconds=40),
+                    dedupe_key="terminal-old",
+                    payload={"terminal_state": "finished"},
+                ),
+            ],
+        )
+        db.commit()
+
+        assert result.accepted == 4
+        assert result.duplicates == 0
+        assert result.updated_runtime_keys == [runtime_key]
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "needs_user"
+        assert state.phase_source == "semantic"
+        assert state.active_tool is None
+        assert state.last_progress_at is None
+        assert state.terminal_state is None
+        assert state.timeline_anchor_at == (now - timedelta(seconds=5)).replace(tzinfo=None)
+        assert int(state.runtime_version) == 1
+
+        view = build_runtime_view(state=state, session=session, now=now)
+        assert view.runtime_phase == "needs_user"
+        assert view.status == "active"
+        assert view.display_phase == "Needs you"
+        assert view.confidence == "live"
+
+    engine.dispose()
+
+
+def test_runtime_view_hides_semantic_phase_for_inferred_progress(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_inferred_phase_view.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=20))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=10),
+                    dedupe_key="progress-recent",
+                    payload={"progress_kind": "assistant_message"},
+                )
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "running"
+        assert state.phase_source == "progress"
+        assert view.runtime_phase is None
+        assert view.status == "active"
+        assert view.display_phase == "Recent progress"
+        assert view.confidence == "inferred"
+
+    engine.dispose()
+
+
+def test_newer_progress_reopens_finished_runtime_state(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_progress_reopens_finished.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=30))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="terminal_signal",
+                    occurred_at=now - timedelta(seconds=20),
+                    dedupe_key="terminal-finished",
+                    payload={"terminal_state": "finished"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=5),
+                    dedupe_key="progress-after-terminal",
+                    payload={"progress_kind": "assistant_message"},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "running"
+        assert state.phase_source == "progress"
+        assert state.terminal_state is None
+        assert state.last_progress_at == (now - timedelta(seconds=5)).replace(tzinfo=None)
+
+        view = build_runtime_view(state=state, session=session, now=now)
+        assert view.runtime_phase is None
+        assert view.status == "active"
+        assert view.display_phase == "Recent progress"
+        assert view.confidence == "inferred"
+
+    engine.dispose()

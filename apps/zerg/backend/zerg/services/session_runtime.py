@@ -47,6 +47,12 @@ def _normalize_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+def _latest_timestamp(*values: datetime | None) -> datetime | None:
+    normalized = [_normalize_utc(value) for value in values]
+    present = [value for value in normalized if value is not None]
+    return max(present) if present else None
+
+
 def coerce_session_uuid(value: str | UUID | None) -> UUID | None:
     if value is None:
         return None
@@ -96,7 +102,7 @@ class RuntimeEventBatchResult(BaseModel):
 
 @dataclass(frozen=True)
 class SessionRuntimeView:
-    runtime_phase: str
+    runtime_phase: str | None
     phase_started_at: datetime | None
     last_progress_at: datetime | None
     runtime_source: str
@@ -199,8 +205,12 @@ def build_runtime_view(
         presence_state = runtime_phase
         presence_tool = active_tool if runtime_phase in {"running", "blocked"} else None
 
+    exposed_runtime_phase = runtime_phase
+    if confidence == "inferred" and phase_source == "progress":
+        exposed_runtime_phase = ""
+
     return SessionRuntimeView(
-        runtime_phase=runtime_phase,
+        runtime_phase=exposed_runtime_phase or None,
         phase_started_at=_normalize_utc(state.phase_started_at),
         last_progress_at=_normalize_utc(state.last_progress_at),
         runtime_source=phase_source,
@@ -356,6 +366,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
         state.device_id = event.device_id
 
     if event.kind == "phase_signal":
+        latest_phase_signal_at = _latest_timestamp(state.last_runtime_signal_at, state.terminal_at)
+        if latest_phase_signal_at is not None and occurred_at < latest_phase_signal_at:
+            return False
         next_phase = (event.phase or state.phase or "idle").strip() or "idle"
         if next_phase not in KNOWN_PHASES:
             next_phase = "idle"
@@ -374,6 +387,13 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
         state.terminal_at = None
 
     elif event.kind == "progress_signal":
+        latest_progress_related_at = _latest_timestamp(
+            state.last_progress_at,
+            state.last_runtime_signal_at,
+            state.terminal_at,
+        )
+        if latest_progress_related_at is not None and occurred_at < latest_progress_related_at:
+            return False
         state.last_progress_at = occurred_at
         state.last_live_at = occurred_at
         state.timeline_anchor_at = occurred_at
@@ -384,13 +404,16 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
             state.terminal_at = None
         freshness_expires_at = _normalize_utc(state.freshness_expires_at)
         if freshness_expires_at is None or freshness_expires_at <= occurred_at or state.phase not in KNOWN_PHASES:
-            if state.phase not in ATTENTION_PHASES and state.phase != "finished":
+            if state.phase not in ATTENTION_PHASES:
                 if state.phase != "running":
                     state.phase = "running"
                     state.phase_started_at = occurred_at
             state.phase_source = "progress"
 
     elif event.kind == "terminal_signal":
+        latest_terminal_related_at = _latest_timestamp(state.last_runtime_signal_at, state.terminal_at)
+        if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at:
+            return False
         terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
         state.phase = "finished"
         state.phase_source = "semantic"

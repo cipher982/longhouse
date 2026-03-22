@@ -115,6 +115,37 @@ async function ingestSession(
   return sessionId;
 }
 
+async function ingestRuntimeEvents(
+  request: APIRequestContext,
+  events: Array<{
+    session_id: string;
+    provider?: string;
+    device_id?: string;
+    source: string;
+    kind: "phase_signal" | "progress_signal" | "terminal_signal" | "binding_signal";
+    phase?: string;
+    tool_name?: string;
+    occurred_at: string;
+    freshness_ms?: number;
+    dedupe_key: string;
+    payload?: Record<string, unknown>;
+    runtime_key?: string;
+  }>,
+): Promise<void> {
+  const response = await request.post("/api/agents/runtime/events/batch", {
+    data: {
+      events: events.map((event) => ({
+        runtime_key: event.runtime_key || `${event.provider || "claude"}:${event.session_id}`,
+        provider: event.provider || "claude",
+        payload: {},
+        ...event,
+      })),
+    },
+  });
+
+  expect(response.ok(), `runtime ingest failed: ${response.status()} ${await response.text()}`).toBe(true);
+}
+
 test.describe("Sessions Page", () => {
   test("Sessions tab renders and shows list or empty state", async ({
     page,
@@ -281,6 +312,198 @@ test.describe("Sessions Page", () => {
 
     // URL should no longer have filter params
     await expect(page).toHaveURL("/timeline");
+  });
+
+  test("Timeline distinguishes executing, attention, and inferred runtime states", async ({
+    page,
+    request,
+  }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const project = `runtime-states-${suffix}`;
+    const now = Date.now();
+
+    const runningTimestamp = new Date(now - 60_000).toISOString();
+    const needsUserTimestamp = new Date(now - 50_000).toISOString();
+    const inferredTimestamp = new Date(now - 40_000).toISOString();
+
+    const runningId = await ingestSession(request, {
+      project,
+      started_at: runningTimestamp,
+      ended_at: runningTimestamp,
+      events: [
+        {
+          role: "user",
+          content_text: `running-state-${suffix}`,
+          timestamp: runningTimestamp,
+          source_path: "/tmp/runtime-running.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    const needsUserId = await ingestSession(request, {
+      project,
+      started_at: needsUserTimestamp,
+      ended_at: needsUserTimestamp,
+      events: [
+        {
+          role: "user",
+          content_text: `needs-user-state-${suffix}`,
+          timestamp: needsUserTimestamp,
+          source_path: "/tmp/runtime-needs-user.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    const inferredId = await ingestSession(request, {
+      project,
+      started_at: inferredTimestamp,
+      ended_at: inferredTimestamp,
+      events: [
+        {
+          role: "user",
+          content_text: `inferred-state-${suffix}`,
+          timestamp: inferredTimestamp,
+          source_path: "/tmp/runtime-inferred.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await ingestRuntimeEvents(request, [
+      {
+        session_id: runningId,
+        source: "e2e",
+        kind: "phase_signal",
+        phase: "running",
+        tool_name: "bash",
+        occurred_at: new Date(now - 5_000).toISOString(),
+        freshness_ms: 600_000,
+        dedupe_key: `running-${suffix}`,
+      },
+      {
+        session_id: needsUserId,
+        source: "e2e",
+        kind: "phase_signal",
+        phase: "needs_user",
+        occurred_at: new Date(now - 4_000).toISOString(),
+        freshness_ms: 86_400_000,
+        dedupe_key: `needs-user-${suffix}`,
+      },
+      {
+        session_id: inferredId,
+        source: "e2e",
+        kind: "progress_signal",
+        occurred_at: new Date(now - 3_000).toISOString(),
+        dedupe_key: `progress-${suffix}`,
+        payload: { progress_kind: "assistant_message" },
+      },
+    ]);
+
+    await page.goto(`/timeline?project=${project}`);
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    const runningCard = page
+      .locator('[data-testid="session-card"]', { hasText: `running-state-${suffix}` })
+      .first();
+    await expect(runningCard).toBeVisible();
+    await expect(runningCard).toContainText("Running bash");
+    await expect(runningCard).toHaveAttribute("data-runtime-tone", "running");
+    await expect(runningCard).toHaveClass(/session-card--live/);
+    await expect(runningCard).toHaveClass(/session-card--running/);
+
+    const needsUserCard = page
+      .locator('[data-testid="session-card"]', { hasText: `needs-user-state-${suffix}` })
+      .first();
+    await expect(needsUserCard).toBeVisible();
+    await expect(needsUserCard).toContainText("Needs you");
+    await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "needs-user");
+    await expect(needsUserCard).not.toHaveClass(/session-card--live/);
+    await expect(needsUserCard).toHaveClass(/session-card--needs-user/);
+
+    const inferredCard = page
+      .locator('[data-testid="session-card"]', { hasText: `inferred-state-${suffix}` })
+      .first();
+    await expect(inferredCard).toBeVisible();
+    await expect(inferredCard).toContainText("Recent progress");
+    await expect(inferredCard).toHaveAttribute("data-runtime-tone", "inferred");
+    await expect(inferredCard).not.toHaveClass(/session-card--live/);
+    await expect(inferredCard).toHaveClass(/session-card--inferred/);
+  });
+
+  test("Timeline live stream updates a visible card runtime phase without a reload", async ({
+    page,
+    request,
+  }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const project = `runtime-stream-${suffix}`;
+    const now = Date.now();
+
+    const olderTimestamp = new Date(now - 5 * 60_000).toISOString();
+    const recentTimestamp = new Date(now - 60_000).toISOString();
+
+    const olderId = await ingestSession(request, {
+      project,
+      started_at: olderTimestamp,
+      ended_at: olderTimestamp,
+      events: [
+        {
+          role: "user",
+          content_text: `older-stream-session-${suffix}`,
+          timestamp: olderTimestamp,
+          source_path: "/tmp/runtime-old.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await ingestSession(request, {
+      project,
+      started_at: recentTimestamp,
+      ended_at: recentTimestamp,
+      events: [
+        {
+          role: "user",
+          content_text: `recent-stream-session-${suffix}`,
+          timestamp: recentTimestamp,
+          source_path: "/tmp/runtime-recent.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    const streamConnected = page.waitForResponse((response) => {
+      return response.url().includes("/api/timeline/sessions/stream") && response.status() === 200;
+    });
+    await page.goto(`/timeline?project=${project}`);
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await streamConnected;
+
+    const cards = page.locator('[data-testid="session-card"]');
+    await expect(cards.first()).toContainText(`recent-stream-session-${suffix}`);
+
+    const olderCard = page
+      .locator('[data-testid="session-card"]', { hasText: `older-stream-session-${suffix}` })
+      .first();
+    await expect(olderCard).toBeVisible();
+
+    await ingestRuntimeEvents(request, [
+      {
+        session_id: olderId,
+        source: "e2e",
+        kind: "phase_signal",
+        phase: "running",
+        tool_name: "bash",
+        occurred_at: new Date().toISOString(),
+        freshness_ms: 600_000,
+        dedupe_key: `stream-running-${suffix}`,
+      },
+    ]);
+
+    await expect(olderCard).toContainText("Running bash", { timeout: 15000 });
+    await expect(olderCard).toHaveAttribute("data-runtime-tone", "running");
+    await expect(olderCard).toHaveClass(/session-card--live/);
   });
 });
 

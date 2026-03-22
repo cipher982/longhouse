@@ -452,7 +452,7 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert row["id"] == str(session.id)
         assert row["status"] == "active"
         assert row["display_phase"] == "Recent progress"
-        assert row["runtime_phase"] == "idle"
+        assert row["runtime_phase"] is None
         assert row["runtime_source"] == "progress"
         assert row["presence_state"] is None
         assert row["last_live_at"] is not None
