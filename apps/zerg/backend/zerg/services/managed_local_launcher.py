@@ -52,6 +52,7 @@ class ManagedLocalLaunchParams:
     owner_id: int
     runner_target: str
     cwd: str
+    provider: str = "claude"
     project: str | None = None
     git_repo: str | None = None
     git_branch: str | None = None
@@ -71,10 +72,17 @@ _MANAGED_LOCAL_SHELL_COMMANDS = {"", "bash", "sh", "zsh", "fish"}
 _MANAGED_LOCAL_CAPTURE_ERROR_SNIPPETS = (
     "command not found: claude-code",
     "command not found: claude",
+    "command not found: codex",
     "aws auth refresh timed out",
     "not logged in",
     "permission denied",
 )
+_VALID_PROVIDERS = {"claude", "codex"}
+_PROVIDER_DISPLAY_NAMES = {"claude": "Claude", "codex": "Codex"}
+_PROVIDER_PANE_COMMANDS = {
+    "claude": {"claude", "node"},
+    "codex": {"codex", "node"},
+}
 
 
 def _resolve_runner(db: Session, owner_id: int, target: str):
@@ -122,7 +130,9 @@ def _derive_project(cwd: str, project: str | None) -> str:
     return Path(cwd).name or "managed-local"
 
 
-def _build_entry_command(*, provider_session_id: str, display_name: str | None) -> str:
+def _build_entry_command(*, provider: str, provider_session_id: str, display_name: str | None) -> str:
+    if provider == "codex":
+        return _build_codex_entry_command()
     parts = ["claude-code", "--session-id", provider_session_id]
     if display_name and display_name.strip():
         parts.extend(["-n", display_name.strip()])
@@ -130,11 +140,17 @@ def _build_entry_command(*, provider_session_id: str, display_name: str | None) 
     return f"zsh -lc {shlex.quote(inner)}"
 
 
-def _build_preflight_command(*, cwd: str) -> str:
+def _build_codex_entry_command() -> str:
+    inner = "source ~/.zshrc >/dev/null 2>&1; exec codex"
+    return f"zsh -lc {shlex.quote(inner)}"
+
+
+def _build_preflight_command(*, provider: str, cwd: str) -> str:
     quoted_cwd = shlex.quote(cwd)
+    cli_name = "codex" if provider == "codex" else "claude-code"
     checks = [
         build_managed_local_shell_prelude(),
-        "command -v claude-code >/dev/null 2>&1 || { echo 'claude-code wrapper is not available' >&2; exit 12; }",
+        f"command -v {cli_name} >/dev/null 2>&1 || {{ echo '{cli_name} is not available' >&2; exit 12; }}",
         f"test -d {quoted_cwd} || {{ echo 'working directory does not exist' >&2; exit 13; }}",
         f"printf {shlex.quote(_MANAGED_LOCAL_TMUX_TMPDIR_MARKER + '%s\\n')} \"${{TMUX_TMPDIR:-}}\"",
     ]
@@ -155,6 +171,11 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     if transport != ManagedSessionTransport.TMUX.value:
         raise ManagedLocalLaunchError(f"Unsupported managed transport '{transport}'", status_code=400)
 
+    provider = params.provider or "claude"
+    if provider not in _VALID_PROVIDERS:
+        raise ManagedLocalLaunchError(f"Unsupported provider '{provider}' for managed local", status_code=400)
+    provider_name = _PROVIDER_DISPLAY_NAMES.get(provider, provider)
+
     cwd = params.cwd.strip()
     if not cwd:
         raise ManagedLocalLaunchError("cwd is required", status_code=400)
@@ -167,7 +188,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         db=db,
         owner_id=params.owner_id,
         runner_id=runner.id,
-        command=_build_preflight_command(cwd=cwd),
+        command=_build_preflight_command(provider=provider, cwd=cwd),
         timeout_secs=10,
         commis_id=None,
         run_id=None,
@@ -192,7 +213,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
 
     session = AgentSession(
         id=session_uuid,
-        provider="claude",
+        provider=provider,
         environment="development",
         project=project,
         device_id=runner.name,
@@ -222,7 +243,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     db.add(session)
     db.flush()
 
-    entry_command = _build_entry_command(provider_session_id=provider_session_id, display_name=params.display_name)
+    entry_command = _build_entry_command(provider=provider, provider_session_id=provider_session_id, display_name=params.display_name)
     launch_command = build_tmux_launch_command(
         session_name=managed_session_name,
         cwd=cwd,
@@ -325,6 +346,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         raise ManagedLocalLaunchError(detail, status_code=502)
 
     pane_command = (verify_data.get("stdout") or "").strip().lower()
+    expected_pane_commands = _PROVIDER_PANE_COMMANDS.get(provider, _PROVIDER_PANE_COMMANDS["claude"])
     if pane_command in _MANAGED_LOCAL_SHELL_COMMANDS:
         capture_result = await dispatcher.dispatch_job(
             db=db,
@@ -343,18 +365,18 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             if marker in capture_lower:
                 await _cleanup_tmux_session()
                 raise ManagedLocalLaunchError(
-                    f"Managed local session failed to start Claude: {capture_text or marker}",
+                    f"Managed local session failed to start {provider_name}: {capture_text or marker}",
                     status_code=502,
                 )
 
         if not capture_text:
             await _cleanup_tmux_session()
             raise ManagedLocalLaunchError(
-                f"Managed local session started an idle shell instead of Claude ({pane_command or 'empty pane'})",
+                f"Managed local session started an idle shell instead of {provider_name} ({pane_command or 'empty pane'})",
                 status_code=502,
             )
 
-    elif "claude" not in pane_command and "node" not in pane_command:
+    elif not any(cmd in pane_command for cmd in expected_pane_commands):
         await _cleanup_tmux_session()
         raise ManagedLocalLaunchError(
             f"Managed local session started an unexpected pane command ({pane_command})",
