@@ -106,7 +106,7 @@ function getDisplayPhase(
 
   if (status === "working") return "Working";
   if (status === "thinking") return "Thinking";
-  if (status === "active") return "Active";
+  if (status === "active") return "Working";
   if (status === "idle") return "Idle";
   if (status === "completed" || fallbackEndedAt != null) return "Completed";
   return "Recent";
@@ -143,12 +143,7 @@ export function resolveSessionRuntimeState(
 
   const statusSuggestsLive =
     status === "working" || status === "thinking" || status === "active";
-  const openSessionFallback =
-    activeSession == null &&
-    status == null &&
-    presenceState == null &&
-    session.ended_at == null;
-  const heuristicActive = presenceState == null && (statusSuggestsLive || openSessionFallback);
+  const heuristicActive = presenceState == null && statusSuggestsLive;
 
   const isLive =
     presenceState === "thinking" ||
@@ -191,7 +186,7 @@ export function resolveSessionRuntimeState(
     presenceTool,
     lastLiveAt,
     confidence,
-    displayPhase: heuristicActive && displayPhase === "Recent" ? "Active" : displayPhase,
+    displayPhase,
     isLive,
     isIdle,
     heuristicActive,

@@ -609,7 +609,7 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
   const runtime = resolveSessionRuntimeState(session, activeSession);
   const runtimeMetaLabel = runtime.isLive
     ? runtime.heuristicActive
-      ? "Inferred"
+      ? "Recent progress"
       : "Live now"
     : runtime.lastLiveAt
       ? `Seen ${formatRelativeTime(runtime.lastLiveAt)}`

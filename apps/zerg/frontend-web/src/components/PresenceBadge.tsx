@@ -16,8 +16,8 @@ export interface PresenceBadgeProps {
   className?: string;
   /**
    * heuristicActive=true — when state is null, show a dim pulsing green dot
-   * with label "Active". Weaker signal than a real presence state but still
-   * shows that this session is considered working by the status heuristic.
+   * with label "Recent progress". Weaker signal than a real presence state but
+   * still shows that this session appears active from recent progress alone.
    */
   heuristicActive?: boolean;
   /**
@@ -275,7 +275,7 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
       return (
         <span
           className={className}
-          title="Active"
+          title="Recent progress"
           style={{ display: "inline-flex", alignItems: "center" }}
         >
           <span style={heuristicDotStyle} />
@@ -296,7 +296,7 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
         }}
       >
         <span style={heuristicDotStyle} />
-        <span style={{ color: "#4ade80", fontWeight: 400, opacity: 0.8 }}>Active</span>
+        <span style={{ color: "#4ade80", fontWeight: 400, opacity: 0.8 }}>Recent progress</span>
       </span>
     );
   }

@@ -241,7 +241,7 @@ def _build_display_phase(
     if presence_state == "idle":
         return "Idle"
     if status == "working":
-        return "Active" if confidence == "inferred" else "Working"
+        return "Working"
     if status == "idle":
         return "Idle"
     if status == "completed" or ended_at is not None:

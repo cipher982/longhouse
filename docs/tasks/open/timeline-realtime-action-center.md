@@ -30,7 +30,7 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - [x] Ship materialized runtime state and runtime events for Timeline
 - [x] Ship Timeline SSE row updates with a slow reconciliation poll
 - [x] Refresh the spec/task docs to match shipped reality
-- [ ] Phase 1: weaken inferred user-facing labels and keep confidence explicit
+- [x] Phase 1: weaken inferred user-facing labels and keep confidence explicit
 - [ ] Phase 2: add execution-home metadata to session APIs and Timeline rows
 - [ ] Phase 3: treat managed-local as a stronger runtime class than transcript-only legacy sessions
 - [ ] Collapse the main Timeline off the secondary `/sessions/active` overlay path
