@@ -22,6 +22,9 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.managed_local_launcher import _build_codex_entry_command
+from zerg.services.managed_local_launcher import _build_entry_command
+from zerg.services.managed_local_launcher import _build_preflight_command
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 
 
@@ -165,6 +168,35 @@ class _FakeDispatcher:
                 "stderr": "",
             },
         }
+
+
+def test_build_entry_command_claude_includes_session_id():
+    cmd = _build_entry_command(provider="claude", provider_session_id="abc-123", display_name=None)
+    inner = _inner_command(cmd)
+    assert "claude-code --session-id abc-123" in inner
+    assert "codex" not in inner
+
+
+def test_build_entry_command_codex_omits_session_id():
+    cmd = _build_entry_command(provider="codex", provider_session_id="abc-123", display_name=None)
+    inner = _inner_command(cmd)
+    assert "exec codex" in inner
+    assert "claude-code" not in inner
+    assert "--session-id" not in inner
+
+
+def test_build_preflight_command_claude_checks_claude_code():
+    cmd = _build_preflight_command(provider="claude", cwd="/tmp/test")
+    inner = _inner_command(cmd)
+    assert "command -v claude-code" in inner
+    assert "command -v codex" not in inner
+
+
+def test_build_preflight_command_codex_checks_codex():
+    cmd = _build_preflight_command(provider="codex", cwd="/tmp/test")
+    inner = _inner_command(cmd)
+    assert "command -v codex" in inner
+    assert "command -v claude-code" not in inner
 
 
 def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkeypatch, tmp_path):
@@ -402,6 +434,120 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             assert session.source_runner_name == "work-laptop"
             assert dispatcher.calls[0]["owner_id"] == user.id
             assert dispatcher.calls[0]["runner_id"] == runner.id
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
+    """Launching with provider=codex creates a codex session with codex-specific preflight."""
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+        dispatcher = _FakeDispatcher(pane_command="codex", capture_stdout="Codex ready")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "project": "zerg",
+                    "provider": "codex",
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["provider"] == "codex"
+            assert payload["execution_home"] == "managed_local"
+
+            session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+            assert session.provider == "codex"
+            assert session.execution_home == "managed_local"
+
+            preflight_inner = _inner_command(dispatcher.calls[0]["command"])
+            assert "command -v codex" in preflight_inner
+            assert "command -v claude-code" not in preflight_inner
+
+            launch_inner = _inner_command(dispatcher.calls[1]["command"])
+            assert "exec codex" in launch_inner
+            assert "claude-code" not in launch_inner
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_rejects_invalid_provider(monkeypatch, tmp_path):
+    """Launching with an unsupported provider returns 400."""
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+        dispatcher = _FakeDispatcher()
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "provider": "gemini",
+                },
+            )
+            assert response.status_code == 400, response.text
+            assert "Unsupported provider" in response.json()["detail"]
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_codex_shell_error_reports_codex(monkeypatch, tmp_path):
+    """Codex launch error message should reference Codex, not Claude."""
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+        dispatcher = _FakeDispatcher(pane_command="zsh", capture_stdout="zsh: command not found: codex")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "provider": "codex",
+                },
+            )
+            assert response.status_code == 502, response.text
+            assert "failed to start Codex" in response.json()["detail"]
         finally:
             api_app_ref.dependency_overrides = {}
 

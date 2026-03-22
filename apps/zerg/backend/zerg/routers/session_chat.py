@@ -218,14 +218,15 @@ class SessionChatRequest(BaseModel):
 
 
 class ManagedLocalSessionLaunchRequest(BaseModel):
-    """Request to start a managed local Claude session on a runner."""
+    """Request to start a managed local AI agent session on a runner."""
 
     runner_target: str = Field(..., description="Runner name or runner:<id>")
     cwd: str = Field(..., min_length=1, description="Working directory on the source runner")
+    provider: str = Field("claude", description="AI provider CLI to launch (claude or codex)")
     project: str | None = Field(None, description="Optional project label")
     git_repo: str | None = Field(None, description="Optional git repository path")
     git_branch: str | None = Field(None, description="Optional git branch name")
-    display_name: str | None = Field(None, description="Optional Claude display name for the session")
+    display_name: str | None = Field(None, description="Optional display name for the session")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
     managed_transport: ManagedSessionTransport = Field(
         ManagedSessionTransport.TMUX,
@@ -234,13 +235,14 @@ class ManagedLocalSessionLaunchRequest(BaseModel):
 
 
 class ManagedLocalThisDeviceLaunchRequest(BaseModel):
-    """Request to start a managed local Claude session on the calling device."""
+    """Request to start a managed local AI agent session on the calling device."""
 
     cwd: str = Field(..., min_length=1, description="Working directory on this device")
+    provider: str = Field("claude", description="AI provider CLI to launch (claude or codex)")
     project: str | None = Field(None, description="Optional project label")
     git_repo: str | None = Field(None, description="Optional git repository path")
     git_branch: str | None = Field(None, description="Optional git branch name")
-    display_name: str | None = Field(None, description="Optional Claude display name for the session")
+    display_name: str | None = Field(None, description="Optional display name for the session")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
     machine_name: str | None = Field(
         None,
@@ -252,6 +254,7 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     """Response after successfully starting a managed local session."""
 
     session_id: str
+    provider: str
     provider_session_id: str
     execution_home: SessionExecutionHome
     managed_transport: ManagedSessionTransport
@@ -297,6 +300,7 @@ def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
     session = result.session
     return ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
+        provider=session.provider or "claude",
         provider_session_id=session.provider_session_id or str(session.id),
         execution_home=SessionExecutionHome(session.execution_home or SessionExecutionHome.LEGACY.value),
         managed_transport=ManagedSessionTransport(session.managed_transport or ManagedSessionTransport.TMUX.value),
@@ -1006,10 +1010,17 @@ async def chat_with_session(
             detail=f"Session {session_id} not found",
         )
 
-    if source_session.provider != "claude":
+    if source_session.provider not in ("claude", "codex"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Only Claude sessions can be resumed (got {source_session.provider})",
+            detail=f"Only Claude and Codex sessions can be resumed (got {source_session.provider})",
+        )
+
+    # Non-managed-local continuation requires Claude (spawns claude subprocess)
+    if source_session.provider != "claude" and source_session.execution_home != SessionExecutionHome.MANAGED_LOCAL.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Non-managed-local continuation is only supported for Claude (got {source_session.provider})",
         )
 
     lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
@@ -1155,12 +1166,10 @@ async def launch_managed_local(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_oikos_user),
 ):
-    """Start a managed local Claude session inside tmux on a connected runner.
+    """Start a managed local AI agent session inside tmux on a connected runner.
 
-    This is the first trustworthy laptop-first path:
-    - Longhouse launches stock Claude Code under tmux on the user's runner
-    - the session is explicitly marked managed_local
-    - later Loop/chat actions can target this exact session home
+    Supports both Claude and Codex providers. The tmux transport is
+    provider-agnostic — Longhouse owns the launch, lifecycle, and input routing.
     """
     try:
         result = await launch_managed_local_session(
@@ -1169,6 +1178,7 @@ async def launch_managed_local(
                 owner_id=current_user.id,
                 runner_target=body.runner_target,
                 cwd=body.cwd,
+                provider=body.provider,
                 project=body.project,
                 git_repo=body.git_repo,
                 git_branch=body.git_branch,
@@ -1195,7 +1205,7 @@ async def launch_managed_local_this_device(
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ):
-    """Start a managed local Claude session on the calling machine's connected runner."""
+    """Start a managed local AI agent session on the calling machine's connected runner."""
 
     owner_id = _resolve_agents_owner_id(db, device_token)
     machine_name = (body.machine_name or "").strip() or str(getattr(device_token, "device_id", "") or "").strip()
@@ -1209,6 +1219,7 @@ async def launch_managed_local_this_device(
                 owner_id=owner_id,
                 runner_target=machine_name,
                 cwd=body.cwd,
+                provider=body.provider,
                 project=body.project,
                 git_repo=body.git_repo,
                 git_branch=body.git_branch,
