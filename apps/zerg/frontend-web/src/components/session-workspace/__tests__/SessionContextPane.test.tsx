@@ -30,6 +30,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     continued_from_session_id: null,
     continuation_kind: "local",
     origin_label: "Cinder",
+    execution_home: "legacy",
     branched_from_event_id: null,
     is_writable_head: true,
     loop_mode: "assist",

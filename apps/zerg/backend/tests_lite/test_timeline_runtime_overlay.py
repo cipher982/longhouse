@@ -37,6 +37,8 @@ def _seed_session(
     ended_at: datetime | None = None,
     project: str = "zerg",
     environment: str = "production",
+    continuation_kind: str | None = None,
+    origin_label: str | None = None,
     user_messages: int = 2,
     assistant_messages: int = 2,
     tool_calls: int = 0,
@@ -47,6 +49,8 @@ def _seed_session(
         project=project,
         started_at=started_at,
         ended_at=ended_at,
+        continuation_kind=continuation_kind,
+        origin_label=origin_label,
         user_messages=user_messages,
         assistant_messages=assistant_messages,
         tool_calls=tool_calls,
@@ -178,6 +182,42 @@ def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path)
         assert data["display_phase"] == "Idle"
         assert data["presence_state"] is None
         assert data["confidence"] is None
+
+
+def test_sessions_list_exposes_execution_home_from_existing_session_metadata(tmp_path):
+    factory = _make_db(tmp_path, "execution_home.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        legacy = _seed_session(
+            db,
+            started_at=now - timedelta(hours=4),
+            ended_at=now - timedelta(hours=3),
+            project="legacy-local",
+            origin_label="cinder",
+            environment="production",
+        )
+        cloud = _seed_session(
+            db,
+            started_at=now - timedelta(hours=2),
+            ended_at=now - timedelta(hours=1),
+            project="cloud-branch",
+            continuation_kind="cloud",
+            origin_label="Cloud",
+            environment="Cloud",
+        )
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=7&limit=10", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        rows = {row["project"]: row for row in resp.json()["sessions"]}
+        assert rows["legacy-local"]["id"] == str(legacy.id)
+        assert rows["legacy-local"]["execution_home"] == "legacy"
+        assert rows["cloud-branch"]["id"] == str(cloud.id)
+        assert rows["cloud-branch"]["execution_home"] == "cloud_takeover"
 
 
 def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):

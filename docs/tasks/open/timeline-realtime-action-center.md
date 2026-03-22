@@ -31,7 +31,7 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - [x] Ship Timeline SSE row updates with a slow reconciliation poll
 - [x] Refresh the spec/task docs to match shipped reality
 - [x] Phase 1: weaken inferred user-facing labels and keep confidence explicit
-- [ ] Phase 2: add execution-home metadata to session APIs and Timeline rows
+- [x] Phase 2: add execution-home metadata to session APIs and Timeline rows
 - [ ] Phase 3: treat managed-local as a stronger runtime class than transcript-only legacy sessions
 - [ ] Collapse the main Timeline off the secondary `/sessions/active` overlay path
 - [ ] Reduce ad hoc runtime fallback paths on the Timeline read path
@@ -48,3 +48,4 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - `needs_user` is a runtime phase, not a promise about which actions are or are not available.
 - `managed_local` is the golden path for exact/control-capable local sessions.
 - Unmanaged local should remain honest fallback observability, not the long-term exact/actionable path.
+- The shared `execution_home` contract now matches the managed-local branch enum and derives from existing session metadata when the dedicated session columns are not present yet.

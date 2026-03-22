@@ -61,6 +61,7 @@ from zerg.services.demo_seed import seed_missing_demo_sessions
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import load_runtime_state_map
+from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.utils.time import UTCBaseModel
 
@@ -76,6 +77,36 @@ def _coerce_session_loop_mode(value: str | None) -> SessionLoopMode:
         return SessionLoopMode(value or SessionLoopMode.MANUAL.value)
     except ValueError:
         return SessionLoopMode.MANUAL
+
+
+def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return SessionExecutionHome(str(value).strip())
+    except ValueError:
+        return None
+
+
+def _resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
+    stored = _coerce_execution_home(getattr(session, "execution_home", None))
+    if stored is not None:
+        return stored
+
+    continuation_kind = (session.continuation_kind or "").strip().lower()
+    if continuation_kind == "cloud":
+        return SessionExecutionHome.CLOUD_TAKEOVER
+    if continuation_kind == "runner":
+        return SessionExecutionHome.MANAGED_HOSTED
+
+    origin_label = (session.origin_label or "").strip().lower()
+    environment = (session.environment or "").strip().lower()
+    if origin_label == "cloud" or environment == "cloud":
+        return SessionExecutionHome.CLOUD_TAKEOVER
+    if origin_label == "hosted" or environment == "hosted":
+        return SessionExecutionHome.MANAGED_HOSTED
+
+    return SessionExecutionHome.LEGACY
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +159,10 @@ class SessionResponse(UTCBaseModel):
     continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID")
     continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
     origin_label: Optional[str] = Field(None, description="User-facing execution origin label")
+    execution_home: SessionExecutionHome = Field(
+        SessionExecutionHome.LEGACY,
+        description="Execution home: legacy|managed_local|managed_hosted|cloud_takeover",
+    )
     branched_from_event_id: Optional[int] = Field(None, description="Event id where this continuation branched")
     is_writable_head: bool = Field(False, description="True when this session is the current writable head")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
@@ -440,6 +475,7 @@ def _build_session_response(
         continued_from_session_id=(str(session.continued_from_session_id) if session.continued_from_session_id else None),
         continuation_kind=session.continuation_kind,
         origin_label=session.origin_label,
+        execution_home=_resolve_execution_home(session),
         branched_from_event_id=session.branched_from_event_id,
         is_writable_head=bool(session.is_writable_head),
         is_sidechain=bool(session.is_sidechain or False),
@@ -520,6 +556,10 @@ class ActiveSessionResponse(UTCBaseModel):
     confidence: Optional[str] = Field(None, description="Runtime confidence: live|inferred|stale")
     # User-driven bucket
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
+    execution_home: SessionExecutionHome = Field(
+        SessionExecutionHome.LEGACY,
+        description="Execution home: legacy|managed_local|managed_hosted|cloud_takeover",
+    )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
 
 
@@ -2432,6 +2472,7 @@ async def list_active_sessions(
                     active_tool=runtime_overlay.active_tool,
                     confidence=runtime_overlay.confidence,
                     user_state=s.user_state or "active",
+                    execution_home=_resolve_execution_home(s),
                     loop_mode=_coerce_session_loop_mode(getattr(s, "loop_mode", None)),
                 )
             )

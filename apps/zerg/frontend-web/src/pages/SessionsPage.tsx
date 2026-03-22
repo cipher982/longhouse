@@ -39,6 +39,7 @@ import {
 import { PresenceBadge } from "../components/PresenceBadge";
 import { parseUTC } from "../lib/dateUtils";
 import { getProviderColor, supportsCloudContinuation } from "../lib/providers";
+import { getExecutionHomeLabel } from "../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { RecallPanel } from "../components/RecallPanel";
 import "../styles/sessions.css";
@@ -619,6 +620,8 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
+  const executionHomeLabel = getExecutionHomeLabel(session.execution_home);
+  const showHeadOriginLabel = !!thread.headOriginLabel && thread.headOriginLabel !== executionHomeLabel;
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
@@ -657,8 +660,19 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
             {session.git_branch}
           </span>
         )}
-        {thread.headOriginLabel && (
-          <span className="environment-badge">Head: {thread.headOriginLabel}</span>
+        {executionHomeLabel && (
+          <span
+            className={
+              executionHomeLabel === "Legacy"
+                ? "environment-badge environment-badge--secondary"
+                : "environment-badge"
+            }
+          >
+            {executionHomeLabel}
+          </span>
+        )}
+        {showHeadOriginLabel && (
+          <span className="environment-badge environment-badge--secondary">Head: {thread.headOriginLabel}</span>
         )}
         {thread.continuationCount > 1 && thread.startedOriginLabel && thread.startedOriginLabel !== thread.headOriginLabel && (
           <span className="environment-badge environment-badge--secondary">Started: {thread.startedOriginLabel}</span>

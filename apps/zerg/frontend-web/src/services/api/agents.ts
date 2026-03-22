@@ -57,6 +57,7 @@ export interface AgentSession {
   continued_from_session_id: string | null;
   continuation_kind: string | null;
   origin_label: string | null;
+  execution_home: SessionExecutionHome;
   branched_from_event_id: number | null;
   is_writable_head: boolean;
   loop_mode: SessionLoopMode;
@@ -180,11 +181,17 @@ export interface AgentActiveSession {
   confidence?: string | null;
   // User-driven bucket
   user_state: "active" | "parked" | "snoozed" | "archived";
+  execution_home: SessionExecutionHome;
   loop_mode: SessionLoopMode;
 }
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
 export type SessionLoopMode = "manual" | "assist" | "autopilot";
+export type SessionExecutionHome =
+  | "legacy"
+  | "managed_local"
+  | "managed_hosted"
+  | "cloud_takeover";
 
 export interface AgentActiveSessionsResponse {
   sessions: AgentActiveSession[];

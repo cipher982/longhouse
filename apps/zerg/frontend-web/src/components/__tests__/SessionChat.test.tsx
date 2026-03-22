@@ -39,6 +39,7 @@ function makeSession(overrides: Partial<ActiveSession> = {}): ActiveSession {
     presence_tool: null,
     presence_updated_at: null,
     user_state: "active",
+    execution_home: "legacy",
     loop_mode: "manual",
     ...overrides,
   };
