@@ -479,7 +479,7 @@ export default function LoopInboxPage() {
         )}
         {showIosHint && (
           <p className="loop-install-hint">
-            On iPhone: tap Share, then <strong>Add to Home Screen</strong>.
+            On iPhone: tap Share, then <strong>Add to Home Screen.</strong>
           </p>
         )}
       </div>
