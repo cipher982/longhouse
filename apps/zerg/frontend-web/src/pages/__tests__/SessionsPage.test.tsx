@@ -4,17 +4,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession, AgentSessionFilters, AgentSessionsListResponse } from "../../services/api/agents";
-import type { ActiveSession } from "../../hooks/useActiveSessions";
 import { TestRouter } from "../../test/test-utils";
 import SessionsPage from "../SessionsPage";
 
 const hookMocks = vi.hoisted(() => ({
   useAgentSessions: vi.fn(),
   useAgentFilters: vi.fn(),
-}));
-
-const activeSessionMocks = vi.hoisted(() => ({
-  useActiveSessions: vi.fn(),
 }));
 
 const timelineStreamMocks = vi.hoisted(() => ({
@@ -24,10 +19,6 @@ const timelineStreamMocks = vi.hoisted(() => ({
 vi.mock("../../hooks/useAgentSessions", () => ({
   useAgentSessions: hookMocks.useAgentSessions,
   useAgentFilters: hookMocks.useAgentFilters,
-}));
-
-vi.mock("../../hooks/useActiveSessions", () => ({
-  useActiveSessions: activeSessionMocks.useActiveSessions,
 }));
 
 vi.mock("../../hooks/useTimelineSessionStream", () => ({
@@ -45,7 +36,6 @@ vi.mock("../../lib/config", () => ({
 }));
 
 const { useAgentSessions: mockUseAgentSessions, useAgentFilters: mockUseAgentFilters } = hookMocks;
-const { useActiveSessions: mockUseActiveSessions } = activeSessionMocks;
 const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStreamMocks;
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
@@ -91,34 +81,6 @@ function makeSessionsResponse(): AgentSessionsListResponse {
     sessions: [makeSession()],
     total: 120,
     has_real_sessions: true,
-  };
-}
-
-function makeActiveSession(overrides: Partial<ActiveSession> = {}): ActiveSession {
-  return {
-    id: "session-1",
-    project: "zerg",
-    provider: "codex",
-    cwd: "/Users/davidrose/git/zerg",
-    git_repo: "https://github.com/cipher982/longhouse.git",
-    git_branch: "main",
-    started_at: "2026-03-21T12:00:00Z",
-    ended_at: null,
-    last_activity_at: "2026-03-21T12:04:00Z",
-    status: "working",
-    attention: "soft",
-    duration_minutes: 4,
-    last_user_message: "clean this up",
-    last_assistant_message: "Running tests now",
-    message_count: 8,
-    tool_calls: 2,
-    presence_state: "running",
-    presence_tool: "bash",
-    presence_updated_at: "2026-03-21T12:04:00Z",
-    user_state: "active",
-    execution_home: "legacy",
-    loop_mode: "manual",
-    ...overrides,
   };
 }
 
@@ -199,16 +161,6 @@ describe("SessionsPage", () => {
         machines: ["laptop", "cube"],
       },
       isLoading: false,
-    });
-
-    mockUseActiveSessions.mockReturnValue({
-      data: {
-        sessions: [],
-        total: 0,
-        last_refresh: "2026-03-21T12:00:00Z",
-      },
-      isLoading: false,
-      error: null,
     });
 
     mockUseTimelineSessionStream.mockImplementation((_filters: AgentSessionFilters, options?: { enabled?: boolean }) => {
@@ -365,12 +317,6 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("Running bash")).toBeInTheDocument();
     expect(screen.getByText("Fresh signal")).toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
-    expect(mockUseActiveSessions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        enabled: false,
-        limit: 50,
-      }),
-    );
   });
 
   it("shows execution-home badges directly on the main timeline cards", async () => {
@@ -405,90 +351,6 @@ describe("SessionsPage", () => {
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();
     expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();
-  });
-
-  it("keeps managed-local runtime truth on the card when live view adds a newer inferred snapshot", async () => {
-    const user = userEvent.setup();
-    mockUseAgentSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeSession({
-            ended_at: null,
-            execution_home: "managed_local",
-            managed_transport: "tmux",
-            origin_label: "cinder",
-            runtime_source: "managed_local_transport",
-            status: "working",
-            confidence: "live",
-            presence_state: "running",
-            presence_tool: "bash",
-            presence_updated_at: "2026-03-21T12:04:00Z",
-            last_live_at: "2026-03-21T12:04:00Z",
-            timeline_anchor_at: "2026-03-21T12:04:00Z",
-            display_phase: "Running bash",
-          }),
-        ],
-        total: 1,
-        has_real_sessions: true,
-      },
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    mockUseActiveSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeActiveSession({
-            execution_home: "managed_local",
-            managed_transport: "tmux",
-            runtime_source: "progress",
-            status: "working",
-            confidence: "inferred",
-            timeline_anchor_at: "2026-03-21T12:05:00Z",
-            last_activity_at: "2026-03-21T12:05:00Z",
-            presence_state: null,
-            presence_tool: null,
-            presence_updated_at: null,
-            display_phase: "Working",
-          }),
-        ],
-        total: 1,
-        last_refresh: "2026-03-21T12:05:00Z",
-      },
-      isLoading: false,
-      error: null,
-    });
-
-    const { container } = renderSessionsPage();
-
-    await user.click(await screen.findByRole("button", { name: "Live view" }));
-
-    expect(await screen.findByText("Local runtime")).toBeInTheDocument();
-    const timelinePhases = Array.from(container.querySelectorAll(".session-card-runtime-phase")).map((node) => node.textContent);
-    expect(timelinePhases).toContain("Running bash");
-    expect(timelinePhases).not.toContain("Working");
-  });
-
-  it("only enables the active sessions poll when live view is open", async () => {
-    const user = userEvent.setup();
-    renderSessionsPage();
-
-    expect(mockUseActiveSessions).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        enabled: false,
-      }),
-    );
-
-    await user.click(await screen.findByRole("button", { name: "Live view" }));
-
-    await waitFor(() => {
-      expect(mockUseActiveSessions).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          enabled: true,
-        }),
-      );
-    });
   });
 
   it("marks recent-progress sessions without semantic live signals honestly", async () => {
@@ -614,120 +476,4 @@ describe("SessionsPage", () => {
     expect(projects[1]).toBe("beta");
   });
 
-  it("does not let the live view poll reorder the main timeline cards", async () => {
-    const user = userEvent.setup();
-    mockUseAgentSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeSession({
-            id: "session-beta",
-            project: "beta",
-            summary_title: "beta",
-            started_at: "2026-03-21T12:00:00Z",
-            last_activity_at: "2026-03-21T12:00:00Z",
-            timeline_anchor_at: "2026-03-21T12:04:00Z",
-            thread_root_session_id: "session-beta",
-            thread_head_session_id: "session-beta",
-          }),
-          makeSession({
-            id: "session-alpha",
-            project: "alpha",
-            summary_title: "alpha",
-            started_at: "2026-03-20T12:00:00Z",
-            last_activity_at: "2026-03-20T12:00:00Z",
-            timeline_anchor_at: "2026-03-21T12:03:00Z",
-            thread_root_session_id: "session-alpha",
-            thread_head_session_id: "session-alpha",
-          }),
-        ],
-        total: 2,
-        has_real_sessions: true,
-      },
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    mockUseActiveSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeActiveSession({
-            id: "session-alpha",
-            project: "alpha",
-            timeline_anchor_at: "2026-03-21T12:05:00Z",
-            last_activity_at: "2026-03-21T12:05:00Z",
-            status: "working",
-            confidence: "inferred",
-            presence_state: null,
-            presence_tool: null,
-            presence_updated_at: null,
-            display_phase: "Working",
-          }),
-        ],
-        total: 1,
-        last_refresh: "2026-03-21T12:05:00Z",
-      },
-      isLoading: false,
-      error: null,
-    });
-
-    const { container } = renderSessionsPage();
-
-    await user.click(await screen.findByRole("button", { name: "Live view" }));
-
-    const projects = Array.from(container.querySelectorAll(".session-card-project")).map((node) => node.textContent);
-    expect(projects[0]).toBe("beta");
-    expect(projects[1]).toBe("alpha");
-  });
-
-  it("prefers fresher timeline runtime over an older active poll snapshot", async () => {
-    const user = userEvent.setup();
-    mockUseAgentSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeSession({
-            ended_at: null,
-            status: "active",
-            presence_state: "needs_user",
-            presence_updated_at: "2026-03-21T12:05:00Z",
-            last_live_at: "2026-03-21T12:05:00Z",
-            timeline_anchor_at: "2026-03-21T12:05:00Z",
-            display_phase: "Needs you",
-          }),
-        ],
-        total: 1,
-        has_real_sessions: true,
-      },
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    mockUseActiveSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeActiveSession({
-            timeline_anchor_at: "2026-03-21T12:03:00Z",
-            last_activity_at: "2026-03-21T12:03:00Z",
-            presence_updated_at: "2026-03-21T12:03:00Z",
-            presence_state: "running",
-            presence_tool: "bash",
-          }),
-        ],
-        total: 1,
-        last_refresh: "2026-03-21T12:03:00Z",
-      },
-      isLoading: false,
-      error: null,
-    });
-
-    const { container } = renderSessionsPage();
-
-    await user.click(await screen.findByRole("button", { name: "Live view" }));
-
-    expect(await screen.findByText("Needs you")).toBeInTheDocument();
-    const timelinePhases = Array.from(container.querySelectorAll(".session-card-runtime-phase")).map((node) => node.textContent);
-    expect(timelinePhases).toContain("Needs you");
-    expect(timelinePhases).not.toContain("Running bash");
-  });
 });

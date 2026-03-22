@@ -15,7 +15,6 @@ import { useNavigate, useSearchParams, useLocation, Link } from "react-router-do
 import { useQueryClient } from "@tanstack/react-query";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
-import { useActiveSessions, type ActiveSession } from "../hooks/useActiveSessions";
 import { useClickOutside } from "../hooks/useClickOutside";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useEscapeKey } from "../hooks/useEscapeKey";
@@ -342,16 +341,6 @@ function renderHighlightedText(text: string, query: string) {
 }
 
 
-function sessionSortKey(status: string): number {
-  if (status === "working") return 0;
-  if (status === "idle") return 1;
-  return 2;
-}
-
-function isSessionLive(session: ActiveSession): boolean {
-  return resolveSessionRuntimeState(session, session).isLive;
-}
-
 function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string | null {
   if (runtime.truthTier === "managed-local") {
     return "Local runtime";
@@ -369,24 +358,6 @@ function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeSta
     return "Stale";
   }
   return null;
-}
-
-function repoNameFromUrl(url: string | null): string | null {
-  if (!url) return null;
-  const cleaned = url.replace(/\.git$/, "");
-  const parts = cleaned.split("/");
-  return parts[parts.length - 1] || null;
-}
-
-function cwdBasename(cwd: string | null): string | null {
-  if (!cwd) return null;
-  const parts = cwd.split("/").filter(Boolean);
-  return parts[parts.length - 1] || null;
-}
-
-function truncateText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength - 3).trim()}...`;
 }
 
 function parsePositiveIntParam(rawValue: string | null, fallback: number, min: number = 1): number {
@@ -431,25 +402,6 @@ function buildSessionsSearchParams(state: SessionsUrlState): URLSearchParams {
   if (state.limit !== PAGE_SIZE) params.set("limit", String(state.limit));
 
   return params;
-}
-
-function getLiveSessionScope(session: ActiveSession): string {
-  return (
-    session.project?.trim() ||
-    repoNameFromUrl(session.git_repo) ||
-    cwdBasename(session.cwd) ||
-    "workspace"
-  );
-}
-
-function getLiveSessionTitle(session: ActiveSession): string {
-  const candidate = (session.last_user_message || session.last_assistant_message || "")
-    .trim()
-    .replace(/\s+/g, " ");
-  if (candidate) {
-    return truncateText(candidate, 56);
-  }
-  return getLiveSessionScope(session);
 }
 
 // ---------------------------------------------------------------------------
@@ -843,7 +795,6 @@ export default function SessionsPage() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const [recallOpen, setRecallOpen] = useState(false);
-  const [liveViewOpen, setLiveViewOpen] = useState(false);
 
   // Fetch dynamic filter options
   const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack);
@@ -934,36 +885,6 @@ export default function SessionsPage() {
 
   useTimelineSessionStream(filters, { enabled: timelineStreamEnabled });
 
-  const {
-    data: activeSessionsData,
-    isLoading: activeSessionsLoading,
-    error: activeSessionsError,
-  } = useActiveSessions({
-    pollInterval: 2000,
-    limit: Math.max(limit, PAGE_SIZE),
-    days_back: daysBack,
-    project: project || undefined,
-    enabled: liveViewOpen,
-  });
-
-  const activeSessions = useMemo(() => {
-    const list = activeSessionsData?.sessions ?? [];
-    return [...list].sort((a, b) => {
-      const groupDiff = sessionSortKey(a.status) - sessionSortKey(b.status);
-      if (groupDiff !== 0) return groupDiff;
-      return parseUTC(b.timeline_anchor_at || b.last_activity_at).getTime() - parseUTC(a.timeline_anchor_at || a.last_activity_at).getTime();
-    });
-  }, [activeSessionsData]);
-
-  const liveOverlaySessions = liveViewOpen ? activeSessions : [];
-  const liveTotal = liveOverlaySessions.length;
-  const liveCount = useMemo(
-    () => liveOverlaySessions.filter(isSessionLive).length,
-    [liveOverlaySessions]
-  );
-
-  const liveAuthError = (activeSessionsError as { status?: number } | null)?.status === 401;
-  const liveList = useMemo(() => liveOverlaySessions.slice(0, 8), [liveOverlaySessions]);
   const threadCards = useMemo(() => buildThreadCards(sessions), [sessions]);
   const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards), [threadCards]);
 
@@ -976,15 +897,6 @@ export default function SessionsPage() {
         onClick={() => navigate("/briefings")}
       >
         Briefings
-      </Button>
-      <Button
-        variant={liveViewOpen ? "primary" : "secondary"}
-        size="sm"
-        onClick={() => setLiveViewOpen((prev) => !prev)}
-        aria-expanded={liveViewOpen}
-        aria-controls="sessions-live-view"
-      >
-        {liveViewOpen ? "Hide live view" : "Live view"}
       </Button>
     </div>
   );
@@ -1167,88 +1079,6 @@ export default function SessionsPage() {
           <div className="sessions-llm-hint">
             Session summaries require an LLM provider.{" "}
             <Link to="/settings">Configure in Settings</Link>
-          </div>
-        )}
-
-        {liveViewOpen && (
-          <div id="sessions-live-view">
-            <Card className="sessions-live-panel">
-            <div className="sessions-live-header">
-              <div>
-                <div className="sessions-live-title">Live View</div>
-                <div className="sessions-live-subtitle">
-                  {activeSessionsLoading && liveTotal === 0
-                    ? "Checking live sessions..."
-                    : liveTotal === 0
-                      ? `No live sessions in the last ${daysBack} days`
-                      : `${liveCount} active · ${liveTotal} total (last ${daysBack} days)`
-                  }
-                </div>
-              </div>
-            </div>
-            <div className="sessions-live-body">
-              {liveAuthError ? (
-                <div className="sessions-live-empty">
-                  <span>Session expired.</span>
-                  <Button variant="primary" size="sm" onClick={() => window.location.reload()}>
-                    Refresh to log in
-                  </Button>
-                </div>
-              ) : activeSessionsLoading && liveTotal === 0 ? (
-                <div className="sessions-live-empty">
-                  <Spinner size="lg" />
-                  <span>Loading live view...</span>
-                </div>
-              ) : liveList.length === 0 ? (
-                <div className="sessions-live-empty">
-                  <span>No recent sessions.</span>
-                  <span className="sessions-live-empty-subtitle">Start a CLI session to populate this list.</span>
-                </div>
-              ) : (
-                <div className="sessions-live-list">
-                  {liveList.map((session) => {
-                    const runtime = resolveSessionRuntimeState(session, session);
-                    const isActive = runtime.isLive;
-                    const rowClass = [
-                      "sessions-live-row",
-                      isActive ? "sessions-live-row--active" : "",
-                    ].filter(Boolean).join(" ");
-
-                    return (
-                      <button
-                        key={session.id}
-                        type="button"
-                        className={rowClass}
-                        onClick={() => {
-                          navigate(buildSessionDetailPath(session));
-                        }}
-                      >
-                        <div className="sessions-live-row-title">
-                          {getLiveSessionTitle(session)}
-                        </div>
-                        <div className="sessions-live-row-meta">
-                          {getLiveSessionScope(session)} · {session.provider} ·{" "}
-                          {formatRelativeTime(session.timeline_anchor_at || session.last_activity_at)}
-                        </div>
-                        <div className="sessions-live-row-presence">
-                          <PresenceBadge
-                            state={runtime.presenceState}
-                            tool={runtime.presenceTool}
-                            compact
-                            heuristicActive={runtime.heuristicActive}
-                            showUnknown={runtime.truthTier === "stale"}
-                          />
-                          <span className="sessions-live-row-presence-label">
-                            {runtime.displayPhase}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            </Card>
           </div>
         )}
 
