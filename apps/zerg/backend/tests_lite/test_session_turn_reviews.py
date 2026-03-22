@@ -30,6 +30,7 @@ from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.services.session_turn_reviews import classify_turn_review_outcome_for_run
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
+from zerg.services.session_turn_reviews import reply_to_pending_turn_review
 
 
 def _make_db(tmp_path, name: str):
@@ -239,6 +240,88 @@ async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud
         assert calls[0]["session_id"] == str(session_id)
         assert calls[0]["text"] == "Run the pending targeted tests."
         assert calls[0]["commis_id"] == f"turn-review-{review.id}"
+
+
+@pytest.mark.asyncio
+async def test_reply_to_pending_turn_review_routes_managed_local_reply_without_cloud_job(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_reply_managed_local.db")
+    calls: list[dict[str, object]] = []
+
+    async def _fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+
+    with SessionLocal() as db:
+        user = _create_user(db, allow_continue=False)
+        runner = _create_runner(db, owner_id=user.id, name="cinder")
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="keep the hiring task moving",
+            assistant_text="I finished the last turn and need your direction on what to do next.",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        session.managed_transport = "tmux"
+        session.source_runner_id = runner.id
+        session.source_runner_name = runner.name
+        session.managed_session_name = "lh-managed-local-reply"
+        db.commit()
+        db.refresh(session)
+
+        review = SessionTurnReview(
+            session_id=session_id,
+            owner_id=user.id,
+            assistant_event_id=2,
+            turn_index=1,
+            trigger_type="turn.completed",
+            loop_mode="assist",
+            decision="wait",
+            summary="Awaiting your direction on the next hiring step.",
+            rationale="The finished turn needs a human reply rather than autonomous continuation.",
+            turn_excerpt="I finished the last turn and need your direction on what to do next.",
+            mode_capability="notify_only",
+            mode_summary="Suggest or escalate from completed turns, but wait for user approval before continuing.",
+            execution_state="needs_human",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=[],
+            status="enqueued",
+            reason="notify_user",
+        )
+        db.add(review)
+        db.commit()
+        db.refresh(review)
+
+        await reply_to_pending_turn_review(
+            db=db,
+            review=review,
+            reply_text="keep going with the hiring shortlist",
+        )
+
+        jobs = db.query(CommisJob).all()
+        assert jobs == []
+
+        db.refresh(review)
+        assert review.status == "acted"
+        assert review.reason == "reply_to_session"
+        assert review.actual_outcome == "delegated_follow_up"
+
+        assert len(calls) == 1
+        assert calls[0]["owner_id"] == user.id
+        assert calls[0]["session_id"] == str(session_id)
+        assert calls[0]["text"] == "keep going with the hiring shortlist"
+        assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
 
 
 @pytest.mark.asyncio

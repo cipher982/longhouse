@@ -38,6 +38,7 @@ from zerg.services.loop_push import revoke_loop_push_subscription
 from zerg.services.loop_push import upsert_loop_push_subscription
 from zerg.services.session_turn_reviews import approve_pending_turn_review
 from zerg.services.session_turn_reviews import dismiss_pending_turn_review
+from zerg.services.session_turn_reviews import reply_to_pending_turn_review
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,8 @@ class LoopInboxItem(UTCBaseModel):
     project: Optional[str] = None
     machine: Optional[str] = None
     provider: Optional[str] = None
+    execution_home: Optional[str] = None
+    home_label: Optional[str] = None
     loop_mode: str
     decision: str
     execution_state: Optional[str] = None
@@ -146,7 +149,8 @@ class LoopActionCard(LoopInboxItem):
 class LoopInboxActionRequest(UTCBaseModel):
     """Bounded phone-first action request for one inbox item."""
 
-    action: Literal["approve_recommended_action", "not_now"]
+    action: Literal["approve_recommended_action", "reply_to_session", "not_now"]
+    reply_text: Optional[str] = None
 
 
 class LoopInboxActionResult(UTCBaseModel):
@@ -333,8 +337,22 @@ def _session_title(session: AgentSession | None, session_id: str) -> str:
     return f"Session {session_id[:8]}"
 
 
-def _available_loop_actions(review: SessionTurnReview) -> List[str]:
+def _home_label(session: AgentSession | None) -> str | None:
+    execution_home = str(getattr(session, "execution_home", "") or "").strip()
+    if execution_home == "managed_local":
+        return "On this Mac"
+    if execution_home == "managed_hosted":
+        return "Hosted"
+    if execution_home == "cloud_takeover":
+        return "Moved to cloud"
+    return None
+
+
+def _available_loop_actions(review: SessionTurnReview, session: AgentSession | None) -> List[str]:
     actions = ["not_now", "open_full_session"]
+    execution_home = str(getattr(session, "execution_home", "") or "").strip()
+    if execution_home == "managed_local":
+        actions.insert(0, "reply_to_session")
     if review.execution_state == "awaiting_user_approval" and review.recommended_action == "continue_session":
         return ["approve_recommended_action", *actions]
     return actions
@@ -575,6 +593,8 @@ def _build_loop_inbox_item(
         project=getattr(session, "project", None),
         machine=getattr(session, "device_id", None),
         provider=getattr(session, "provider", None),
+        execution_home=str(getattr(session, "execution_home", "") or "").strip() or None,
+        home_label=_home_label(session),
         loop_mode=review.loop_mode,
         decision=review.decision,
         execution_state=review.execution_state,
@@ -686,7 +706,7 @@ def get_loop_inbox_action_card_by_card_id(
         mode_summary=review.mode_summary,
         last_user_text=last_user_text,
         last_assistant_text=last_assistant_text or review.turn_excerpt,
-        available_actions=_available_loop_actions(review) if card_state == "active" else [],
+        available_actions=_available_loop_actions(review, session) if card_state == "active" else [],
     )
 
 
@@ -745,6 +765,27 @@ async def act_on_loop_inbox_item(
             status=review.status,
             reason=review.reason,
             queued_job_id=int(job.id) if job is not None else None,
+        )
+
+    if request.action == "reply_to_session":
+        try:
+            await reply_to_pending_turn_review(
+                db=db,
+                review=review,
+                reply_text=str(request.reply_text or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        db.refresh(review)
+        return LoopInboxActionResult(
+            session_id=str(review.session_id),
+            review_id=int(review.id),
+            action=request.action,
+            status=review.status,
+            reason=review.reason,
+            queued_job_id=None,
         )
 
     try:

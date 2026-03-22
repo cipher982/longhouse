@@ -75,6 +75,8 @@ function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
     project: "zerg",
     machine: "cinder",
     provider: "claude",
+    executionHome: "managed_local",
+    homeLabel: "On this Mac",
     loopMode: "assist",
     decision: "continue",
     executionState: "awaiting_user_approval",
@@ -99,7 +101,7 @@ function makeActionCard(overrides: Partial<LoopActionCard> = {}): LoopActionCard
     modeSummary: "Suggest or escalate from completed turns, but wait for approval before continuing.",
     lastUserText: "finish the session detail page",
     lastAssistantText: "Only targeted verification remains. Run the pending targeted tests.",
-    availableActions: ["approve_recommended_action", "not_now"],
+    availableActions: ["approve_recommended_action", "reply_to_session", "not_now"],
     ...overrides,
   };
 }
@@ -208,7 +210,27 @@ describe("LoopInboxPage", () => {
     await user.click(screen.getByTestId("loop-approve-action"));
 
     await waitFor(() => {
-      expect(applyLoopInboxActionMock).toHaveBeenCalledWith(42, "approve_recommended_action");
+      expect(applyLoopInboxActionMock).toHaveBeenCalledWith(42, "approve_recommended_action", {
+        replyText: undefined,
+      });
+    });
+  });
+
+  it("shows the managed-local venue label and sends a quick reply", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("On this Mac")).toHaveLength(2);
+    });
+
+    await user.type(screen.getByTestId("loop-reply-input"), "continue with the hiring shortlist");
+    await user.click(screen.getByTestId("loop-reply-action"));
+
+    await waitFor(() => {
+      expect(applyLoopInboxActionMock).toHaveBeenCalledWith(42, "reply_to_session", {
+        replyText: "continue with the hiring shortlist",
+      });
     });
   });
 
