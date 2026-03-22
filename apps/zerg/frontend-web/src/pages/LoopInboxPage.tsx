@@ -534,19 +534,20 @@ export default function LoopInboxPage() {
   ) : null;
 
   const mobileQueueDrawer =
-    showMobileQueueButton && queueOpen ? (
+    showMobileQueueButton ? (
       <>
         <div
-          className="loop-inbox-queue-drawer-scrim"
+          className={`loop-inbox-queue-drawer-scrim${queueOpen ? " is-open" : ""}`}
           data-testid="loop-mobile-queue-scrim"
           onClick={() => setQueueOpen(false)}
           aria-hidden="true"
         />
         <aside
           id="loop-mobile-queue-drawer"
-          className="loop-inbox-queue-drawer"
+          className={`loop-inbox-queue-drawer${queueOpen ? " is-open" : ""}`}
           role="dialog"
-          aria-modal="true"
+          aria-modal={queueOpen ? true : undefined}
+          aria-hidden={!queueOpen}
           aria-labelledby="loop-mobile-queue-drawer-title"
           data-testid="loop-mobile-queue-drawer"
         >

@@ -253,7 +253,7 @@ describe("LoopInboxPage", () => {
     await user.click(screen.getByTestId("loop-mobile-queue-button"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toHaveAttribute("aria-hidden", "false");
     });
 
     expect(screen.getByTestId("loop-inbox-row-42")).toBeInTheDocument();
@@ -279,7 +279,7 @@ describe("LoopInboxPage", () => {
     await user.click(screen.getByTestId("loop-mobile-queue-button"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toHaveAttribute("aria-hidden", "false");
     });
 
     const emptyState = screen.getByTestId("loop-mobile-queue-drawer-empty");
@@ -341,8 +341,8 @@ describe("LoopInboxPage", () => {
     await user.click(screen.getByTestId("loop-mobile-queue-button"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
-      expect(screen.getByTestId("loop-mobile-queue-scrim")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toHaveAttribute("aria-hidden", "false");
+      expect(screen.getByTestId("loop-mobile-queue-scrim")).toHaveClass("is-open");
       expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
     });
 
@@ -353,7 +353,8 @@ describe("LoopInboxPage", () => {
     await user.click(screen.getByTestId("loop-mobile-queue-close"));
 
     await waitFor(() => {
-      expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toHaveAttribute("aria-hidden", "true");
+      expect(screen.getByTestId("loop-mobile-queue-scrim")).not.toHaveClass("is-open");
     });
 
     await user.click(screen.getByTestId("loop-mobile-queue-button"));
@@ -361,7 +362,7 @@ describe("LoopInboxPage", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("loop-location")).toHaveTextContent("/loop/card/99");
-      expect(screen.queryByTestId("loop-mobile-queue-drawer")).not.toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toHaveAttribute("aria-hidden", "true");
       expect(screen.getByTestId("loop-mobile-queue-button")).toBeInTheDocument();
     });
 
@@ -400,7 +401,8 @@ describe("LoopInboxPage", () => {
     renderPage("/loop/card/390");
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-count")).toHaveTextContent("2");
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toHaveAttribute("aria-hidden", "false");
     });
 
     expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
