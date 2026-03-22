@@ -45,10 +45,11 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
     assert "source ~/.zshrc >/dev/null 2>&1" in inner
     assert "command -v tmux >/dev/null 2>&1" in inner
     assert (
-        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} set-option -g remain-on-exit failed \\; "
-        "new-session -d -s lh-demo"
+        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; "
+        "set-option -g remain-on-exit failed \\; "
+        "new-session -d -s lh-demo -c '/tmp/path with spaces' /tmp/longhouse-managed-lh-demo.zsh"
     ) in inner
-    assert "/tmp/path with spaces" in inner
+    assert "cat > /tmp/longhouse-managed-lh-demo.zsh <<'__LONGHOUSE_MANAGED_LOCAL__'" in inner
     assert "exec claude-code --dangerously-skip-permissions" in inner
 
 

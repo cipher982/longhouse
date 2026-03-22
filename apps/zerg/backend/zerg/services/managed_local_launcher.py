@@ -25,6 +25,7 @@ from zerg.models.agents import AgentSession
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_attach_command
+from zerg.services.managed_local_tmux import build_tmux_capture_command
 from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
@@ -66,6 +67,14 @@ class ManagedLocalLaunchResult:
 
 
 _MANAGED_LOCAL_TMUX_TMPDIR_MARKER = "__LONGHOUSE_TMUX_TMPDIR__="
+_MANAGED_LOCAL_SHELL_COMMANDS = {"", "bash", "sh", "zsh", "fish"}
+_MANAGED_LOCAL_CAPTURE_ERROR_SNIPPETS = (
+    "command not found: claude-code",
+    "command not found: claude",
+    "aws auth refresh timed out",
+    "not logged in",
+    "permission denied",
+)
 
 
 def _resolve_runner(db: Session, owner_id: int, target: str):
@@ -228,6 +237,11 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         session_name=managed_session_name,
         tmux_tmpdir=managed_tmux_tmpdir,
     )
+    capture_command = build_tmux_capture_command(
+        session_name=managed_session_name,
+        lines=80,
+        tmux_tmpdir=managed_tmux_tmpdir,
+    )
 
     async def _cleanup_tmux_session() -> None:
         try:
@@ -311,14 +325,36 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         raise ManagedLocalLaunchError(detail, status_code=502)
 
     pane_command = (verify_data.get("stdout") or "").strip().lower()
-    if pane_command in {"", "bash", "sh", "zsh", "fish"}:
-        await _cleanup_tmux_session()
-        raise ManagedLocalLaunchError(
-            f"Managed local session started an idle shell instead of Claude ({pane_command or 'empty pane'})",
-            status_code=502,
+    if pane_command in _MANAGED_LOCAL_SHELL_COMMANDS:
+        capture_result = await dispatcher.dispatch_job(
+            db=db,
+            owner_id=params.owner_id,
+            runner_id=runner.id,
+            command=capture_command,
+            timeout_secs=10,
+            commis_id=None,
+            run_id=None,
         )
+        capture_data = capture_result.get("data", {}) if capture_result.get("ok") else {}
+        capture_text = ((capture_data.get("stdout") or "") + "\n" + (capture_data.get("stderr") or "")).strip()
+        capture_lower = capture_text.lower()
 
-    if "claude" not in pane_command and "node" not in pane_command:
+        for marker in _MANAGED_LOCAL_CAPTURE_ERROR_SNIPPETS:
+            if marker in capture_lower:
+                await _cleanup_tmux_session()
+                raise ManagedLocalLaunchError(
+                    f"Managed local session failed to start Claude: {capture_text or marker}",
+                    status_code=502,
+                )
+
+        if not capture_text:
+            await _cleanup_tmux_session()
+            raise ManagedLocalLaunchError(
+                f"Managed local session started an idle shell instead of Claude ({pane_command or 'empty pane'})",
+                status_code=502,
+            )
+
+    elif "claude" not in pane_command and "node" not in pane_command:
         await _cleanup_tmux_session()
         raise ManagedLocalLaunchError(
             f"Managed local session started an unexpected pane command ({pane_command})",
