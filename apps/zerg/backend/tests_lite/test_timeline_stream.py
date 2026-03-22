@@ -7,8 +7,10 @@ from datetime import timedelta
 from datetime import timezone
 from unittest.mock import patch
 
+import pytest
 import zerg.dependencies.auth as _auth_deps  # noqa: F401
 import zerg.routers.timeline as timeline_router
+from fastapi import HTTPException
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
@@ -285,6 +287,101 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
     assert all(call.get("include_total") is False for call in window_signature_kwargs)
 
 
+def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread_anchor(tmp_path):
+    session_local = _make_db(tmp_path, "timeline_thread_cards_default.db")
+    now = datetime.now(timezone.utc)
+    thread_anchor = now - timedelta(seconds=5)
+
+    with session_local() as db:
+        root = _seed_session(
+            db,
+            started_at=now - timedelta(days=7),
+            ended_at=now - timedelta(days=7),
+            project="threaded-default",
+        )
+        root.is_writable_head = 0
+        db.commit()
+
+        head = AgentSession(
+            provider="claude",
+            environment="production",
+            project="threaded-default",
+            started_at=now - timedelta(days=6),
+            ended_at=now - timedelta(days=6),
+            thread_root_session_id=root.id,
+            continued_from_session_id=root.id,
+            user_messages=2,
+            assistant_messages=2,
+            tool_calls=1,
+            summary="Writable head summary",
+            summary_title="Writable head",
+            is_writable_head=1,
+        )
+        db.add(head)
+        db.commit()
+        db.refresh(head)
+
+        recent_single = _seed_session(
+            db,
+            started_at=now - timedelta(hours=1),
+            ended_at=now - timedelta(minutes=30),
+            project="recent-single",
+        )
+
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{root.id}",
+                session_id=root.id,
+                provider="claude",
+                device_id="cinder",
+                phase="running",
+                phase_source="semantic",
+                active_tool="bash",
+                phase_started_at=now - timedelta(seconds=20),
+                last_runtime_signal_at=now - timedelta(seconds=20),
+                last_progress_at=thread_anchor,
+                last_live_at=now - timedelta(seconds=20),
+                timeline_anchor_at=thread_anchor,
+                freshness_expires_at=now + timedelta(minutes=5),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+
+        response = asyncio.run(
+            timeline_router.list_timeline_sessions(
+                project=None,
+                provider=None,
+                environment=None,
+                include_test=False,
+                hide_autonomous=True,
+                device_id=None,
+                days_back=14,
+                query=None,
+                limit=20,
+                offset=0,
+                sort=None,
+                mode="lexical",
+                context_mode="forensic",
+                db=db,
+            )
+        )
+
+    assert response.total == 2
+    assert len(response.sessions) == 2
+
+    top = response.sessions[0]
+    assert top.thread_id == str(root.id)
+    assert top.head.id == str(head.id)
+    assert top.detail.id == str(head.id)
+    assert top.root.id == str(root.id)
+    assert top.timeline_anchor_at == thread_anchor.replace(tzinfo=None)
+    assert top.timeline_anchor_at > response.sessions[1].timeline_anchor_at
+    assert response.sessions[1].thread_id == str(recent_single.id)
+
+
 def test_list_timeline_sessions_query_path_stays_raw_session_compatibility(tmp_path):
     session_local = _make_db(tmp_path, "timeline_thread_cards_lexical.db")
     now = datetime.now(timezone.utc)
@@ -367,3 +464,47 @@ def test_list_timeline_sessions_query_path_stays_raw_session_compatibility(tmp_p
     assert row["thread_head_session_id"] == str(head.id)
     assert row["match_event_id"] is not None
     assert magic in (row["match_snippet"] or "")
+
+
+@pytest.mark.parametrize(
+    ("query", "sort", "mode"),
+    [
+        ("thread-card-needle", None, "lexical"),
+        (None, None, "hybrid"),
+    ],
+)
+def test_timeline_stream_rejects_compatibility_contracts(tmp_path, query, sort, mode):
+    session_local = _make_db(tmp_path, "timeline_stream_reject_contract.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="reject-stream-contract",
+        )
+
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(
+                timeline_router.stream_timeline_sessions(
+                    _ConnectedRequest(),
+                    project=None,
+                    provider=None,
+                    environment=None,
+                    include_test=False,
+                    hide_autonomous=True,
+                    device_id=None,
+                    days_back=14,
+                    query=query,
+                    limit=20,
+                    offset=0,
+                    sort=sort,
+                    mode=mode,
+                    context_mode="forensic",
+                    db=db,
+                )
+            )
+
+    assert excinfo.value.status_code == 400
+    assert "default no-query lexical recency contract" in str(excinfo.value.detail)
