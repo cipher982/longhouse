@@ -210,14 +210,14 @@ describe("LoopInboxPage", () => {
     await user.click(screen.getByTestId("loop-approve-action"));
 
     await waitFor(() => {
-      expect(applyLoopInboxActionMock).toHaveBeenCalledWith(42, "approve_recommended_action", {
-        replyText: undefined,
-      });
+      expect(applyLoopInboxActionMock).toHaveBeenCalledWith(42, "approve_recommended_action");
     });
   });
 
   it("shows the managed-local venue label and sends a quick reply", async () => {
     const user = userEvent.setup();
+    fetchLoopInboxMock.mockResolvedValue([makeInboxItem({ homeLabel: null })]);
+    fetchLoopActionCardMock.mockResolvedValue(makeActionCard({ homeLabel: null }));
     renderPage();
 
     await waitFor(() => {
@@ -232,6 +232,24 @@ describe("LoopInboxPage", () => {
         replyText: "continue with the hiring shortlist",
       });
     });
+  });
+
+  it("only shows the quick reply composer when reply_to_session is available", async () => {
+    fetchLoopActionCardMock.mockResolvedValue(
+      makeActionCard({
+        availableActions: ["approve_recommended_action", "not_now"],
+      }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId("loop-reply-box")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("loop-reply-input")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("loop-reply-action")).not.toBeInTheDocument();
   });
 
   it("renders a stale card even when the inbox is empty", async () => {
