@@ -10,6 +10,7 @@ Covers:
 - Ingest endpoint uses task queue (no BackgroundTasks)
 """
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -336,6 +337,66 @@ async def test_worker_marks_done_on_success(tmp_path):
 
     tasks = _get_tasks(factory, status="done")
     assert len(tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_requeues_timed_out_embedding_task(tmp_path, monkeypatch):
+    """Timed-out embeddings should retry instead of blocking later turn-loop work forever."""
+    from zerg.services.ingest_task_queue import TASK_TIMEOUT_SECONDS
+    from zerg.services.ingest_task_queue import _execute_task
+
+    factory = _make_db(tmp_path, "worker_embedding_timeout.db")
+    db = factory()
+    db.add(SessionTask(id="task-embedding-timeout", session_id="s1", task_type="embedding", status="running", attempts=1))
+    db.commit()
+    db.close()
+
+    async def _hang(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setitem(TASK_TIMEOUT_SECONDS, "embedding", 0.01)
+
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.routers.agents._generate_embeddings_impl", new=AsyncMock(side_effect=_hang)):
+            await _execute_task("task-embedding-timeout", "s1", "embedding")
+
+    tasks = _get_tasks(factory, status="pending")
+    assert len(tasks) == 1
+    assert tasks[0].error == "embedding task timed out after 0.01s"
+
+
+@pytest.mark.asyncio
+async def test_process_batch_reprioritizes_new_turn_loop_work_between_tasks(tmp_path):
+    """A newly queued turn_loop should preempt older embeddings on the next claim."""
+    from zerg.services.ingest_task_queue import _process_batch
+
+    factory = _make_db(tmp_path, "worker_reprioritize_between_tasks.db")
+    db = factory()
+    db.add(SessionTask(id="task-summary", session_id="session-summary", task_type="summary", status="pending"))
+    db.add(SessionTask(id="task-embedding", session_id="session-embedding", task_type="embedding", status="pending"))
+    db.commit()
+    db.close()
+
+    executed: list[str] = []
+
+    async def _fake_execute(task_id: str, session_id: str, task_type: str) -> None:
+        executed.append(task_type)
+        db = factory()
+        try:
+            task = db.query(SessionTask).filter(SessionTask.id == task_id).one()
+            task.status = "done"
+            task.error = None
+            if task_type == "summary":
+                db.add(SessionTask(id="task-turn-loop", session_id="session-turn-loop", task_type="turn_loop", status="pending"))
+            db.commit()
+        finally:
+            db.close()
+
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.services.ingest_task_queue._execute_task", new=AsyncMock(side_effect=_fake_execute)):
+            await _process_batch()
+
+    assert executed == ["summary", "turn_loop", "embedding"]
 
 
 @pytest.mark.asyncio

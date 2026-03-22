@@ -7,6 +7,10 @@ worker polls this table, retrying failures up to max_attempts.
 Architecture:
 - Single-worker design: one asyncio task processes tasks sequentially.
   No row-level locking needed because only one worker runs per process.
+- Claim one task at a time so newly arrived turn-loop work can preempt older
+  low-priority tasks on the next iteration.
+- Bound task execution time so a hung summary/embedding call cannot stall the
+  entire post-ingest pipeline indefinitely.
 - Crash recovery: on startup, stale 'running' tasks are reset to 'pending'.
 - Dedup: won't enqueue a duplicate pending/running task for the same session+type.
 
@@ -36,8 +40,13 @@ from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 logger = logging.getLogger(__name__)
 
 WORKER_POLL_SECONDS = 2.0
-BATCH_SIZE = 5
+CLAIM_LIMIT = 1
 STALE_RUNNING_MINUTES = 30
+TASK_TIMEOUT_SECONDS: dict[str, float] = {
+    "turn_loop": 60.0,
+    "summary": 180.0,
+    "embedding": 30.0,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +108,7 @@ async def run_ingest_task_worker(poll_seconds: float = WORKER_POLL_SECONDS) -> N
 
     Runs indefinitely. Launch as asyncio.create_task() from lifespan.
     """
-    logger.info("Ingest task worker started (poll=%.1fs, batch=%d)", poll_seconds, BATCH_SIZE)
+    logger.info("Ingest task worker started (poll=%.1fs, claim_limit=%d)", poll_seconds, CLAIM_LIMIT)
     while True:
         try:
             await _process_batch()
@@ -109,18 +118,18 @@ async def run_ingest_task_worker(poll_seconds: float = WORKER_POLL_SECONDS) -> N
 
 
 async def _process_batch() -> None:
-    factory = get_session_factory()
-    db = factory()
-    try:
-        tasks = _claim_pending(db, BATCH_SIZE)
-    finally:
-        db.close()
+    while True:
+        factory = get_session_factory()
+        db = factory()
+        try:
+            tasks = _claim_pending(db, CLAIM_LIMIT)
+        finally:
+            db.close()
 
-    if not tasks:
-        return
+        if not tasks:
+            return
 
-    # Execute sequentially to avoid hammering the LLM API
-    for task_id, session_id, task_type in tasks:
+        task_id, session_id, task_type = tasks[0]
         await _execute_task(task_id, session_id, task_type)
 
 
@@ -148,30 +157,49 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
 
 
 async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
+    timeout_seconds = TASK_TIMEOUT_SECONDS.get(task_type)
     try:
-        if task_type == "summary":
-            from zerg.routers.agents import _generate_summary_impl
-
-            await _generate_summary_impl(session_id)
-        elif task_type == "embedding":
-            from zerg.routers.agents import _generate_embeddings_impl
-
-            await _generate_embeddings_impl(session_id)
-        elif task_type == "turn_loop":
-            factory = get_session_factory()
-            db = factory()
-            try:
-                await maybe_process_session_turn_loop(db=db, session_id=session_id)
-            finally:
-                db.close()
+        if timeout_seconds is None:
+            await _run_task_impl(session_id, task_type)
         else:
-            logger.warning("Unknown task_type %r for task %s", task_type, task_id)
+            await asyncio.wait_for(_run_task_impl(session_id, task_type), timeout=timeout_seconds)
 
         _mark_status(task_id, "done", error=None, retry=False)
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
+    except asyncio.TimeoutError:
+        timeout_label = f"{timeout_seconds:g}s" if timeout_seconds is not None else "unknown"
+        logger.warning("Ingest task %s (%s/%s) timed out after %s", task_id, task_type, session_id, timeout_label)
+        _mark_status(
+            task_id,
+            "failed",
+            error=f"{task_type} task timed out after {timeout_label}",
+            retry=True,
+        )
     except Exception as e:
         logger.exception("Ingest task %s (%s/%s) failed", task_id, task_type, session_id)
         _mark_status(task_id, "failed", error=str(e), retry=True)
+
+
+async def _run_task_impl(session_id: str, task_type: str) -> None:
+    if task_type == "summary":
+        from zerg.routers.agents import _generate_summary_impl
+
+        await _generate_summary_impl(session_id)
+        return
+    if task_type == "embedding":
+        from zerg.routers.agents import _generate_embeddings_impl
+
+        await _generate_embeddings_impl(session_id)
+        return
+    if task_type == "turn_loop":
+        factory = get_session_factory()
+        db = factory()
+        try:
+            await maybe_process_session_turn_loop(db=db, session_id=session_id)
+        finally:
+            db.close()
+        return
+    logger.warning("Unknown task_type %r for session %s", task_type, session_id)
 
 
 def _mark_status(task_id: str, final_status: str, error: str | None, retry: bool) -> None:
