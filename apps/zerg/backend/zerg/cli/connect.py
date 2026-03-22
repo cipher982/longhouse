@@ -532,9 +532,7 @@ def connect(
         return
 
     if install:
-        _handle_install(
-            url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval, machine_name=machine_name
-        )
+        _handle_install(url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval, machine_name=machine_name)
         return
 
     # Normal connect mode — exec longhouse-engine (replaces this process)
@@ -553,8 +551,7 @@ def connect(
 
     if poll:
         typer.secho(
-            "Warning: --poll is deprecated and ignored. The Rust engine always uses "
-            "file watching plus a periodic fallback scan.",
+            "Warning: --poll is deprecated and ignored. The Rust engine always uses " "file watching plus a periodic fallback scan.",
             fg=typer.colors.YELLOW,
         )
 
@@ -781,8 +778,8 @@ def _handle_hooks_only(
     token: str | None,
     claude_dir: str | None,
 ) -> None:
-    """Handle --hooks-only flag: install Claude Code hooks without the daemon."""
-    typer.echo("Installing Claude Code hooks...")
+    """Handle --hooks-only flag: install Claude Code + Codex hooks without the daemon."""
+    typer.echo("Installing hooks...")
     typer.echo(f"  URL: {url}")
 
     try:
@@ -798,8 +795,8 @@ def _handle_hooks_only(
     _verify_and_warn_path()
 
     typer.echo("")
-    typer.echo("Hooks installed. Claude Code will ship sessions on each Stop event")
-    typer.echo("and show recent sessions on SessionStart.")
+    typer.echo("Hooks installed for Claude Code and Codex (if present).")
+    typer.echo("Sessions will ship on each Stop event with real-time presence.")
 
 
 def _handle_install(
@@ -853,9 +850,9 @@ def _handle_install(
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    # Also install Claude Code hooks
+    # Also install Claude Code + Codex hooks
     typer.echo("")
-    typer.echo("Installing Claude Code hooks...")
+    typer.echo("Installing hooks (Claude Code + Codex)...")
     try:
         actions = install_hooks(url=url, token=token, claude_dir=claude_dir)
         for action in actions:

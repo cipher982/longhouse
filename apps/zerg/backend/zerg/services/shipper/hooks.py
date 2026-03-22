@@ -1,13 +1,11 @@
-"""Claude Code hook installation and shared workspace MCP helpers for Longhouse.
+"""Claude Code and Codex hook installation and shared workspace MCP helpers for Longhouse.
 
 Installs hook scripts and injects hook configuration into
-~/.claude/settings.json so that Claude Code automatically ships
-sessions and reports real-time presence without network calls in the
-hook hot path.
+~/.claude/settings.json and ~/.codex/hooks.json so that both Claude Code
+and Codex automatically ship sessions and report real-time presence
+without network calls in the hook hot path.
 
-Also provides shared TOML helpers used for workspace-scoped Codex MCP config.
-
-Two hooks are installed:
+Claude hooks (via settings.json):
 
 - **longhouse-hook.sh** (Stop, UserPromptSubmit, PreToolUse, PostToolUse):
   Unified hook. Writes presence events to a local outbox directory
@@ -18,6 +16,14 @@ Two hooks are installed:
 - **longhouse-session-start.sh** (SessionStart): On fresh session startup,
   queries Longhouse for recent sessions in the current project and injects
   a system message with context. Runs once per session (sync is acceptable).
+
+Codex hooks (via hooks.json):
+
+- **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, Stop):
+  Writes presence events to the same ~/.claude/outbox/ directory using
+  Codex's camelCase hook input fields. On Stop, ships the transcript.
+  Codex has fewer hook events than Claude (no PreToolUse/PostToolUse),
+  so tool-level granularity is not available.
 
 Usage:
     from zerg.services.shipper.hooks import install_hooks
@@ -147,6 +153,58 @@ LINES=$(echo "$RESPONSE" | jq -r '.sessions[:5][] | "  \\(.started_at | split("T
 MSG="Longhouse: ${TOTAL} sessions in ${PROJECT} (7d):\\n${LINES}"
 
 jq -nc --arg msg "$MSG" '{"systemMessage": $msg}'
+exit 0
+"""
+
+# ---------------------------------------------------------------------------
+# Codex hook script template
+# ---------------------------------------------------------------------------
+
+CODEX_HOOK_SCRIPT = """\
+#!/bin/bash
+# Longhouse Codex hook — presence outbox write + transcript ship
+# Installed by: longhouse connect --install
+# Registered on: SessionStart, UserPromptSubmit, Stop (via ~/.codex/hooks.json)
+# Presence: no network — writes to local outbox, daemon handles upload.
+# Stop also runs longhouse-engine ship (local binary, ships transcript).
+INPUT=$(cat)
+
+# Codex uses camelCase field names in hook input (unlike Claude's snake_case).
+IFS=$'\\x1f' read -r EVENT SESSION_ID CWD TRANSCRIPT <<< "$(
+  printf '%s' "$INPUT" | jq -r '[
+    (.hookEventName // ""),
+    (.sessionId // ""),
+    (.cwd // ""),
+    (.transcriptPath // "")
+  ] | join("\\u001f")'
+)"
+
+[ -z "$SESSION_ID" ] && exit 0
+
+# Map event -> presence state
+case "$EVENT" in
+  SessionStart)         STATE="idle" ;;
+  UserPromptSubmit)     STATE="thinking" ;;
+  Stop)                 STATE="idle" ;;
+  *)                    exit 0 ;;
+esac
+
+# Write presence to outbox (same outbox the engine daemon drains for Claude).
+# Atomic: write to .tmp.* then rename to prs.*.json
+OUTBOX="$HOME/.claude/outbox"
+[ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
+TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
+jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
+      --arg tool "" --arg cwd "$CWD" \\
+  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}' > "$TMPFILE"
+mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+
+# Stop: also ship the session transcript via engine binary.
+ENGINE="__ENGINE_PATH__"
+if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]; then
+  "$ENGINE" ship --file "$TRANSCRIPT" &>/dev/null &
+fi
+
 exit 0
 """
 
@@ -407,6 +465,154 @@ def install_hooks(
     )
 
     logger.info("Installed Longhouse hooks in %s", config_dir)
+
+    # ------------------------------------------------------------------
+    # 6. Install Codex hooks (best-effort — Codex may not be installed)
+    # ------------------------------------------------------------------
+    codex_actions = install_codex_hooks(engine_path=engine_path)
+    actions.extend(codex_actions)
+
+    return actions
+
+
+# ---------------------------------------------------------------------------
+# Codex hooks.json management
+# ---------------------------------------------------------------------------
+
+_CODEX_HOOK_MARKER = "longhouse-"
+
+
+def _resolve_codex_dir() -> Path:
+    """Resolve the Codex config directory (~/.codex)."""
+    return Path.home() / ".codex"
+
+
+def _is_longhouse_codex_hook(entry: dict) -> bool:
+    """Return True if a Codex hooks.json MatcherGroup belongs to Longhouse."""
+    for hook in entry.get("hooks", []):
+        cmd = hook.get("command", "")
+        if _CODEX_HOOK_MARKER in cmd:
+            return True
+    return False
+
+
+def _merge_codex_hooks_for_event(
+    existing_groups: list[dict],
+    new_group: dict,
+) -> list[dict]:
+    """Merge a Longhouse hook into a Codex event's MatcherGroup array."""
+    updated = False
+    result: list[dict] = []
+    for group in existing_groups:
+        if _is_longhouse_codex_hook(group):
+            result.append(new_group)
+            updated = True
+        else:
+            result.append(group)
+    if not updated:
+        result.append(new_group)
+    return result
+
+
+def install_codex_hooks(
+    engine_path: str | None = None,
+) -> list[str]:
+    """Install Longhouse hook script and hooks.json for Codex CLI.
+
+    Best-effort: returns empty list if Codex is not installed (~/.codex/
+    does not exist). Does not create ~/.codex/ from scratch.
+
+    Steps:
+    1. Write longhouse-codex-hook.sh to ~/.codex/hooks/
+    2. Read or create ~/.codex/hooks.json
+    3. Upsert Longhouse hook entries for SessionStart, UserPromptSubmit, Stop
+    4. Write hooks.json back
+
+    Returns:
+        List of human-readable action strings.
+    """
+    codex_dir = _resolve_codex_dir()
+    if not codex_dir.exists():
+        return []
+
+    actions: list[str] = []
+
+    # ------------------------------------------------------------------
+    # 1. Write Codex hook script
+    # ------------------------------------------------------------------
+    hooks_dir = codex_dir / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    if engine_path is None:
+        try:
+            from zerg.services.shipper.service import get_engine_executable
+
+            engine_path = get_engine_executable()
+        except RuntimeError:
+            engine_path = "longhouse-engine"
+
+    # Resolve outbox dir — Codex hook writes to the same outbox the engine
+    # already drains (~/.claude/outbox/), keeping one daemon for all providers.
+    claude_outbox = str(Path.home() / ".claude" / "outbox")
+    hook_content = CODEX_HOOK_SCRIPT.replace(
+        "$HOME/.claude/outbox",
+        claude_outbox,
+    ).replace(
+        "__ENGINE_PATH__",
+        engine_path,
+    )
+
+    hook_script = hooks_dir / "longhouse-codex-hook.sh"
+    hook_script.write_text(hook_content)
+    hook_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    actions.append(f"Wrote {hook_script}")
+
+    # ------------------------------------------------------------------
+    # 2. Read existing hooks.json
+    # ------------------------------------------------------------------
+    hooks_json_path = codex_dir / "hooks.json"
+    hooks_data: dict = {}
+    if hooks_json_path.exists():
+        text = hooks_json_path.read_text()
+        if text.strip():
+            try:
+                hooks_data = json.loads(text)
+            except json.JSONDecodeError:
+                logger.warning("Corrupt hooks.json at %s, starting fresh", hooks_json_path)
+                hooks_data = {}
+
+    # ------------------------------------------------------------------
+    # 3. Merge hook entries (Codex uses PascalCase event keys)
+    # ------------------------------------------------------------------
+    hook_path = str(hook_script)
+    hooks_obj = hooks_data.setdefault("hooks", {})
+
+    # Codex MatcherGroup format: {hooks: [{type: "command", command: "...", timeout: N}]}
+    lifecycle_group = {
+        "hooks": [{"type": "command", "command": hook_path, "timeout": 5}],
+    }
+    stop_group = {
+        "hooks": [{"type": "command", "command": hook_path, "timeout": 30}],
+    }
+
+    for event in ("SessionStart", "UserPromptSubmit"):
+        existing = hooks_obj.get(event, [])
+        if not isinstance(existing, list):
+            existing = []
+        hooks_obj[event] = _merge_codex_hooks_for_event(existing, lifecycle_group)
+
+    existing_stop = hooks_obj.get("Stop", [])
+    if not isinstance(existing_stop, list):
+        existing_stop = []
+    hooks_obj["Stop"] = _merge_codex_hooks_for_event(existing_stop, stop_group)
+
+    # ------------------------------------------------------------------
+    # 4. Write hooks.json back
+    # ------------------------------------------------------------------
+    hooks_json_path.write_text(json.dumps(hooks_data, indent=2) + "\n")
+    actions.append(f"Updated {hooks_json_path} with SessionStart, UserPromptSubmit, Stop hooks")
+
+    logger.info("Installed Longhouse Codex hooks in %s", codex_dir)
     return actions
 
 
