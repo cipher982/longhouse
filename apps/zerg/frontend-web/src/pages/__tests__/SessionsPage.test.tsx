@@ -254,6 +254,8 @@ describe("SessionsPage", () => {
         total: 3,
         has_real_sessions: true,
         compatibility_mode: "query_grouped",
+        compatibility_has_more: false,
+        compatibility_source_count: 3,
       },
       isLoading: false,
       error: null,
@@ -265,6 +267,109 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("2 results")).toBeInTheDocument();
     expect(screen.getByText("Showing 2 grouped results from 3 matching sessions")).toBeInTheDocument();
     expect(screen.queryByText("Showing 2 of 3 task threads")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load More" })).not.toBeInTheDocument();
+  });
+
+  it("keeps query compatibility load-more tied to raw matching-session exhaustion", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-root",
+            project: "compat",
+            thread_root_session_id: "thread-1",
+            thread_head_session_id: "thread-2",
+          }),
+        ],
+        total: 5,
+        has_real_sessions: true,
+        compatibility_mode: "query_grouped",
+        compatibility_has_more: true,
+        compatibility_source_count: 2,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=needle");
+
+    expect(await screen.findByRole("button", { name: "Load More" })).toBeInTheDocument();
+  });
+
+  it("renders query compatibility cards from the matched detail session instead of speculative head state", async () => {
+    const detail = makeSession({
+      id: "matched-continuation",
+      project: "search-hit-project",
+      summary_title: "Matched continuation",
+      summary: "Older matched continuation summary",
+      started_at: "2026-03-20T12:00:00Z",
+      last_activity_at: "2026-03-20T12:30:00Z",
+      match_event_id: 42,
+      match_snippet: "needle in the older continuation",
+      thread_root_session_id: "thread-1",
+      thread_head_session_id: "head-session",
+      thread_continuation_count: 3,
+      execution_home: "legacy",
+      status: "completed",
+      display_phase: "Completed",
+    });
+    const head = makeSession({
+      id: "head-session",
+      project: "current-head-project",
+      summary_title: "Current writable head",
+      summary: "Newest head summary",
+      started_at: "2026-03-21T12:00:00Z",
+      last_activity_at: "2026-03-21T12:45:00Z",
+      thread_root_session_id: "thread-1",
+      thread_head_session_id: "head-session",
+      thread_continuation_count: 3,
+      execution_home: "managed_local",
+      status: "working",
+      presence_state: "running",
+      display_phase: "Running bash",
+      active_tool: "bash",
+    });
+
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard(detail, {
+            thread_id: "thread-1",
+            head,
+            detail,
+            root: makeSession({
+              id: "root-session",
+              project: "root-project",
+              thread_root_session_id: "thread-1",
+              thread_head_session_id: "head-session",
+            }),
+            continuation_count: 3,
+            started_origin_label: "On this Mac",
+            head_origin_label: "Cloud",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+        compatibility_mode: "query_grouped",
+        compatibility_has_more: false,
+        compatibility_source_count: 1,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=needle");
+
+    expect(await screen.findByText("Matched continuation")).toBeInTheDocument();
+    expect(screen.queryByText("Current writable head")).not.toBeInTheDocument();
+    expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Head:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Started:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/continuations/)).not.toBeInTheDocument();
+    expect(screen.getByText("Open match")).toBeInTheDocument();
+    expect(screen.getByText(/^Matched .*ago$/)).toBeInTheDocument();
   });
 
   it("refreshes relative time labels while the timeline stays open", async () => {
