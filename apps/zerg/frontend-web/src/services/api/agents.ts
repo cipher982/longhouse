@@ -72,6 +72,23 @@ export interface AgentSessionsListResponse {
   has_real_sessions: boolean;
 }
 
+export interface TimelineSessionCard {
+  thread_id: string;
+  timeline_anchor_at: string | null;
+  head: AgentSession;
+  detail: AgentSession;
+  root: AgentSession;
+  continuation_count: number;
+  started_origin_label: string | null;
+  head_origin_label: string | null;
+}
+
+export interface TimelineSessionsListResponse {
+  sessions: TimelineSessionCard[];
+  total: number;
+  has_real_sessions: boolean;
+}
+
 export interface AgentSessionThreadResponse {
   root_session_id: string;
   head_session_id: string;
@@ -210,13 +227,13 @@ export interface AgentFiltersResponse {
 }
 
 export interface TimelineSessionUpsertEvent {
-  session: AgentSession;
+  session: TimelineSessionCard;
   total?: number;
   has_real_sessions?: boolean;
 }
 
 export interface TimelineSessionRemoveEvent {
-  session_id: string;
+  thread_id: string;
   total?: number;
   has_real_sessions?: boolean;
 }
@@ -233,12 +250,68 @@ export interface TimelineSessionStreamHandlers {
 // API Functions
 // ---------------------------------------------------------------------------
 
+function getRawTimelineSessionAnchor(session: AgentSession): string | null {
+  return session.timeline_anchor_at || session.last_activity_at || session.started_at || null;
+}
+
+function buildHybridTimelineCards(sessions: AgentSession[]): TimelineSessionCard[] {
+  const cardsByThread = new Map<string, TimelineSessionCard>();
+  const orderedThreadIds: string[] = [];
+
+  for (const session of sessions) {
+    const threadId = session.thread_root_session_id || session.id;
+    const existing = cardsByThread.get(threadId);
+    if (!existing) {
+      orderedThreadIds.push(threadId);
+      cardsByThread.set(threadId, {
+        thread_id: threadId,
+        timeline_anchor_at: getRawTimelineSessionAnchor(session),
+        head: session,
+        detail: session,
+        root: session,
+        continuation_count: session.thread_continuation_count || 1,
+        started_origin_label: session.origin_label || session.environment,
+        head_origin_label: session.origin_label || session.environment,
+      });
+      continue;
+    }
+
+    const nextHead =
+      session.id === existing.detail.thread_head_session_id || session.is_writable_head
+        ? session
+        : existing.head;
+    const nextRoot =
+      session.id === existing.detail.thread_root_session_id
+        ? session
+        : existing.root;
+
+    cardsByThread.set(threadId, {
+      ...existing,
+      head: nextHead,
+      root: nextRoot,
+      continuation_count: Math.max(existing.continuation_count, session.thread_continuation_count || 1),
+      started_origin_label:
+        (session.id === existing.detail.thread_root_session_id
+          ? session.origin_label || session.environment
+          : existing.started_origin_label),
+      head_origin_label:
+        (session.id === existing.detail.thread_head_session_id || session.is_writable_head
+          ? session.origin_label || session.environment
+          : existing.head_origin_label),
+    });
+  }
+
+  return orderedThreadIds
+    .map((threadId) => cardsByThread.get(threadId))
+    .filter((card): card is TimelineSessionCard => card != null);
+}
+
 /**
  * List agent sessions with optional filters.
  */
 export async function fetchAgentSessions(
   filters: AgentSessionFilters = {},
-): Promise<AgentSessionsListResponse> {
+): Promise<TimelineSessionsListResponse> {
   const params = new URLSearchParams();
 
   if (filters.project) params.set("project", filters.project);
@@ -257,7 +330,18 @@ export async function fetchAgentSessions(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}${queryString ? `?${queryString}` : ""}`;
 
-  return request<AgentSessionsListResponse>(path, { method: "GET" });
+  if (filters.mode === "hybrid") {
+    // Hybrid search still comes back as raw session hits today; collapse those
+    // client-side until thread-aware hybrid paging/ranking is designed cleanly.
+    const rawResponse = await request<AgentSessionsListResponse>(path, { method: "GET" });
+    return {
+      sessions: buildHybridTimelineCards(rawResponse.sessions),
+      total: rawResponse.total,
+      has_real_sessions: rawResponse.has_real_sessions,
+    };
+  }
+
+  return request<TimelineSessionsListResponse>(path, { method: "GET" });
 }
 
 function buildTimelineSessionsParams(filters: AgentSessionFilters = {}): URLSearchParams {
@@ -319,7 +403,7 @@ export function connectTimelineSessionsStream(
 
   eventSource.addEventListener("session_remove", (event: MessageEvent) => {
     const data = parseStreamEventData<TimelineSessionRemoveEvent>(event);
-    if (data?.session_id) {
+    if (data?.thread_id) {
       handlers.onSessionRemove?.(data);
     }
   });

@@ -3,7 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentSession, AgentSessionFilters, AgentSessionsListResponse } from "../../services/api/agents";
+import type {
+  AgentSession,
+  AgentSessionFilters,
+  TimelineSessionCard,
+  TimelineSessionsListResponse,
+} from "../../services/api/agents";
 import { TestRouter } from "../../test/test-utils";
 import SessionsPage from "../SessionsPage";
 
@@ -76,9 +81,42 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   };
 }
 
-function makeSessionsResponse(): AgentSessionsListResponse {
+function makeTimelineCard(
+  overrides: Partial<AgentSession> = {},
+  cardOverrides: Partial<TimelineSessionCard> = {},
+): TimelineSessionCard {
+  const detail = makeSession(overrides);
+  const headOverrides =
+    cardOverrides.head != null
+      ? cardOverrides.head
+      : makeSession({
+          ...overrides,
+          id: detail.thread_head_session_id || detail.id,
+        });
+  const rootOverrides =
+    cardOverrides.root != null
+      ? cardOverrides.root
+      : makeSession({
+          ...overrides,
+          id: detail.thread_root_session_id || detail.id,
+        });
+
   return {
-    sessions: [makeSession()],
+    thread_id: detail.thread_root_session_id,
+    timeline_anchor_at: detail.timeline_anchor_at || detail.last_activity_at || detail.started_at,
+    head: headOverrides,
+    detail,
+    root: rootOverrides,
+    continuation_count: detail.thread_continuation_count,
+    started_origin_label: rootOverrides.origin_label || rootOverrides.environment,
+    head_origin_label: headOverrides.origin_label || headOverrides.environment,
+    ...cardOverrides,
+  };
+}
+
+function makeSessionsResponse(): TimelineSessionsListResponse {
+  return {
+    sessions: [makeTimelineCard()],
     total: 120,
     has_real_sessions: true,
   };
@@ -205,7 +243,7 @@ describe("SessionsPage", () => {
         return {
           data: {
             sessions: [
-              makeSession({
+              makeTimelineCard({
                 started_at: "2026-03-21T12:00:00Z",
                 last_activity_at: "2026-03-21T12:00:00Z",
                 timeline_anchor_at: "2026-03-21T12:00:00Z",
@@ -337,7 +375,7 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             ended_at: "2026-03-21T12:03:00Z",
             status: "working",
             presence_state: "running",
@@ -366,11 +404,11 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             execution_home: "managed_local",
             origin_label: "cinder",
           }),
-          makeSession({
+          makeTimelineCard({
             id: "session-2",
             project: "cloud",
             summary_title: "Cloud branch",
@@ -400,7 +438,7 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             ended_at: null,
             status: "active",
             confidence: "inferred",
@@ -425,7 +463,7 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             ended_at: null,
             status: "active",
             confidence: "inferred",
@@ -455,7 +493,7 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             ended_at: null,
             execution_home: "managed_local",
             managed_transport: "tmux",
@@ -493,7 +531,7 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             ended_at: null,
             execution_home: "managed_local",
             managed_transport: "tmux",
@@ -532,7 +570,7 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             ended_at: null,
             status: "working",
             confidence: "live",
@@ -566,7 +604,7 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             ended_at: null,
             status: undefined,
             confidence: undefined,
@@ -600,7 +638,7 @@ describe("SessionsPage", () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             started_at: "2026-03-21T11:00:00Z",
             ended_at: "2026-03-21T12:00:00Z",
             last_activity_at: "2026-03-21T12:00:00Z",
@@ -620,11 +658,11 @@ describe("SessionsPage", () => {
     expect(screen.getByText("2m ago")).toBeInTheDocument();
   });
 
-  it("reorders timeline cards when the session timeline anchor makes an older session newest", async () => {
+  it("preserves backend thread-card ordering without regrouping client-side", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
-          makeSession({
+          makeTimelineCard({
             id: "session-beta",
             project: "beta",
             summary_title: "beta",
@@ -633,7 +671,7 @@ describe("SessionsPage", () => {
             thread_root_session_id: "session-beta",
             thread_head_session_id: "session-beta",
           }),
-          makeSession({
+          makeTimelineCard({
             id: "session-alpha",
             project: "alpha",
             summary_title: "alpha",
@@ -655,8 +693,8 @@ describe("SessionsPage", () => {
     const { container } = renderSessionsPage();
 
     const projects = Array.from(container.querySelectorAll(".session-card-project")).map((node) => node.textContent);
-    expect(projects[0]).toBe("alpha");
-    expect(projects[1]).toBe("beta");
+    expect(projects[0]).toBe("beta");
+    expect(projects[1]).toBe("alpha");
   });
 
 });

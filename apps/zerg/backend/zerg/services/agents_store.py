@@ -1647,6 +1647,229 @@ class AgentsStore:
         )
         return total, signature_rows
 
+    def _timeline_thread_ranked_subquery(
+        self,
+        *,
+        project: Optional[str],
+        provider: Optional[str],
+        environment: Optional[str],
+        include_test: bool,
+        device_id: Optional[str],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        query: Optional[str],
+        exclude_user_states: Optional[list[str]],
+        hide_autonomous: bool,
+        context_mode: str,
+        branch_mode: str,
+    ):
+        last_activity_subq = self._last_activity_subquery()
+        presence_subq = self._presence_updated_subquery()
+        runtime_signal_subq = self._runtime_signal_subquery()
+        activity_anchor = self._recent_activity_anchor_expr(
+            last_activity_subq.c.last_activity_at,
+            presence_subq.c.presence_updated_at,
+            runtime_signal_subq.c.runtime_timeline_anchor_at,
+        )
+        thread_id = func.coalesce(AgentSession.thread_root_session_id, AgentSession.id).label("thread_id")
+
+        stmt = (
+            select(
+                AgentSession.id.label("session_id"),
+                thread_id,
+                AgentSession.started_at.label("started_at"),
+                AgentSession.updated_at.label("session_updated_at"),
+                activity_anchor.label("thread_anchor"),
+                last_activity_subq.c.last_activity_at.label("last_activity_at"),
+                presence_subq.c.presence_updated_at.label("presence_updated_at"),
+                runtime_signal_subq.c.runtime_updated_at.label("runtime_updated_at"),
+                runtime_signal_subq.c.runtime_version.label("runtime_version"),
+            )
+            .select_from(AgentSession)
+            .outerjoin(last_activity_subq, last_activity_subq.c.session_id == AgentSession.id)
+            .outerjoin(presence_subq, presence_subq.c.session_id == AgentSession.id)
+            .outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == AgentSession.id)
+        )
+
+        stmt = self._apply_session_listing_filters(
+            stmt,
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            query=query,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+            context_mode=context_mode,
+            branch_mode=branch_mode,
+            time_anchor=activity_anchor,
+        )
+        if stmt is None:
+            return None
+
+        base_subq = stmt.subquery()
+        row_number = (
+            func.row_number()
+            .over(
+                partition_by=base_subq.c.thread_id,
+                order_by=(
+                    base_subq.c.thread_anchor.desc(),
+                    base_subq.c.started_at.desc(),
+                    base_subq.c.session_id.desc(),
+                ),
+            )
+            .label("rn")
+        )
+        return select(
+            base_subq.c.thread_id,
+            base_subq.c.session_id,
+            base_subq.c.started_at,
+            base_subq.c.session_updated_at,
+            base_subq.c.thread_anchor,
+            base_subq.c.last_activity_at,
+            base_subq.c.presence_updated_at,
+            base_subq.c.runtime_updated_at,
+            base_subq.c.runtime_version,
+            row_number,
+        ).subquery()
+
+    def list_timeline_thread_page(
+        self,
+        *,
+        project: Optional[str] = None,
+        provider: Optional[str] = None,
+        environment: Optional[str] = None,
+        include_test: bool = False,
+        device_id: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        query: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+        exclude_user_states: Optional[list[str]] = None,
+        hide_autonomous: bool = True,
+        context_mode: str = "forensic",
+        branch_mode: str = "head",
+    ) -> tuple[int, tuple[tuple[str, str, datetime | None], ...]]:
+        ranked_subq = self._timeline_thread_ranked_subquery(
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            query=query,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+            context_mode=context_mode,
+            branch_mode=branch_mode,
+        )
+        if ranked_subq is None:
+            return 0, ()
+
+        total = (
+            self.db.execute(
+                select(func.count()).select_from(select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1).subquery())
+            ).scalar()
+            or 0
+        )
+        rows = tuple(
+            self.db.execute(
+                select(
+                    ranked_subq.c.thread_id,
+                    ranked_subq.c.session_id,
+                    ranked_subq.c.thread_anchor,
+                )
+                .where(ranked_subq.c.rn == 1)
+                .order_by(ranked_subq.c.thread_anchor.desc(), ranked_subq.c.session_id.desc())
+                .limit(limit)
+                .offset(offset)
+            ).all()
+        )
+        return total, tuple((str(row.thread_id), str(row.session_id), row.thread_anchor) for row in rows)
+
+    def list_timeline_thread_window_signature(
+        self,
+        *,
+        project: Optional[str] = None,
+        provider: Optional[str] = None,
+        environment: Optional[str] = None,
+        include_test: bool = False,
+        device_id: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        query: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+        exclude_user_states: Optional[list[str]] = None,
+        hide_autonomous: bool = True,
+        context_mode: str = "forensic",
+        branch_mode: str = "head",
+        include_total: bool = False,
+    ) -> tuple[
+        int | None,
+        tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, datetime | None, int], ...],
+    ]:
+        ranked_subq = self._timeline_thread_ranked_subquery(
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            query=query,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+            context_mode=context_mode,
+            branch_mode=branch_mode,
+        )
+        if ranked_subq is None:
+            return (0 if include_total else None), ()
+
+        total: int | None = None
+        if include_total:
+            total = (
+                self.db.execute(
+                    select(func.count()).select_from(select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1).subquery())
+                ).scalar()
+                or 0
+            )
+
+        rows = tuple(
+            self.db.execute(
+                select(
+                    ranked_subq.c.thread_id,
+                    ranked_subq.c.session_id,
+                    ranked_subq.c.thread_anchor,
+                    ranked_subq.c.session_updated_at,
+                    ranked_subq.c.last_activity_at,
+                    ranked_subq.c.presence_updated_at,
+                    ranked_subq.c.runtime_version,
+                )
+                .where(ranked_subq.c.rn == 1)
+                .order_by(ranked_subq.c.thread_anchor.desc(), ranked_subq.c.session_id.desc())
+                .limit(limit)
+                .offset(offset)
+            ).all()
+        )
+        return total, tuple(
+            (
+                str(row.thread_id),
+                str(row.session_id),
+                row.thread_anchor,
+                row.session_updated_at,
+                row.last_activity_at,
+                row.presence_updated_at,
+                int(row.runtime_version or 0),
+            )
+            for row in rows
+        )
+
     @staticmethod
     def _latest_non_null_expr(lhs, rhs):
         return case(

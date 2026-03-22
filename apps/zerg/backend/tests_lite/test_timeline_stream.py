@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionRuntimeState
@@ -130,8 +131,9 @@ def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
     assert events[0]["event"] == "connected"
     assert events[1]["event"] == "session_upsert"
     assert "Timeline session stream connected" in events[0]["data"]
-    assert upsert_payload["session"]["project"] == "old-runtime-stream"
-    assert upsert_payload["session"]["display_phase"] == "Running bash"
+    assert upsert_payload["session"]["thread_id"] == str(old_runtime.id)
+    assert upsert_payload["session"]["head"]["project"] == "old-runtime-stream"
+    assert upsert_payload["session"]["head"]["display_phase"] == "Running bash"
 
 
 def test_session_window_signature_prefers_runtime_activity_anchor(tmp_path):
@@ -242,13 +244,13 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
 
     list_sessions_calls = 0
     window_signature_kwargs: list[dict] = []
-    original_list_sessions = timeline_router.agents_router.list_sessions
-    original_window_signature = timeline_router.AgentsStore.list_session_window_signature
+    original_list_timeline_sessions = timeline_router.list_timeline_sessions
+    original_window_signature = timeline_router.AgentsStore.list_timeline_thread_window_signature
 
-    async def _counting_list_sessions(*args, **kwargs):
+    async def _counting_list_timeline_sessions(*args, **kwargs):
         nonlocal list_sessions_calls
         list_sessions_calls += 1
-        return await original_list_sessions(*args, **kwargs)
+        return await original_list_timeline_sessions(*args, **kwargs)
 
     def _capturing_window_signature(self, *args, **kwargs):
         window_signature_kwargs.append(dict(kwargs))
@@ -277,8 +279,8 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
         return events
 
     with (
-        patch.object(timeline_router.agents_router, "list_sessions", new=_counting_list_sessions),
-        patch.object(timeline_router.AgentsStore, "list_session_window_signature", new=_capturing_window_signature),
+        patch.object(timeline_router, "list_timeline_sessions", new=_counting_list_timeline_sessions),
+        patch.object(timeline_router.AgentsStore, "list_timeline_thread_window_signature", new=_capturing_window_signature),
         patch.object(timeline_router, "TIMELINE_STREAM_POLL_SECONDS", 0),
         patch.object(timeline_router, "TIMELINE_STREAM_HEARTBEAT_SECONDS", 0),
     ):
@@ -290,3 +292,86 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
     assert list_sessions_calls == 1
     assert len(window_signature_kwargs) >= 1
     assert all(call.get("include_total") is False for call in window_signature_kwargs)
+
+
+def test_list_timeline_sessions_returns_one_card_per_thread_for_lexical_search(tmp_path):
+    session_local = _make_db(tmp_path, "timeline_thread_cards_lexical.db")
+    now = datetime.now(timezone.utc)
+    magic = "thread-card-needle"
+
+    with session_local() as db:
+        root = _seed_session(
+            db,
+            started_at=now - timedelta(days=2),
+            ended_at=now - timedelta(days=2),
+            project="threaded-search",
+        )
+        root.is_writable_head = 0
+        db.add(
+            AgentEvent(
+                session_id=root.id,
+                role="user",
+                content_text=f"older continuation match {magic}",
+                timestamp=now - timedelta(days=2),
+            )
+        )
+        db.commit()
+
+        head = AgentSession(
+            provider="claude",
+            environment="production",
+            project="threaded-search",
+            started_at=now - timedelta(hours=1),
+            ended_at=now - timedelta(hours=1),
+            thread_root_session_id=root.id,
+            continued_from_session_id=root.id,
+            user_messages=2,
+            assistant_messages=2,
+            tool_calls=1,
+            summary="Head session",
+            summary_title="Head session",
+            is_writable_head=1,
+        )
+        db.add(head)
+        db.commit()
+        db.refresh(head)
+        db.add(
+            AgentEvent(
+                session_id=head.id,
+                role="user",
+                content_text="newer continuation without the lexical token",
+                timestamp=now - timedelta(hours=1),
+            )
+        )
+        db.commit()
+
+        with patch.object(AgentsStore, "_fts_session_ids", return_value=[root.id]):
+            payload = asyncio.run(
+                timeline_router.list_timeline_sessions(
+                    project="threaded-search",
+                    provider=None,
+                    environment=None,
+                    include_test=False,
+                    hide_autonomous=True,
+                    device_id=None,
+                    days_back=14,
+                    query=magic,
+                    limit=20,
+                    offset=0,
+                    sort=None,
+                    mode="lexical",
+                    context_mode="forensic",
+                    db=db,
+                )
+            )
+
+    assert payload.total == 1
+    assert len(payload.sessions) == 1
+    card = payload.sessions[0]
+    assert card.thread_id == str(root.id)
+    assert card.detail.id == str(root.id)
+    assert card.head.id == str(head.id)
+    assert card.root.id == str(root.id)
+    assert card.continuation_count == 2
+    assert card.detail.match_event_id is not None
+    assert magic in (card.detail.match_snippet or "")
