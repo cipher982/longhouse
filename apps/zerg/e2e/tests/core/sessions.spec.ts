@@ -606,7 +606,8 @@ test.describe("Session Detail Page", () => {
 
     const card = page.locator(".session-card", { hasText: project });
     await expect(card).toHaveCount(1);
-    await expect(card).toContainText("Head: Cloud");
+    await expect(card).toContainText("Cloud");
+    await expect(card).not.toContainText("Head: Cloud");
     await expect(card).toContainText("Started: Cinder");
     await expect(card).toContainText("2 continuations");
 
