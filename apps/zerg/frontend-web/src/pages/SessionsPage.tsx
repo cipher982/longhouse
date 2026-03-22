@@ -591,6 +591,11 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: Sess
       className={cardClassName}
       onClick={onClick}
       style={{ borderLeftColor: getProviderColor(session.provider) }}
+      data-testid="session-card"
+      data-session-id={session.id}
+      data-thread-id={thread.threadId}
+      data-runtime-tone={runtime.tone}
+      data-execution-home={session.execution_home || "legacy"}
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
