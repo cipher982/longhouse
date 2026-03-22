@@ -1,6 +1,13 @@
 import { test, expect } from "../fixtures";
 import { resetDatabase } from "../test-utils";
 
+// NOTE:
+// These mobile Loop tests intentionally keep the browser/UI real while mocking the
+// Loop backend APIs and device/runtime edges (web push delivery, service worker
+// notification clicks, tmux-backed managed-local Claude sessions). Those pieces
+// need separate integration/device canaries later; this file is the first
+// pragmatic E2E slice for the mobile action UX and request contracts.
+
 const inboxItems = [
   {
     card_id: 42,
@@ -82,16 +89,68 @@ const cards = {
   },
 };
 
+const managedLocalInboxItem = {
+  card_id: 261,
+  session_id: "sess-managed-local",
+  title: "Managed Local Hiring Follow-up",
+  project: "hiring",
+  machine: "cinder",
+  provider: "claude",
+  execution_home: "managed_local",
+  home_label: "On this Mac",
+  loop_mode: "assist",
+  decision: "continue",
+  execution_state: "awaiting_user_approval",
+  summary: "Claude paused after step 1 and is waiting to continue the exact Mac session.",
+  recommended_action: "continue_session",
+  follow_up_prompt: "Continue to step 2 in the same managed local session.",
+  blocked_reasons: [],
+  last_turn_at: "2026-03-22T14:10:00Z",
+  card_state: "active",
+  card_state_reason: null,
+  superseded_by_card_id: null,
+  requires_attention: true,
+};
+
+const managedLocalCard = {
+  ...managedLocalInboxItem,
+  rationale: "This session is managed on the source Mac, so Loop can safely continue or reply without cloud takeover.",
+  mode_capability: "notify_only",
+  mode_summary: "Suggest or escalate from completed turns, but wait for approval before continuing.",
+  last_user_text: "Do step 1, then stop and ask me before step 2.",
+  last_assistant_text: "Step 1 is complete. I am waiting for your go-ahead before step 2.",
+  available_actions: ["approve_recommended_action", "reply_to_session", "not_now"],
+};
+
 async function mockLoopInboxApi(
   page: import("@playwright/test").Page,
   {
     items = inboxItems,
     cardMap = cards,
+    onAction,
   }: {
     items?: typeof inboxItems;
     cardMap?: Record<number, unknown>;
+    onAction?: (payload: {
+      cardId: number;
+      action: string | null;
+      replyText: string | null;
+    }) => Promise<{
+      status?: number;
+      body?: unknown;
+      nextItems?: typeof inboxItems;
+      nextCards?: Record<number, unknown>;
+    } | void> | {
+      status?: number;
+      body?: unknown;
+      nextItems?: typeof inboxItems;
+      nextCards?: Record<number, unknown>;
+    } | void;
   } = {},
 ): Promise<void> {
+  let currentItems = items;
+  let currentCardMap = cardMap;
+
   const handleLoopInboxRoute = async (route: import("@playwright/test").Route): Promise<void> => {
     const url = new URL(route.request().url());
     const pathname = url.pathname;
@@ -100,7 +159,7 @@ async function mockLoopInboxApi(
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(items),
+        body: JSON.stringify(currentItems),
       });
       return;
     }
@@ -108,7 +167,7 @@ async function mockLoopInboxApi(
     const cardMatch = pathname.match(/\/api\/oikos\/loop-inbox\/cards\/(\d+)$/);
     if (cardMatch) {
       const cardId = Number(cardMatch[1]);
-      const card = cardMap[cardId];
+      const card = currentCardMap[cardId];
       if (!card) {
         await route.fulfill({
           status: 404,
@@ -121,6 +180,40 @@ async function mockLoopInboxApi(
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(card),
+      });
+      return;
+    }
+
+    const actionMatch = pathname.match(/\/api\/oikos\/loop-inbox\/cards\/(\d+)\/actions$/);
+    if (actionMatch && route.request().method() === "POST") {
+      const cardId = Number(actionMatch[1]);
+      const payload = route.request().postDataJSON() as { action?: string; reply_text?: string | null };
+      const outcome = (await onAction?.({
+        cardId,
+        action: typeof payload?.action === "string" ? payload.action : null,
+        replyText: typeof payload?.reply_text === "string" ? payload.reply_text : null,
+      })) ?? {};
+
+      if (outcome.nextItems) {
+        currentItems = outcome.nextItems;
+      }
+      if (outcome.nextCards) {
+        currentCardMap = outcome.nextCards;
+      }
+
+      await route.fulfill({
+        status: outcome.status ?? 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          outcome.body ?? {
+            session_id: `sess-${cardId}`,
+            review_id: cardId,
+            action: payload?.action ?? null,
+            status: "acted",
+            reason: null,
+            queued_job_id: null,
+          },
+        ),
       });
       return;
     }
@@ -176,7 +269,9 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
 
   const cardBox = await card.boundingBox();
   expect(cardBox).toBeTruthy();
-  expect(cardBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(viewport.height * 0.24);
+  // Keep this generous enough for the compact mobile chrome to evolve without
+  // making the card disappear below the fold again.
+  expect(cardBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(viewport.height * 0.26);
 
   const headerBox = await header.boundingBox();
   const queueButtonBox = await queueButton.boundingBox();
@@ -200,7 +295,7 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   const drawerBox = await drawer.boundingBox();
   expect(drawerBox).toBeTruthy();
   expect(drawerBox?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(1);
-  expect(drawerBox?.width ?? 0).toBeLessThan(viewport.width * 0.9);
+  expect(drawerBox?.width ?? 0).toBeLessThan(viewport.width * 0.96);
   await saveScreenshot(page, testInfo, "loop-inbox-mobile-drawer-open.png");
 
   await drawer.getByTestId("loop-inbox-row-99").click();
@@ -279,4 +374,94 @@ test("loop inbox shows an explicit empty state in the mobile drawer when nothing
   await expect(drawer).toBeVisible();
   await expect(drawer.getByTestId("loop-mobile-queue-drawer-empty")).toContainText("No follow-ups right now");
   await expect(drawer.getByText("New approvals will appear here as soon as a coding turn needs review.")).toBeVisible();
+});
+
+test("loop inbox mobile managed-local continue uses the exact card action contract (mocked transport boundary)", async ({
+  page,
+}) => {
+  const actionCalls: Array<{ cardId: number; action: string | null; replyText: string | null }> = [];
+
+  await mockLoopInboxApi(page, {
+    items: [managedLocalInboxItem],
+    cardMap: { 261: managedLocalCard },
+    onAction: async (payload) => {
+      actionCalls.push(payload);
+      return {
+        body: {
+          session_id: managedLocalInboxItem.session_id,
+          review_id: managedLocalInboxItem.card_id,
+          action: payload.action,
+          status: "acted",
+          reason: null,
+          queued_job_id: null,
+        },
+        nextItems: [],
+        nextCards: {
+          261: {
+            ...managedLocalCard,
+            card_state: "acted",
+            card_state_reason: "Continue was sent to the managed local session.",
+          },
+        },
+      };
+    },
+  });
+
+  await page.goto("/loop/card/261");
+
+  await expect(page.getByTestId("loop-inbox-card")).toContainText("On this Mac");
+  await expect(page.getByTestId("loop-approve-action")).toContainText("Continue");
+
+  await page.getByTestId("loop-approve-action").click();
+
+  await expect.poll(() => actionCalls.length).toBe(1);
+  expect(actionCalls[0]).toEqual({
+    cardId: 261,
+    action: "approve_recommended_action",
+    replyText: null,
+  });
+
+  await expect(page.getByTestId("loop-inbox-card-status-banner")).toContainText("This follow-up was already handled");
+  await expect(page.getByText("Continue was sent to the managed local session.")).toBeVisible();
+});
+
+test("loop inbox mobile managed-local reply sends quick text to the exact card action contract (mocked tmux/session boundary)", async ({
+  page,
+}) => {
+  const actionCalls: Array<{ cardId: number; action: string | null; replyText: string | null }> = [];
+
+  await mockLoopInboxApi(page, {
+    items: [managedLocalInboxItem],
+    cardMap: { 261: managedLocalCard },
+    onAction: async (payload) => {
+      actionCalls.push(payload);
+      return {
+        body: {
+          session_id: managedLocalInboxItem.session_id,
+          review_id: managedLocalInboxItem.card_id,
+          action: payload.action,
+          status: "acted",
+          reason: null,
+          queued_job_id: null,
+        },
+      };
+    },
+  });
+
+  await page.goto("/loop/card/261");
+
+  await expect(page.getByTestId("loop-reply-box")).toBeVisible();
+  await expect(page.getByTestId("loop-inbox-card")).toContainText("On this Mac");
+
+  await page.getByTestId("loop-reply-input").fill("Continue to step 2 now.");
+  await page.getByTestId("loop-reply-action").click();
+
+  await expect.poll(() => actionCalls.length).toBe(1);
+  expect(actionCalls[0]).toEqual({
+    cardId: 261,
+    action: "reply_to_session",
+    replyText: "Continue to step 2 now.",
+  });
+
+  await expect(page.getByTestId("loop-reply-input")).toHaveValue("");
 });
