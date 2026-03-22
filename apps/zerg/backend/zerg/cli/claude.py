@@ -107,8 +107,15 @@ def _resolve_runner_target(
         for match in matches:
             owner_label = getattr(match.owner, "email", None) or f"owner_id={match.owner_id}"
             owners.append(f"runner:{match.id} ({owner_label})")
+        prefix = "".join(
+            [
+                "Runner name is ambiguous. Re-run with --owner-email or ",
+                "a runner:<id> target. Matches: ",
+            ]
+        )
+        message = prefix + ", ".join(owners)
         raise typer.BadParameter(
-            "Runner name is ambiguous. Re-run with --owner-email or a runner:<id> target. Matches: " + ", ".join(owners),
+            message,
             param_hint="--runner",
         )
 
