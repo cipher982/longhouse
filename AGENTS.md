@@ -91,6 +91,7 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 
 - **Backend**: FastAPI + Pydantic, `apps/zerg/backend/zerg/`
 - **Frontend**: React + React Query, `apps/zerg/frontend-web/`
+- **Frontend effects**: `useEffect` is for external synchronization only, never for syncing React state to React state or routine fetch bookkeeping.
 - **Package managers**: Bun (JS), uv (Python) — never npm/pip
 - **Generated code** (don't edit): `backend/zerg/generated/`, `backend/zerg/tools/generated/`, `frontend-web/src/generated/`
 - **Tests**: Always use `make test*` targets, never direct pytest/playwright. New backend tests go in `tests_lite/`.
