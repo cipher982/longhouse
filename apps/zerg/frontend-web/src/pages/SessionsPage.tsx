@@ -5,7 +5,7 @@
  * - Timeline list grouped by day
  * - Filter by project, provider, date range (dynamic from API)
  * - Search sessions by content
- * - Live updates via polling
+ * - Live updates via timeline stream with slow reconciliation
  * - Pagination with "Load More"
  * - Click to view session details
  */
@@ -23,6 +23,7 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSession,
   type AgentSessionFilters,
+  getTimelineCardAnchor,
   type TimelineSessionCard,
   seedDemoSessions,
 } from "../services/api/agents";
@@ -103,18 +104,6 @@ function getDateKey(dateStr: string, nowMs: number = Date.now()): string {
   });
 }
 
-function getTimelineAnchor(
-  session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">,
-): string {
-  return session.timeline_anchor_at || session.last_activity_at || session.started_at;
-}
-
-function getResolvedTimelineAnchor(
-  session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">,
-): string {
-  return getTimelineAnchor(session);
-}
-
 function useDocumentVisible(): boolean {
   const [isVisible, setIsVisible] = useState(() => typeof document === "undefined" || !document.hidden);
 
@@ -172,7 +161,7 @@ function groupThreadCardsByDay(
   const groups = new Map<string, TimelineSessionCard[]>();
 
   for (const card of cards) {
-    const key = getDateKey(card.timeline_anchor_at || getResolvedTimelineAnchor(card.head), nowMs);
+    const key = getDateKey(getTimelineCardAnchor(card), nowMs);
     const existing = groups.get(key) || [];
     existing.push(card);
     groups.set(key, existing);
@@ -570,7 +559,7 @@ function SessionCard({
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
-        <span className="session-card-time">{formatRelativeTime(thread.timeline_anchor_at || getResolvedTimelineAnchor(session), relativeNowMs)}</span>
+        <span className="session-card-time">{formatRelativeTime(getTimelineCardAnchor(thread), relativeNowMs)}</span>
       </div>
 
       <div className="session-card-meta">
@@ -849,7 +838,7 @@ export default function SessionsPage() {
   const timelineStreamEnabled = timelineStreamEligible && documentVisible;
 
   // Single unified query — use SSE for live rows and keep a slow polling backstop.
-  const activeResult = useAgentSessions(filters, {
+  const timelineResult = useAgentSessions(filters, {
     refetchInterval: timelineStreamEligible
       ? TIMELINE_RECONCILIATION_MS
       : (query) => {
@@ -859,10 +848,10 @@ export default function SessionsPage() {
           return pendingSessions ? 3_000 : 30_000;
         },
   });
-  const data = activeResult.data;
-  const isLoading = activeResult.isLoading;
-  const error = activeResult.error;
-  const refetch = activeResult.refetch;
+  const data = timelineResult.data;
+  const isLoading = timelineResult.isLoading;
+  const error = timelineResult.error;
+  const refetch = timelineResult.refetch;
 
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;

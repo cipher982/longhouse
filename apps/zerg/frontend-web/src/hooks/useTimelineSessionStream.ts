@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   connectTimelineSessionsStream,
   type AgentSessionFilters,
+  getTimelineCardAnchor,
   type TimelineSessionCard,
   type TimelineSessionsListResponse,
   type TimelineSessionRemoveEvent,
@@ -10,7 +11,7 @@ import {
 } from "../services/api/agents";
 
 function sessionAnchorMillis(card: TimelineSessionCard): number {
-  return new Date(card.timeline_anchor_at || card.head.timeline_anchor_at || card.head.last_activity_at || card.head.started_at).getTime();
+  return new Date(getTimelineCardAnchor(card)).getTime();
 }
 
 function sortSessionsByAnchor(sessions: TimelineSessionCard[]): TimelineSessionCard[] {

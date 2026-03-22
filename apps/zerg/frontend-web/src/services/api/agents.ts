@@ -253,8 +253,16 @@ export interface TimelineSessionStreamHandlers {
 // API Functions
 // ---------------------------------------------------------------------------
 
-function getRawTimelineSessionAnchor(session: AgentSession): string | null {
-  return session.timeline_anchor_at || session.last_activity_at || session.started_at || null;
+export function getTimelineSessionAnchor(
+  session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">,
+): string {
+  return session.timeline_anchor_at || session.last_activity_at || session.started_at;
+}
+
+export function getTimelineCardAnchor(
+  card: Pick<TimelineSessionCard, "timeline_anchor_at" | "head">,
+): string {
+  return card.timeline_anchor_at || getTimelineSessionAnchor(card.head);
 }
 
 function buildCompatibilityTimelineCards(sessions: AgentSession[]): TimelineSessionCard[] {
@@ -268,7 +276,7 @@ function buildCompatibilityTimelineCards(sessions: AgentSession[]): TimelineSess
       orderedThreadIds.push(threadId);
       cardsByThread.set(threadId, {
         thread_id: threadId,
-        timeline_anchor_at: getRawTimelineSessionAnchor(session),
+        timeline_anchor_at: getTimelineSessionAnchor(session),
         head: session,
         detail: session,
         root: session,
