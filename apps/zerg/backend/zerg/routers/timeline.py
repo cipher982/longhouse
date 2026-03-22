@@ -25,10 +25,8 @@ from zerg.database import get_db
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
-from zerg.models.agents import SessionPresence
 from zerg.routers import agents as agents_router
 from zerg.services.agents_store import AgentsStore
-from zerg.services.session_runtime import load_runtime_state_map
 
 logger = logging.getLogger(__name__)
 
@@ -66,19 +64,6 @@ def _stream_supports_preflight(*, query: str | None, sort: str | None, mode: str
     return mode in (None, "lexical") and effective_sort == "recency"
 
 
-def _load_presence_updated_map(db: Session, session_ids: list[UUID]) -> dict[str, datetime]:
-    if not session_ids:
-        return {}
-
-    rows = db.query(SessionPresence.session_id, SessionPresence.updated_at).filter(SessionPresence.session_id.in_(session_ids)).all()
-    presence_map: dict[str, datetime] = {}
-    for session_id, updated_at in rows:
-        if session_id is None or updated_at is None:
-            continue
-        presence_map[str(session_id)] = updated_at
-    return presence_map
-
-
 def _load_timeline_stream_window_signature(
     *,
     db: Session,
@@ -93,10 +78,10 @@ def _load_timeline_stream_window_signature(
     limit: int,
     offset: int,
     context_mode: str,
-) -> tuple[int, tuple[tuple[str, str | None, str | None, str | None, int, str | None], ...]]:
+) -> tuple[int, tuple[tuple[str, str | None, str | None, str | None, str | None, int, str | None], ...]]:
     store = AgentsStore(db)
     since = datetime.now(timezone.utc) - timedelta(days=days_back)
-    sessions, total = store.list_sessions(
+    total, rows = store.list_session_window_signature(
         project=project,
         provider=provider,
         environment=environment,
@@ -108,24 +93,27 @@ def _load_timeline_stream_window_signature(
         offset=offset,
         hide_autonomous=hide_autonomous,
         context_mode=context_mode,
-        anchor_on_activity=True,
     )
 
-    session_ids = [session.id for session in sessions]
-    runtime_state_map = load_runtime_state_map(db, session_ids)
-    presence_map = _load_presence_updated_map(db, session_ids)
-
-    signature_rows: list[tuple[str, str | None, str | None, str | None, int, str | None]] = []
-    for session in sessions:
-        runtime_state = runtime_state_map.get(str(session.id))
+    signature_rows: list[tuple[str, str | None, str | None, str | None, str | None, int, str | None]] = []
+    for (
+        session_id,
+        session_updated_at,
+        last_activity_at,
+        presence_updated_at,
+        runtime_updated_at,
+        runtime_version,
+        runtime_timeline_anchor_at,
+    ) in rows:
         signature_rows.append(
             (
-                str(session.id),
-                _normalize_utc_iso(session.updated_at),
-                _normalize_utc_iso(presence_map.get(str(session.id))),
-                _normalize_utc_iso(getattr(runtime_state, "updated_at", None)),
-                int(getattr(runtime_state, "runtime_version", 0) or 0),
-                _normalize_utc_iso(getattr(runtime_state, "timeline_anchor_at", None)),
+                session_id,
+                _normalize_utc_iso(session_updated_at),
+                _normalize_utc_iso(last_activity_at),
+                _normalize_utc_iso(presence_updated_at),
+                _normalize_utc_iso(runtime_updated_at),
+                int(runtime_version or 0),
+                _normalize_utc_iso(runtime_timeline_anchor_at),
             )
         )
 
@@ -151,7 +139,9 @@ async def _timeline_sessions_stream(
     context_mode: str,
 ):
     previous_signatures: dict[str, str] = {}
-    previous_window_signature: tuple[int, tuple[tuple[str, str | None, str | None, str | None, int, str | None], ...]] | None = None
+    previous_window_signature: (
+        tuple[int, tuple[tuple[str, str | None, str | None, str | None, str | None, int, str | None], ...]] | None
+    ) = None
     last_heartbeat = monotonic()
     preflight_enabled = _stream_supports_preflight(query=query, sort=sort, mode=mode)
 
