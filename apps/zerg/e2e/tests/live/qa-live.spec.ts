@@ -70,6 +70,19 @@ async function findVisibleTimelineSessionId(page: Page): Promise<string | null> 
   const cards = page.locator(".session-card[data-session-id]");
   await cards.first().waitFor({ timeout: 12_000 });
   const count = await cards.count();
+  const stableTones = new Set(["inactive", "idle"]);
+
+  for (const preferredTone of stableTones) {
+    for (let index = 0; index < count; index += 1) {
+      const card = cards.nth(index);
+      const tone = await card.getAttribute("data-runtime-tone");
+      if (tone !== preferredTone) continue;
+      const sessionId = await card.getAttribute("data-session-id");
+      if (sessionId) {
+        return sessionId;
+      }
+    }
+  }
 
   for (let index = 0; index < count; index += 1) {
     const sessionId = await cards.nth(index).getAttribute("data-session-id");
