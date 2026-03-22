@@ -30,7 +30,9 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_tmux import build_tmux_capture_command
+from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
+from zerg.services.managed_local_tmux import build_tmux_launch_command
 
 
 def _make_db(tmp_path: Path):
@@ -177,6 +179,10 @@ def _make_fake_claude_home(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     log_path = tmp_path / "fake-claude.log"
     tmux_tmpdir = Path("/tmp") / f"lh-tmux-{uuid4().hex[:8]}"
     tmux_tmpdir.mkdir(parents=True, exist_ok=True)
+    tmux_bin = shutil.which("tmux")
+    node_bin = shutil.which("node")
+    if tmux_bin is None or node_bin is None:
+        raise RuntimeError("tmux and node must be available for managed-local transport integration tests")
 
     node_impl = textwrap.dedent(
         """\
@@ -234,27 +240,43 @@ def _make_fake_claude_home(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     claude_path.write_text(launcher, encoding="utf-8")
     claude_path.chmod(claude_path.stat().st_mode | stat.S_IXUSR)
 
+    shell_init_path = ":".join(
+        [
+            str(bin_dir),
+            str(Path(tmux_bin).parent),
+            str(Path(node_bin).parent),
+        ]
+    )
     (home / ".zshrc").write_text(
-        f'export PATH="{bin_dir}:$PATH"\nexport FAKE_CLAUDE_LOG="{log_path}"\n',
+        f'export PATH="{shell_init_path}:$PATH"\nexport FAKE_CLAUDE_LOG="{log_path}"\n',
         encoding="utf-8",
     )
 
     env = {
         "HOME": str(home),
         "ZDOTDIR": str(home),
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "TMUX_TMPDIR": str(tmux_tmpdir),
     }
 
     return home, log_path, env
 
 
-async def _capture_tmux_output(dispatcher: _LocalExecDispatcher, *, session_name: str) -> str:
+async def _capture_tmux_output(
+    dispatcher: _LocalExecDispatcher,
+    *,
+    session_name: str,
+    tmux_tmpdir: str | None = None,
+) -> str:
     result = await dispatcher.dispatch_job(
         db=None,
         owner_id=0,
         runner_id=0,
-        command=build_tmux_capture_command(session_name=session_name, lines=80),
+        command=build_tmux_capture_command(
+            session_name=session_name,
+            lines=80,
+            tmux_tmpdir=tmux_tmpdir,
+        ),
         timeout_secs=5,
         commis_id=None,
         run_id=None,
@@ -268,12 +290,17 @@ async def _wait_for_tmux_text(
     *,
     session_name: str,
     needle: str,
+    tmux_tmpdir: str | None = None,
     timeout_secs: float = 5.0,
 ) -> str:
     deadline = time.monotonic() + timeout_secs
     latest = ""
     while time.monotonic() < deadline:
-        latest = await _capture_tmux_output(dispatcher, session_name=session_name)
+        latest = await _capture_tmux_output(
+            dispatcher,
+            session_name=session_name,
+            tmux_tmpdir=tmux_tmpdir,
+        )
         if needle in latest:
             return latest
         await asyncio.sleep(0.1)
@@ -281,10 +308,10 @@ async def _wait_for_tmux_text(
 
 
 @pytest.mark.skipif(
-    shutil.which("tmux") is None or shutil.which("zsh") is None,
-    reason="Requires local tmux + zsh for the managed-local transport canary.",
+    shutil.which("tmux") is None or shutil.which("zsh") is None or shutil.which("node") is None,
+    reason="Requires local tmux, zsh, and node for the managed-local transport canary.",
 )
-def test_managed_local_launch_and_send_text_use_real_tmux_transport(monkeypatch, tmp_path):
+def test_managed_local_launch_and_send_text_use_real_tmux_transport_with_shell_init_path(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     _home, log_path, launcher_env = _make_fake_claude_home(tmp_path)
     workspace = tmp_path / "workspace"
@@ -328,24 +355,30 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport(monkeypatch,
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.execution_home == "managed_local"
             assert session.source_runner_name == "cinder"
+            assert session.managed_tmux_tmpdir == launcher_env["TMUX_TMPDIR"]
 
             startup_output = asyncio.run(
                 _wait_for_tmux_text(
                     dispatcher,
                     session_name=managed_session_name,
                     needle="FAKE_CLAUDE_START",
+                    tmux_tmpdir=session.managed_tmux_tmpdir,
                 )
             )
             normalized_startup = startup_output.replace("\n", "")
             assert f"session={payload['provider_session_id']}" in normalized_startup
             assert "name=Managed Local Proof" in normalized_startup
 
+            wrong_tmux_tmpdir = tmp_path / "wrong-tmux"
+            wrong_tmux_tmpdir.mkdir()
+            dispatcher.env["TMUX_TMPDIR"] = str(wrong_tmux_tmpdir)
+
             send_result = asyncio.run(
                 send_text_to_managed_local_session(
                     db=db,
                     owner_id=user.id,
                     session=session,
-                    text="Continue from Loop now",
+                    text="Enter",
                     commis_id="managed-local-transport-canary",
                 )
             )
@@ -355,10 +388,11 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport(monkeypatch,
                 _wait_for_tmux_text(
                     dispatcher,
                     session_name=managed_session_name,
-                    needle="ASSISTANT: continuing exact managed local session",
+                    needle="ASSISTANT: received Enter",
+                    tmux_tmpdir=session.managed_tmux_tmpdir,
                 )
             )
-            assert "USER:Continue from Loop now" in turn_output
+            assert "USER:Enter" in turn_output
 
             runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
             assert runtime_state.phase == "thinking"
@@ -366,7 +400,7 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport(monkeypatch,
 
             log_text = log_path.read_text(encoding="utf-8")
             assert "START session=" in log_text
-            assert "USER:Continue from Loop now" in log_text
+            assert "USER:Enter" in log_text
         finally:
             if managed_session_name:
                 asyncio.run(
@@ -374,10 +408,91 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport(monkeypatch,
                         db=db,
                         owner_id=user.id,
                         runner_id=runner.id,
-                        command=build_tmux_kill_session_command(session_name=managed_session_name),
+                        command=build_tmux_kill_session_command(
+                            session_name=managed_session_name,
+                            tmux_tmpdir=(
+                                session.managed_tmux_tmpdir
+                                if "session" in locals()
+                                else launcher_env["TMUX_TMPDIR"]
+                            ),
+                        ),
                         timeout_secs=5,
                         commis_id=None,
                         run_id=None,
                     )
                 )
             api_app_ref.dependency_overrides = {}
+
+
+@pytest.mark.skipif(
+    shutil.which("tmux") is None or shutil.which("zsh") is None or shutil.which("node") is None,
+    reason="Requires local tmux, zsh, and node for the managed-local transport canary.",
+)
+def test_tmux_launch_command_retains_fast_failing_pane(tmp_path):
+    _home, _log_path, launcher_env = _make_fake_claude_home(tmp_path)
+    dispatcher = _LocalExecDispatcher(env={**os.environ, **launcher_env})
+    workspace = tmp_path / "fast-fail-workspace"
+    workspace.mkdir()
+    session_name = f"lh-fast-fail-{uuid4().hex[:8]}"
+
+    try:
+        launch_result = asyncio.run(
+            dispatcher.dispatch_job(
+                db=None,
+                owner_id=0,
+                runner_id=0,
+                command=build_tmux_launch_command(
+                    session_name=session_name,
+                    cwd=str(workspace),
+                    launch_command="zsh -lc 'echo FAST_FAIL; exit 23'",
+                    tmux_tmpdir=launcher_env["TMUX_TMPDIR"],
+                ),
+                timeout_secs=5,
+                commis_id=None,
+                run_id=None,
+            )
+        )
+        assert launch_result["ok"] is True
+        assert int(launch_result["data"]["exit_code"]) == 0
+
+        has_session_result = asyncio.run(
+            dispatcher.dispatch_job(
+                db=None,
+                owner_id=0,
+                runner_id=0,
+                command=build_tmux_has_session_command(
+                    session_name=session_name,
+                    tmux_tmpdir=launcher_env["TMUX_TMPDIR"],
+                ),
+                timeout_secs=5,
+                commis_id=None,
+                run_id=None,
+            )
+        )
+        assert has_session_result["ok"] is True
+        assert int(has_session_result["data"]["exit_code"]) == 0
+
+        captured = asyncio.run(
+            _wait_for_tmux_text(
+                dispatcher,
+                session_name=session_name,
+                needle="FAST_FAIL",
+                tmux_tmpdir=launcher_env["TMUX_TMPDIR"],
+            )
+        )
+        assert "FAST_FAIL" in captured
+    finally:
+        asyncio.run(
+            dispatcher.dispatch_job(
+                db=None,
+                owner_id=0,
+                runner_id=0,
+                command=build_tmux_kill_session_command(
+                    session_name=session_name,
+                    tmux_tmpdir=launcher_env["TMUX_TMPDIR"],
+                ),
+                timeout_secs=5,
+                commis_id=None,
+                run_id=None,
+            )
+        )

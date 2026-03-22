@@ -10,6 +10,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 TMUX_SESSION_NAME_MAX = 64
 _TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 MANAGED_LOCAL_TMUX_SERVER_LABEL = "longhouse-managed"
+TMUX_NOT_INSTALLED_MESSAGE = "tmux is not installed"
 
 
 def normalize_tmux_session_name(seed: str, *, prefix: str = "lh") -> str:
@@ -43,59 +44,119 @@ def _require_non_empty(name: str, value: str | None) -> str:
     return raw
 
 
+def _normalize_tmux_tmpdir(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    return raw or None
+
+
+def build_managed_local_shell_prelude(*, tmux_tmpdir: str | None = None, require_tmux: bool = True) -> str:
+    """Shell bootstrap shared by preflight and tmux follow-up commands."""
+    commands = ["source ~/.zshrc >/dev/null 2>&1"]
+    normalized_tmpdir = _normalize_tmux_tmpdir(tmux_tmpdir)
+    if normalized_tmpdir:
+        commands.append(f"export TMUX_TMPDIR={_quote(normalized_tmpdir)}")
+    if require_tmux:
+        commands.append("command -v tmux >/dev/null 2>&1" f" || {{ echo {_quote(TMUX_NOT_INSTALLED_MESSAGE)} >&2; exit 11; }}")
+    return "; ".join(commands)
+
+
+def _wrap_managed_local_shell_command(
+    command: str,
+    *,
+    tmux_tmpdir: str | None = None,
+    exec_command: bool = False,
+) -> str:
+    inner = [
+        build_managed_local_shell_prelude(tmux_tmpdir=tmux_tmpdir),
+        f"{'exec ' if exec_command else ''}{_require_non_empty('command', command)}",
+    ]
+    return f"zsh -lc {_quote('; '.join(inner))}"
+
+
 def _tmux_prefix() -> str:
     return f"tmux -L {_quote(MANAGED_LOCAL_TMUX_SERVER_LABEL)}"
 
 
-def build_tmux_launch_command(*, session_name: str, cwd: str, launch_command: str) -> str:
+def build_tmux_launch_command(
+    *,
+    session_name: str,
+    cwd: str,
+    launch_command: str,
+    tmux_tmpdir: str | None = None,
+) -> str:
     """Build a detached tmux launch command for a managed local session."""
     name = normalize_tmux_session_name(session_name, prefix="")
     working_dir = _require_non_empty("cwd", cwd)
     entry = _require_non_empty("launch_command", launch_command)
     inner = f"cd {_quote(working_dir)} && exec {entry}"
-    return f"{_tmux_prefix()} new-session -d -s {_quote(name)} {_quote(inner)}"
+    tmux_command = f"{_tmux_prefix()} set-option -g remain-on-exit failed \\; " f"new-session -d -s {_quote(name)} {_quote(inner)}"
+    return _wrap_managed_local_shell_command(tmux_command, tmux_tmpdir=tmux_tmpdir)
 
 
-def build_tmux_has_session_command(*, session_name: str) -> str:
+def build_tmux_has_session_command(*, session_name: str, tmux_tmpdir: str | None = None) -> str:
     """Build a probe command that exits 0 when the tmux session exists."""
     name = normalize_tmux_session_name(session_name, prefix="")
-    return f"{_tmux_prefix()} has-session -t {_quote(name)}"
+    return _wrap_managed_local_shell_command(
+        f"{_tmux_prefix()} has-session -t {_quote(name)}",
+        tmux_tmpdir=tmux_tmpdir,
+    )
 
 
-def build_tmux_current_command_command(*, session_name: str) -> str:
+def build_tmux_current_command_command(*, session_name: str, tmux_tmpdir: str | None = None) -> str:
     """Build a command that prints the active pane command for a tmux session."""
     name = normalize_tmux_session_name(session_name, prefix="")
-    return f"{_tmux_prefix()} display-message -p -t {_quote(name)} '#{{pane_current_command}}'"
+    return _wrap_managed_local_shell_command(
+        f"{_tmux_prefix()} display-message -p -t {_quote(name)} '#{{pane_current_command}}'",
+        tmux_tmpdir=tmux_tmpdir,
+    )
 
 
-def build_tmux_kill_session_command(*, session_name: str) -> str:
+def build_tmux_kill_session_command(*, session_name: str, tmux_tmpdir: str | None = None) -> str:
     """Build a best-effort session kill command for cleanup."""
     name = normalize_tmux_session_name(session_name, prefix="")
-    return f"{_tmux_prefix()} kill-session -t {_quote(name)}"
+    return _wrap_managed_local_shell_command(
+        f"{_tmux_prefix()} kill-session -t {_quote(name)}",
+        tmux_tmpdir=tmux_tmpdir,
+    )
 
 
-def build_tmux_capture_command(*, session_name: str, lines: int = 200) -> str:
+def build_tmux_capture_command(*, session_name: str, lines: int = 200, tmux_tmpdir: str | None = None) -> str:
     """Build a pane-capture command for the tmux session."""
     name = normalize_tmux_session_name(session_name, prefix="")
     if lines <= 0:
         raise ValueError("lines must be positive")
-    return f"{_tmux_prefix()} capture-pane -pt {_quote(name)} -S -{int(lines)}"
+    return _wrap_managed_local_shell_command(
+        f"{_tmux_prefix()} capture-pane -pt {_quote(name)} -S -{int(lines)}",
+        tmux_tmpdir=tmux_tmpdir,
+    )
 
 
-def build_tmux_set_remain_on_exit_command(*, session_name: str, mode: str = "failed") -> str:
+def build_tmux_set_remain_on_exit_command(
+    *,
+    session_name: str,
+    mode: str = "failed",
+    tmux_tmpdir: str | None = None,
+) -> str:
     """Build a command that preserves failed panes for inspection."""
     name = normalize_tmux_session_name(session_name, prefix="")
     normalized_mode = _require_non_empty("mode", mode)
-    return f"{_tmux_prefix()} set-option -t {_quote(name)} remain-on-exit {_quote(normalized_mode)}"
+    return _wrap_managed_local_shell_command(
+        f"{_tmux_prefix()} set-option -t {_quote(name)} remain-on-exit {_quote(normalized_mode)}",
+        tmux_tmpdir=tmux_tmpdir,
+    )
 
 
-def build_tmux_attach_command(*, session_name: str) -> str:
+def build_tmux_attach_command(*, session_name: str, tmux_tmpdir: str | None = None) -> str:
     """Build the user-facing attach command for a managed local session."""
     name = normalize_tmux_session_name(session_name, prefix="")
-    return f"{_tmux_prefix()} attach -t {_quote(name)}"
+    return _wrap_managed_local_shell_command(
+        f"{_tmux_prefix()} attach -t {_quote(name)}",
+        tmux_tmpdir=tmux_tmpdir,
+        exec_command=True,
+    )
 
 
-def build_tmux_send_text_command(*, session_name: str, text: str) -> str:
+def build_tmux_send_text_command(*, session_name: str, text: str, tmux_tmpdir: str | None = None) -> str:
     """Build a tmux command that sends text followed by Enter."""
     name = normalize_tmux_session_name(session_name, prefix="")
     raw = str(text or "")
@@ -108,7 +169,6 @@ def build_tmux_send_text_command(*, session_name: str, text: str) -> str:
     commands: list[str] = []
     for line in lines:
         if line:
-            commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} -- {_quote(line)} Enter")
-        else:
-            commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} Enter")
-    return " && ".join(commands)
+            commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} -l -- {_quote(line)}")
+        commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} Enter")
+    return _wrap_managed_local_shell_command(" && ".join(commands), tmux_tmpdir=tmux_tmpdir)

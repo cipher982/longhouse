@@ -315,7 +315,7 @@ describe("SessionsPage", () => {
     renderSessionsPage();
 
     expect(await screen.findByText("Running bash")).toBeInTheDocument();
-    expect(screen.getByText("Fresh signal")).toBeInTheDocument();
+    expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
@@ -361,7 +361,7 @@ describe("SessionsPage", () => {
             ended_at: null,
             status: "working",
             confidence: "inferred",
-            display_phase: "Working",
+            display_phase: "Recent progress",
           }),
         ],
         total: 1,
@@ -374,9 +374,110 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Working")).toBeInTheDocument();
-    expect(screen.getByText("Recent progress")).toBeInTheDocument();
+    expect(await screen.findByText("Recent progress")).toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
+  });
+
+  it("does not style inferred recent progress as currently executing", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            ended_at: null,
+            status: "working",
+            confidence: "inferred",
+            display_phase: "Recent progress",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    const { container } = renderSessionsPage();
+
+    await screen.findByText("Recent progress");
+
+    const card = container.querySelector(".session-card");
+    expect(card).toHaveClass("session-card--inferred");
+    expect(card).not.toHaveClass("session-card--live");
+    expect(card).not.toHaveClass("session-card--running");
+    expect(card).not.toHaveClass("session-card--thinking");
+  });
+
+  it("styles needs-you sessions as attention state, not executing work", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            ended_at: null,
+            execution_home: "managed_local",
+            managed_transport: "tmux",
+            runtime_source: "managed_local_transport",
+            status: "working",
+            confidence: "live",
+            presence_state: "needs_user",
+            presence_updated_at: "2026-03-21T12:04:00Z",
+            last_live_at: "2026-03-21T12:04:00Z",
+            timeline_anchor_at: "2026-03-21T12:04:00Z",
+            display_phase: "Needs you",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    const { container } = renderSessionsPage();
+
+    expect(await screen.findByText("Needs you")).toBeInTheDocument();
+    expect(screen.getByText("Local runtime")).toBeInTheDocument();
+
+    const card = container.querySelector(".session-card");
+    expect(card).toHaveClass("session-card--needs-user");
+    expect(card).not.toHaveClass("session-card--live");
+    expect(card).not.toHaveClass("session-card--running");
+    expect(card).not.toHaveClass("session-card--thinking");
+  });
+
+  it("styles thinking sessions as active execution distinct from running", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            ended_at: null,
+            status: "working",
+            confidence: "live",
+            presence_state: "thinking",
+            presence_updated_at: "2026-03-21T12:04:00Z",
+            last_live_at: "2026-03-21T12:04:00Z",
+            timeline_anchor_at: "2026-03-21T12:04:00Z",
+            display_phase: "Thinking",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    const { container } = renderSessionsPage();
+
+    expect(await screen.findByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
+
+    const card = container.querySelector(".session-card");
+    expect(card).toHaveClass("session-card--live");
+    expect(card).toHaveClass("session-card--thinking");
+    expect(card).not.toHaveClass("session-card--running");
   });
 
   it("does not treat a merely open session as live without runtime evidence", async () => {

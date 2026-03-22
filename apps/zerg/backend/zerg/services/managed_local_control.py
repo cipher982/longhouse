@@ -57,6 +57,7 @@ async def send_text_to_managed_local_session(
         command=build_tmux_send_text_command(
             session_name=str(session.managed_session_name),
             text=text,
+            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
         ),
         timeout_secs=timeout_secs,
         commis_id=commis_id,

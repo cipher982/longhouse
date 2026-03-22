@@ -291,6 +291,8 @@ def _build_display_phase(
         return f"Blocked on {presence_tool}" if presence_tool else "Needs permission"
     if presence_state == "idle":
         return "Idle"
+    if confidence == "inferred":
+        return "Recent progress"
     if status == "working":
         return "Working"
     if status == "idle":
