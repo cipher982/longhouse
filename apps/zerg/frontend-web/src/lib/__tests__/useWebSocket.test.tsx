@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "react-hot-toast";
 import { useWebSocket } from "../useWebSocket";
 
 vi.mock("../config", () => ({
@@ -178,5 +179,49 @@ describe("useWebSocket", () => {
     unmount();
 
     expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the first real error after an intentional reconnect", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const wrapper = createWrapper(queryClient);
+    const onError = vi.fn();
+
+    const { result } = renderHook(
+      () =>
+        useWebSocket(true, {
+          onError,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(mockSockets).toHaveLength(1);
+    });
+
+    act(() => {
+      mockSockets[0].emit("open", new Event("open"));
+      result.current.reconnect();
+    });
+
+    await waitFor(() => {
+      expect(mockSockets).toHaveLength(2);
+    });
+
+    act(() => {
+      mockSockets[1].emit("error", new Event("error"));
+    });
+
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(result.current.connectionStatus).toBe("error");
+      expect(toast.error).toHaveBeenCalledWith(
+        "WebSocket connection failed. Real-time features disabled.",
+        { duration: 5000 },
+      );
+    });
   });
 });

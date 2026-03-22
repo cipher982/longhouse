@@ -241,20 +241,27 @@ export function useWebSocket(
   const connect = useCallback(() => {
     // Clean up existing connection
     if (wsRef.current) {
+      const existingSocket = wsRef.current;
       try {
         // Mark as intentional so handleError ignores self-inflicted closure
         // (e.g. StrictMode effect re-run or manual reconnect).
         intentionalCloseRef.current = true;
-        if (typeof wsRef.current.removeEventListener === 'function') {
-          wsRef.current.removeEventListener('message', handleMessage);
-          wsRef.current.removeEventListener('open', handleConnect);
-          wsRef.current.removeEventListener('close', handleDisconnect);
-          wsRef.current.removeEventListener('error', handleError);
+        if (typeof existingSocket.removeEventListener === 'function') {
+          existingSocket.removeEventListener('message', handleMessage);
+          existingSocket.removeEventListener('open', handleConnect);
+          existingSocket.removeEventListener('close', handleDisconnect);
+          existingSocket.removeEventListener('error', handleError);
+        } else {
+          existingSocket.onmessage = null;
+          existingSocket.onopen = null;
+          existingSocket.onclose = null;
+          existingSocket.onerror = null;
         }
-        wsRef.current.close();
+        existingSocket.close();
       } catch (error) {
         // Ignore cleanup errors in test environment
         console.warn('WebSocket cleanup error:', error);
+      } finally {
         intentionalCloseRef.current = false;
       }
     }
@@ -306,21 +313,28 @@ export function useWebSocket(
     }
 
     if (wsRef.current) {
+      const existingSocket = wsRef.current;
       // Mark as intentional so handleError ignores self-inflicted closure
       intentionalCloseRef.current = true;
 
       try {
-        if (typeof wsRef.current.removeEventListener === 'function') {
-          wsRef.current.removeEventListener('message', handleMessage);
-          wsRef.current.removeEventListener('open', handleConnect);
-          wsRef.current.removeEventListener('close', handleDisconnect);
-          wsRef.current.removeEventListener('error', handleError);
+        if (typeof existingSocket.removeEventListener === 'function') {
+          existingSocket.removeEventListener('message', handleMessage);
+          existingSocket.removeEventListener('open', handleConnect);
+          existingSocket.removeEventListener('close', handleDisconnect);
+          existingSocket.removeEventListener('error', handleError);
+        } else {
+          existingSocket.onmessage = null;
+          existingSocket.onopen = null;
+          existingSocket.onclose = null;
+          existingSocket.onerror = null;
         }
-        wsRef.current.close();
+        existingSocket.close();
         wsRef.current = null;
       } catch (error) {
         console.warn('WebSocket disconnect error:', error);
         wsRef.current = null;
+      } finally {
         intentionalCloseRef.current = false;
       }
     }
