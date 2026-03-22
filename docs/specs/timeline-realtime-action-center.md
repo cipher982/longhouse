@@ -75,34 +75,80 @@ Three migration leftovers remain:
 
 Those are the actual near-term cleanup items.
 
-## Immediate Work
+## Phased Plan
 
-### 1. Collapse the main Timeline off `/sessions/active`
+### Phase 1: Honest desktop semantics
 
-The main list should render from the Timeline row itself, not depend on a secondary live overlay feed.
+Goal: make the current Timeline labels truthful without pretending unmanaged local sessions are exact.
 
-Keep `/sessions/active` only for the optional live subpanel or other non-critical-path surfaces until it can be removed or narrowed.
+Scope:
 
-### 2. Make materialized runtime state the clear primary truth path
+- Replace inferred `Active` language with weaker user-facing wording.
+- Keep confidence explicit on rows, but stop making inference read like certainty.
+- Tighten the row model around `phase`, `confidence`, and `runtime_source`.
 
-The reducer-backed runtime state should be the normal source for Timeline reads.
+Success criteria:
 
-Ad hoc fallback logic from presence + transcript can stay temporarily for migration safety, but it should be treated as compatibility code, not permanent architecture.
+- Inferred unmanaged rows no longer render as plain `Active`.
+- A user can visually distinguish authoritative live execution from recent-progress inference.
+- Timeline cards do not imply that an open terminal tab means the agent is actively working.
+- Backend and frontend tests lock the new label/state contract.
 
-### 3. Replace the 1-second full-list SSE polling loop with a cheaper change detector
+### Phase 2: Execution-home visibility
 
-The current stream works, but the hot path in `apps/zerg/backend/zerg/routers/timeline.py` is still too expensive:
+Goal: let Timeline answer where a session is running without defining what actions are available there.
 
-- it calls the full session listing path every second
-- it serializes whole rows
-- it diffs JSON signatures for each client
+Scope:
 
-The next optimization should keep the simple `session_upsert` / `session_remove` protocol and make change detection cheaper before adding a richer stream protocol.
+- Add explicit `execution_home` metadata to session APIs and Timeline rows.
+- Show concise desktop labels like `On this Mac`, `Hosted`, or `Cloud`.
+- Keep action semantics separate from this field.
+
+Success criteria:
+
+- Timeline rows expose a canonical execution-home field.
+- The user can tell managed-local from legacy/unmanaged rows at a glance.
+- The new field does not silently change continuation behavior or Loop semantics.
+
+### Phase 3: Managed runtime class
+
+Goal: treat managed sessions as a stronger runtime source than transcript-only fallback.
+
+Scope:
+
+- Introduce stronger runtime-source semantics for managed sessions.
+- Prefer managed transport/runtime signals over transcript progress when available.
+- Keep unmanaged local as fallback observability only.
+
+Success criteria:
+
+- Managed-local sessions can surface stronger runtime truth than legacy transcript-only sessions.
+- Runtime-source precedence is explicit and test-covered.
+- Timeline remains read-only with respect to continuation transport semantics.
+
+### Phase 4: Cleanup and scale
+
+Goal: finish the migration residue and make the hot path cheaper.
+
+Scope:
+
+- Collapse the main Timeline off `/sessions/active`.
+- Make materialized runtime state the clear primary truth path.
+- Replace the 1-second full-list SSE polling loop with a cheaper change detector.
+
+Success criteria:
+
+- Main Timeline cards render from `/timeline/sessions` rows only.
+- Remaining ad hoc fallback paths are clearly compatibility-only.
+- Timeline streaming no longer requires full filtered-list recompute/diff per client every second.
+- Manual QA covers multiple concurrent sessions and long-running silent turns.
 
 ## Explicitly Deferred
 
 Do not expand scope into these yet:
 
+- exact working detection for unmanaged local Codex sessions
+- `open terminal but idle` detection for unmanaged local sessions
 - PID/process-tree supervision
 - richer SSE patch/resync machinery beyond row upsert/remove
 - runtime-key complexity on the Timeline read path unless current session binding proves insufficient
