@@ -17,6 +17,7 @@ import json
 
 import typer
 
+from zerg.cli.claude import claude
 from zerg.cli.connect import app as connect_app
 from zerg.cli.doctor import doctor
 from zerg.cli.mcp_serve import mcp_server
@@ -79,6 +80,7 @@ app.command(name="status")(status)
 # Session shipping commands (convenience aliases)
 # Find commands by callback function name to avoid index-position bugs
 _cmd_lookup = {cmd.callback.__name__: cmd.callback for cmd in connect_app.registered_commands}
+app.command(name="claude")(claude)
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])
@@ -87,7 +89,11 @@ app.command(name="recall")(_cmd_lookup["recall"])
 
 @app.command(name="migrate")
 def migrate(
-    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override (defaults to env)."),
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="SQLite DATABASE_URL override (defaults to env).",
+    ),
     apply: bool = typer.Option(False, "--apply", help="Apply pending heavy migrations."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
