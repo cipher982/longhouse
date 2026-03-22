@@ -177,12 +177,14 @@ def test_build_entry_command_claude_includes_session_id():
     assert "codex" not in inner
 
 
-def test_build_entry_command_codex_omits_session_id():
+def test_build_entry_command_codex_injects_longhouse_session_id():
     cmd = _build_entry_command(provider="codex", provider_session_id="abc-123", display_name=None)
     inner = _inner_command(cmd)
     assert "exec codex" in inner
     assert "claude-code" not in inner
     assert "--session-id" not in inner
+    assert "export LONGHOUSE_SESSION_ID=" in inner
+    assert "abc-123" in inner
 
 
 def test_build_preflight_command_claude_checks_claude_code():
@@ -482,6 +484,10 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             launch_inner = _inner_command(dispatcher.calls[1]["command"])
             assert "exec codex" in launch_inner
             assert "claude-code" not in launch_inner
+
+            # Must inject LONGHOUSE_SESSION_ID so hook routes presence to Longhouse's UUID
+            assert "LONGHOUSE_SESSION_ID" in launch_inner
+            assert payload["provider_session_id"] in launch_inner
         finally:
             api_app_ref.dependency_overrides = {}
 

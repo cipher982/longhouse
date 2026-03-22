@@ -132,7 +132,7 @@ def _derive_project(cwd: str, project: str | None) -> str:
 
 def _build_entry_command(*, provider: str, provider_session_id: str, display_name: str | None) -> str:
     if provider == "codex":
-        return _build_codex_entry_command()
+        return _build_codex_entry_command(managed_session_id=provider_session_id)
     parts = ["claude-code", "--session-id", provider_session_id]
     if display_name and display_name.strip():
         parts.extend(["-n", display_name.strip()])
@@ -140,8 +140,14 @@ def _build_entry_command(*, provider: str, provider_session_id: str, display_nam
     return f"zsh -lc {shlex.quote(inner)}"
 
 
-def _build_codex_entry_command() -> str:
-    inner = "source ~/.zshrc >/dev/null 2>&1; exec codex"
+def _build_codex_entry_command(*, managed_session_id: str) -> str:
+    """Build the tmux entry command for a managed-local Codex session.
+
+    Injects LONGHOUSE_SESSION_ID into the environment so the Codex hook
+    script routes presence and transcript shipping under Longhouse's UUID
+    instead of Codex's auto-generated session ID.
+    """
+    inner = f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}; " "source ~/.zshrc >/dev/null 2>&1; exec codex"
     return f"zsh -lc {shlex.quote(inner)}"
 
 
