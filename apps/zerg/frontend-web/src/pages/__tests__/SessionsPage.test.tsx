@@ -232,6 +232,41 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("uses honest grouped-results copy in query compatibility mode", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-root",
+            project: "compat",
+            summary_title: "compat root",
+            thread_root_session_id: "thread-1",
+            thread_head_session_id: "thread-2",
+          }),
+          makeTimelineCard({
+            id: "session-other",
+            project: "compat-2",
+            summary_title: "compat other",
+            thread_root_session_id: "thread-3",
+            thread_head_session_id: "thread-3",
+          }),
+        ],
+        total: 3,
+        has_real_sessions: true,
+        compatibility_mode: "query_grouped",
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=needle");
+
+    expect(await screen.findByText("2 results")).toBeInTheDocument();
+    expect(screen.getByText("Showing 2 grouped results from 3 matching sessions")).toBeInTheDocument();
+    expect(screen.queryByText("Showing 2 of 3 task threads")).not.toBeInTheDocument();
+  });
+
   it("refreshes relative time labels while the timeline stays open", async () => {
     vi.useFakeTimers();
     try {

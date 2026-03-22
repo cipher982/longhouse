@@ -87,6 +87,7 @@ export interface TimelineSessionsListResponse {
   sessions: TimelineSessionCard[];
   total: number;
   has_real_sessions: boolean;
+  compatibility_mode?: "query_grouped";
 }
 
 export interface AgentSessionThreadResponse {
@@ -254,7 +255,7 @@ function getRawTimelineSessionAnchor(session: AgentSession): string | null {
   return session.timeline_anchor_at || session.last_activity_at || session.started_at || null;
 }
 
-function buildHybridTimelineCards(sessions: AgentSession[]): TimelineSessionCard[] {
+function buildCompatibilityTimelineCards(sessions: AgentSession[]): TimelineSessionCard[] {
   const cardsByThread = new Map<string, TimelineSessionCard>();
   const orderedThreadIds: string[] = [];
 
@@ -276,6 +277,16 @@ function buildHybridTimelineCards(sessions: AgentSession[]): TimelineSessionCard
       continue;
     }
 
+    const sessionHasExplicitMatch =
+      session.match_event_id != null || !!session.match_snippet || session.match_score != null;
+    const currentDetailHasExplicitMatch =
+      existing.detail.match_event_id != null ||
+      !!existing.detail.match_snippet ||
+      existing.detail.match_score != null;
+    const nextDetail =
+      sessionHasExplicitMatch && !currentDetailHasExplicitMatch
+        ? session
+        : existing.detail;
     const nextHead =
       session.id === existing.detail.thread_head_session_id || session.is_writable_head
         ? session
@@ -288,6 +299,7 @@ function buildHybridTimelineCards(sessions: AgentSession[]): TimelineSessionCard
     cardsByThread.set(threadId, {
       ...existing,
       head: nextHead,
+      detail: nextDetail,
       root: nextRoot,
       continuation_count: Math.max(existing.continuation_count, session.thread_continuation_count || 1),
       started_origin_label:
@@ -330,14 +342,16 @@ export async function fetchAgentSessions(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}${queryString ? `?${queryString}` : ""}`;
 
-  if (filters.mode === "hybrid") {
-    // Hybrid search still comes back as raw session hits today; collapse those
-    // client-side until thread-aware hybrid paging/ranking is designed cleanly.
+  const compatibilityMode = !!filters.query || (filters.mode != null && filters.mode !== "lexical");
+  if (compatibilityMode) {
+    // Query-driven search still comes back as raw session hits today; collapse
+    // those client-side until thread-aware query paging/ranking is designed cleanly.
     const rawResponse = await request<AgentSessionsListResponse>(path, { method: "GET" });
     return {
-      sessions: buildHybridTimelineCards(rawResponse.sessions),
+      sessions: buildCompatibilityTimelineCards(rawResponse.sessions),
       total: rawResponse.total,
       has_real_sessions: rawResponse.has_real_sessions,
+      compatibility_mode: "query_grouped",
     };
   }
 
