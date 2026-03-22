@@ -23,6 +23,7 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSession,
   type AgentSessionFilters,
+  type TimelineSessionCard,
   seedDemoSessions,
 } from "../services/api/agents";
 import {
@@ -164,87 +165,14 @@ function useRelativeTimeClock(enabled: boolean): number {
   return nowMs;
 }
 
-interface SessionThreadCard {
-  threadId: string;
-  head: AgentSession;
-  detail: AgentSession;
-  root: AgentSession;
-  sessions: AgentSession[];
-  continuationCount: number;
-  startedOriginLabel: string | null;
-  headOriginLabel: string | null;
-}
-
-function buildThreadCards(
-  sessions: AgentSession[],
-): SessionThreadCard[] {
-  const groups = new Map<string, {
-    order: number;
-    sessions: AgentSession[];
-    detail: AgentSession;
-    head: AgentSession | null;
-  }>();
-
-  sessions.forEach((session, index) => {
-    const threadId = session.thread_root_session_id || session.id;
-    const existing = groups.get(threadId);
-    if (!existing) {
-      groups.set(threadId, {
-        order: index,
-        sessions: [session],
-        detail: session,
-        head: session.id === session.thread_head_session_id || session.is_writable_head ? session : null,
-      });
-      return;
-    }
-
-    existing.sessions.push(session);
-    if (session.id === session.thread_head_session_id || session.is_writable_head) {
-      existing.head = session;
-    }
-  });
-
-  return Array.from(groups.entries())
-    .map(([threadId, group]) => {
-      const orderedSessions = [...group.sessions].sort(
-        (a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime(),
-      );
-      const root = orderedSessions.find((session) => session.id === threadId) || orderedSessions[0] || group.detail;
-      const head =
-        group.head ||
-        orderedSessions.find((session) => session.id === group.detail.thread_head_session_id) ||
-        group.detail;
-
-      return {
-        order: group.order,
-        threadId,
-        head,
-        detail: group.detail,
-        root,
-        sessions: orderedSessions,
-        continuationCount: head.thread_continuation_count || orderedSessions.length,
-        startedOriginLabel: root.origin_label || root.environment,
-        headOriginLabel: head.origin_label || head.environment,
-      };
-    })
-    .sort((a, b) => {
-      const anchorDiff =
-        parseUTC(getResolvedTimelineAnchor(b.head)).getTime() -
-        parseUTC(getResolvedTimelineAnchor(a.head)).getTime();
-      if (anchorDiff !== 0) return anchorDiff;
-      return a.order - b.order;
-    })
-    .map(({ order: _order, ...card }) => card);
-}
-
 function groupThreadCardsByDay(
-  cards: SessionThreadCard[],
+  cards: TimelineSessionCard[],
   nowMs: number,
-): Map<string, SessionThreadCard[]> {
-  const groups = new Map<string, SessionThreadCard[]>();
+): Map<string, TimelineSessionCard[]> {
+  const groups = new Map<string, TimelineSessionCard[]>();
 
   for (const card of cards) {
-    const key = getDateKey(getResolvedTimelineAnchor(card.head), nowMs);
+    const key = getDateKey(card.timeline_anchor_at || getResolvedTimelineAnchor(card.head), nowMs);
     const existing = groups.get(key) || [];
     existing.push(card);
     groups.set(key, existing);
@@ -582,7 +510,7 @@ function FilterPopover({
 // ---------------------------------------------------------------------------
 
 interface SessionCardProps {
-  thread: SessionThreadCard;
+  thread: TimelineSessionCard;
   onClick: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
@@ -600,7 +528,7 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relati
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
   const executionHomeLabel = getExecutionHomeLabel(session.execution_home);
-  const showHeadOriginLabel = !!thread.headOriginLabel && thread.headOriginLabel !== executionHomeLabel;
+  const showHeadOriginLabel = !!thread.head_origin_label && thread.head_origin_label !== executionHomeLabel;
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
@@ -624,14 +552,14 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relati
       onClick={onClick}
       style={{ borderLeftColor: getProviderColor(session.provider) }}
       data-testid="session-card"
-      data-session-id={session.id}
-      data-thread-id={thread.threadId}
+      data-session-id={detailSession.id}
+      data-thread-id={thread.thread_id}
       data-runtime-tone={runtime.tone}
       data-execution-home={session.execution_home || "legacy"}
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
-        <span className="session-card-time">{formatRelativeTime(getResolvedTimelineAnchor(session), relativeNowMs)}</span>
+        <span className="session-card-time">{formatRelativeTime(thread.timeline_anchor_at || getResolvedTimelineAnchor(session), relativeNowMs)}</span>
       </div>
 
       <div className="session-card-meta">
@@ -657,14 +585,14 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relati
           </span>
         )}
         {showHeadOriginLabel && (
-          <span className="environment-badge environment-badge--secondary">Head: {thread.headOriginLabel}</span>
+          <span className="environment-badge environment-badge--secondary">Head: {thread.head_origin_label}</span>
         )}
-        {thread.continuationCount > 1 && thread.startedOriginLabel && thread.startedOriginLabel !== thread.headOriginLabel && (
-          <span className="environment-badge environment-badge--secondary">Started: {thread.startedOriginLabel}</span>
+        {thread.continuation_count > 1 && thread.started_origin_label && thread.started_origin_label !== thread.head_origin_label && (
+          <span className="environment-badge environment-badge--secondary">Started: {thread.started_origin_label}</span>
         )}
-        {thread.continuationCount > 1 && (
+        {thread.continuation_count > 1 && (
           <span className="environment-badge environment-badge--secondary">
-            {thread.continuationCount} continuations
+            {thread.continuation_count} continuations
           </span>
         )}
       </div>
@@ -734,8 +662,8 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relati
 
 interface SessionGroupProps {
   title: string;
-  sessions: SessionThreadCard[];
-  onSessionClick: (thread: SessionThreadCard) => void;
+  sessions: TimelineSessionCard[];
+  onSessionClick: (thread: TimelineSessionCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
   relativeNowMs: number;
@@ -758,7 +686,7 @@ function SessionGroup({
       <div className="session-group-list">
         {sessions.map((thread) => (
           <SessionCard
-            key={thread.threadId}
+            key={thread.thread_id}
             thread={thread}
             onClick={() => onSessionClick(thread)}
             highlightQuery={highlightQuery}
@@ -904,7 +832,9 @@ export default function SessionsPage() {
     refetchInterval: timelineStreamEligible
       ? TIMELINE_RECONCILIATION_MS
       : (query) => {
-          const pendingSessions = query.state.data?.sessions?.some((session) => !session.summary_title && !session.summary);
+          const pendingSessions = query.state.data?.sessions?.some(
+            (session) => !session.head.summary_title && !session.head.summary
+          );
           return pendingSessions ? 3_000 : 30_000;
         },
   });
@@ -920,7 +850,7 @@ export default function SessionsPage() {
 
   useTimelineSessionStream(filters, { enabled: timelineStreamEnabled });
 
-  const threadCards = useMemo(() => buildThreadCards(sessions), [sessions]);
+  const threadCards = sessions;
   const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards, relativeNowMs), [threadCards, relativeNowMs]);
 
   const headerActions = (
@@ -937,7 +867,7 @@ export default function SessionsPage() {
   );
 
   // Handle session click - preserve current filters in location state
-  const handleSessionClick = useCallback((thread: SessionThreadCard) => {
+  const handleSessionClick = useCallback((thread: TimelineSessionCard) => {
     const detailSession = thread.detail;
     const matchEventId = debouncedQuery ? detailSession.match_event_id : null;
     navigate(buildSessionDetailPath(detailSession, matchEventId), {
@@ -1311,9 +1241,7 @@ export default function SessionsPage() {
         {total > 0 && (
           <div className="sessions-footer">
             <span className="sessions-count">
-              {threadCards.length === sessions.length
-                ? `Showing ${threadCards.length} of ${total} sessions`
-                : `Showing ${threadCards.length} task threads from ${sessions.length} sessions`}
+              {`Showing ${threadCards.length} of ${total} task threads`}
             </span>
             {hasMore && (
               <Button

@@ -18,7 +18,7 @@ import {
   fetchAgentBriefing,
   type BriefingResponse,
   type AgentSessionFilters,
-  type AgentSessionsListResponse,
+  type TimelineSessionsListResponse,
   type AgentSession,
   type AgentSessionThreadResponse,
   type AgentSessionProjectionResponse,
@@ -35,7 +35,7 @@ import {
  * Hook to fetch sessions for the timeline page.
  */
 type AgentSessionsQueryOptions = Pick<
-  UseQueryOptions<AgentSessionsListResponse>,
+  UseQueryOptions<TimelineSessionsListResponse>,
   "enabled" | "refetchInterval"
 >;
 
@@ -43,7 +43,7 @@ export function useAgentSessions(
   filters: AgentSessionFilters = {},
   options: AgentSessionsQueryOptions = {}
 ) {
-  return useQuery<AgentSessionsListResponse>({
+  return useQuery<TimelineSessionsListResponse>({
     queryKey: ["agent-sessions", filters],
     queryFn: () => fetchAgentSessions(filters),
     meta: { apiHealth: true },

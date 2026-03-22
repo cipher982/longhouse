@@ -17,6 +17,9 @@ from fastapi import Depends
 from fastapi import Query
 from fastapi import Request
 from fastapi import Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 from sse_starlette.sse import EventSourceResponse
@@ -25,6 +28,7 @@ from zerg.database import get_db
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
+from zerg.models.agents import AgentSession
 from zerg.routers import agents as agents_router
 from zerg.services.agents_store import AgentsStore
 
@@ -40,9 +44,110 @@ TIMELINE_STREAM_POLL_SECONDS = 1.0
 TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 
 
-def _session_payload_signature(session: agents_router.SessionResponse) -> tuple[dict, str]:
+class TimelineSessionCardResponse(BaseModel):
+    thread_id: str = Field(..., description="Logical thread/task root UUID")
+    timeline_anchor_at: datetime | None = Field(None, description="Anchor used for timeline ordering and grouping")
+    head: agents_router.SessionResponse
+    detail: agents_router.SessionResponse
+    root: agents_router.SessionResponse
+    continuation_count: int = Field(..., description="Concrete continuation count in this logical thread")
+    started_origin_label: str | None = Field(None, description="Origin label for where the thread started")
+    head_origin_label: str | None = Field(None, description="Origin label for the current writable head")
+
+
+class TimelineSessionsListResponse(BaseModel):
+    sessions: list[TimelineSessionCardResponse]
+    total: int
+    has_real_sessions: bool = True
+
+
+def _session_payload_signature(session: TimelineSessionCardResponse) -> tuple[dict, str]:
     payload = session.model_dump(mode="json")
     return payload, json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _has_real_sessions(db: Session, *, total: int) -> bool:
+    if total == 0:
+        return True
+    return (
+        db.query(AgentSession.id).filter((AgentSession.device_id != "demo-mac") | (AgentSession.device_id.is_(None))).limit(1).first()
+        is not None
+    )
+
+
+def _build_session_response_map(
+    *,
+    db: Session,
+    session_ids: list[str],
+) -> dict[str, agents_router.SessionResponse]:
+    if not session_ids:
+        return {}
+
+    store = AgentsStore(db)
+    uuid_ids = [UUID(session_id) for session_id in session_ids]
+    sessions = db.query(AgentSession).filter(AgentSession.id.in_(uuid_ids)).all()
+    if not sessions:
+        return {}
+
+    activity_map = store.get_last_activity_map([session.id for session in sessions])
+    presence_map = agents_router._load_presence_map(db, [session.id for session in sessions])
+    runtime_state_map = agents_router.load_runtime_state_map(db, [session.id for session in sessions])
+    first_user_map = store.get_first_message_map([session.id for session in sessions], role="user", max_len=80)
+    thread_cache: dict[str, tuple[str, int]] = {}
+    now = datetime.now(timezone.utc)
+
+    response_map: dict[str, agents_router.SessionResponse] = {}
+    for session in sessions:
+        response = agents_router._build_session_response(
+            store,
+            session,
+            thread_cache=thread_cache,
+            last_activity_at=agents_router._normalize_utc_datetime(activity_map.get(session.id) or session.ended_at or session.started_at),
+            runtime_overlay=agents_router._resolve_runtime_overlay(
+                session,
+                last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
+                presence_map=presence_map,
+                runtime_state_map=runtime_state_map,
+                now=now,
+            ),
+            first_user_message=first_user_map.get(session.id),
+        )
+        response_map[response.id] = response
+    return response_map
+
+
+def _build_timeline_cards_from_detail_rows(
+    *,
+    db: Session,
+    detail_rows: list[agents_router.SessionResponse],
+) -> list[TimelineSessionCardResponse]:
+    if not detail_rows:
+        return []
+
+    response_map = {session.id: session for session in detail_rows}
+    supplemental_ids = sorted(
+        {detail.thread_root_session_id for detail in detail_rows}
+        | {detail.thread_head_session_id for detail in detail_rows} - response_map.keys()
+    )
+    response_map.update(_build_session_response_map(db=db, session_ids=supplemental_ids))
+
+    cards: list[TimelineSessionCardResponse] = []
+    for detail in detail_rows:
+        head = response_map.get(detail.thread_head_session_id, detail)
+        root = response_map.get(detail.thread_root_session_id, detail)
+        cards.append(
+            TimelineSessionCardResponse(
+                thread_id=detail.thread_root_session_id,
+                timeline_anchor_at=detail.timeline_anchor_at,
+                head=head,
+                detail=detail,
+                root=root,
+                continuation_count=head.thread_continuation_count or detail.thread_continuation_count or 1,
+                started_origin_label=root.origin_label or root.environment,
+                head_origin_label=head.origin_label or head.environment,
+            )
+        )
+    return cards
 
 
 def _effective_stream_sort(query: str | None, sort: str | None) -> str:
@@ -51,7 +156,7 @@ def _effective_stream_sort(query: str | None, sort: str | None) -> str:
 
 def _stream_supports_preflight(*, query: str | None, sort: str | None, mode: str | None) -> bool:
     effective_sort = _effective_stream_sort(query, sort)
-    return mode in (None, "lexical") and effective_sort == "recency"
+    return query is None and mode in (None, "lexical") and effective_sort == "recency"
 
 
 def _load_timeline_stream_window_signature(
@@ -71,7 +176,7 @@ def _load_timeline_stream_window_signature(
 ) -> tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]:
     store = AgentsStore(db)
     since = datetime.now(timezone.utc) - timedelta(days=days_back)
-    _, rows = store.list_session_window_signature(
+    _, rows = store.list_timeline_thread_window_signature(
         project=project,
         provider=provider,
         environment=environment,
@@ -152,7 +257,7 @@ async def _timeline_sessions_stream(
             previous_window_signature = current_window_signature
 
         with session_factory() as db:
-            response = await agents_router.list_sessions(
+            response = await list_timeline_sessions(
                 project=project,
                 provider=provider,
                 environment=environment,
@@ -167,8 +272,6 @@ async def _timeline_sessions_stream(
                 mode=mode,
                 context_mode=context_mode,
                 db=db,
-                _auth=None,
-                _single=None,
             )
 
         current_payloads: dict[str, dict] = {}
@@ -176,16 +279,16 @@ async def _timeline_sessions_stream(
 
         for session in response.sessions:
             payload, signature = _session_payload_signature(session)
-            current_payloads[session.id] = payload
-            current_signatures[session.id] = signature
+            current_payloads[session.thread_id] = payload
+            current_signatures[session.thread_id] = signature
 
         removed_ids = previous_signatures.keys() - current_signatures.keys()
-        for session_id in sorted(removed_ids):
+        for thread_id in sorted(removed_ids):
             yield {
                 "event": "session_remove",
                 "data": json.dumps(
                     {
-                        "session_id": session_id,
+                        "thread_id": thread_id,
                         "total": response.total,
                         "has_real_sessions": response.has_real_sessions,
                     }
@@ -193,14 +296,14 @@ async def _timeline_sessions_stream(
             }
 
         for session in response.sessions:
-            signature = current_signatures[session.id]
-            if previous_signatures.get(session.id) == signature:
+            signature = current_signatures[session.thread_id]
+            if previous_signatures.get(session.thread_id) == signature:
                 continue
             yield {
                 "event": "session_upsert",
                 "data": json.dumps(
                     {
-                        "session": current_payloads[session.id],
+                        "session": current_payloads[session.thread_id],
                         "total": response.total,
                         "has_real_sessions": response.has_real_sessions,
                     }
@@ -277,7 +380,7 @@ async def recall_timeline_sessions(
     )
 
 
-@router.get("/sessions", response_model=agents_router.SessionsListResponse)
+@router.get("/sessions", response_model=TimelineSessionsListResponse)
 async def list_timeline_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -297,23 +400,69 @@ async def list_timeline_sessions(
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.list_sessions(
+    effective_mode = mode or "lexical"
+    if effective_mode == "hybrid":
+        # Hybrid search remains on the legacy raw-session contract for now.
+        # The main thread-card contract in this route is only authoritative for
+        # default recency and lexical search.
+        raw_response = await agents_router.list_sessions(
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            hide_autonomous=hide_autonomous,
+            device_id=device_id,
+            days_back=days_back,
+            query=query,
+            limit=limit,
+            offset=offset,
+            sort=sort,
+            mode=mode,
+            context_mode=context_mode,
+            db=db,
+            _auth=None,
+            _single=None,
+        )
+        if isinstance(raw_response, Response):
+            return raw_response
+        return JSONResponse(content=raw_response.model_dump())
+
+    store = AgentsStore(db)
+    since = datetime.now(timezone.utc) - timedelta(days=days_back)
+    total, thread_rows = store.list_timeline_thread_page(
         project=project,
         provider=provider,
         environment=environment,
         include_test=include_test,
-        hide_autonomous=hide_autonomous,
         device_id=device_id,
-        days_back=days_back,
+        since=since,
         query=query,
         limit=limit,
         offset=offset,
-        sort=sort,
-        mode=mode,
+        hide_autonomous=hide_autonomous,
         context_mode=context_mode,
-        db=db,
-        _auth=None,
-        _single=None,
+    )
+    detail_ids = [session_id for _thread_id, session_id, _anchor in thread_rows]
+    detail_map = _build_session_response_map(db=db, session_ids=detail_ids)
+    detail_rows = [detail_map[session_id] for session_id in detail_ids if session_id in detail_map]
+
+    if query:
+        match_map = store.get_session_matches([UUID(session.id) for session in detail_rows], query, context_mode=context_mode)
+        detail_rows = [
+            detail.model_copy(
+                update={
+                    "match_event_id": (match_map.get(UUID(detail.id)) or {}).get("event_id"),
+                    "match_snippet": (match_map.get(UUID(detail.id)) or {}).get("snippet"),
+                    "match_role": (match_map.get(UUID(detail.id)) or {}).get("role"),
+                }
+            )
+            for detail in detail_rows
+        ]
+
+    return TimelineSessionsListResponse(
+        sessions=_build_timeline_cards_from_detail_rows(db=db, detail_rows=detail_rows),
+        total=total,
+        has_real_sessions=_has_real_sessions(db, total=total),
     )
 
 

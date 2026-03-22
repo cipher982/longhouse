@@ -295,6 +295,75 @@ test.describe("Sessions Page", () => {
     }
   });
 
+  test("Lexical timeline search keeps one card per thread and opens the matched continuation", async ({
+    page,
+    request,
+  }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const project = `thread-search-${suffix}`;
+    const magicToken = `older-hit-${suffix}`;
+    const rootTimestamp = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const headTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+    const rootId = await ingestSession(request, {
+      project,
+      started_at: rootTimestamp,
+      ended_at: rootTimestamp,
+      events: [
+        {
+          role: "user",
+          content_text: `Need to inspect ${magicToken} from the older continuation`,
+          timestamp: rootTimestamp,
+          source_path: "/tmp/thread-search-root.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    const headId = await ingestSession(request, {
+      project,
+      started_at: headTimestamp,
+      ended_at: headTimestamp,
+      thread_root_session_id: rootId,
+      continued_from_session_id: rootId,
+      events: [
+        {
+          role: "user",
+          content_text: "Newer continuation without the lexical token",
+          timestamp: headTimestamp,
+          source_path: "/tmp/thread-search-head.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await page.goto(`/timeline?project=${project}`);
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    const searchInput = page.locator('input[type="search"]');
+    await searchInput.fill(magicToken);
+    await expect(page).toHaveURL(new RegExp(`query=${magicToken}`));
+
+    const cards = page.locator('[data-testid="session-card"]');
+    await expect(cards).toHaveCount(1);
+
+    const sessionCard = cards.first();
+    await expect(sessionCard).toHaveAttribute("data-thread-id", rootId);
+    await expect(sessionCard).toHaveAttribute("data-session-id", rootId);
+    await expect(sessionCard).toContainText(magicToken);
+    await expect(sessionCard).not.toContainText(headId);
+
+    await sessionCard.click();
+
+    await expect(page).toHaveURL(new RegExp(`/timeline/${rootId}.*event_id=`));
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+    const matchedEvent = page
+      .getByTestId("session-timeline-row")
+      .filter({ hasText: magicToken })
+      .first();
+    await expect(matchedEvent).toBeVisible({ timeout: 15000 });
+  });
+
   test("Clear filters button removes all filters", async ({ page }) => {
     // Navigate with pre-set filters — filtersOpen auto-opens from URL params
     await page.goto("/timeline?provider=claude&project=zerg");

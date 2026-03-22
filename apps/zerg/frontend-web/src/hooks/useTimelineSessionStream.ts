@@ -2,29 +2,29 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   connectTimelineSessionsStream,
-  type AgentSession,
   type AgentSessionFilters,
-  type AgentSessionsListResponse,
+  type TimelineSessionCard,
+  type TimelineSessionsListResponse,
   type TimelineSessionRemoveEvent,
   type TimelineSessionUpsertEvent,
 } from "../services/api/agents";
 
-function sessionAnchorMillis(session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">): number {
-  return new Date(session.timeline_anchor_at || session.last_activity_at || session.started_at).getTime();
+function sessionAnchorMillis(card: TimelineSessionCard): number {
+  return new Date(card.timeline_anchor_at || card.head.timeline_anchor_at || card.head.last_activity_at || card.head.started_at).getTime();
 }
 
-function sortSessionsByAnchor(sessions: AgentSession[]): AgentSession[] {
+function sortSessionsByAnchor(sessions: TimelineSessionCard[]): TimelineSessionCard[] {
   return [...sessions].sort((a, b) => sessionAnchorMillis(b) - sessionAnchorMillis(a));
 }
 
 function upsertTimelineSession(
-  current: AgentSessionsListResponse,
+  current: TimelineSessionsListResponse,
   event: TimelineSessionUpsertEvent,
   limit: number | undefined,
-): AgentSessionsListResponse {
+): TimelineSessionsListResponse {
   const sessions = sortSessionsByAnchor([
     event.session,
-    ...current.sessions.filter((session) => session.id !== event.session.id),
+    ...current.sessions.filter((session) => session.thread_id !== event.session.thread_id),
   ]);
 
   return {
@@ -35,13 +35,13 @@ function upsertTimelineSession(
 }
 
 function removeTimelineSession(
-  current: AgentSessionsListResponse,
+  current: TimelineSessionsListResponse,
   event: TimelineSessionRemoveEvent,
-): AgentSessionsListResponse {
+): TimelineSessionsListResponse {
   return {
     total: event.total ?? current.total,
     has_real_sessions: event.has_real_sessions ?? current.has_real_sessions,
-    sessions: current.sessions.filter((session) => session.id !== event.session_id),
+    sessions: current.sessions.filter((session) => session.thread_id !== event.thread_id),
   };
 }
 
@@ -63,13 +63,13 @@ export function useTimelineSessionStream(
 
     return connectTimelineSessionsStream(filters, {
       onSessionUpsert: (event) => {
-        queryClient.setQueryData<AgentSessionsListResponse>(
+        queryClient.setQueryData<TimelineSessionsListResponse>(
           ["agent-sessions", filters],
           (current) => (current ? upsertTimelineSession(current, event, filters.limit) : current),
         );
       },
       onSessionRemove: (event) => {
-        queryClient.setQueryData<AgentSessionsListResponse>(
+        queryClient.setQueryData<TimelineSessionsListResponse>(
           ["agent-sessions", filters],
           (current) => (current ? removeTimelineSession(current, event) : current),
         );
