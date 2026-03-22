@@ -160,9 +160,9 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
     timeout_seconds = TASK_TIMEOUT_SECONDS.get(task_type)
     try:
         if timeout_seconds is None:
-            await _run_task_impl(session_id, task_type)
+            await _run_task_impl(task_id, session_id, task_type)
         else:
-            await asyncio.wait_for(_run_task_impl(session_id, task_type), timeout=timeout_seconds)
+            await asyncio.wait_for(_run_task_impl(task_id, session_id, task_type), timeout=timeout_seconds)
 
         _mark_status(task_id, "done", error=None, retry=False)
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
@@ -180,7 +180,7 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
         _mark_status(task_id, "failed", error=str(e), retry=True)
 
 
-async def _run_task_impl(session_id: str, task_type: str) -> None:
+async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
     if task_type == "summary":
         from zerg.routers.agents import _generate_summary_impl
 
@@ -195,7 +195,12 @@ async def _run_task_impl(session_id: str, task_type: str) -> None:
         factory = get_session_factory()
         db = factory()
         try:
-            await maybe_process_session_turn_loop(db=db, session_id=session_id)
+            task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
+            await maybe_process_session_turn_loop(
+                db=db,
+                session_id=session_id,
+                freshness_reference_at=getattr(task, "created_at", None),
+            )
         finally:
             db.close()
         return

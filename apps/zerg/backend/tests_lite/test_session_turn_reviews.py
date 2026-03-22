@@ -867,6 +867,50 @@ async def test_turn_review_uses_latest_assistant_turn_timestamp_when_session_end
 
 
 @pytest.mark.asyncio
+async def test_turn_review_skips_stale_completed_turn_by_default(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_stale_completed_turn.db")
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="Continue the turn.",
+            rationale="The next step is bounded.",
+            recommended_action="continue_session",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=16,
+        )
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="finish the verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        stale_turn_at = _now() - timedelta(minutes=20)
+        session.ended_at = stale_turn_at
+        latest_assistant = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id, AgentEvent.role == "assistant")
+            .order_by(AgentEvent.id.desc())
+            .first()
+        )
+        assert latest_assistant is not None
+        latest_assistant.timestamp = stale_turn_at
+        db.commit()
+
+        review = await maybe_record_session_turn_review(db=db, session_id=str(session_id))
+
+        assert review is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("presence_state", ["needs_user", "blocked"])
 async def test_turn_review_still_records_when_latest_presence_is_pause_state(monkeypatch, tmp_path, presence_state):
     SessionLocal = _make_db(tmp_path, f"turn_review_pause_{presence_state}.db")

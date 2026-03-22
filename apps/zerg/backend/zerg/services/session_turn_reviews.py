@@ -645,7 +645,12 @@ def _review_requires_mobile_attention(review: SessionTurnReview) -> bool:
     return True
 
 
-async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[SessionTurnReview | None, bool]:
+async def _record_session_turn_review(
+    *,
+    db: Session,
+    session_id: str,
+    freshness_reference_at: datetime | None = None,
+) -> tuple[SessionTurnReview | None, bool]:
     if not _has_turn_review_table(db):
         return None, False
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -657,8 +662,11 @@ async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[
     if turn is None:
         return None, False
     now = datetime.now(timezone.utc)
-    if (now - turn.assistant_timestamp).total_seconds() > (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60):
-        return None, False
+    fresh_window_seconds = _TURN_REVIEW_FRESH_WINDOW_MINUTES * 60
+    if (now - turn.assistant_timestamp).total_seconds() > fresh_window_seconds:
+        reference_time = _normalize_utc(freshness_reference_at)
+        if reference_time is None or (reference_time - turn.assistant_timestamp).total_seconds() > fresh_window_seconds:
+            return None, False
 
     presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
     if presence is not None:
@@ -1249,8 +1257,17 @@ def dismiss_pending_turn_review(*, db: Session, review: SessionTurnReview, reaso
     )
 
 
-async def maybe_process_session_turn_loop(*, db: Session, session_id: str) -> SessionTurnReview | None:
-    review, created = await _record_session_turn_review(db=db, session_id=session_id)
+async def maybe_process_session_turn_loop(
+    *,
+    db: Session,
+    session_id: str,
+    freshness_reference_at: datetime | None = None,
+) -> SessionTurnReview | None:
+    review, created = await _record_session_turn_review(
+        db=db,
+        session_id=session_id,
+        freshness_reference_at=freshness_reference_at,
+    )
     if review is None:
         return None
     await maybe_execute_recorded_turn_review(db=db, review=review)
