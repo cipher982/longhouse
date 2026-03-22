@@ -319,3 +319,45 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             assert dispatcher.calls[0]["runner_id"] == runner.id
         finally:
             api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_this_device_falls_back_from_stale_token_owner(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        device_token = SimpleNamespace(owner_id=user.id + 999, device_id="cinder", id="token-stale-owner")
+        client, api_app_ref = _make_device_client(db, device_token)
+        dispatcher = _FakeDispatcher(preflight_tmux_tmpdir="/tmp/lh-managed-launch")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                headers={"X-Agents-Token": "zdt_test_token"},
+                json={
+                    "cwd": "/Users/davidrose/git/zeta/hiring",
+                    "project": "hiring",
+                    "display_name": "Hiring session",
+                    "loop_mode": "assist",
+                    "machine_name": "cinder",
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["source_runner_name"] == "cinder"
+
+            session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+            assert session.source_runner_id == runner.id
+            assert dispatcher.calls[0]["owner_id"] == user.id
+            assert dispatcher.calls[0]["runner_id"] == runner.id
+        finally:
+            api_app_ref.dependency_overrides = {}

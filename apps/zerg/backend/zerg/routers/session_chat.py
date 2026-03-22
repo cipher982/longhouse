@@ -282,7 +282,10 @@ class SessionChatError(BaseModel):
 def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> int:
     owner_id = getattr(device_token, "owner_id", None)
     if owner_id is not None:
-        return int(owner_id)
+        owner = db.query(User.id).filter(User.id == int(owner_id)).first()
+        if owner is not None:
+            return int(owner[0])
+        logger.warning("Device token owner_id=%s is stale; falling back to single-tenant owner", owner_id)
 
     owner = db.query(User.id).order_by(User.id.asc()).first()
     if owner is None:
