@@ -235,6 +235,7 @@ function SessionDetailWorkspaceRoute({
         presence_tool: null,
         presence_updated_at: null,
         user_state: "active",
+        execution_home: continuationSourceSession.execution_home,
         loop_mode:
           continuationSourceSession.id === session.id
             ? effectiveLoopMode

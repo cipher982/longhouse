@@ -92,6 +92,7 @@ describe("Timeline session stream", () => {
         continued_from_session_id: null,
         continuation_kind: null,
         origin_label: null,
+        execution_home: "legacy",
         branched_from_event_id: null,
         is_writable_head: true,
         loop_mode: "manual",

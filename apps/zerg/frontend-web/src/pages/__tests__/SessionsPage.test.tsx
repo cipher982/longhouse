@@ -78,6 +78,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     continued_from_session_id: null,
     continuation_kind: null,
     origin_label: "laptop",
+    execution_home: "legacy",
     branched_from_event_id: null,
     is_writable_head: true,
     loop_mode: "manual",
@@ -115,6 +116,7 @@ function makeActiveSession(overrides: Partial<ActiveSession> = {}): ActiveSessio
     presence_tool: "bash",
     presence_updated_at: "2026-03-21T12:04:00Z",
     user_state: "active",
+    execution_home: "legacy",
     loop_mode: "manual",
     ...overrides,
   };
@@ -369,6 +371,40 @@ describe("SessionsPage", () => {
         limit: 50,
       }),
     );
+  });
+
+  it("shows execution-home badges directly on the main timeline cards", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            execution_home: "managed_local",
+            origin_label: "cinder",
+          }),
+          makeSession({
+            id: "session-2",
+            project: "cloud",
+            summary_title: "Cloud branch",
+            execution_home: "cloud_takeover",
+            origin_label: "Cloud",
+            thread_root_session_id: "session-2",
+            thread_head_session_id: "session-2",
+          }),
+        ],
+        total: 2,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("On this Mac")).toBeInTheDocument();
+    expect(screen.getByText("Cloud")).toBeInTheDocument();
+    expect(screen.getByText("Head: cinder")).toBeInTheDocument();
+    expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();
   });
 
   it("only enables the active sessions poll when live view is open", async () => {
