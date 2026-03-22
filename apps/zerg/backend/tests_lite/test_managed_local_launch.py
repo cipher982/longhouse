@@ -15,6 +15,7 @@ from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
@@ -53,6 +54,24 @@ def _make_client(db_session, current_user):
 
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+    return TestClient(app, backend="asyncio"), api_app
+
+
+def _make_device_client(db_session, device_token):
+    from zerg.main import api_app
+    from zerg.main import app
+
+    def override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    def override_device_token():
+        return device_token
+
+    api_app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[verify_agents_token] = override_device_token
     return TestClient(app, backend="asyncio"), api_app
 
 
@@ -251,5 +270,52 @@ def test_launch_managed_local_session_rolls_back_when_tmux_verify_fails(monkeypa
                 f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} kill-session -t lh-hiring-"
                 in _inner_command(dispatcher.calls[-1]["command"])
             )
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        runner.name = "work-laptop"
+        db.commit()
+        db.refresh(runner)
+
+        device_token = SimpleNamespace(owner_id=user.id, device_id="host-123", id="token-1")
+        client, api_app_ref = _make_device_client(db, device_token)
+        dispatcher = _FakeDispatcher(preflight_tmux_tmpdir="/tmp/lh-managed-launch")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                headers={"X-Agents-Token": "zdt_test_token"},
+                json={
+                    "machine_name": "work-laptop",
+                    "cwd": "/Users/davidrose/git/zeta/hiring",
+                    "project": "hiring",
+                    "display_name": "Hiring session",
+                    "loop_mode": "assist",
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["source_runner_name"] == "work-laptop"
+
+            session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+            assert session.source_runner_id == runner.id
+            assert session.source_runner_name == "work-laptop"
+            assert dispatcher.calls[0]["owner_id"] == user.id
+            assert dispatcher.calls[0]["runner_id"] == runner.id
         finally:
             api_app_ref.dependency_overrides = {}

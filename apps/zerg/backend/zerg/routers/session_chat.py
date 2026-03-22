@@ -35,8 +35,11 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentEvent
+from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_control import send_text_to_managed_local_session
@@ -230,6 +233,21 @@ class ManagedLocalSessionLaunchRequest(BaseModel):
     )
 
 
+class ManagedLocalThisDeviceLaunchRequest(BaseModel):
+    """Request to start a managed local Claude session on the calling device."""
+
+    cwd: str = Field(..., min_length=1, description="Working directory on this device")
+    project: str | None = Field(None, description="Optional project label")
+    git_repo: str | None = Field(None, description="Optional git repository path")
+    git_branch: str | None = Field(None, description="Optional git branch name")
+    display_name: str | None = Field(None, description="Optional Claude display name for the session")
+    loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
+    machine_name: str | None = Field(
+        None,
+        description="Optional local Longhouse machine label override used to resolve this device's runner",
+    )
+
+
 class ManagedLocalSessionLaunchResponse(BaseModel):
     """Response after successfully starting a managed local session."""
 
@@ -259,6 +277,32 @@ class SessionChatError(BaseModel):
     error: str
     code: str
     lock_info: SessionLockInfo | None = None
+
+
+def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> int:
+    owner_id = getattr(device_token, "owner_id", None)
+    if owner_id is not None:
+        return int(owner_id)
+
+    owner = db.query(User.id).order_by(User.id.asc()).first()
+    if owner is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="No Longhouse user is configured")
+    return int(owner[0])
+
+
+def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
+    session = result.session
+    return ManagedLocalSessionLaunchResponse(
+        session_id=str(session.id),
+        provider_session_id=session.provider_session_id or str(session.id),
+        execution_home=SessionExecutionHome(session.execution_home or SessionExecutionHome.LEGACY.value),
+        managed_transport=ManagedSessionTransport(session.managed_transport or ManagedSessionTransport.TMUX.value),
+        loop_mode=SessionLoopMode(session.loop_mode or SessionLoopMode.MANUAL.value),
+        source_runner_id=int(session.source_runner_id or 0),
+        source_runner_name=session.source_runner_name or "",
+        managed_session_name=session.managed_session_name or "",
+        attach_command=result.attach_command,
+    )
 
 
 def _lock_scope_id_for_session(db: Session, session_id: str) -> str:
@@ -1138,18 +1182,49 @@ async def launch_managed_local(
         logger.exception("Managed local launch failed unexpectedly")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Managed local launch failed")
 
-    session = result.session
-    return ManagedLocalSessionLaunchResponse(
-        session_id=str(session.id),
-        provider_session_id=session.provider_session_id or str(session.id),
-        execution_home=SessionExecutionHome(session.execution_home or SessionExecutionHome.LEGACY.value),
-        managed_transport=ManagedSessionTransport(session.managed_transport or ManagedSessionTransport.TMUX.value),
-        loop_mode=SessionLoopMode(session.loop_mode or SessionLoopMode.MANUAL.value),
-        source_runner_id=int(session.source_runner_id or 0),
-        source_runner_name=session.source_runner_name or "",
-        managed_session_name=session.managed_session_name or "",
-        attach_command=result.attach_command,
-    )
+    return _managed_local_launch_response(result)
+
+
+@router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)
+async def launch_managed_local_this_device(
+    body: ManagedLocalThisDeviceLaunchRequest,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+):
+    """Start a managed local Claude session on the calling machine's connected runner."""
+
+    owner_id = _resolve_agents_owner_id(db, device_token)
+    machine_name = (body.machine_name or "").strip() or str(getattr(device_token, "device_id", "") or "").strip()
+    if not machine_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not determine this device name")
+
+    try:
+        result = await launch_managed_local_session(
+            db,
+            ManagedLocalLaunchParams(
+                owner_id=owner_id,
+                runner_target=machine_name,
+                cwd=body.cwd,
+                project=body.project,
+                git_repo=body.git_repo,
+                git_branch=body.git_branch,
+                display_name=body.display_name,
+                loop_mode=body.loop_mode.value,
+            ),
+        )
+    except ManagedLocalLaunchError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except Exception:
+        db.rollback()
+        logger.exception("Managed local launch for this device failed unexpectedly")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Managed local launch failed",
+        )
+
+    return _managed_local_launch_response(result)
 
 
 @router.get("/{session_id}/lock")

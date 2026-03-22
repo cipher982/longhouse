@@ -2,34 +2,27 @@
 
 from __future__ import annotations
 
-import asyncio
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import typer
-from sqlalchemy.orm import Session
 
-from zerg.crud import get_user_by_email
-from zerg.crud import runner_crud
-from zerg.database import get_session_factory
-from zerg.database import initialize_database
-from zerg.models.models import Runner
-from zerg.services.managed_local_launcher import ManagedLocalLaunchError
-from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
-from zerg.services.managed_local_launcher import ManagedLocalLaunchResult
-from zerg.services.managed_local_launcher import launch_managed_local_session
+from zerg.services.session_continuity import get_machine_name_label
+from zerg.services.shipper import get_zerg_url
+from zerg.services.shipper import load_token
 from zerg.session_loop_mode import SessionLoopMode
 
 
 @dataclass(frozen=True)
-class ResolvedRunnerTarget:
-    owner_id: int
-    owner_email: str | None
-    runner_target: str
-    runner_name: str
+class ManagedLocalLaunchResponse:
+    session_id: str
+    provider_session_id: str
+    attach_command: str
+    source_runner_name: str
 
 
 def _interactive_stdio() -> bool:
@@ -42,122 +35,115 @@ def _run_attach_command(attach_command: str) -> int:
     return int(completed.returncode)
 
 
-def _resolve_runner_by_name(db: Session, name: str) -> list[Runner]:
-    return db.query(Runner).filter(Runner.name == name).order_by(Runner.id.asc()).all()
-
-
-def _resolve_runner_target(
-    db: Session,
+def _load_api_credentials(
     *,
-    runner_target: str,
-    owner_email: str | None,
-) -> ResolvedRunnerTarget:
-    target = runner_target.strip()
-    if not target:
-        raise typer.BadParameter("Runner target is required.", param_hint="--runner")
+    url: str | None,
+    token: str | None,
+    config_dir: Path | None,
+) -> tuple[str, str]:
+    resolved_url = (url or get_zerg_url(config_dir) or "").strip()
+    if not resolved_url:
+        typer.secho("No Longhouse URL configured. Run 'longhouse auth' first.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
-    owner = None
-    if owner_email:
-        owner = get_user_by_email(db, owner_email.strip())
-        if owner is None:
-            raise typer.BadParameter(f"Owner '{owner_email}' was not found.", param_hint="--owner-email")
+    resolved_token = (token or load_token(config_dir) or "").strip()
+    if not resolved_token:
+        typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
-    if target.startswith("runner:"):
-        try:
-            runner_id = int(target.split(":", 1)[1])
-        except ValueError as exc:
-            raise typer.BadParameter(
-                "Runner must be a name or runner:<id>.",
-                param_hint="--runner",
-            ) from exc
-        runner = runner_crud.get_runner(db, runner_id)
-        if runner is None:
-            raise typer.BadParameter(f"Runner '{target}' was not found.", param_hint="--runner")
-        if owner is not None and runner.owner_id != owner.id:
-            raise typer.BadParameter(
-                f"Runner '{target}' is not owned by '{owner.email}'.",
-                param_hint="--owner-email",
-            )
-        return ResolvedRunnerTarget(
-            owner_id=runner.owner_id,
-            owner_email=getattr(runner.owner, "email", None),
-            runner_target=target,
-            runner_name=runner.name,
-        )
+    return resolved_url, resolved_token
 
-    if owner is not None:
-        runner = runner_crud.get_runner_by_name(db, owner.id, target)
-        if runner is None:
-            raise typer.BadParameter(
-                f"Runner '{target}' was not found for '{owner.email}'.",
-                param_hint="--runner",
-            )
-        return ResolvedRunnerTarget(
-            owner_id=runner.owner_id,
-            owner_email=owner.email,
-            runner_target=runner.name,
-            runner_name=runner.name,
-        )
 
-    matches = _resolve_runner_by_name(db, target)
-    if not matches:
-        raise typer.BadParameter(f"Runner '{target}' was not found.", param_hint="--runner")
-    if len(matches) > 1:
-        owners = []
-        for match in matches:
-            owner_label = getattr(match.owner, "email", None) or f"owner_id={match.owner_id}"
-            owners.append(f"runner:{match.id} ({owner_label})")
-        prefix = "".join(
-            [
-                "Runner name is ambiguous. Re-run with --owner-email or ",
-                "a runner:<id> target. Matches: ",
-            ]
-        )
-        message = prefix + ", ".join(owners)
-        raise typer.BadParameter(
-            message,
-            param_hint="--runner",
-        )
-
-    runner = matches[0]
-    return ResolvedRunnerTarget(
-        owner_id=runner.owner_id,
-        owner_email=getattr(runner.owner, "email", None),
-        runner_target=runner.name,
-        runner_name=runner.name,
+def _git_output(cwd: Path, *args: str) -> str | None:
+    completed = subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        check=False,
+        capture_output=True,
+        text=True,
     )
+    if completed.returncode != 0:
+        return None
+    value = completed.stdout.strip()
+    return value or None
 
 
-def _launch_managed_local_from_cli(
-    db: Session,
+def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
+    git_repo = _git_output(cwd, "rev-parse", "--show-toplevel")
+    git_branch = _git_output(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    if git_branch == "HEAD":
+        git_branch = None
+    return git_repo, git_branch
+
+
+def _launch_managed_local_from_api(
     *,
-    runner_target: str,
-    cwd: str,
+    url: str,
+    token: str,
+    cwd: Path,
     project: str | None,
     loop_mode: SessionLoopMode,
     name: str | None,
-    owner_email: str | None,
-) -> tuple[ResolvedRunnerTarget, ManagedLocalLaunchResult]:
-    resolved = _resolve_runner_target(db, runner_target=runner_target, owner_email=owner_email)
-    launch_result = asyncio.run(
-        launch_managed_local_session(
-            db,
-            ManagedLocalLaunchParams(
-                owner_id=resolved.owner_id,
-                runner_target=resolved.runner_target,
-                cwd=cwd,
-                project=project,
-                display_name=name,
-                loop_mode=loop_mode.value,
-            ),
-        )
+    machine_name: str,
+) -> ManagedLocalLaunchResponse:
+    git_repo, git_branch = _infer_git_context(cwd)
+    payload = {
+        "cwd": str(cwd),
+        "project": project,
+        "git_repo": git_repo,
+        "git_branch": git_branch,
+        "display_name": name,
+        "loop_mode": loop_mode.value,
+        "machine_name": machine_name,
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                f"{url.rstrip('/')}/api/sessions/managed-local/this-device",
+                headers={"X-Agents-Token": token},
+                json=payload,
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code == 401:
+        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code != 200:
+        detail = ""
+        try:
+            payload = response.json()
+            detail = str(payload.get("detail") or "").strip()
+        except ValueError:
+            detail = response.text.strip()
+        message = detail or response.text[:200] or "Managed local launch failed"
+        typer.secho(message, fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    body = response.json()
+    return ManagedLocalLaunchResponse(
+        session_id=str(body["session_id"]),
+        provider_session_id=str(body["provider_session_id"]),
+        attach_command=str(body["attach_command"]),
+        source_runner_name=str(body.get("source_runner_name") or machine_name),
     )
-    return resolved, launch_result
 
 
 def claude(
-    runner: str = typer.Option(..., "--runner", help="Runner name or runner:<id>."),
-    cwd: Path = typer.Option(..., "--cwd", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    cwd: Path = typer.Option(
+        Path("."),
+        "--cwd",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Working directory to launch from (defaults to current directory).",
+    ),
     project: str | None = typer.Option(None, "--project", help="Optional session project label."),
     loop_mode: SessionLoopMode = typer.Option(
         SessionLoopMode.MANUAL,
@@ -165,61 +151,59 @@ def claude(
         help="Loop mode to store on the managed-local session.",
     ),
     name: str | None = typer.Option(None, "--name", help="Optional display name for the Claude session."),
-    owner_email: str | None = typer.Option(
-        None,
-        "--owner-email",
-        help="Owner email for disambiguating runner names when needed.",
-    ),
     attach: bool = typer.Option(
         True,
         "--attach/--no-attach",
-        help="Auto-attach to the tmux session when running interactively.",
+        help="Auto-attach to the managed local session when running interactively.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified)",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified)",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude)",
     ),
 ) -> None:
-    """Launch a managed-local Claude Code session on an existing runner."""
+    """Launch a managed-local Claude Code session on this device via the Longhouse API."""
 
-    initialize_database()
-    db = get_session_factory()()
-    attach_command: str | None = None
-    attach_requested = attach
+    config_dir = Path(claude_dir) if claude_dir else None
+    resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    machine_name = get_machine_name_label()
+    result = _launch_managed_local_from_api(
+        url=resolved_url,
+        token=resolved_token,
+        cwd=cwd,
+        project=project,
+        loop_mode=loop_mode,
+        name=name,
+        machine_name=machine_name,
+    )
 
-    try:
-        resolved, result = _launch_managed_local_from_cli(
-            db,
-            runner_target=runner,
-            cwd=str(cwd),
-            project=project,
-            loop_mode=loop_mode,
-            name=name,
-            owner_email=owner_email,
-        )
-        session = result.session
-        attach_command = result.attach_command
+    typer.secho("Managed local Claude session launched on this device.", fg=typer.colors.GREEN)
+    typer.echo(f"Session ID: {result.session_id}")
+    typer.echo(f"Provider session ID: {result.provider_session_id}")
+    typer.echo(f"Attach: {result.attach_command}")
 
+    if not attach:
+        return
+    if not _interactive_stdio():
+        typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
+        return
+
+    typer.echo("Attaching...")
+    exit_code = _run_attach_command(result.attach_command)
+    if exit_code != 0:
         typer.secho(
-            f"Managed local Claude session launched on {resolved.runner_name}.",
-            fg=typer.colors.GREEN,
+            f"Auto-attach exited with code {exit_code}. Run the printed attach command manually.",
+            fg=typer.colors.YELLOW,
         )
-        typer.echo(f"Session ID: {session.id}")
-        typer.echo(f"Provider session ID: {session.provider_session_id}")
-        typer.echo(f"Attach: {attach_command}")
-
-        if not attach_requested:
-            return
-        if not _interactive_stdio():
-            typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-            return
-
-        typer.echo("Attaching...")
-        exit_code = _run_attach_command(attach_command)
-        if exit_code != 0:
-            typer.secho(
-                f"Auto-attach exited with code {exit_code}. Run the printed attach command manually.",
-                fg=typer.colors.YELLOW,
-            )
-    except ManagedLocalLaunchError as exc:
-        db.rollback()
-        typer.secho(exc.detail, fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-    finally:
-        db.close()
