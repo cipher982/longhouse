@@ -16,6 +16,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -154,6 +155,12 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert session.managed_session_name == payload["managed_session_name"]
             assert session.continuation_kind == "local"
             assert session.origin_label == runner.name
+
+            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
+            assert runtime_state.phase == "idle"
+            assert runtime_state.phase_source == "semantic"
+            assert runtime_state.last_runtime_signal_at is not None
+            assert runtime_state.freshness_expires_at is not None
 
             assert len(dispatcher.calls) == 4
             assert dispatcher.calls[0]["runner_id"] == runner.id

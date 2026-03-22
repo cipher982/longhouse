@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.services.managed_local_runtime import mark_managed_local_input_sent
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
@@ -78,4 +79,9 @@ async def send_text_to_managed_local_session(
             error=detail or "Managed local send-text command failed",
         )
 
+    mark_managed_local_input_sent(
+        db,
+        session=session,
+        dedupe_suffix=str(commis_id or ""),
+    )
     return ManagedLocalSendResult(ok=True, exit_code=0)

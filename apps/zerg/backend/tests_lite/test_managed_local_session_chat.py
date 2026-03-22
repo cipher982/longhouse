@@ -19,6 +19,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -163,6 +164,11 @@ def test_chat_with_session_routes_managed_local_without_cloud_continuation(monke
             assert '"created_continuation": false' in body
             assert f'"session_id": "{source_session.id}"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
+            runtime_state = (
+                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).one()
+            )
+            assert runtime_state.phase == "idle"
+            assert runtime_state.phase_source == "semantic"
             assert len(calls) == 1
             assert calls[0]["runner_id"] == runner.id
             assert calls[0]["owner_id"] == user.id
