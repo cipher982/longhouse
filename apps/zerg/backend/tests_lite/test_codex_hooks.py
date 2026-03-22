@@ -26,6 +26,16 @@ def test_codex_hook_script_template_has_required_markers():
     assert 'ENGINE="__ENGINE_PATH__"' in CODEX_HOOK_SCRIPT, "must use placeholder in the command variable"
 
 
+def test_codex_hook_script_has_managed_session_id_support():
+    """Hook script must have explicit managed vs unmanaged session ID paths."""
+    assert "LONGHOUSE_SESSION_ID" in CODEX_HOOK_SCRIPT, "must check for managed-local env var"
+    assert "CODEX_SESSION_ID" in CODEX_HOOK_SCRIPT, "must read Codex's native session ID"
+    # Managed path: uses LONGHOUSE_SESSION_ID for outbox AND transcript ship
+    assert "--session-id" in CODEX_HOOK_SCRIPT, "must pass --session-id override to engine for managed sessions"
+    # No fallback pattern — two explicit paths
+    assert "SID=" in CODEX_HOOK_SCRIPT, "must assign SID explicitly in each path"
+
+
 def test_codex_hook_script_maps_all_events():
     """Hook script must handle all three Codex hook events."""
     assert "SessionStart)" in CODEX_HOOK_SCRIPT

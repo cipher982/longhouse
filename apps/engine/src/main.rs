@@ -175,6 +175,10 @@ enum Commands {
         /// Human-readable name for this machine (default: from ~/.claude/longhouse-machine-name or hostname)
         #[arg(long)]
         machine_name: Option<String>,
+
+        /// Override session ID for managed-local sessions (uses provider's native ID as provider_session_id)
+        #[arg(long)]
+        session_id: Option<String>,
     },
 }
 
@@ -321,6 +325,7 @@ fn main() -> anyhow::Result<()> {
             compression,
             max_batch_bytes,
             machine_name,
+            session_id,
         } => {
             let algo = parse_compression_algo(&compression)?;
             // Initialize machine name for payload labeling
@@ -344,6 +349,7 @@ fn main() -> anyhow::Result<()> {
                     json,
                     algo,
                     max_batch_bytes,
+                    session_id.as_deref(),
                 ))?;
             } else {
                 rt.block_on(cmd_ship(
@@ -703,6 +709,7 @@ async fn cmd_ship_file(
     json_output: bool,
     algo: CompressionAlgo,
     max_batch_bytes: Option<u64>,
+    session_id_override: Option<&str>,
 ) -> anyhow::Result<()> {
     if !path.exists() {
         anyhow::bail!("File not found: {}", path.display());
@@ -724,8 +731,14 @@ async fn cmd_ship_file(
 
     let conn = open_db(config.db_path.as_deref())?;
 
-    let prepared =
-        shipper::prepare_file_batches(path, &provider, algo, &conn, config.max_batch_bytes)?;
+    let prepared = shipper::prepare_file_batches(
+        path,
+        &provider,
+        algo,
+        &conn,
+        config.max_batch_bytes,
+        session_id_override,
+    )?;
     let prepared = match prepared {
         Some(prepared) => prepared,
         None => {
@@ -925,6 +938,7 @@ mod tests {
             true,
             true,
             CompressionAlgo::Gzip,
+            None,
             None,
         ))
         .unwrap();

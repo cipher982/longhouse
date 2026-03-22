@@ -357,7 +357,7 @@ async fn ship_batch(
             }
         };
 
-        match shipper::prepare_file_batches(path, provider, algo, conn, max_batch_bytes) {
+        match shipper::prepare_file_batches(path, provider, algo, conn, max_batch_bytes, None) {
             Ok(Some(prepared)) => {
                 match shipper::ship_prepared_file(prepared, client, conn, Some(tracker)).await {
                     Ok(outcome) => {

@@ -437,9 +437,12 @@ fn prepare_whole_document_action(
     end_offset: u64,
     algo: CompressionAlgo,
     max_batch_bytes: u64,
+    session_id_override: Option<&str>,
 ) -> Result<Vec<PreparedAction>> {
+    let payload_session_id =
+        session_id_override.unwrap_or(&parse_result.metadata.session_id);
     let compressed = compressor::build_and_compress_with(
-        &parse_result.metadata.session_id,
+        payload_session_id,
         &parse_result.events,
         &parse_result.metadata,
         path_str,
@@ -454,7 +457,7 @@ fn prepare_whole_document_action(
             offset: start_offset,
             new_offset: end_offset,
             event_count: parse_result.events.len(),
-            session_id: parse_result.metadata.session_id.clone(),
+            session_id: payload_session_id.to_string(),
             compressed,
         })]);
     }
@@ -465,7 +468,7 @@ fn prepare_whole_document_action(
         offset: start_offset,
         new_offset: end_offset,
         event_count: parse_result.events.len(),
-        session_id: parse_result.metadata.session_id.clone(),
+        session_id: payload_session_id.to_string(),
         reason: format!(
             "compressed whole-document payload is {} bytes which exceeds max_batch_bytes {} and has no source-line boundaries for further splitting",
             compressed.len(),
@@ -481,9 +484,12 @@ fn materialize_ship_range(
     algo: CompressionAlgo,
     max_batch_bytes: u64,
     range: ShipRange,
+    session_id_override: Option<&str>,
 ) -> Result<Vec<PreparedAction>> {
+    let payload_session_id =
+        session_id_override.unwrap_or(&parse_result.metadata.session_id);
     let compressed = compressor::build_and_compress_with_source_lines(
-        &parse_result.metadata.session_id,
+        payload_session_id,
         &parse_result.events[range.event_range.clone()],
         &parse_result.metadata,
         path_str,
@@ -502,7 +508,7 @@ fn materialize_ship_range(
                 .event_range
                 .end
                 .saturating_sub(range.event_range.start),
-            session_id: parse_result.metadata.session_id.clone(),
+            session_id: payload_session_id.to_string(),
             compressed,
         })]);
     }
@@ -546,6 +552,7 @@ fn materialize_ship_range(
         algo,
         max_batch_bytes,
         left,
+        session_id_override,
     )?;
     actions.extend(materialize_ship_range(
         parse_result,
@@ -554,6 +561,7 @@ fn materialize_ship_range(
         algo,
         max_batch_bytes,
         right,
+        session_id_override,
     )?);
     Ok(actions)
 }
@@ -566,6 +574,7 @@ fn build_prepared_actions(
     end_offset: u64,
     algo: CompressionAlgo,
     max_batch_bytes: u64,
+    session_id_override: Option<&str>,
 ) -> Result<Vec<PreparedAction>> {
     if parse_result.source_lines.is_empty() {
         if parse_result.events.is_empty() {
@@ -580,6 +589,7 @@ fn build_prepared_actions(
             end_offset,
             algo,
             max_batch_bytes,
+            session_id_override,
         );
     }
 
@@ -599,6 +609,7 @@ fn build_prepared_actions(
                 algo,
                 max_batch_bytes,
                 range,
+                session_id_override,
             )?),
             PlannedRangeAction::DeadLetter(range) => {
                 actions.push(PreparedAction::DeadLetter(dead_letter_from_raw_range(
@@ -621,6 +632,7 @@ pub fn prepare_path_range(
     end_offset_cap: Option<u64>,
     algo: CompressionAlgo,
     max_batch_bytes: u64,
+    session_id_override: Option<&str>,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_size = match std::fs::metadata(path) {
@@ -660,6 +672,7 @@ pub fn prepare_path_range(
         new_offset,
         algo,
         max_batch_bytes,
+        session_id_override,
     )?;
 
     if actions.is_empty() {
@@ -681,7 +694,7 @@ pub fn prepare_path_from_offset(
     algo: CompressionAlgo,
     max_batch_bytes: u64,
 ) -> Result<Option<PreparedFile>> {
-    prepare_path_range(path, provider, offset, None, algo, max_batch_bytes)
+    prepare_path_range(path, provider, offset, None, algo, max_batch_bytes, None)
 }
 
 pub fn prepare_file_batches(
@@ -690,6 +703,7 @@ pub fn prepare_file_batches(
     algo: CompressionAlgo,
     conn: &Connection,
     max_batch_bytes: u64,
+    session_id_override: Option<&str>,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_state = FileState::new(conn);
@@ -727,7 +741,7 @@ pub fn prepare_file_batches(
         current_offset
     };
 
-    prepare_path_range(path, provider, offset, None, algo, max_batch_bytes)
+    prepare_path_range(path, provider, offset, None, algo, max_batch_bytes, session_id_override)
 }
 
 async fn attempt_ship(
@@ -995,6 +1009,7 @@ pub async fn replay_spool_batch_with_batch_bytes(
             Some(entry.end_offset),
             algo,
             max_batch_bytes,
+            None,
         ) {
             Ok(Some(prepared)) => prepared,
             Ok(None) => {
@@ -1148,7 +1163,7 @@ pub async fn full_scan_with_batch_bytes(
     let mut events_shipped = 0usize;
 
     for (path, provider_name) in &all_files {
-        match prepare_file_batches(path, provider_name, algo, conn, max_batch_bytes) {
+        match prepare_file_batches(path, provider_name, algo, conn, max_batch_bytes, None) {
             Ok(Some(prepared)) => {
                 let outcome = ship_prepared_file(prepared, client, conn, tracker).await?;
                 if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
@@ -1650,7 +1665,7 @@ mod tests {
         std::fs::write(&path, format!("{}\n{}\n{}\n", lines[0], lines[1], lines[2])).unwrap();
 
         let prepared =
-            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 400).unwrap();
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 400, None).unwrap();
         let prepared = prepared.expect("file should prepare into batched actions");
 
         assert!(
@@ -1703,7 +1718,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec_pretty(&gemini).unwrap()).unwrap();
 
         let prepared =
-            prepare_file_batches(&path, "gemini", CompressionAlgo::Gzip, &conn, 32).unwrap();
+            prepare_file_batches(&path, "gemini", CompressionAlgo::Gzip, &conn, 32, None).unwrap();
         let prepared = prepared.expect("gemini file should still prepare without source lines");
 
         assert_eq!(prepared.actions.len(), 1);
@@ -1727,6 +1742,7 @@ mod tests {
             CompressionAlgo::Gzip,
             &conn,
             5 * 1024 * 1024,
+            None,
         )
         .unwrap();
         let prepared = prepared.expect("gemini file should prepare at normal batch limit");
@@ -1768,7 +1784,7 @@ mod tests {
         .unwrap();
 
         let prepared =
-            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 800).unwrap();
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 800, None).unwrap();
         let prepared = prepared.expect("file should prepare");
         assert!(
             prepared.actions.len() >= 2,
@@ -1827,7 +1843,7 @@ mod tests {
         std::fs::write(&path, format!("{}\n{}\n", huge, tail)).unwrap();
 
         let prepared =
-            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 600).unwrap();
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 600, None).unwrap();
         let prepared = prepared.expect("file should prepare with dead-letter + tail");
         let ship_batches = prepared
             .actions
@@ -1961,7 +1977,7 @@ mod tests {
         .unwrap();
 
         let prepared =
-            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000).unwrap();
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None).unwrap();
         assert!(
             prepared.is_none(),
             "fresh shipping must stop while an earlier queued gap is still unacked"
@@ -2249,6 +2265,7 @@ mod tests {
             Some(full_end),
             CompressionAlgo::Gzip,
             800,
+            None,
         )
         .unwrap()
         .expect("replay range should prepare into multiple batches");

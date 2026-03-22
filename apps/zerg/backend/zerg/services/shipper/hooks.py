@@ -170,7 +170,7 @@ CODEX_HOOK_SCRIPT = """\
 INPUT=$(cat)
 
 # Codex uses camelCase field names in hook input (unlike Claude's snake_case).
-IFS=$'\\x1f' read -r EVENT SESSION_ID CWD TRANSCRIPT <<< "$(
+IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT <<< "$(
   printf '%s' "$INPUT" | jq -r '[
     (.hookEventName // ""),
     (.sessionId // ""),
@@ -179,7 +179,16 @@ IFS=$'\\x1f' read -r EVENT SESSION_ID CWD TRANSCRIPT <<< "$(
   ] | join("\\u001f")'
 )"
 
-[ -z "$SESSION_ID" ] && exit 0
+# Session ID resolution — two distinct paths, no fallbacks.
+# LONGHOUSE_SESSION_ID is injected by the managed-local launcher into the
+# tmux environment. When present, Longhouse owns the session identity.
+# When absent, this is an unmanaged Codex session and Codex owns the ID.
+if [ -n "$LONGHOUSE_SESSION_ID" ]; then
+  SID="$LONGHOUSE_SESSION_ID"
+else
+  [ -z "$CODEX_SESSION_ID" ] && exit 0
+  SID="$CODEX_SESSION_ID"
+fi
 
 # Map event -> presence state
 case "$EVENT" in
@@ -194,15 +203,21 @@ esac
 OUTBOX="$HOME/.claude/outbox"
 [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
 TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
-jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
+jq -n --arg sid "$SID" --arg st "$STATE" \\
       --arg tool "" --arg cwd "$CWD" \\
   '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}' > "$TMPFILE"
 mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 
-# Stop: also ship the session transcript via engine binary.
+# Stop: ship the session transcript via engine binary.
+# For managed-local sessions, --session-id overrides the ingest UUID so the
+# transcript lands on the Longhouse-owned session, not a duplicate.
 ENGINE="__ENGINE_PATH__"
 if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]; then
-  "$ENGINE" ship --file "$TRANSCRIPT" &>/dev/null &
+  if [ -n "$LONGHOUSE_SESSION_ID" ]; then
+    "$ENGINE" ship --file "$TRANSCRIPT" --session-id "$LONGHOUSE_SESSION_ID" &>/dev/null &
+  else
+    "$ENGINE" ship --file "$TRANSCRIPT" &>/dev/null &
+  fi
 fi
 
 exit 0
