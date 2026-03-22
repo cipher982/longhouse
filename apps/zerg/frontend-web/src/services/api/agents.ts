@@ -88,6 +88,8 @@ export interface TimelineSessionsListResponse {
   total: number;
   has_real_sessions: boolean;
   compatibility_mode?: "query_grouped";
+  compatibility_has_more?: boolean;
+  compatibility_source_count?: number;
 }
 
 export interface AgentSessionThreadResponse {
@@ -352,6 +354,8 @@ export async function fetchAgentSessions(
       total: rawResponse.total,
       has_real_sessions: rawResponse.has_real_sessions,
       compatibility_mode: "query_grouped",
+      compatibility_has_more: (filters.offset || 0) + rawResponse.sessions.length < rawResponse.total,
+      compatibility_source_count: rawResponse.sessions.length,
     };
   }
 

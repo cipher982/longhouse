@@ -514,12 +514,20 @@ interface SessionCardProps {
   onClick: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
+  compatibilityMode?: boolean;
   relativeNowMs: number;
 }
 
-function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relativeNowMs }: SessionCardProps) {
-  const session = thread.head;
+function SessionCard({
+  thread,
+  onClick,
+  highlightQuery,
+  isSemanticResult,
+  compatibilityMode = false,
+  relativeNowMs,
+}: SessionCardProps) {
   const detailSession = thread.detail;
+  const session = compatibilityMode ? detailSession : thread.head;
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
@@ -528,13 +536,16 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relati
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
   const executionHomeLabel = getExecutionHomeLabel(session.execution_home);
-  const showHeadOriginLabel = !!thread.head_origin_label && thread.head_origin_label !== executionHomeLabel;
+  const showHeadOriginLabel =
+    !compatibilityMode && !!thread.head_origin_label && thread.head_origin_label !== executionHomeLabel;
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
-  const primaryActionLabel = supportsCloudContinuation(session.provider) ? "Continue in cloud" : "Latest context";
+  const primaryActionLabel = compatibilityMode
+    ? "Open match"
+    : (supportsCloudContinuation(session.provider) ? "Continue in cloud" : "Latest context");
   const cardClassName = [
     "session-card",
     runtime.isExecuting ? "session-card--live" : "",
@@ -587,10 +598,13 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relati
         {showHeadOriginLabel && (
           <span className="environment-badge environment-badge--secondary">Head: {thread.head_origin_label}</span>
         )}
-        {thread.continuation_count > 1 && thread.started_origin_label && thread.started_origin_label !== thread.head_origin_label && (
+        {!compatibilityMode &&
+          thread.continuation_count > 1 &&
+          thread.started_origin_label &&
+          thread.started_origin_label !== thread.head_origin_label && (
           <span className="environment-badge environment-badge--secondary">Started: {thread.started_origin_label}</span>
         )}
-        {thread.continuation_count > 1 && (
+        {!compatibilityMode && thread.continuation_count > 1 && (
           <span className="environment-badge environment-badge--secondary">
             {thread.continuation_count} continuations
           </span>
@@ -645,7 +659,11 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relati
           <span className="session-stat-separator">&middot;</span>
           <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
           <span className="session-stat-separator">&middot;</span>
-          <span className="session-stat session-stat--secondary">Started {formatRelativeTime(thread.root.started_at, relativeNowMs)}</span>
+          <span className="session-stat session-stat--secondary">
+            {compatibilityMode
+              ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
+              : `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`}
+          </span>
         </div>
         <div className="session-card-actions">
           <span className="session-card-action-label">{primaryActionLabel}</span>
@@ -666,6 +684,7 @@ interface SessionGroupProps {
   onSessionClick: (thread: TimelineSessionCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
+  compatibilityMode?: boolean;
   relativeNowMs: number;
 }
 
@@ -675,6 +694,7 @@ function SessionGroup({
   onSessionClick,
   highlightQuery,
   isSemanticResult,
+  compatibilityMode,
   relativeNowMs,
 }: SessionGroupProps) {
   return (
@@ -691,6 +711,7 @@ function SessionGroup({
             onClick={() => onSessionClick(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
+            compatibilityMode={compatibilityMode}
             relativeNowMs={relativeNowMs}
           />
         ))}
@@ -847,7 +868,7 @@ export default function SessionsPage() {
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
   const compatibilityMode = data?.compatibility_mode === "query_grouped";
-  const hasMore = sessions.length < total;
+  const hasMore = compatibilityMode ? (data?.compatibility_has_more ?? false) : sessions.length < total;
 
   useTimelineSessionStream(filters, { enabled: timelineStreamEnabled });
 
@@ -1236,6 +1257,7 @@ export default function SessionsPage() {
                 onSessionClick={handleSessionClick}
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
+                compatibilityMode={compatibilityMode}
                 relativeNowMs={relativeNowMs}
               />
             ))}
