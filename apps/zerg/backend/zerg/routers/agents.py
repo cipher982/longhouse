@@ -23,7 +23,6 @@ import asyncio
 import gzip
 import logging
 import re
-from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -59,8 +58,10 @@ from zerg.services.agents_store import SessionIngest
 from zerg.services.demo_seed import delete_demo_sessions
 from zerg.services.demo_seed import seed_missing_demo_sessions
 from zerg.services.session_runtime import SessionRuntimeView
+from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_runtime import should_include_runtime_view
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
@@ -227,42 +228,12 @@ class SessionThreadResponse(BaseModel):
     sessions: List[SessionResponse]
 
 
-PRESENCE_STALE_THRESHOLD = timedelta(minutes=10)
-RECENT_ACTIVITY_WINDOW = timedelta(minutes=5)
-FRESH_PRESENCE_STATES = {"thinking", "running", "needs_user", "blocked"}
-
-
-@dataclass(frozen=True)
-class SessionRuntimeOverlay:
-    runtime_phase: str | None
-    phase_started_at: datetime | None
-    last_progress_at: datetime | None
-    runtime_source: str | None
-    terminal_state: str | None
-    runtime_version: int | None
-    status: str
-    presence_state: str | None
-    presence_tool: str | None
-    presence_updated_at: datetime | None
-    last_live_at: datetime | None
-    display_phase: str
-    active_tool: str | None
-    confidence: str | None
-    timeline_anchor_at: datetime
-
-
 def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def _latest_timestamp(*values: datetime | None) -> datetime | None:
-    normalized = [_normalize_utc_datetime(value) for value in values]
-    present = [value for value in normalized if value is not None]
-    return max(present) if present else None
 
 
 def _load_presence_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionPresence]:
@@ -273,125 +244,6 @@ def _load_presence_map(db: Session, session_ids: list[UUID]) -> dict[str, Sessio
     return {row.session_id: row for row in rows}
 
 
-def _build_display_phase(
-    *,
-    status: str,
-    presence_state: str | None,
-    presence_tool: str | None,
-    confidence: str | None,
-    ended_at: datetime | None,
-) -> str:
-    if presence_state == "running":
-        return f"Running {presence_tool}" if presence_tool else "Running"
-    if presence_state == "thinking":
-        return "Thinking"
-    if presence_state == "needs_user":
-        return "Needs you"
-    if presence_state == "blocked":
-        return f"Blocked on {presence_tool}" if presence_tool else "Needs permission"
-    if presence_state == "idle":
-        return "Idle"
-    if confidence == "inferred":
-        return "Recent progress"
-    if status == "active":
-        return "Recent progress"
-    if status == "working":
-        return "Working"
-    if status == "idle":
-        return "Idle"
-    if status == "completed" or ended_at is not None:
-        return "Completed"
-    return "Recent"
-
-
-def _derive_session_runtime_overlay(
-    session: AgentSession,
-    *,
-    last_activity_at: datetime | None,
-    presence: SessionPresence | None,
-    now: datetime,
-) -> SessionRuntimeOverlay:
-    started_at = _normalize_utc_datetime(session.started_at) or now
-    ended_at = _normalize_utc_datetime(session.ended_at)
-    progress_at = _normalize_utc_datetime(last_activity_at) or ended_at or started_at
-    presence_updated_at = _normalize_utc_datetime(presence.updated_at if presence else None)
-    presence_state = None
-    presence_tool = None
-    if presence is not None and presence_updated_at is not None and (now - presence_updated_at) < PRESENCE_STALE_THRESHOLD:
-        presence_state = presence.state
-        presence_tool = presence.tool_name
-
-    timeline_anchor_at = _latest_timestamp(progress_at, presence_updated_at, started_at) or now
-    last_live_at = presence_updated_at
-    confidence: str | None = None
-
-    if presence_state in FRESH_PRESENCE_STATES:
-        status = "working" if presence_state in {"thinking", "running"} else "active"
-        confidence = "live"
-    elif presence_state == "idle":
-        status = "idle"
-        confidence = "live"
-    elif ended_at is None:
-        if (now - progress_at) <= RECENT_ACTIVITY_WINDOW:
-            status = "active"
-            confidence = "inferred"
-            last_live_at = last_live_at or progress_at
-        else:
-            status = "idle"
-            confidence = "stale" if presence_updated_at is not None else None
-    else:
-        status = "completed"
-        confidence = "stale" if presence_updated_at is not None else None
-
-    return SessionRuntimeOverlay(
-        runtime_phase=presence_state or ("finished" if ended_at is not None else "idle"),
-        phase_started_at=presence_updated_at or progress_at,
-        last_progress_at=progress_at,
-        runtime_source=("semantic" if presence_state is not None else ("progress" if confidence == "inferred" else "fallback")),
-        terminal_state=("finished" if ended_at is not None and status == "completed" else None),
-        runtime_version=0,
-        status=status,
-        presence_state=presence_state,
-        presence_tool=presence_tool,
-        presence_updated_at=presence_updated_at,
-        last_live_at=last_live_at,
-        display_phase=_build_display_phase(
-            status=status,
-            presence_state=presence_state,
-            presence_tool=presence_tool,
-            confidence=confidence,
-            ended_at=ended_at,
-        ),
-        active_tool=presence_tool,
-        confidence=confidence,
-        timeline_anchor_at=timeline_anchor_at,
-    )
-
-
-def _overlay_from_runtime_state(
-    session: AgentSession,
-    *,
-    runtime_view: SessionRuntimeView,
-) -> SessionRuntimeOverlay:
-    return SessionRuntimeOverlay(
-        runtime_phase=runtime_view.runtime_phase,
-        phase_started_at=runtime_view.phase_started_at,
-        last_progress_at=runtime_view.last_progress_at,
-        runtime_source=runtime_view.runtime_source,
-        terminal_state=runtime_view.terminal_state,
-        runtime_version=runtime_view.runtime_version,
-        status=runtime_view.status,
-        presence_state=runtime_view.presence_state,
-        presence_tool=runtime_view.presence_tool,
-        presence_updated_at=runtime_view.presence_updated_at,
-        last_live_at=runtime_view.last_live_at,
-        display_phase=runtime_view.display_phase,
-        active_tool=runtime_view.active_tool,
-        confidence=runtime_view.confidence,
-        timeline_anchor_at=runtime_view.timeline_anchor_at,
-    )
-
-
 def _resolve_runtime_overlay(
     session: AgentSession,
     *,
@@ -399,20 +251,17 @@ def _resolve_runtime_overlay(
     presence_map: dict[str, SessionPresence],
     runtime_state_map: dict[str, Any],
     now: datetime,
-) -> SessionRuntimeOverlay:
+) -> SessionRuntimeView:
     runtime_state = runtime_state_map.get(str(session.id))
     if runtime_state is not None:
-        return _overlay_from_runtime_state(
-            session,
-            runtime_view=build_runtime_view(
-                state=runtime_state,
-                session=session,
-                now=now,
-            ),
+        return build_runtime_view(
+            state=runtime_state,
+            session=session,
+            now=now,
         )
 
-    return _derive_session_runtime_overlay(
-        session,
+    return build_fallback_runtime_view(
+        session=session,
         last_activity_at=last_activity_at,
         presence=presence_map.get(str(session.id)),
         now=now,
@@ -437,7 +286,7 @@ def _build_session_response(
     *,
     thread_cache: Dict[str, tuple[str, int]] | None = None,
     last_activity_at: datetime | None = None,
-    runtime_overlay: SessionRuntimeOverlay | None = None,
+    runtime_overlay: SessionRuntimeView | None = None,
     first_user_message: str | None = None,
     match_event_id: int | None = None,
     match_snippet: str | None = None,
@@ -446,12 +295,7 @@ def _build_session_response(
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = _get_thread_meta(store, session, cache)
-    include_runtime = runtime_overlay is not None and (
-        session.ended_at is None
-        or runtime_overlay.presence_updated_at is not None
-        or runtime_overlay.last_live_at is not None
-        or runtime_overlay.runtime_source not in {None, "fallback"}
-    )
+    include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,

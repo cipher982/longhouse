@@ -66,6 +66,44 @@ function normalizeRuntimeSource(source: string | null | undefined): string | nul
   return trimmed ? trimmed : null;
 }
 
+function isLegacyProgressStatus(status: string | null): boolean {
+  return status === "working" || status === "active";
+}
+
+function isProgressFallback({
+  status,
+  confidence,
+  runtimeSource,
+  presenceState,
+}: {
+  status: string | null;
+  confidence: string | null;
+  runtimeSource: string | null;
+  presenceState: KnownPresenceState | null;
+}): boolean {
+  if (presenceState != null) {
+    return false;
+  }
+  return confidence === "inferred" || runtimeSource === "progress" || isLegacyProgressStatus(status);
+}
+
+function hasFreshRuntimeSignal({
+  confidence,
+  runtimeSource,
+  presenceState,
+}: {
+  confidence: string | null;
+  runtimeSource: string | null;
+  presenceState: KnownPresenceState | null;
+}): boolean {
+  return (
+    presenceState != null ||
+    (confidence === "live" && runtimeSource !== "progress" && runtimeSource !== "fallback") ||
+    runtimeSource === "semantic" ||
+    runtimeSource === "managed_local_transport"
+  );
+}
+
 function getRuntimeTruthTier(
   overlay: Partial<TimelineRuntimeOverlay> | null | undefined,
 ): RuntimeTruthTier {
@@ -74,13 +112,7 @@ function getRuntimeTruthTier(
   const presenceState = normalizePresenceState(overlay?.presence_state ?? null);
   const runtimeSource = normalizeRuntimeSource(overlay?.runtime_source ?? null);
   const executionHome = overlay?.execution_home ?? null;
-  const statusSuggestsRecentProgress =
-    status === "working" || status === "thinking" || status === "active";
-  const hasFreshSignal =
-    presenceState != null ||
-    (confidence === "live" && runtimeSource !== "progress" && runtimeSource !== "fallback") ||
-    runtimeSource === "semantic" ||
-    runtimeSource === "managed_local_transport";
+  const hasFreshSignal = hasFreshRuntimeSignal({ confidence, runtimeSource, presenceState });
 
   if (executionHome === "managed_local" && hasFreshSignal && confidence !== "stale") {
     return "managed-local";
@@ -88,7 +120,7 @@ function getRuntimeTruthTier(
   if (hasFreshSignal && confidence !== "stale") {
     return "fresh";
   }
-  if (confidence === "inferred" || runtimeSource === "progress" || statusSuggestsRecentProgress) {
+  if (isProgressFallback({ status, confidence, runtimeSource, presenceState })) {
     return "inferred";
   }
   if (confidence === "stale" || runtimeSource === "fallback") {
@@ -124,15 +156,41 @@ function getDisplayPhase(
     return "Idle";
   }
 
-  // Compatibility shim: older callers may still emit `working` without a
-  // semantic presence state. Treat that as fallback progress until all
-  // producers are tightened to the newer execution-only contract.
-  if (status === "working") return "Recent progress";
-  if (status === "thinking") return "Thinking";
-  if (status === "active") return "Recent progress";
+  if (isLegacyProgressStatus(status)) return "Recent progress";
   if (status === "idle") return "Idle";
   if (status === "completed" || fallbackEndedAt != null) return "Completed";
   return "Recent";
+}
+
+function getTone(
+  presenceState: KnownPresenceState | null,
+  {
+    heuristicActive,
+    isIdle,
+  }: {
+    heuristicActive: boolean;
+    isIdle: boolean;
+  },
+): SessionRuntimeState["tone"] {
+  if (presenceState === "blocked") {
+    return "blocked";
+  }
+  if (presenceState === "needs_user") {
+    return "needs-user";
+  }
+  if (presenceState === "running") {
+    return "running";
+  }
+  if (presenceState === "thinking") {
+    return "thinking";
+  }
+  if (heuristicActive) {
+    return "inferred";
+  }
+  if (isIdle) {
+    return "idle";
+  }
+  return "inactive";
 }
 
 export function resolveSessionRuntimeState(
@@ -153,33 +211,13 @@ export function resolveSessionRuntimeState(
   const confidence = session.confidence ?? null;
   const truthTier = sessionTruthTier;
 
-  const heuristicActive = presenceState == null && truthTier === "inferred";
+  const heuristicActive = isProgressFallback({ status, confidence, runtimeSource, presenceState });
   const isExecuting = presenceState === "thinking" || presenceState === "running";
   const needsAttention = presenceState === "needs_user" || presenceState === "blocked";
 
   const isLive = isExecuting;
   const isIdle = presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle");
-  const hasSignal =
-    truthTier !== "none" ||
-    presenceState != null ||
-    status != null ||
-    lastLiveAt != null ||
-    heuristicActive;
-
-  let tone: SessionRuntimeState["tone"] = "inactive";
-  if (presenceState === "blocked") {
-    tone = "blocked";
-  } else if (presenceState === "needs_user") {
-    tone = "needs-user";
-  } else if (presenceState === "running") {
-    tone = "running";
-  } else if (presenceState === "thinking") {
-    tone = "thinking";
-  } else if (heuristicActive) {
-    tone = "inferred";
-  } else if (isIdle) {
-    tone = "idle";
-  }
+  const hasSignal = truthTier !== "none" || presenceState != null || status != null || lastLiveAt != null;
 
   const displayPhase = getDisplayPhase(
     presenceState,
@@ -188,6 +226,7 @@ export function resolveSessionRuntimeState(
     session.ended_at ?? null,
     session.display_phase ?? null,
   );
+  const tone = getTone(presenceState, { heuristicActive, isIdle });
 
   return {
     status,

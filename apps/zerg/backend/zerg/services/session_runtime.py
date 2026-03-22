@@ -20,6 +20,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 
@@ -37,6 +38,7 @@ INFERRED_PROGRESS_WINDOW = timedelta(minutes=5)
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked", "needs_user"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}
+PRESENCE_STALE_THRESHOLD = timedelta(minutes=10)
 
 
 def _normalize_utc(value: datetime | None) -> datetime | None:
@@ -231,6 +233,86 @@ def build_runtime_view(
         active_tool=active_tool,
         confidence=confidence,
         timeline_anchor_at=timeline_anchor_at,
+    )
+
+
+def build_fallback_runtime_view(
+    *,
+    session: AgentSession,
+    last_activity_at: datetime | None,
+    presence: SessionPresence | None,
+    now: datetime,
+) -> SessionRuntimeView:
+    normalized_now = _normalize_utc(now) or datetime.now(timezone.utc)
+    started_at = _normalize_utc(session.started_at) or normalized_now
+    ended_at = _normalize_utc(session.ended_at)
+    progress_at = _normalize_utc(last_activity_at) or ended_at or started_at
+    presence_updated_at = _normalize_utc(presence.updated_at if presence else None)
+
+    presence_state: str | None = None
+    presence_tool: str | None = None
+    if presence is not None and presence_updated_at is not None and (normalized_now - presence_updated_at) < PRESENCE_STALE_THRESHOLD:
+        presence_state = presence.state
+        presence_tool = presence.tool_name
+
+    timeline_anchor_at = _latest_timestamp(progress_at, presence_updated_at, started_at) or normalized_now
+    last_live_at = presence_updated_at
+    confidence: str | None = None
+
+    if presence_state in {"thinking", "running", "needs_user", "blocked"}:
+        status = "working" if presence_state in LIVE_EXECUTION_PHASES else "active"
+        confidence = "live"
+    elif presence_state == "idle":
+        status = "idle"
+        confidence = "live"
+    elif ended_at is None:
+        if (normalized_now - progress_at) <= INFERRED_PROGRESS_WINDOW:
+            status = "active"
+            confidence = "inferred"
+            last_live_at = last_live_at or progress_at
+        else:
+            status = "idle"
+            confidence = "stale" if presence_updated_at is not None else None
+    else:
+        status = "completed"
+        confidence = "stale" if presence_updated_at is not None else None
+
+    runtime_phase = presence_state or ("finished" if ended_at is not None else "idle")
+    return SessionRuntimeView(
+        runtime_phase=runtime_phase,
+        phase_started_at=presence_updated_at or progress_at,
+        last_progress_at=progress_at,
+        runtime_source=("semantic" if presence_state is not None else ("progress" if confidence == "inferred" else "fallback")),
+        terminal_state=("finished" if ended_at is not None and status == "completed" else None),
+        runtime_version=0,
+        status=status,
+        presence_state=presence_state,
+        presence_tool=presence_tool,
+        presence_updated_at=presence_updated_at,
+        last_live_at=last_live_at,
+        display_phase=_display_phase_for_state(
+            phase=runtime_phase,
+            active_tool=presence_tool,
+            confidence=confidence or "stale",
+            terminal_state=("finished" if ended_at is not None and status == "completed" else None),
+            status=status,
+        ),
+        active_tool=presence_tool,
+        confidence=confidence,
+        timeline_anchor_at=timeline_anchor_at,
+    )
+
+
+def should_include_runtime_view(
+    *,
+    session: AgentSession,
+    runtime_view: SessionRuntimeView | None,
+) -> bool:
+    return runtime_view is not None and (
+        session.ended_at is None
+        or runtime_view.presence_updated_at is not None
+        or runtime_view.last_live_at is not None
+        or runtime_view.runtime_source not in {None, "fallback"}
     )
 
 
