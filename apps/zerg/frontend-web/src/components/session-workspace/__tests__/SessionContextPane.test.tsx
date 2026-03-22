@@ -109,6 +109,25 @@ describe("SessionContextPane", () => {
     expect(screen.getByRole("radio", { name: /manual/i })).toHaveAttribute("aria-checked", "false");
   });
 
+  it("uses runtime semantics instead of ended_at to describe session state", () => {
+    renderPane({
+      session: makeSession({
+        ended_at: "2026-03-17T10:04:00Z",
+        status: "working",
+        presence_state: "running",
+        presence_tool: "bash",
+        display_phase: "Running bash",
+        confidence: "live",
+        runtime_source: "managed_local_transport",
+        execution_home: "managed_local",
+      }),
+    });
+
+    expect(screen.getAllByText("Running bash")).toHaveLength(2);
+    expect(screen.getByText("On this Mac")).toBeInTheDocument();
+    expect(screen.queryByText("Completed")).not.toBeInTheDocument();
+  });
+
   it("calls back with the selected loop mode", async () => {
     const user = userEvent.setup();
     const onLoopModeChange = vi.fn();

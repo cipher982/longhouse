@@ -59,20 +59,46 @@ export function useAgentSessions(
  * Hook to fetch a single session by ID.
  */
 export function useAgentSession(sessionId: string | null) {
+  return useAgentSessionWithOptions(sessionId);
+}
+
+type AgentSessionQueryOptions = Pick<
+  UseQueryOptions<AgentSession>,
+  "enabled" | "refetchInterval"
+>;
+
+export function useAgentSessionWithOptions(
+  sessionId: string | null,
+  options: AgentSessionQueryOptions = {},
+) {
   return useQuery<AgentSession>({
     queryKey: ["agent-session", sessionId],
     queryFn: () => fetchAgentSession(sessionId!),
-    enabled: !!sessionId,
+    enabled: options.enabled ?? !!sessionId,
+    refetchInterval: options.refetchInterval,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
   });
 }
 
 export function useAgentSessionThread(sessionId: string | null) {
+  return useAgentSessionThreadWithOptions(sessionId);
+}
+
+type AgentSessionThreadQueryOptions = Pick<
+  UseQueryOptions<AgentSessionThreadResponse>,
+  "enabled" | "refetchInterval"
+>;
+
+export function useAgentSessionThreadWithOptions(
+  sessionId: string | null,
+  options: AgentSessionThreadQueryOptions = {},
+) {
   return useQuery<AgentSessionThreadResponse>({
     queryKey: ["agent-session-thread", sessionId],
     queryFn: () => fetchAgentSessionThread(sessionId!),
-    enabled: !!sessionId,
+    enabled: options.enabled ?? !!sessionId,
+    refetchInterval: options.refetchInterval,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
   });
