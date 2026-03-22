@@ -450,10 +450,86 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["status"] == "working"
+        assert row["status"] == "active"
         assert row["display_phase"] == "Recent progress"
         assert row["runtime_phase"] == "idle"
         assert row["runtime_source"] == "progress"
         assert row["presence_state"] is None
         assert row["last_live_at"] is not None
+        assert row["confidence"] == "inferred"
+
+
+def test_sessions_list_marks_materialized_needs_user_as_active_attention(tmp_path):
+    factory = _make_db(tmp_path, "materialized_runtime_needs_user.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=6),
+            ended_at=None,
+            project="runtime-needs-user",
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{session.id}",
+                session_id=session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="needs_user",
+                phase_source="managed_local_transport",
+                active_tool=None,
+                phase_started_at=now - timedelta(seconds=30),
+                last_runtime_signal_at=now - timedelta(seconds=30),
+                last_progress_at=now - timedelta(seconds=25),
+                last_live_at=now - timedelta(seconds=30),
+                timeline_anchor_at=now - timedelta(seconds=25),
+                freshness_expires_at=now + timedelta(minutes=10),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=4,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == str(session.id)
+        assert row["status"] == "active"
+        assert row["presence_state"] == "needs_user"
+        assert row["display_phase"] == "Needs you"
+        assert row["runtime_phase"] == "needs_user"
+        assert row["runtime_source"] == "managed_local_transport"
+        assert row["confidence"] == "live"
+
+
+def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
+    factory = _make_db(tmp_path, "active_sessions_progress_fallback.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=1),
+            ended_at=None,
+            project="progress-fallback",
+        )
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions/active?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()["sessions"]
+        row = next(item for item in rows if item["id"] == str(session.id))
+        assert row["status"] == "active"
+        assert row["presence_state"] is None
+        assert row["display_phase"] == "Recent progress"
+        assert row["runtime_phase"] == "idle"
         assert row["confidence"] == "inferred"

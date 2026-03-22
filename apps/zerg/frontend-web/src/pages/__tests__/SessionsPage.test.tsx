@@ -359,7 +359,7 @@ describe("SessionsPage", () => {
         sessions: [
           makeSession({
             ended_at: null,
-            status: "working",
+            status: "active",
             confidence: "inferred",
             display_phase: "Recent progress",
           }),
@@ -384,7 +384,7 @@ describe("SessionsPage", () => {
         sessions: [
           makeSession({
             ended_at: null,
-            status: "working",
+            status: "active",
             confidence: "inferred",
             display_phase: "Recent progress",
           }),
@@ -417,7 +417,7 @@ describe("SessionsPage", () => {
             execution_home: "managed_local",
             managed_transport: "tmux",
             runtime_source: "managed_local_transport",
-            status: "working",
+            status: "active",
             confidence: "live",
             presence_state: "needs_user",
             presence_updated_at: "2026-03-21T12:04:00Z",
@@ -441,6 +441,45 @@ describe("SessionsPage", () => {
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--needs-user");
+    expect(card).not.toHaveClass("session-card--live");
+    expect(card).not.toHaveClass("session-card--running");
+    expect(card).not.toHaveClass("session-card--thinking");
+  });
+
+  it("styles blocked sessions as attention state, not executing work", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            ended_at: null,
+            execution_home: "managed_local",
+            managed_transport: "tmux",
+            runtime_source: "managed_local_transport",
+            status: "active",
+            confidence: "live",
+            presence_state: "blocked",
+            presence_tool: "bash",
+            presence_updated_at: "2026-03-21T12:05:00Z",
+            last_live_at: "2026-03-21T12:05:00Z",
+            timeline_anchor_at: "2026-03-21T12:05:00Z",
+            display_phase: "Blocked on bash",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    const { container } = renderSessionsPage();
+
+    expect(await screen.findByText("Blocked on bash")).toBeInTheDocument();
+    expect(screen.getByText("Local runtime")).toBeInTheDocument();
+
+    const card = container.querySelector(".session-card");
+    expect(card).toHaveClass("session-card--blocked");
     expect(card).not.toHaveClass("session-card--live");
     expect(card).not.toHaveClass("session-card--running");
     expect(card).not.toHaveClass("session-card--thinking");

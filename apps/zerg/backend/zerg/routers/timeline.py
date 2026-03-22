@@ -438,7 +438,7 @@ async def list_timeline_session_summaries(
 @router.get("/sessions/active", response_model=agents_router.ActiveSessionsResponse)
 async def list_timeline_active_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, idle, completed)"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, active, idle, completed)"),
     attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),

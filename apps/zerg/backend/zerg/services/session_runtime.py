@@ -160,9 +160,13 @@ def _status_for_state(
     if terminal_state is not None or phase == "finished":
         return "completed"
     if confidence == "inferred":
-        return "working"
+        return "active"
     if confidence == "live":
-        return "idle" if phase == "idle" else "working"
+        if phase in LIVE_EXECUTION_PHASES:
+            return "working"
+        if phase in ATTENTION_PHASES:
+            return "active"
+        return "idle"
     if ended_at is None:
         return "idle"
     return "completed"

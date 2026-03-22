@@ -148,7 +148,7 @@ class SessionResponse(UTCBaseModel):
     runtime_source: Optional[str] = Field(None, description="Materialized runtime source: semantic|progress|fallback")
     terminal_state: Optional[str] = Field(None, description="Terminal runtime state when known")
     runtime_version: Optional[int] = Field(None, description="Monotonic runtime version for patch ordering")
-    status: Optional[str] = Field(None, description="Derived runtime status (working, idle, completed)")
+    status: Optional[str] = Field(None, description="Derived runtime status (working, active, idle, completed)")
     presence_state: Optional[str] = Field(None, description="Fresh presence signal when available")
     presence_tool: Optional[str] = Field(None, description="Tool currently executing (when applicable)")
     presence_updated_at: Optional[datetime] = Field(None, description="When presence was last signalled")
@@ -229,7 +229,7 @@ class SessionThreadResponse(BaseModel):
 
 PRESENCE_STALE_THRESHOLD = timedelta(minutes=10)
 RECENT_ACTIVITY_WINDOW = timedelta(minutes=5)
-LIVE_PRESENCE_STATES = {"thinking", "running", "needs_user", "blocked"}
+FRESH_PRESENCE_STATES = {"thinking", "running", "needs_user", "blocked"}
 
 
 @dataclass(frozen=True)
@@ -293,6 +293,8 @@ def _build_display_phase(
         return "Idle"
     if confidence == "inferred":
         return "Recent progress"
+    if status == "active":
+        return "Recent progress"
     if status == "working":
         return "Working"
     if status == "idle":
@@ -323,15 +325,15 @@ def _derive_session_runtime_overlay(
     last_live_at = presence_updated_at
     confidence: str | None = None
 
-    if presence_state in LIVE_PRESENCE_STATES:
-        status = "working"
+    if presence_state in FRESH_PRESENCE_STATES:
+        status = "working" if presence_state in {"thinking", "running"} else "active"
         confidence = "live"
     elif presence_state == "idle":
         status = "idle"
         confidence = "live"
     elif ended_at is None:
         if (now - progress_at) <= RECENT_ACTIVITY_WINDOW:
-            status = "working"
+            status = "active"
             confidence = "inferred"
             last_live_at = last_live_at or progress_at
         else:
@@ -342,7 +344,7 @@ def _derive_session_runtime_overlay(
         confidence = "stale" if presence_updated_at is not None else None
 
     return SessionRuntimeOverlay(
-        runtime_phase=presence_state or ("finished" if ended_at is not None else ("running" if confidence == "inferred" else "idle")),
+        runtime_phase=presence_state or ("finished" if ended_at is not None else "idle"),
         phase_started_at=presence_updated_at or progress_at,
         last_progress_at=progress_at,
         runtime_source=("semantic" if presence_state is not None else ("progress" if confidence == "inferred" else "fallback")),
@@ -560,7 +562,7 @@ class ActiveSessionResponse(UTCBaseModel):
     runtime_source: Optional[str] = Field(None, description="Materialized runtime source: semantic|progress|fallback")
     terminal_state: Optional[str] = Field(None, description="Terminal runtime state when known")
     runtime_version: Optional[int] = Field(None, description="Monotonic runtime version for patch ordering")
-    status: str = Field(..., description="Session status (working, idle, completed)")
+    status: str = Field(..., description="Session status (working, active, idle, completed)")
     attention: str = Field(..., description="Attention level (auto by default)")
     duration_minutes: int = Field(..., description="Duration in minutes")
     last_user_message: Optional[str] = Field(None, description="Last user message (truncated)")
@@ -2408,7 +2410,7 @@ async def list_session_summaries(
 @router.get("/sessions/active", response_model=ActiveSessionsResponse)
 async def list_active_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, idle, completed)"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, active, idle, completed)"),
     attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
