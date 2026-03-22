@@ -138,7 +138,7 @@ def _build_timeline_cards_from_detail_rows(
         cards.append(
             TimelineSessionCardResponse(
                 thread_id=detail.thread_root_session_id,
-                timeline_anchor_at=detail.timeline_anchor_at,
+                timeline_anchor_at=head.timeline_anchor_at or head.last_activity_at or head.started_at,
                 head=head,
                 detail=detail,
                 root=root,
@@ -401,10 +401,11 @@ async def list_timeline_sessions(
     db: Session = Depends(get_db),
 ):
     effective_mode = mode or "lexical"
-    if effective_mode == "hybrid":
+    if query is not None or effective_mode != "lexical":
         # Hybrid search remains on the legacy raw-session contract for now.
-        # The main thread-card contract in this route is only authoritative for
-        # default recency and lexical search.
+        # Query-driven search remains on the legacy raw-session contract for now.
+        # The thread-card contract in this route is only authoritative for the
+        # default no-query timeline path.
         raw_response = await agents_router.list_sessions(
             project=project,
             provider=provider,
@@ -425,7 +426,7 @@ async def list_timeline_sessions(
         )
         if isinstance(raw_response, Response):
             return raw_response
-        return JSONResponse(content=raw_response.model_dump())
+        return JSONResponse(content=raw_response.model_dump(mode="json"))
 
     store = AgentsStore(db)
     since = datetime.now(timezone.utc) - timedelta(days=days_back)

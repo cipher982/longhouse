@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
-import types
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from unittest.mock import patch
 
+import zerg.dependencies.auth as _auth_deps  # noqa: F401
+import zerg.routers.timeline as timeline_router
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
@@ -16,15 +16,6 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
-
-browser_auth_stub = types.ModuleType("zerg.dependencies.browser_auth")
-browser_auth_stub.get_current_browser_user = lambda *args, **kwargs: None
-browser_auth_stub.get_optional_browser_user = lambda *args, **kwargs: None
-sys.modules.setdefault("zerg.dependencies.browser_auth", browser_auth_stub)
-
-from zerg.routers.timeline import _timeline_sessions_stream
-
-timeline_router = sys.modules[_timeline_sessions_stream.__module__]
 
 
 def _make_db(tmp_path, name="timeline_stream.db"):
@@ -104,7 +95,7 @@ def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
         db.commit()
 
     async def _collect_events():
-        stream = _timeline_sessions_stream(
+        stream = timeline_router._timeline_sessions_stream(
             _ConnectedRequest(),
             session_factory=session_local,
             project=None,
@@ -257,7 +248,7 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
         return original_window_signature(self, *args, **kwargs)
 
     async def _collect_events():
-        stream = _timeline_sessions_stream(
+        stream = timeline_router._timeline_sessions_stream(
             _ConnectedRequest(),
             session_factory=session_local,
             project=None,
@@ -294,7 +285,7 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
     assert all(call.get("include_total") is False for call in window_signature_kwargs)
 
 
-def test_list_timeline_sessions_returns_one_card_per_thread_for_lexical_search(tmp_path):
+def test_list_timeline_sessions_query_path_stays_raw_session_compatibility(tmp_path):
     session_local = _make_db(tmp_path, "timeline_thread_cards_lexical.db")
     now = datetime.now(timezone.utc)
     magic = "thread-card-needle"
@@ -365,13 +356,14 @@ def test_list_timeline_sessions_returns_one_card_per_thread_for_lexical_search(t
                 )
             )
 
-    assert payload.total == 1
-    assert len(payload.sessions) == 1
-    card = payload.sessions[0]
-    assert card.thread_id == str(root.id)
-    assert card.detail.id == str(root.id)
-    assert card.head.id == str(head.id)
-    assert card.root.id == str(root.id)
-    assert card.continuation_count == 2
-    assert card.detail.match_event_id is not None
-    assert magic in (card.detail.match_snippet or "")
+    assert payload.status_code == 200
+    body = json.loads(payload.body)
+    assert body["total"] == 1
+    assert len(body["sessions"]) == 1
+    row = body["sessions"][0]
+    assert row["id"] == str(root.id)
+    assert "head" not in row
+    assert row["thread_root_session_id"] == str(root.id)
+    assert row["thread_head_session_id"] == str(head.id)
+    assert row["match_event_id"] is not None
+    assert magic in (row["match_snippet"] or "")

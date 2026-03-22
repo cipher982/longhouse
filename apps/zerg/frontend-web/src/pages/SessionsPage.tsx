@@ -846,6 +846,7 @@ export default function SessionsPage() {
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
+  const compatibilityMode = data?.compatibility_mode === "query_grouped";
   const hasMore = sessions.length < total;
 
   useTimelineSessionStream(filters, { enabled: timelineStreamEnabled });
@@ -855,7 +856,11 @@ export default function SessionsPage() {
 
   const headerActions = (
     <div className="sessions-header-actions">
-      {threadCards.length > 0 && <span className="sessions-header-count">{threadCards.length} tasks</span>}
+      {threadCards.length > 0 && (
+        <span className="sessions-header-count">
+          {compatibilityMode ? `${threadCards.length} results` : `${threadCards.length} tasks`}
+        </span>
+      )}
       <Button
         variant="ghost"
         size="sm"
@@ -1241,7 +1246,9 @@ export default function SessionsPage() {
         {total > 0 && (
           <div className="sessions-footer">
             <span className="sessions-count">
-              {`Showing ${threadCards.length} of ${total} task threads`}
+              {compatibilityMode
+                ? `Showing ${threadCards.length} grouped results from ${total} matching sessions`
+                : `Showing ${threadCards.length} of ${total} task threads`}
             </span>
             {hasMore && (
               <Button
