@@ -164,6 +164,12 @@ For v1, that stack is sufficient to transport `tmux` commands to the source mach
 **Rationale:** Simple, reversible, preserves native Claude UX, avoids building a custom terminal wrapper first.
 **Revisit if:** tmux state proves too brittle, or a dedicated PTY supervisor becomes clearly superior.
 
+### Decision: Reuse shipper-ingested same-session events instead of scraping terminal output
+**Context:** Managed local chat needs to preserve the existing `/sessions/{id}/chat` SSE contract without building a brittle terminal parser.
+**Choice:** After sending text through tmux, wait for new events on the same session to arrive via the existing shipper/Stop-hook ingest path, then stream those persisted events back to the client.
+**Rationale:** Lower complexity, higher fidelity, and it keeps managed-local chat on the same transcript source of truth Longhouse already uses.
+**Revisit if:** The shipper path proves too latent or unreliable for same-turn response UX.
+
 ## Architecture
 
 ### Session homes
@@ -203,7 +209,8 @@ Managed local dispatch:
 
 - resolve source runner + tmux metadata
 - send a `tmux send-keys` command over the runner transport
-- capture enough output tail to confirm progress
+- wait for new shipper-ingested events on that same session
+- stream those persisted events back over the existing session-chat SSE route
 
 The transcript and session page continue to use existing event/timeline infrastructure.
 
@@ -274,12 +281,14 @@ Scope:
 
 - branch session chat by execution home
 - send typed text into managed local session
+- wait for same-session events from shipper ingest and stream them back
 - keep current hosted/headless path unchanged
 
 **Acceptance criteria**
 
 - `Continue`/chat text for `managed_local` goes to the source tmux session
 - same-session identity is preserved
+- the existing session-chat SSE contract stays intact
 - focused tests prove routing behavior and tmux command dispatch
 
 ### Phase 4: Loop phone actions for managed local

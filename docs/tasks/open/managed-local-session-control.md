@@ -28,7 +28,7 @@ Ship the first trustworthy away-from-keyboard product for laptop-first Claude us
 - [x] Add managed-local tmux command builder/service with focused tests
 - [x] Expose execution-home metadata in session APIs
 - [x] Add managed-local launcher on a connected runner
-- [ ] Route `/sessions/{id}/chat` to tmux-backed local sessions
+- [x] Route `/sessions/{id}/chat` to tmux-backed local sessions
 - [ ] Add Loop `Reply` as a first-class action for managed-local cards
 - [ ] Show `On this Mac` clearly in Loop/session surfaces
 - [ ] Dogfood a real managed local session from laptop + phone
