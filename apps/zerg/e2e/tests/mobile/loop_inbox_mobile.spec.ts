@@ -82,7 +82,16 @@ const cards = {
   },
 };
 
-async function mockLoopInboxApi(page: import("@playwright/test").Page): Promise<void> {
+async function mockLoopInboxApi(
+  page: import("@playwright/test").Page,
+  {
+    items = inboxItems,
+    cardMap = cards,
+  }: {
+    items?: typeof inboxItems;
+    cardMap?: Record<number, unknown>;
+  } = {},
+): Promise<void> {
   await page.route("**/api/oikos/loop-inbox**", async (route) => {
     const url = new URL(route.request().url());
     const pathname = url.pathname;
@@ -91,7 +100,7 @@ async function mockLoopInboxApi(page: import("@playwright/test").Page): Promise<
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(inboxItems),
+        body: JSON.stringify(items),
       });
       return;
     }
@@ -99,10 +108,19 @@ async function mockLoopInboxApi(page: import("@playwright/test").Page): Promise<
     const cardMatch = pathname.match(/\/api\/oikos\/loop-inbox\/cards\/(\d+)$/);
     if (cardMatch) {
       const cardId = Number(cardMatch[1]);
+      const card = cardMap[cardId];
+      if (!card) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Not found" }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(cards[cardId as 42 | 99]),
+        body: JSON.stringify(card),
       });
       return;
     }
@@ -208,4 +226,49 @@ test("loop inbox auto-opens the queue when a stale mobile card is selected", asy
   await expect(statusBanner).toContainText("Viewing older card");
   await expect(statusBanner).toContainText("A newer turn replaced this follow-up.");
   await expect(statusBanner.getByRole("link", { name: "Open current" })).toHaveAttribute("href", "/loop/card/99");
+});
+
+test("loop inbox keeps the mobile queue button visible when only one follow-up exists", async ({
+  page,
+}) => {
+  await mockLoopInboxApi(page, {
+    items: [inboxItems[0]],
+    cardMap: { 42: cards[42] },
+  });
+
+  await page.goto("/loop/card/42");
+
+  await expect(page.getByTestId("loop-mobile-header")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-button")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-count")).toHaveText("1");
+
+  await page.getByTestId("loop-mobile-queue-button").click();
+
+  const drawer = page.getByTestId("loop-mobile-queue-drawer");
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByTestId("loop-inbox-row-42")).toBeVisible();
+  await expect(drawer.getByText("No follow-ups right now")).toHaveCount(0);
+});
+
+test("loop inbox shows an explicit empty state in the mobile drawer when nothing is waiting", async ({
+  page,
+}) => {
+  await mockLoopInboxApi(page, {
+    items: [],
+    cardMap: {},
+  });
+
+  await page.goto("/loop");
+
+  await expect(page.getByTestId("loop-mobile-header")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-button")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-count")).toHaveCount(0);
+  await expect(page.getByText("No sessions need attention")).toBeVisible();
+
+  await page.getByTestId("loop-mobile-queue-button").click();
+
+  const drawer = page.getByTestId("loop-mobile-queue-drawer");
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByTestId("loop-mobile-queue-drawer-empty")).toContainText("No follow-ups right now");
+  await expect(drawer.getByText("New approvals will appear here as soon as a coding turn needs review.")).toBeVisible();
 });
