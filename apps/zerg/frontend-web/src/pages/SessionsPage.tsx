@@ -360,6 +360,25 @@ function isSessionLive(session: ActiveSession): boolean {
   return resolveSessionRuntimeState(session, session).isLive;
 }
 
+function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string | null {
+  if (runtime.truthTier === "managed-local") {
+    return "Local runtime";
+  }
+  if (runtime.truthTier === "fresh") {
+    return "Fresh signal";
+  }
+  if (runtime.truthTier === "inferred") {
+    return "Recent progress";
+  }
+  if (runtime.lastLiveAt) {
+    return `Seen ${formatRelativeTime(runtime.lastLiveAt)}`;
+  }
+  if (runtime.truthTier === "stale" || runtime.confidence === "stale") {
+    return "Stale";
+  }
+  return null;
+}
+
 function repoNameFromUrl(url: string | null): string | null {
   if (!url) return null;
   const cleaned = url.replace(/\.git$/, "");
@@ -608,15 +627,7 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session, activeSession);
-  const runtimeMetaLabel = runtime.isLive
-    ? runtime.heuristicActive
-      ? "Recent progress"
-      : "Live now"
-    : runtime.lastLiveAt
-      ? `Seen ${formatRelativeTime(runtime.lastLiveAt)}`
-      : runtime.confidence === "stale"
-        ? "Stale"
-        : null;
+  const runtimeMetaLabel = getRuntimeMetaLabel(runtime);
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -692,7 +703,7 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
               tool={runtime.presenceTool}
               compact
               heuristicActive={runtime.heuristicActive}
-              showUnknown={runtime.confidence === "stale"}
+              showUnknown={runtime.truthTier === "stale"}
             />
             <span className="session-card-runtime-phase">{runtime.displayPhase}</span>
             {runtimeMetaLabel && (
@@ -1245,7 +1256,7 @@ export default function SessionsPage() {
                             tool={runtime.presenceTool}
                             compact
                             heuristicActive={runtime.heuristicActive}
-                            showUnknown={runtime.confidence === "stale"}
+                            showUnknown={runtime.truthTier === "stale"}
                           />
                           <span className="sessions-live-row-presence-label">
                             {runtime.displayPhase}

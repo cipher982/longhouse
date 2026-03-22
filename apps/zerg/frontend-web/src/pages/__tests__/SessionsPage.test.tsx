@@ -363,7 +363,7 @@ describe("SessionsPage", () => {
     renderSessionsPage();
 
     expect(await screen.findByText("Running bash")).toBeInTheDocument();
-    expect(screen.getByText("Live now")).toBeInTheDocument();
+    expect(screen.getByText("Fresh signal")).toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
     expect(mockUseActiveSessions).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -405,6 +405,69 @@ describe("SessionsPage", () => {
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();
     expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();
+  });
+
+  it("keeps managed-local runtime truth on the card when live view adds a newer inferred snapshot", async () => {
+    const user = userEvent.setup();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            ended_at: null,
+            execution_home: "managed_local",
+            managed_transport: "tmux",
+            origin_label: "cinder",
+            runtime_source: "managed_local_transport",
+            status: "working",
+            confidence: "live",
+            presence_state: "running",
+            presence_tool: "bash",
+            presence_updated_at: "2026-03-21T12:04:00Z",
+            last_live_at: "2026-03-21T12:04:00Z",
+            timeline_anchor_at: "2026-03-21T12:04:00Z",
+            display_phase: "Running bash",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseActiveSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeActiveSession({
+            execution_home: "managed_local",
+            managed_transport: "tmux",
+            runtime_source: "progress",
+            status: "working",
+            confidence: "inferred",
+            timeline_anchor_at: "2026-03-21T12:05:00Z",
+            last_activity_at: "2026-03-21T12:05:00Z",
+            presence_state: null,
+            presence_tool: null,
+            presence_updated_at: null,
+            display_phase: "Working",
+          }),
+        ],
+        total: 1,
+        last_refresh: "2026-03-21T12:05:00Z",
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    const { container } = renderSessionsPage();
+
+    await user.click(await screen.findByRole("button", { name: "Live view" }));
+
+    expect(await screen.findByText("Local runtime")).toBeInTheDocument();
+    const timelinePhases = Array.from(container.querySelectorAll(".session-card-runtime-phase")).map((node) => node.textContent);
+    expect(timelinePhases).toContain("Running bash");
+    expect(timelinePhases).not.toContain("Working");
   });
 
   it("only enables the active sessions poll when live view is open", async () => {
@@ -482,7 +545,7 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("Cleanup sessions page")).toBeInTheDocument();
     expect(screen.queryByText("Working")).not.toBeInTheDocument();
     expect(screen.queryByText("Recent progress")).not.toBeInTheDocument();
-    expect(screen.queryByText("Live now")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
   });
 
   it("uses the session timeline anchor for the card timestamp", async () => {

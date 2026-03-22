@@ -2,12 +2,16 @@ import type {
   AgentActiveSession,
   AgentSession,
   AgentSessionStatus,
+  ManagedSessionTransport,
+  SessionExecutionHome,
 } from "../services/api/agents";
 
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
+export type RuntimeTruthTier = "none" | "stale" | "inferred" | "fresh" | "managed-local";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
+  runtime_source?: string | null;
   status?: AgentSessionStatus | string | null;
   presence_state?: string | null;
   presence_tool?: string | null;
@@ -16,9 +20,14 @@ type TimelineRuntimeOverlay = {
   display_phase?: string | null;
   active_tool?: string | null;
   confidence?: string | null;
+  execution_home?: SessionExecutionHome | null;
+  managed_transport?: ManagedSessionTransport | null;
 };
 
-export type TimelineRuntimeSession = Pick<AgentSession, "ended_at" | "last_activity_at" | "timeline_anchor_at"> &
+export type TimelineRuntimeSession = Pick<
+  AgentSession,
+  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "execution_home" | "managed_transport"
+> &
   Partial<TimelineRuntimeOverlay>;
 
 export type TimelineRuntimeActiveSession = Pick<
@@ -30,10 +39,13 @@ export type TimelineRuntimeActiveSession = Pick<
   | "presence_updated_at"
   | "last_activity_at"
   | "timeline_anchor_at"
+  | "runtime_source"
   | "last_live_at"
   | "display_phase"
   | "active_tool"
   | "confidence"
+  | "execution_home"
+  | "managed_transport"
 >;
 
 export interface SessionRuntimeState {
@@ -41,11 +53,14 @@ export interface SessionRuntimeState {
   presenceState: KnownPresenceState | null;
   presenceTool: string | null;
   lastLiveAt: string | null;
+  runtimeSource: string | null;
   confidence: string | null;
+  truthTier: RuntimeTruthTier;
   displayPhase: string;
   isLive: boolean;
   isIdle: boolean;
   heuristicActive: boolean;
+  isManagedLocalTruth: boolean;
   hasSignal: boolean;
   tone: "inactive" | "live" | "running" | "needs-user" | "blocked" | "idle";
 }
@@ -75,6 +90,57 @@ export function normalizePresenceState(state: string | null | undefined): KnownP
     return state;
   }
   return null;
+}
+
+function normalizeRuntimeSource(source: string | null | undefined): string | null {
+  const trimmed = source?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function truthTierScore(tier: RuntimeTruthTier): number {
+  switch (tier) {
+    case "managed-local":
+      return 4;
+    case "fresh":
+      return 3;
+    case "inferred":
+      return 2;
+    case "stale":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function getRuntimeTruthTier(
+  overlay: Partial<TimelineRuntimeOverlay> | null | undefined,
+): RuntimeTruthTier {
+  const status = overlay?.status ?? null;
+  const confidence = overlay?.confidence ?? null;
+  const presenceState = normalizePresenceState(overlay?.presence_state ?? null);
+  const runtimeSource = normalizeRuntimeSource(overlay?.runtime_source ?? null);
+  const executionHome = overlay?.execution_home ?? null;
+  const statusSuggestsRecentProgress =
+    status === "working" || status === "thinking" || status === "active";
+  const hasFreshSignal =
+    presenceState != null ||
+    (confidence === "live" && runtimeSource !== "progress" && runtimeSource !== "fallback") ||
+    runtimeSource === "semantic" ||
+    runtimeSource === "managed_local_transport";
+
+  if (executionHome === "managed_local" && hasFreshSignal && confidence !== "stale") {
+    return "managed-local";
+  }
+  if (hasFreshSignal && confidence !== "stale") {
+    return "fresh";
+  }
+  if (confidence === "inferred" || runtimeSource === "progress" || statusSuggestsRecentProgress) {
+    return "inferred";
+  }
+  if (confidence === "stale" || runtimeSource === "fallback") {
+    return "stale";
+  }
+  return "none";
 }
 
 function getDisplayPhase(
@@ -116,9 +182,15 @@ export function resolveSessionRuntimeState(
   session: TimelineRuntimeSession,
   activeSession?: TimelineRuntimeActiveSession | null,
 ): SessionRuntimeState {
-  const sessionIsFresher = overlayFreshnessMillis(session) >= overlayFreshnessMillis(activeSession);
-  const primaryOverlay = sessionIsFresher ? session : activeSession;
-  const secondaryOverlay = sessionIsFresher ? activeSession : session;
+  const sessionTruthTier = getRuntimeTruthTier(session);
+  const activeTruthTier = getRuntimeTruthTier(activeSession);
+  const sessionScore = truthTierScore(sessionTruthTier);
+  const activeScore = truthTierScore(activeTruthTier);
+  const sessionWins =
+    sessionScore > activeScore ||
+    (sessionScore === activeScore && overlayFreshnessMillis(session) >= overlayFreshnessMillis(activeSession));
+  const primaryOverlay = sessionWins ? session : activeSession;
+  const secondaryOverlay = sessionWins ? activeSession : session;
 
   const status = primaryOverlay?.status ?? secondaryOverlay?.status ?? null;
   const presenceState = normalizePresenceState(
@@ -136,14 +208,16 @@ export function resolveSessionRuntimeState(
     secondaryOverlay?.last_live_at ??
     secondaryOverlay?.presence_updated_at ??
     (presenceState ? primaryOverlay?.last_activity_at ?? secondaryOverlay?.last_activity_at ?? null : null);
+  const runtimeSource = normalizeRuntimeSource(
+    primaryOverlay?.runtime_source ?? secondaryOverlay?.runtime_source ?? null,
+  );
   const confidence =
     primaryOverlay?.confidence ??
     secondaryOverlay?.confidence ??
-    (activeSession ? "live" : null);
+    null;
+  const truthTier = sessionWins ? sessionTruthTier : activeTruthTier;
 
-  const statusSuggestsLive =
-    status === "working" || status === "thinking" || status === "active";
-  const heuristicActive = presenceState == null && statusSuggestsLive;
+  const heuristicActive = presenceState == null && truthTier === "inferred";
 
   const isLive =
     presenceState === "thinking" ||
@@ -153,7 +227,7 @@ export function resolveSessionRuntimeState(
     heuristicActive;
   const isIdle = presenceState === "idle" || (!isLive && status === "idle");
   const hasSignal =
-    activeSession != null ||
+    truthTier !== "none" ||
     presenceState != null ||
     status != null ||
     lastLiveAt != null ||
@@ -186,10 +260,13 @@ export function resolveSessionRuntimeState(
     presenceTool,
     lastLiveAt,
     confidence,
+    runtimeSource,
+    truthTier,
     displayPhase,
     isLive,
     isIdle,
     heuristicActive,
+    isManagedLocalTruth: truthTier === "managed-local",
     hasSignal,
     tone,
   };
