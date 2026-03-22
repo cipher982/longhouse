@@ -61,6 +61,7 @@ class CompletedAssistantTurn:
     turn_index: int
     text: str
     last_user_text: str | None
+    assistant_timestamp: datetime
 
 
 @dataclass(frozen=True)
@@ -153,12 +154,14 @@ def load_latest_completed_assistant_turn(db: Session, session_id: str) -> Comple
     current_role: str | None = None
     current_texts: list[str] = []
     current_last_event_id: int | None = None
+    current_last_timestamp: datetime | None = None
     last_user_text: str | None = None
 
     def _flush() -> None:
         nonlocal current_role
         nonlocal current_texts
         nonlocal current_last_event_id
+        nonlocal current_last_timestamp
         nonlocal last_user_text
         if current_role is None or current_last_event_id is None:
             return
@@ -168,6 +171,7 @@ def load_latest_completed_assistant_turn(db: Session, session_id: str) -> Comple
                 "role": current_role,
                 "text": turn_text,
                 "assistant_event_id": current_last_event_id if current_role == "assistant" else None,
+                "assistant_timestamp": current_last_timestamp if current_role == "assistant" else None,
                 "last_user_text": last_user_text,
             }
         )
@@ -177,6 +181,7 @@ def load_latest_completed_assistant_turn(db: Session, session_id: str) -> Comple
         current_role = None
         current_texts = []
         current_last_event_id = None
+        current_last_timestamp = None
 
     for message in messages:
         if message.role != current_role:
@@ -184,6 +189,7 @@ def load_latest_completed_assistant_turn(db: Session, session_id: str) -> Comple
             current_role = message.role
         current_texts.append(message.text)
         current_last_event_id = message.event_id
+        current_last_timestamp = message.timestamp
         if message.role == "user":
             last_user_text = message.text
     _flush()
@@ -195,13 +201,15 @@ def load_latest_completed_assistant_turn(db: Session, session_id: str) -> Comple
         return None
     text = str(latest_turn["text"] or "").strip()
     assistant_event_id = latest_turn["assistant_event_id"]
-    if not text or assistant_event_id is None:
+    assistant_timestamp = _normalize_utc(latest_turn.get("assistant_timestamp"))
+    if not text or assistant_event_id is None or assistant_timestamp is None:
         return None
     return CompletedAssistantTurn(
         assistant_event_id=int(assistant_event_id),
         turn_index=len(turns) - 1,
         text=text,
         last_user_text=str(latest_turn.get("last_user_text") or "").strip() or None,
+        assistant_timestamp=assistant_timestamp,
     )
 
 
@@ -645,11 +653,11 @@ async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[
         return None, False
     if session.user_state in {"archived", "snoozed"}:
         return None, False
-    ended_at = _normalize_utc(session.ended_at)
-    if ended_at is None:
+    turn = load_latest_completed_assistant_turn(db, session_id)
+    if turn is None:
         return None, False
     now = datetime.now(timezone.utc)
-    if (now - ended_at).total_seconds() > (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60):
+    if (now - turn.assistant_timestamp).total_seconds() > (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60):
         return None, False
 
     presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
@@ -661,10 +669,6 @@ async def _record_session_turn_review(*, db: Session, session_id: str) -> tuple[
             and presence.state in _ACTIVE_PRESENCE_STATES
         ):
             return None, False
-
-    turn = load_latest_completed_assistant_turn(db, session_id)
-    if turn is None:
-        return None, False
 
     existing = (
         db.query(SessionTurnReview)
