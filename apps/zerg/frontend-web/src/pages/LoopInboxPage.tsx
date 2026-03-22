@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { SidebarIcon, XIcon } from "../components/icons";
-import { Badge, Button, EmptyState, IconButton, PageShell, Spinner } from "../components/ui";
+import { Badge, Button, EmptyState, PageShell, Spinner } from "../components/ui";
 import {
   applyLoopInboxAction,
   fetchLoopActionCard,
@@ -316,6 +316,7 @@ export default function LoopInboxPage() {
   const showMobileStatusNotice = isPhoneLayout && currentCardIsStale;
   const queueSummaryLabel =
     queueCountLabel && queuePositionLabel ? `${queueCountLabel} · ${queuePositionLabel}` : queueCountLabel;
+  const queueButtonLabel = "Follow-ups";
   const queueButtonAriaLabel = currentCardNeedsQueueRecovery
     ? ["Open follow-ups", queueCountLabel, "Viewing older card"].filter(Boolean).join(". ")
     : ["Open follow-ups", queueCountLabel, queuePositionLabel].filter(Boolean).join(". ");
@@ -616,7 +617,8 @@ export default function LoopInboxPage() {
         {showMobileTopBar && (
           <header className="loop-inbox-mobile-header" data-testid="loop-mobile-header">
             <div className="loop-inbox-mobile-header-slot">
-              <IconButton
+              <button
+                type="button"
                 className={`loop-inbox-mobile-header-trigger${queueOpen ? " is-active" : ""}`}
                 onClick={() => setQueueOpen((open) => !open)}
                 aria-haspopup="dialog"
@@ -625,22 +627,20 @@ export default function LoopInboxPage() {
                 aria-label={queueButtonAriaLabel}
                 data-testid="loop-mobile-queue-button"
               >
-                <SidebarIcon width={18} height={18} />
-                {inboxCount > 0 && (
-                  <span
-                    className="loop-inbox-mobile-header-trigger-count"
-                    data-testid="loop-mobile-queue-count"
-                    aria-hidden="true"
-                  >
-                    {inboxCount}
-                  </span>
-                )}
-              </IconButton>
+                <SidebarIcon width={18} height={18} className="loop-inbox-mobile-header-trigger-icon" />
+                <span className="loop-inbox-mobile-header-trigger-label">{queueButtonLabel}</span>
+                <span
+                  className={`loop-inbox-mobile-header-trigger-count${inboxCount === 0 ? " is-empty" : ""}`}
+                  data-testid="loop-mobile-queue-count"
+                  aria-hidden="true"
+                >
+                  {inboxCount}
+                </span>
+              </button>
             </div>
             <div className="loop-inbox-mobile-header-copy">
               <div className="loop-inbox-mobile-header-title">Loop Inbox</div>
             </div>
-            <span className="loop-inbox-mobile-header-placeholder" aria-hidden="true" />
           </header>
         )}
 
