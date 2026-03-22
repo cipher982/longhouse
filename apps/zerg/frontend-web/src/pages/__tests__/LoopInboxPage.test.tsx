@@ -233,16 +233,58 @@ describe("LoopInboxPage", () => {
     expect(screen.getByRole("link", { name: /Open current/i })).toHaveAttribute("href", "/loop/card/99");
   });
 
-  it("hides the mobile queue toggle when only one active follow-up exists", async () => {
+  it("keeps the mobile queue button available when only one active follow-up exists", async () => {
+    const user = userEvent.setup();
     setViewportWidth(390);
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId("loop-inbox-card")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-button")).toHaveAttribute(
+        "aria-label",
+        expect.stringMatching(/1 open follow-up/i),
+      );
     });
 
     expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
-    expect(screen.queryByTestId("loop-mobile-queue-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-queue-button")).toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-queue-count")).toHaveTextContent("1");
+
+    await user.click(screen.getByTestId("loop-mobile-queue-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId("loop-inbox-row-42")).toBeInTheDocument();
+  });
+
+  it("keeps the mobile queue button available and shows an empty drawer when no follow-ups are waiting", async () => {
+    const user = userEvent.setup();
+    setViewportWidth(390);
+    fetchLoopInboxMock.mockResolvedValue([]);
+
+    renderPage("/loop");
+
+    await waitFor(() => {
+      expect(screen.getByText("No sessions need attention")).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
+    expect(screen.getByTestId("loop-mobile-queue-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("loop-mobile-queue-count")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /No open follow-ups/i })).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("loop-mobile-queue-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("loop-mobile-queue-drawer")).toBeInTheDocument();
+    });
+
+    const emptyState = screen.getByTestId("loop-mobile-queue-drawer-empty");
+    expect(within(emptyState).getByText("No follow-ups right now")).toBeInTheDocument();
+    expect(
+      within(emptyState).getByText("New approvals will appear here as soon as a coding turn needs review."),
+    ).toBeInTheDocument();
   });
 
   it("opens the mobile queue drawer and selecting another follow-up swaps the card", async () => {
@@ -278,7 +320,10 @@ describe("LoopInboxPage", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("loop-mobile-header")).toBeInTheDocument();
-      expect(screen.getByTestId("loop-mobile-queue-button")).toBeInTheDocument();
+      expect(screen.getByTestId("loop-mobile-queue-button")).toHaveAttribute(
+        "aria-label",
+        expect.stringMatching(/2 open follow-ups/i),
+      );
     });
 
     expect(screen.queryByText(/^Attention queue$/i)).not.toBeInTheDocument();
