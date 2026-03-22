@@ -159,6 +159,7 @@ test("loop inbox keeps the card primary and opens the queue as a left drawer on 
   await expect(header).toBeVisible();
   await expect(queueButton).toBeVisible();
   await expect(queueButton).toHaveAttribute("aria-label", /Open follow-ups/);
+  await expect(queueButton).toContainText("Follow-ups");
   await expect(queueCount).toHaveText("2");
   await expect(page.getByRole("link", { name: "Open timeline" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Candidate Interview Recaps and Hiring Pitches" })).toBeVisible();
@@ -220,6 +221,7 @@ test("loop inbox auto-opens the queue when a stale mobile card is selected", asy
 
   await expect(page.getByTestId("loop-mobile-header")).toBeVisible();
   await expect(page.getByTestId("loop-mobile-queue-button")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-button")).toContainText("Follow-ups");
   await expect(page.getByTestId("loop-mobile-queue-count")).toHaveText("2");
   await expect(drawer).toBeVisible();
   await expect(drawer.getByText("Settings and Modal Ownership Committed")).toBeVisible();
@@ -240,6 +242,7 @@ test("loop inbox keeps the mobile queue button visible when only one follow-up e
 
   await expect(page.getByTestId("loop-mobile-header")).toBeVisible();
   await expect(page.getByTestId("loop-mobile-queue-button")).toBeVisible();
+  await expect(page.getByTestId("loop-mobile-queue-button")).toContainText("Follow-ups");
   await expect(page.getByTestId("loop-mobile-queue-count")).toHaveText("1");
 
   await page.getByTestId("loop-mobile-queue-button").click();
@@ -262,7 +265,8 @@ test("loop inbox shows an explicit empty state in the mobile drawer when nothing
 
   await expect(page.getByTestId("loop-mobile-header")).toBeVisible();
   await expect(page.getByTestId("loop-mobile-queue-button")).toBeVisible();
-  await expect(page.getByTestId("loop-mobile-queue-count")).toHaveCount(0);
+  await expect(page.getByTestId("loop-mobile-queue-button")).toContainText("Follow-ups");
+  await expect(page.getByTestId("loop-mobile-queue-count")).toHaveText("0");
   await expect(page.getByText("No sessions need attention")).toBeVisible();
 
   await page.getByTestId("loop-mobile-queue-button").click();
