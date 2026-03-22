@@ -45,16 +45,6 @@ def _session_payload_signature(session: agents_router.SessionResponse) -> tuple[
     return payload, json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-def _normalize_utc_iso(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
-    return value.isoformat().replace("+00:00", "Z")
-
-
 def _effective_stream_sort(query: str | None, sort: str | None) -> str:
     return sort or ("relevance" if query else "recency")
 
@@ -78,10 +68,10 @@ def _load_timeline_stream_window_signature(
     limit: int,
     offset: int,
     context_mode: str,
-) -> tuple[int, tuple[tuple[str, str | None, str | None, str | None, str | None, int, str | None], ...]]:
+) -> tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]:
     store = AgentsStore(db)
     since = datetime.now(timezone.utc) - timedelta(days=days_back)
-    total, rows = store.list_session_window_signature(
+    _, rows = store.list_session_window_signature(
         project=project,
         provider=provider,
         environment=environment,
@@ -93,31 +83,9 @@ def _load_timeline_stream_window_signature(
         offset=offset,
         hide_autonomous=hide_autonomous,
         context_mode=context_mode,
+        include_total=False,
     )
-
-    signature_rows: list[tuple[str, str | None, str | None, str | None, str | None, int, str | None]] = []
-    for (
-        session_id,
-        session_updated_at,
-        last_activity_at,
-        presence_updated_at,
-        runtime_updated_at,
-        runtime_version,
-        runtime_timeline_anchor_at,
-    ) in rows:
-        signature_rows.append(
-            (
-                session_id,
-                _normalize_utc_iso(session_updated_at),
-                _normalize_utc_iso(last_activity_at),
-                _normalize_utc_iso(presence_updated_at),
-                _normalize_utc_iso(runtime_updated_at),
-                int(runtime_version or 0),
-                _normalize_utc_iso(runtime_timeline_anchor_at),
-            )
-        )
-
-    return total, tuple(signature_rows)
+    return rows
 
 
 async def _timeline_sessions_stream(
@@ -140,7 +108,7 @@ async def _timeline_sessions_stream(
 ):
     previous_signatures: dict[str, str] = {}
     previous_window_signature: (
-        tuple[int, tuple[tuple[str, str | None, str | None, str | None, str | None, int, str | None], ...]] | None
+        tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...] | None
     ) = None
     last_heartbeat = monotonic()
     preflight_enabled = _stream_supports_preflight(query=query, sort=sort, mode=mode)
