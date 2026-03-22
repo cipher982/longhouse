@@ -2,7 +2,7 @@
  * Maps Longhouse sessions to Forum canvas entities.
  */
 
-import type { ActiveSession } from "../../hooks/useActiveSessions";
+import type { ForumActiveSession } from "./api";
 import type {
   ForumEntity,
   ForumGridPoint,
@@ -41,24 +41,24 @@ function cwdBasename(cwd: string | null): string | null {
   return parts[parts.length - 1] || null;
 }
 
-export function getSessionRoomLabel(session: ActiveSession): string {
+export function getSessionRoomLabel(session: ForumActiveSession): string {
   return (
     session.project?.trim() ||
-    repoNameFromUrl(session.git_repo) ||
-    cwdBasename(session.cwd) ||
+    repoNameFromUrl(session.git_repo ?? null) ||
+    cwdBasename(session.cwd ?? null) ||
     "misc"
   );
 }
 
-export function getSessionDisplayTitle(session: ActiveSession): string {
+export function getSessionDisplayTitle(session: ForumActiveSession): string {
   const candidate = (session.last_user_message || session.last_assistant_message || "").trim();
   if (candidate) {
     return truncate(candidate.replace(/\s+/g, " "), 32);
   }
   return (
     session.project?.trim() ||
-    repoNameFromUrl(session.git_repo) ||
-    cwdBasename(session.cwd) ||
+    repoNameFromUrl(session.git_repo ?? null) ||
+    cwdBasename(session.cwd ?? null) ||
     session.provider
   );
 }
@@ -102,7 +102,7 @@ function computePositionInRoom(room: ForumRoom, index: number, total: number): F
 /**
  * Group sessions by project/repo and create rooms.
  */
-function createRoomsFromSessions(sessions: ActiveSession[]): Map<string, ForumRoom> {
+function createRoomsFromSessions(sessions: ForumActiveSession[]): Map<string, ForumRoom> {
   const projects = new Map<string, string>();
   for (const session of sessions) {
     const label = getSessionRoomLabel(session);
@@ -145,12 +145,12 @@ function createRoomsFromSessions(sessions: ActiveSession[]): Map<string, ForumRo
  * Map sessions to canvas entities.
  */
 function mapSessionsToEntities(
-  sessions: ActiveSession[],
+  sessions: ForumActiveSession[],
   rooms: Map<string, ForumRoom>,
 ): Map<string, ForumEntity> {
   const entities = new Map<string, ForumEntity>();
 
-  const byRoom = new Map<string, ActiveSession[]>();
+  const byRoom = new Map<string, ForumActiveSession[]>();
   for (const session of sessions) {
     const roomKey = getSessionRoomLabel(session);
     if (!byRoom.has(roomKey)) {
@@ -209,7 +209,7 @@ function mapSessionsToEntities(
   return entities;
 }
 
-export function buildForumStateFromSessions(sessions: ActiveSession[]): ForumMapState {
+export function buildForumStateFromSessions(sessions: ForumActiveSession[]): ForumMapState {
   const rooms = createRoomsFromSessions(sessions);
   const layout = createForumLayout(Math.max(rooms.size, 1));
   const base = createForumState({ layout, rooms: Array.from(rooms.values()) });

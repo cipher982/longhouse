@@ -14,8 +14,8 @@ import { buildUrl } from "../services/api/base";
 import { fetchWithRefresh } from "../lib/auth-refresh";
 import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
 import { fetchSessionLockStatus, type SessionLockInfo } from "../services/api";
+import type { AgentSession } from "../services/api/agents";
 import { Badge, Button, Spinner } from "./ui";
-import type { ActiveSession } from "../hooks/useActiveSessions";
 import "../styles/session-chat.css";
 
 interface SSEAssistantDelta {
@@ -57,7 +57,7 @@ interface ChatMessage {
 }
 
 interface SessionChatProps {
-  session: ActiveSession;
+  session: SessionChatTarget;
   onClose?: () => void;
   emptyStateTitle?: string;
   hintText?: string;
@@ -72,6 +72,8 @@ interface SessionChatProps {
   requireClickForFirstSend?: boolean;
   keyboardHintText?: string;
 }
+
+export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
 
 export function SessionChat({
   session,

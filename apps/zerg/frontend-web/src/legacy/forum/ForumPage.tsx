@@ -7,7 +7,7 @@ import { Badge, Button, Card, PageShell, SectionHeader, Spinner } from "../../co
 import { PresenceBadge, PresenceHero } from "../../components/PresenceBadge";
 import { SessionChat } from "../../components/SessionChat";
 import { ForumCanvas } from "./ForumCanvas";
-import { useActiveSessions } from "../../hooks/useActiveSessions";
+import { useForumSessions } from "./api";
 import {
   buildForumStateFromSessions,
   getSessionDisplayTitle,
@@ -72,7 +72,7 @@ export default function ForumPage() {
 
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
 
-  const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } = useActiveSessions({
+  const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } = useForumSessions({
     pollInterval: 2000,
     limit: 50,
     days_back: 7,

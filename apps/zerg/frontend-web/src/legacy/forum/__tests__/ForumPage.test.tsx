@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes, useLocation } from "react-router-dom";
 import ForumPage from "../ForumPage";
 import { TestRouter } from "../../../test/test-utils";
+import type { ForumActiveSession } from "../api";
 
 vi.mock("../ForumCanvas", () => ({
   ForumCanvas: () => <div data-testid="forum-canvas" />,
@@ -16,10 +17,14 @@ vi.mock("../../../components/SessionChat", () => ({
   ),
 }));
 
-const useActiveSessionsMock = vi.fn();
-vi.mock("../../../hooks/useActiveSessions", () => ({
-  useActiveSessions: (options: unknown) => useActiveSessionsMock(options),
-}));
+const useForumSessionsMock = vi.fn();
+vi.mock("../api", async () => {
+  const actual = await vi.importActual<typeof import("../api")>("../api");
+  return {
+    ...actual,
+    useForumSessions: (options: unknown) => useForumSessionsMock(options),
+  };
+});
 
 const createTestQueryClient = () =>
   new QueryClient({
@@ -58,7 +63,7 @@ function renderForum(initialEntry = "/forum") {
   );
 }
 
-function makeSession() {
+function makeSession(): ForumActiveSession {
   return {
     id: "session-1",
     project: "longhouse-demo",
@@ -84,11 +89,11 @@ function makeSession() {
 describe("ForumPage", () => {
   afterEach(() => {
     cleanup();
-    useActiveSessionsMock.mockReset();
+    useForumSessionsMock.mockReset();
   });
 
   it("shows empty state", async () => {
-    useActiveSessionsMock.mockReturnValue({
+    useForumSessionsMock.mockReturnValue({
       data: { sessions: [], total: 0, last_refresh: new Date().toISOString() },
       isLoading: false,
       error: null,
@@ -101,7 +106,7 @@ describe("ForumPage", () => {
   });
 
   it("reads the selected session directly from the URL", async () => {
-    useActiveSessionsMock.mockReturnValue({
+    useForumSessionsMock.mockReturnValue({
       data: {
         sessions: [makeSession()],
         total: 1,
@@ -120,7 +125,7 @@ describe("ForumPage", () => {
   });
 
   it("reads chat mode directly from the URL", async () => {
-    useActiveSessionsMock.mockReturnValue({
+    useForumSessionsMock.mockReturnValue({
       data: {
         sessions: [makeSession()],
         total: 1,
@@ -137,7 +142,7 @@ describe("ForumPage", () => {
   });
 
   it("clears invalid session selections from the URL", async () => {
-    useActiveSessionsMock.mockReturnValue({
+    useForumSessionsMock.mockReturnValue({
       data: {
         sessions: [makeSession()],
         total: 1,
