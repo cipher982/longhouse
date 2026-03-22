@@ -103,7 +103,7 @@ class _LocalExecDispatcher:
             }
         )
 
-        if command.startswith("tmux display-message"):
+        if " display-message " in command:
             return await asyncio.to_thread(
                 self._run_with_settle_poll,
                 command=command,

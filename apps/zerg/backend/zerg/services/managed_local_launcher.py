@@ -23,10 +23,12 @@ from sqlalchemy.orm import Session
 from zerg.crud import runner_crud
 from zerg.models.agents import AgentSession
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
+from zerg.services.managed_local_tmux import build_tmux_attach_command
 from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
 from zerg.services.managed_local_tmux import build_tmux_launch_command
+from zerg.services.managed_local_tmux import build_tmux_set_remain_on_exit_command
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
 from zerg.services.managed_local_tmux import validate_managed_transport
 from zerg.services.runner_connection_manager import get_runner_connection_manager
@@ -205,6 +207,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     )
     verify_session_command = build_tmux_has_session_command(session_name=managed_session_name)
     verify_command = build_tmux_current_command_command(session_name=managed_session_name)
+    preserve_failures_command = build_tmux_set_remain_on_exit_command(session_name=managed_session_name, mode="failed")
 
     async def _cleanup_tmux_session() -> None:
         try:
@@ -238,6 +241,28 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         stderr = (launch_data.get("stderr") or "").strip()
         stdout = (launch_data.get("stdout") or "").strip()
         detail = stderr or stdout or "Managed local launcher exited non-zero"
+        raise ManagedLocalLaunchError(detail, status_code=502)
+
+    preserve_result = await dispatcher.dispatch_job(
+        db=db,
+        owner_id=params.owner_id,
+        runner_id=runner.id,
+        command=preserve_failures_command,
+        timeout_secs=10,
+        commis_id=None,
+        run_id=None,
+    )
+    if not preserve_result.get("ok"):
+        detail = preserve_result.get("error", {}).get("message", "Managed local pane retention setup failed")
+        await _cleanup_tmux_session()
+        raise ManagedLocalLaunchError(detail, status_code=502)
+
+    preserve_data = preserve_result.get("data", {})
+    if int(preserve_data.get("exit_code", 1)) != 0:
+        stderr = (preserve_data.get("stderr") or "").strip()
+        stdout = (preserve_data.get("stdout") or "").strip()
+        detail = stderr or stdout or "Managed local pane retention setup failed"
+        await _cleanup_tmux_session()
         raise ManagedLocalLaunchError(detail, status_code=502)
 
     verify_session_result = await dispatcher.dispatch_job(
@@ -302,7 +327,10 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     mark_managed_local_session_launched(db, session=session)
     db.commit()
     db.refresh(session)
-    return ManagedLocalLaunchResult(session=session, attach_command=f"tmux attach -t {managed_session_name}")
+    return ManagedLocalLaunchResult(
+        session=session,
+        attach_command=build_tmux_attach_command(session_name=managed_session_name),
+    )
 
 
 __all__ = [

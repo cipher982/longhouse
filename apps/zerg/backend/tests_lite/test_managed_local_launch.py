@@ -20,6 +20,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 
 
 def _make_db(tmp_path):
@@ -82,7 +83,7 @@ class _FakeDispatcher:
                 "timeout_secs": timeout_secs,
             }
         )
-        if command.startswith("tmux has-session"):
+        if command.startswith(f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} has-session"):
             return {
                 "ok": True,
                 "data": {
@@ -91,7 +92,7 @@ class _FakeDispatcher:
                     "stderr": "" if self.verify_exit_code == 0 else "failed to find session",
                 },
             }
-        if command.startswith("tmux display-message"):
+        if command.startswith(f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} display-message"):
             return {
                 "ok": True,
                 "data": {
@@ -144,7 +145,9 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert payload["managed_transport"] == "tmux"
             assert payload["loop_mode"] == "assist"
             assert payload["source_runner_name"] == "cinder"
-            assert payload["attach_command"].startswith("tmux attach -t lh-Hiring-session-")
+            assert payload["attach_command"].startswith(
+                f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} attach -t lh-Hiring-session-"
+            )
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.execution_home == "managed_local"
@@ -162,16 +165,29 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert runtime_state.last_runtime_signal_at is not None
             assert runtime_state.freshness_expires_at is not None
 
-            assert len(dispatcher.calls) == 4
+            assert len(dispatcher.calls) == 5
             assert dispatcher.calls[0]["runner_id"] == runner.id
             assert "command -v tmux" in dispatcher.calls[0]["command"]
             assert "command -v claude-code" in dispatcher.calls[0]["command"]
-            assert "tmux new-session -d -s" in dispatcher.calls[1]["command"]
+            assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} new-session -d -s" in dispatcher.calls[1]["command"]
             assert "claude-code --session-id" in dispatcher.calls[1]["command"]
-            assert dispatcher.calls[2]["command"] == f"tmux has-session -t {session.managed_session_name}"
+            assert (
+                dispatcher.calls[2]["command"]
+                == (
+                    f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} set-option -t "
+                    f"{session.managed_session_name} remain-on-exit failed"
+                )
+            )
             assert (
                 dispatcher.calls[3]["command"]
-                == f"tmux display-message -p -t {session.managed_session_name} '#{{pane_current_command}}'"
+                == f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} has-session -t {session.managed_session_name}"
+            )
+            assert (
+                dispatcher.calls[4]["command"]
+                == (
+                    f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} display-message -p -t "
+                    f"{session.managed_session_name} '#{{pane_current_command}}'"
+                )
             )
         finally:
             api_app_ref.dependency_overrides = {}
@@ -205,7 +221,9 @@ def test_launch_managed_local_session_rolls_back_when_tmux_verify_fails(monkeypa
             assert response.status_code == 502, response.text
             assert "failed to find session" in response.json()["detail"]
             assert db.query(AgentSession).count() == 0
-            assert len(dispatcher.calls) == 4
-            assert dispatcher.calls[-1]["command"].startswith("tmux kill-session -t lh-hiring-")
+            assert len(dispatcher.calls) == 5
+            assert dispatcher.calls[-1]["command"].startswith(
+                f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} kill-session -t lh-hiring-"
+            )
         finally:
             api_app_ref.dependency_overrides = {}
