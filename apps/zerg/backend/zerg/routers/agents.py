@@ -85,6 +85,10 @@ def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
         return None
     try:
         return SessionExecutionHome(str(value).strip())
+    except ValueError:
+        return None
+
+
 def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
     if value is None:
         return None
@@ -96,7 +100,7 @@ def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | No
 
 def _resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
     stored = _coerce_execution_home(getattr(session, "execution_home", None))
-    if stored is not None:
+    if stored is not None and stored != SessionExecutionHome.LEGACY:
         return stored
 
     continuation_kind = (session.continuation_kind or "").strip().lower()
@@ -112,7 +116,9 @@ def _resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
     if origin_label == "hosted" or environment == "hosted":
         return SessionExecutionHome.MANAGED_HOSTED
 
-    return SessionExecutionHome.LEGACY
+    return stored or SessionExecutionHome.LEGACY
+
+
 # ---------------------------------------------------------------------------
 # Response Models
 # ---------------------------------------------------------------------------
