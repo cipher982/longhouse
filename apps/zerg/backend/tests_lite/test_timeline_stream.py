@@ -2,16 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+import types
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from unittest.mock import patch
 
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionRuntimeState
+
+browser_auth_stub = types.ModuleType("zerg.dependencies.browser_auth")
+browser_auth_stub.get_current_browser_user = lambda *args, **kwargs: None
+browser_auth_stub.get_optional_browser_user = lambda *args, **kwargs: None
+sys.modules.setdefault("zerg.dependencies.browser_auth", browser_auth_stub)
+
 from zerg.routers.timeline import _timeline_sessions_stream
+
+timeline_router = sys.modules[_timeline_sessions_stream.__module__]
 
 
 def _make_db(tmp_path, name="timeline_stream.db"):
@@ -120,3 +131,58 @@ def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
     assert "Timeline session stream connected" in events[0]["data"]
     assert upsert_payload["session"]["project"] == "old-runtime-stream"
     assert upsert_payload["session"]["display_phase"] == "Running bash"
+
+
+def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
+    session_local = _make_db(tmp_path, "timeline_stream_unchanged.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="steady-stream",
+        )
+
+    list_sessions_calls = 0
+    original_list_sessions = timeline_router.agents_router.list_sessions
+
+    async def _counting_list_sessions(*args, **kwargs):
+        nonlocal list_sessions_calls
+        list_sessions_calls += 1
+        return await original_list_sessions(*args, **kwargs)
+
+    async def _collect_events():
+        stream = _timeline_sessions_stream(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            hide_autonomous=True,
+            device_id=None,
+            days_back=14,
+            query=None,
+            limit=1,
+            offset=0,
+            sort=None,
+            mode="lexical",
+            context_mode="forensic",
+        )
+        events = [await anext(stream), await anext(stream), await anext(stream)]
+        await stream.aclose()
+        return events
+
+    with (
+        patch.object(timeline_router.agents_router, "list_sessions", new=_counting_list_sessions),
+        patch.object(timeline_router, "TIMELINE_STREAM_POLL_SECONDS", 0),
+        patch.object(timeline_router, "TIMELINE_STREAM_HEARTBEAT_SECONDS", 0),
+    ):
+        events = asyncio.run(_collect_events())
+
+    assert events[0]["event"] == "connected"
+    assert events[1]["event"] == "session_upsert"
+    assert events[2]["event"] == "heartbeat"
+    assert list_sessions_calls == 1
