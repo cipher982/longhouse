@@ -614,6 +614,72 @@ describe("SessionsPage", () => {
     expect(projects[1]).toBe("beta");
   });
 
+  it("does not let the live view poll reorder the main timeline cards", async () => {
+    const user = userEvent.setup();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeSession({
+            id: "session-beta",
+            project: "beta",
+            summary_title: "beta",
+            started_at: "2026-03-21T12:00:00Z",
+            last_activity_at: "2026-03-21T12:00:00Z",
+            timeline_anchor_at: "2026-03-21T12:04:00Z",
+            thread_root_session_id: "session-beta",
+            thread_head_session_id: "session-beta",
+          }),
+          makeSession({
+            id: "session-alpha",
+            project: "alpha",
+            summary_title: "alpha",
+            started_at: "2026-03-20T12:00:00Z",
+            last_activity_at: "2026-03-20T12:00:00Z",
+            timeline_anchor_at: "2026-03-21T12:03:00Z",
+            thread_root_session_id: "session-alpha",
+            thread_head_session_id: "session-alpha",
+          }),
+        ],
+        total: 2,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseActiveSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeActiveSession({
+            id: "session-alpha",
+            project: "alpha",
+            timeline_anchor_at: "2026-03-21T12:05:00Z",
+            last_activity_at: "2026-03-21T12:05:00Z",
+            status: "working",
+            confidence: "inferred",
+            presence_state: null,
+            presence_tool: null,
+            presence_updated_at: null,
+            display_phase: "Working",
+          }),
+        ],
+        total: 1,
+        last_refresh: "2026-03-21T12:05:00Z",
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    const { container } = renderSessionsPage();
+
+    await user.click(await screen.findByRole("button", { name: "Live view" }));
+
+    const projects = Array.from(container.querySelectorAll(".session-card-project")).map((node) => node.textContent);
+    expect(projects[0]).toBe("beta");
+    expect(projects[1]).toBe("alpha");
+  });
+
   it("prefers fresher timeline runtime over an older active poll snapshot", async () => {
     const user = userEvent.setup();
     mockUseAgentSessions.mockReturnValue({
