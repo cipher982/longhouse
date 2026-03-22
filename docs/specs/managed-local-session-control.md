@@ -2,7 +2,7 @@
 
 Status: in progress
 Owner: David / Longhouse product direction
-Updated: 2026-03-21
+Updated: 2026-03-22
 
 ## Executive Summary
 
@@ -71,13 +71,38 @@ Longhouse should not replace the Claude Code terminal UI on laptop.
 
 Managed local sessions should run the stock Claude Code TUI under Longhouse-owned launch control.
 
-### 4. Managed local beats arbitrary attach
+### 4. Managed local sessions live on a dedicated tmux server
+
+Longhouse-managed sessions should not share the user's default tmux server.
+
+Use a dedicated tmux socket/server for managed sessions so that:
+
+- Longhouse session names do not collide with personal tmux usage
+- cleanup is deterministic
+- capture/send/attach behavior is isolated from unrelated panes
+- tests can exercise managed tmux control without leaking into the developer's normal server
+
+### 5. Failed panes stay visible
+
+If a managed local Claude process exits or crashes, Longhouse should prefer leaving the pane visible rather than silently destroying it.
+
+The desired behavior is equivalent to:
+
+- `remain-on-exit=failed`
+
+That keeps the last output available for:
+
+- solo debugging
+- timeline truth
+- later respawn/recovery work
+
+### 6. Managed local beats arbitrary attach
 
 For v1, Longhouse should support sessions that it launched itself.
 
 Do not try to attach to arbitrary already-open naked Claude terminals as a core product path.
 
-### 5. Loop remains the phone action surface
+### 7. Loop remains the phone action surface
 
 Telegram is a nudge.
 
@@ -87,11 +112,23 @@ Telegram is a nudge.
 - reply
 - not now
 
-### 6. Reply is first-class
+### 8. Reply is first-class
 
 The phone product is not just one-tap approval.
 
 For managed local sessions, users must be able to send a short freeform reply back into the source session.
+
+### 9. Hooks stay in the design
+
+tmux is the transport and visibility layer, but it should not be the only runtime truth source.
+
+For managed local sessions, Longhouse should continue to prefer explicit Claude/Codex lifecycle signals when available, and treat tmux metadata/capture as supporting evidence.
+
+Near-term hook opportunities:
+
+- Claude lifecycle hooks for `thinking`, `running`, `needs_user`, `idle`
+- tmux pane/session exit signals for failure visibility
+- optional wrapper-emitted readiness markers so launch/send paths know when the managed session is genuinely ready
 
 ## Validated Feasibility
 
@@ -106,6 +143,7 @@ This preserves:
 - the real Claude Code TUI on laptop
 - the exact session context
 - the exact working tree and filesystem
+- a path to keep tmux as a thin operator substrate rather than a replacement TUI
 
 ### Managed headless continuity
 
@@ -201,9 +239,17 @@ Each managed local session needs enough data to drive remote control:
 - source runner id
 - source runner name
 - local transport: `tmux`
+- tmux server label / socket namespace
 - tmux session name
 - source cwd
 - source provider session id
+- launch status / readiness state
+
+Minimal v1 metadata should be enough to answer:
+
+- which managed tmux server owns this session?
+- which tmux session should Longhouse send text to?
+- should a failed pane be kept for inspection?
 
 ### Control path
 
@@ -218,6 +264,8 @@ Managed local dispatch:
 - wait for new shipper-ingested events on that same session
 - stream those persisted events back over the existing session-chat SSE route
 
+The tmux transport should target a dedicated Longhouse server/socket, not the user's default tmux namespace.
+
 The transcript and session page continue to use existing event/timeline infrastructure.
 
 ### Launch path
@@ -228,8 +276,10 @@ That launch path should:
 
 - create/update the `AgentSession`
 - persist managed-local metadata
-- launch stock Claude Code inside `tmux`
+- launch stock Claude Code inside a dedicated Longhouse tmux server
+- set failed-pane retention semantics
 - preserve the laptop-native TUI experience
+- leave room for a small readiness marker/hook bridge
 
 ## Implementation Phases
 
@@ -272,11 +322,15 @@ Scope:
 - start managed local session on runner
 - persist tmux session metadata
 - prove tmux session existence / status
+- isolate managed sessions onto a dedicated Longhouse tmux server/socket
+- preserve failed panes for inspection
 
 **Acceptance criteria**
 
 - backend can create a managed local session on a reachable runner
 - tmux session metadata is persisted
+- managed sessions do not collide with the user's default tmux server
+- failed panes remain inspectable after Claude exits abnormally
 - focused tests cover launch success/failure cases
 
 ### Phase 3: Send text into managed local sessions
@@ -312,6 +366,23 @@ Wire Loop actions for managed local sessions:
 - `Reply` becomes first-class
 - no cloud takeover wording appears in the managed-local path
 
+### Phase 5: Runtime and hook hardening
+
+Strengthen managed-local observability without turning tmux into the only truth source.
+
+Scope:
+
+- keep using Claude lifecycle hooks where available
+- add a small managed-local readiness signal so launch/send paths know when Claude is actually live
+- surface failed-pane / exited-session state cleanly
+- keep tmux capture as a debugging and fallback tool, not the primary semantic runtime model
+
+**Acceptance criteria**
+
+- managed-local launch can distinguish "tmux exists" from "Claude is actually ready"
+- failed panes are visible and attributable to the managed session
+- runtime state uses hooks/semantic signals first, with tmux as transport/fallback evidence
+
 ## Review Notes
 
 This spec intentionally chooses the smallest product that still feels magical:
@@ -319,5 +390,6 @@ This spec intentionally chooses the smallest product that still feels magical:
 - managed local only
 - real Claude TUI on laptop
 - remote steering from phone
+- dedicated Longhouse tmux server, not the user's personal tmux server
 
 If this works well, hosted/headless can become a second explicit start mode later without changing the core trust model.
