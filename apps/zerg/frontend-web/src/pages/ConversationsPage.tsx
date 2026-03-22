@@ -86,6 +86,7 @@ export default function ConversationsPage() {
   const gmailErrorParam = searchParams.get("gmail_error");
 
   const authMethodsQuery = useAuthMethods();
+  const hasSearchFilter = searchQuery.trim().length > 0;
 
   const usesHostedGmailConnect = Boolean(authMethodsQuery.data?.sso_url);
   const gmailReady = authMethodsQuery.data?.gmail_ready ?? (usesHostedGmailConnect || Boolean(config.googleClientId));
@@ -117,7 +118,20 @@ export default function ConversationsPage() {
     && !listQuery.isError
     && conversations.length > 0
     && !selectedConversationInList;
-  const effectiveConversationId = shouldCanonicalizeSelection ? null : selectedConversationId;
+  const shouldClearFilteredSelection =
+    !listQuery.isLoading
+    && !listQuery.isError
+    && hasSearchFilter
+    && selectedConversationId != null
+    && conversations.length === 0;
+  const shouldDeferFilteredSelection =
+    listQuery.isLoading
+    && hasSearchFilter
+    && selectedConversationId != null;
+  const effectiveConversationId =
+    shouldCanonicalizeSelection || shouldClearFilteredSelection || shouldDeferFilteredSelection
+      ? null
+      : selectedConversationId;
 
   const detailQuery = useQuery({
     queryKey: ["canonical-conversation", effectiveConversationId],
@@ -285,6 +299,12 @@ export default function ConversationsPage() {
   if (shouldCanonicalizeSelection) {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("conversation", String(conversations[0].id));
+    return <Navigate to={buildConversationsPath(nextParams)} replace />;
+  }
+
+  if (shouldClearFilteredSelection) {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("conversation");
     return <Navigate to={buildConversationsPath(nextParams)} replace />;
   }
 

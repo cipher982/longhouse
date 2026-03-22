@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouter } from "../../test/test-utils";
 import ConversationsPage from "../ConversationsPage";
@@ -69,6 +69,20 @@ const { useAuth: mockUseAuth, refreshAuth: mockRefreshAuth, useAuthMethods: mock
 const { requestGoogleAuthorizationCode: mockRequestGoogleAuthorizationCode } = googleCodeClientMocks;
 const { startHostedGmailConnect: mockStartHostedGmailConnect } = authApiMocks;
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="conversations-location">{`${location.pathname}${location.search}`}</div>;
+}
+
+function ConversationsPageWithLocation() {
+  return (
+    <>
+      <ConversationsPage />
+      <LocationProbe />
+    </>
+  );
+}
+
 function renderConversationsPage(initialEntry = "/conversations?conversation=1") {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -81,7 +95,7 @@ function renderConversationsPage(initialEntry = "/conversations?conversation=1")
     <QueryClientProvider client={queryClient}>
       <TestRouter initialEntries={[initialEntry]}>
         <Routes>
-          <Route path="/conversations" element={<ConversationsPage />} />
+          <Route path="/conversations" element={<ConversationsPageWithLocation />} />
         </Routes>
       </TestRouter>
     </QueryClientProvider>
@@ -304,6 +318,16 @@ describe("ConversationsPage", () => {
     });
 
     expect(await screen.findByText("Can you book dinner for 7?")).toBeInTheDocument();
+  });
+
+  it("clears stale selection when a search returns no matching conversations", async () => {
+    renderConversationsPage("/conversations?q=nomatch&conversation=1");
+
+    expect(await screen.findByText("No email threads yet")).toBeInTheDocument();
+    expect(screen.queryByText("Dinner plans")).not.toBeInTheDocument();
+    expect(mockFetchConversation).not.toHaveBeenCalled();
+    expect(mockFetchConversationMessages).not.toHaveBeenCalled();
+    expect(screen.getByTestId("conversations-location")).toHaveTextContent("/conversations?q=nomatch");
   });
 
   it("lets the user connect Gmail from the inbox when it is not connected", async () => {
