@@ -186,6 +186,17 @@ export interface LoopInboxActionResult {
   queuedJobId: number | null;
 }
 
+export interface LoopInboxSnapshotEvent {
+  items: LoopInboxItem[];
+}
+
+export interface LoopInboxStreamHandlers {
+  onConnected?: () => void;
+  onHeartbeat?: (timestamp: string) => void;
+  onSnapshot?: (event: LoopInboxSnapshotEvent) => void;
+  onError?: (error: Event) => void;
+}
+
 interface LoopPushConfigRaw {
   enabled: boolean;
   vapid_public_key: string | null;
@@ -296,6 +307,45 @@ export async function fetchSessionTurnTelemetry(sessionId: string): Promise<Sess
 export async function fetchLoopInbox(): Promise<LoopInboxItem[]> {
   const rows = await request<LoopInboxItemSummaryRaw[]>("/oikos/loop-inbox");
   return rows.map(parseLoopInboxItem);
+}
+
+function parseStreamEventData<T>(event: MessageEvent): T | null {
+  try {
+    return JSON.parse(event.data) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function connectLoopInboxStream(handlers: LoopInboxStreamHandlers = {}): () => void {
+  const eventSource = new EventSource("/api/oikos/loop-inbox/stream", { withCredentials: true });
+
+  eventSource.addEventListener("connected", () => {
+    handlers.onConnected?.();
+  });
+
+  eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
+    const data = parseStreamEventData<{ timestamp: string }>(event);
+    if (data?.timestamp) {
+      handlers.onHeartbeat?.(data.timestamp);
+    }
+  });
+
+  eventSource.addEventListener("inbox_snapshot", (event: MessageEvent) => {
+    const data = parseStreamEventData<{ items: LoopInboxItemSummaryRaw[] }>(event);
+    if (!data?.items) {
+      return;
+    }
+    handlers.onSnapshot?.({ items: data.items.map(parseLoopInboxItem) });
+  });
+
+  eventSource.onerror = (error) => {
+    handlers.onError?.(error);
+  };
+
+  return () => {
+    eventSource.close();
+  };
 }
 
 export async function fetchLoopActionCard(cardId: number | string): Promise<LoopActionCard> {

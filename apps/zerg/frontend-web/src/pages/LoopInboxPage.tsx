@@ -13,6 +13,7 @@ import {
   type LoopInboxItem,
 } from "../services/api/oikos";
 import { useLoopInstallPrompt } from "../hooks/useLoopInstallPrompt";
+import { useLoopInboxStream } from "../hooks/useLoopInboxStream";
 import { useLoopPushNotifications } from "../hooks/useLoopPushNotifications";
 import "../styles/loop-inbox.css";
 
@@ -309,7 +310,7 @@ export default function LoopInboxPage() {
   const inboxQuery = useQuery({
     queryKey: ["loop-inbox"],
     queryFn: fetchLoopInbox,
-    refetchInterval: 15000,
+    refetchInterval: typeof EventSource === "undefined" ? 15000 : false,
   });
 
   const legacySessionQuery = useQuery({
@@ -341,6 +342,11 @@ export default function LoopInboxPage() {
       await queryClient.invalidateQueries({ queryKey: ["loop-inbox"] });
       await queryClient.invalidateQueries({ queryKey: ["loop-action-card", variables.currentCardId] });
     },
+  });
+
+  useLoopInboxStream({
+    enabled: typeof EventSource !== "undefined",
+    selectedCardId,
   });
 
   const handleAction = async (action: LoopInboxAction, options?: { replyText?: string | null }) => {
