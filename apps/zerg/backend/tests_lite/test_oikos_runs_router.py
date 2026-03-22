@@ -230,8 +230,8 @@ def _create_session(
     return session
 
 
-def _add_turn(db, *, session_id, user_text: str, assistant_text: str):
-    timestamp = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
+def _add_turn(db, *, session_id, user_text: str, assistant_text: str, timestamp: datetime | None = None):
+    timestamp = timestamp or datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
     user_event = AgentEvent(
         session_id=session_id,
         role="user",
@@ -835,6 +835,7 @@ def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
             session_id=session.id,
             user_text="finish targeted verification",
             assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+            timestamp=fresh_time,
         )
 
         asyncio.run(maybe_process_session_turn_loop(db=db, session_id=str(session.id)))

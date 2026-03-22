@@ -347,7 +347,15 @@ async def test_worker_requeues_timed_out_embedding_task(tmp_path, monkeypatch):
 
     factory = _make_db(tmp_path, "worker_embedding_timeout.db")
     db = factory()
-    db.add(SessionTask(id="task-embedding-timeout", session_id="s1", task_type="embedding", status="running", attempts=1))
+    db.add(
+        SessionTask(
+            id="task-embedding-timeout",
+            session_id="s1",
+            task_type="embedding",
+            status="running",
+            attempts=1,
+        )
+    )
     db.commit()
     db.close()
 
@@ -387,7 +395,14 @@ async def test_process_batch_reprioritizes_new_turn_loop_work_between_tasks(tmp_
             task.status = "done"
             task.error = None
             if task_type == "summary":
-                db.add(SessionTask(id="task-turn-loop", session_id="session-turn-loop", task_type="turn_loop", status="pending"))
+                db.add(
+                    SessionTask(
+                        id="task-turn-loop",
+                        session_id="session-turn-loop",
+                        task_type="turn_loop",
+                        status="pending",
+                    )
+                )
             db.commit()
         finally:
             db.close()
@@ -492,7 +507,10 @@ async def test_turn_loop_task_wakes_operator_for_recent_completed_idle_session(t
 
 
 @pytest.mark.asyncio
-async def test_turn_loop_task_uses_latest_assistant_turn_timestamp_when_session_ended_at_is_stale(tmp_path, monkeypatch):
+async def test_turn_loop_task_uses_latest_assistant_turn_timestamp_when_session_ended_at_is_stale(
+    tmp_path,
+    monkeypatch,
+):
     """Fresh assistant turns should still produce reviews even when session metadata lags behind."""
     from zerg.services.ingest_task_queue import _execute_task
 
@@ -564,6 +582,56 @@ async def test_turn_loop_task_uses_latest_assistant_turn_timestamp_when_session_
     assert reviews[0].assistant_event_id == latest_assistant_event.id
     assert reviews[0].status == "enqueued"
     assert reviews[0].run_id == 777
+    invoke_oikos.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_turn_loop_task_processes_stale_completed_turn_from_durable_queue(tmp_path, monkeypatch):
+    """Durable turn_loop tasks should still review the turn even if the worker picks it up late."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    factory = _make_db(tmp_path, "worker_turn_loop_stale_queue_delay.db")
+    stale_ended_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
+        factory,
+        ended_at=stale_ended_at,
+        presence_state="idle",
+        presence_updated_at=stale_ended_at,
+        loop_mode=SessionLoopMode.ASSIST,
+        user_context={
+            "preferences": {
+                "operator_mode": {
+                    "enabled": True,
+                    "shadow_mode": True,
+                    "allow_continue": False,
+                    "allow_notify": True,
+                }
+            }
+        },
+    )
+    db = factory()
+    try:
+        task = db.query(SessionTask).filter(SessionTask.id == task_id).one()
+        task.created_at = stale_ended_at + timedelta(minutes=3)
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch(
+            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+            new=AsyncMock(return_value=_continue_decision()),
+        ):
+            with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=888)) as invoke_oikos:
+                await _execute_task(task_id, session_id, "turn_loop")
+
+    reviews = _get_turn_reviews(factory)
+    tasks = _get_tasks(factory, status="done")
+    assert len(tasks) == 1
+    assert len(reviews) == 1
+    assert reviews[0].status == "enqueued"
+    assert reviews[0].run_id == 888
     invoke_oikos.assert_awaited_once()
 
 
