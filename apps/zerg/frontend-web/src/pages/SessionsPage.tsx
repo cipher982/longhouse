@@ -112,14 +112,8 @@ function getTimelineAnchor(
 
 function getResolvedTimelineAnchor(
   session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">,
-  activeSession?: Pick<ActiveSession, "timeline_anchor_at" | "last_activity_at"> | null,
 ): string {
-  const sessionAnchor = getTimelineAnchor(session);
-  const activeAnchor = activeSession?.timeline_anchor_at || activeSession?.last_activity_at || null;
-  if (!activeAnchor) {
-    return sessionAnchor;
-  }
-  return parseUTC(activeAnchor).getTime() >= parseUTC(sessionAnchor).getTime() ? activeAnchor : sessionAnchor;
+  return getTimelineAnchor(session);
 }
 
 function useDocumentVisible(): boolean {
@@ -154,7 +148,6 @@ interface SessionThreadCard {
 
 function buildThreadCards(
   sessions: AgentSession[],
-  activeSessionsById: Map<string, ActiveSession>,
 ): SessionThreadCard[] {
   const groups = new Map<string, {
     order: number;
@@ -207,8 +200,8 @@ function buildThreadCards(
     })
     .sort((a, b) => {
       const anchorDiff =
-        parseUTC(getResolvedTimelineAnchor(b.head, activeSessionsById.get(b.head.id) ?? null)).getTime() -
-        parseUTC(getResolvedTimelineAnchor(a.head, activeSessionsById.get(a.head.id) ?? null)).getTime();
+        parseUTC(getResolvedTimelineAnchor(b.head)).getTime() -
+        parseUTC(getResolvedTimelineAnchor(a.head)).getTime();
       if (anchorDiff !== 0) return anchorDiff;
       return a.order - b.order;
     })
@@ -217,12 +210,11 @@ function buildThreadCards(
 
 function groupThreadCardsByDay(
   cards: SessionThreadCard[],
-  activeSessionsById: Map<string, ActiveSession>,
 ): Map<string, SessionThreadCard[]> {
   const groups = new Map<string, SessionThreadCard[]>();
 
   for (const card of cards) {
-    const key = getDateKey(getResolvedTimelineAnchor(card.head, activeSessionsById.get(card.head.id) ?? null));
+    const key = getDateKey(getResolvedTimelineAnchor(card.head));
     const existing = groups.get(key) || [];
     existing.push(card);
     groups.set(key, existing);
@@ -615,18 +607,17 @@ function FilterPopover({
 
 interface SessionCardProps {
   thread: SessionThreadCard;
-  activeSession?: ActiveSession | null;
   onClick: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
 }
 
-function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
+function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
   const session = thread.head;
   const detailSession = thread.detail;
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
-  const runtime = resolveSessionRuntimeState(session, activeSession);
+  const runtime = resolveSessionRuntimeState(session);
   const runtimeMetaLabel = getRuntimeMetaLabel(runtime);
 
   const projectLabel = getProjectLabel(session);
@@ -657,7 +648,7 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
-        <span className="session-card-time">{formatRelativeTime(getResolvedTimelineAnchor(session, activeSession))}</span>
+        <span className="session-card-time">{formatRelativeTime(getResolvedTimelineAnchor(session))}</span>
       </div>
 
       <div className="session-card-meta">
@@ -761,7 +752,6 @@ function SessionCard({ thread, activeSession, onClick, highlightQuery, isSemanti
 interface SessionGroupProps {
   title: string;
   sessions: SessionThreadCard[];
-  activeSessionsById: Map<string, ActiveSession>;
   onSessionClick: (thread: SessionThreadCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
@@ -770,7 +760,6 @@ interface SessionGroupProps {
 function SessionGroup({
   title,
   sessions,
-  activeSessionsById,
   onSessionClick,
   highlightQuery,
   isSemanticResult,
@@ -786,7 +775,6 @@ function SessionGroup({
           <SessionCard
             key={thread.threadId}
             thread={thread}
-            activeSession={activeSessionsById.get(thread.head.id) ?? null}
             onClick={() => onSessionClick(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
@@ -976,16 +964,8 @@ export default function SessionsPage() {
 
   const liveAuthError = (activeSessionsError as { status?: number } | null)?.status === 401;
   const liveList = useMemo(() => liveOverlaySessions.slice(0, 8), [liveOverlaySessions]);
-  const activeSessionsById = useMemo(
-    () => new Map(liveOverlaySessions.map((session) => [session.id, session])),
-    [liveOverlaySessions],
-  );
-
-  const threadCards = useMemo(() => buildThreadCards(sessions, activeSessionsById), [sessions, activeSessionsById]);
-  const groupedSessions = useMemo(
-    () => groupThreadCardsByDay(threadCards, activeSessionsById),
-    [threadCards, activeSessionsById],
-  );
+  const threadCards = useMemo(() => buildThreadCards(sessions), [sessions]);
+  const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards), [threadCards]);
 
   const headerActions = (
     <div className="sessions-header-actions">
@@ -1453,7 +1433,6 @@ export default function SessionsPage() {
                 key={dateKey}
                 title={dateKey}
                 sessions={daySessions}
-                activeSessionsById={activeSessionsById}
                 onSessionClick={handleSessionClick}
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
