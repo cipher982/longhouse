@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Query
 from fastapi import Request
 from fastapi import Response
@@ -116,33 +117,47 @@ def _build_session_response_map(
     return response_map
 
 
-def _build_timeline_cards_from_detail_rows(
+def _build_timeline_cards_from_thread_rows(
     *,
     db: Session,
-    detail_rows: list[agents_router.SessionResponse],
+    thread_rows: tuple[tuple[str, str, datetime | None], ...],
 ) -> list[TimelineSessionCardResponse]:
-    if not detail_rows:
+    if not thread_rows:
         return []
 
-    response_map = {session.id: session for session in detail_rows}
+    representative_ids = [session_id for _thread_id, session_id, _thread_anchor in thread_rows]
+    response_map = _build_session_response_map(db=db, session_ids=representative_ids)
+    representative_rows = [(thread_id, response_map.get(session_id), thread_anchor) for thread_id, session_id, thread_anchor in thread_rows]
     supplemental_ids = sorted(
-        {detail.thread_root_session_id for detail in detail_rows}
-        | {detail.thread_head_session_id for detail in detail_rows} - response_map.keys()
+        (
+            {detail.thread_root_session_id for _thread_id, detail, _thread_anchor in representative_rows if detail is not None}
+            | {detail.thread_head_session_id for _thread_id, detail, _thread_anchor in representative_rows if detail is not None}
+        )
+        - response_map.keys()
     )
     response_map.update(_build_session_response_map(db=db, session_ids=supplemental_ids))
 
     cards: list[TimelineSessionCardResponse] = []
-    for detail in detail_rows:
-        head = response_map.get(detail.thread_head_session_id, detail)
-        root = response_map.get(detail.thread_root_session_id, detail)
+    for thread_id, representative, thread_anchor in representative_rows:
+        if representative is None:
+            continue
+        head = response_map.get(representative.thread_head_session_id, representative)
+        root = response_map.get(representative.thread_root_session_id, representative)
         cards.append(
             TimelineSessionCardResponse(
-                thread_id=detail.thread_root_session_id,
-                timeline_anchor_at=head.timeline_anchor_at or head.last_activity_at or head.started_at,
+                thread_id=thread_id,
+                timeline_anchor_at=(
+                    thread_anchor
+                    or representative.timeline_anchor_at
+                    or head.timeline_anchor_at
+                    or representative.last_activity_at
+                    or head.last_activity_at
+                    or head.started_at
+                ),
                 head=head,
-                detail=detail,
+                detail=head,
                 root=root,
-                continuation_count=head.thread_continuation_count or detail.thread_continuation_count or 1,
+                continuation_count=head.thread_continuation_count or representative.thread_continuation_count or 1,
                 started_origin_label=root.origin_label or root.environment,
                 head_origin_label=head.origin_label or head.environment,
             )
@@ -157,6 +172,15 @@ def _effective_stream_sort(query: str | None, sort: str | None) -> str:
 def _stream_supports_preflight(*, query: str | None, sort: str | None, mode: str | None) -> bool:
     effective_sort = _effective_stream_sort(query, sort)
     return query is None and mode in (None, "lexical") and effective_sort == "recency"
+
+
+def _validate_timeline_stream_contract(*, query: str | None, sort: str | None, mode: str | None) -> None:
+    if _stream_supports_preflight(query=query, sort=sort, mode=mode):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail="Timeline session stream only supports the default no-query lexical recency contract.",
+    )
 
 
 def _load_timeline_stream_window_signature(
@@ -443,25 +467,8 @@ async def list_timeline_sessions(
         hide_autonomous=hide_autonomous,
         context_mode=context_mode,
     )
-    detail_ids = [session_id for _thread_id, session_id, _anchor in thread_rows]
-    detail_map = _build_session_response_map(db=db, session_ids=detail_ids)
-    detail_rows = [detail_map[session_id] for session_id in detail_ids if session_id in detail_map]
-
-    if query:
-        match_map = store.get_session_matches([UUID(session.id) for session in detail_rows], query, context_mode=context_mode)
-        detail_rows = [
-            detail.model_copy(
-                update={
-                    "match_event_id": (match_map.get(UUID(detail.id)) or {}).get("event_id"),
-                    "match_snippet": (match_map.get(UUID(detail.id)) or {}).get("snippet"),
-                    "match_role": (match_map.get(UUID(detail.id)) or {}).get("role"),
-                }
-            )
-            for detail in detail_rows
-        ]
-
     return TimelineSessionsListResponse(
-        sessions=_build_timeline_cards_from_detail_rows(db=db, detail_rows=detail_rows),
+        sessions=_build_timeline_cards_from_thread_rows(db=db, thread_rows=thread_rows),
         total=total,
         has_real_sessions=_has_real_sessions(db, total=total),
     )
@@ -488,6 +495,7 @@ async def stream_timeline_sessions(
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
 ) -> EventSourceResponse:
+    _validate_timeline_stream_contract(query=query, sort=sort, mode=mode)
     session_factory = make_sessionmaker(db.get_bind())
     db.close()
 
