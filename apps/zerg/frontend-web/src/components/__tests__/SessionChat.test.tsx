@@ -2,8 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { SessionChat } from "../SessionChat";
-import type { ActiveSession } from "../../hooks/useActiveSessions";
+import { SessionChat, type SessionChatTarget } from "../SessionChat";
 
 const { fetchWithRefreshMock } = vi.hoisted(() => ({
   fetchWithRefreshMock: vi.fn(),
@@ -17,30 +16,11 @@ vi.mock("../../services/api/base", () => ({
   buildUrl: (path: string) => path,
 }));
 
-function makeSession(overrides: Partial<ActiveSession> = {}): ActiveSession {
+function makeSession(overrides: Partial<SessionChatTarget> = {}): SessionChatTarget {
   return {
     id: "sess-1",
     project: "zerg",
     provider: "claude",
-    cwd: "/Users/davidrose/git/zerg",
-    git_repo: "git@github.com:cipher982/longhouse.git",
-    git_branch: "main",
-    started_at: "2026-03-19T16:45:00Z",
-    ended_at: null,
-    last_activity_at: "2026-03-19T16:45:00Z",
-    status: "working",
-    attention: "auto",
-    duration_minutes: 0,
-    last_user_message: null,
-    last_assistant_message: null,
-    message_count: 0,
-    tool_calls: 0,
-    presence_state: null,
-    presence_tool: null,
-    presence_updated_at: null,
-    user_state: "active",
-    execution_home: "legacy",
-    loop_mode: "manual",
     ...overrides,
   };
 }

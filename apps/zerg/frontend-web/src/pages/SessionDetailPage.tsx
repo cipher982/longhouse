@@ -13,12 +13,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button, EmptyState, Spinner } from "../components/ui";
-import { SessionChat } from "../components/SessionChat";
+import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { EventInspectorPane } from "../components/session-workspace/EventInspectorPane";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
-import type { ActiveSession } from "../hooks/useActiveSessions";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
@@ -210,39 +209,11 @@ function SessionDetailWorkspaceRoute({
         ? 'Press the "Start in Cloud" button to confirm the first cloud message.'
         : undefined;
 
-  const activeSessionForChat: ActiveSession | null = canContinueInCloud
+  const sessionChatTarget: SessionChatTarget | null = canContinueInCloud
     ? {
         id: continuationSourceSession.id,
         project: continuationSourceSession.project,
         provider: continuationSourceSession.provider,
-        cwd: continuationSourceSession.cwd,
-        git_repo: continuationSourceSession.git_repo,
-        git_branch: continuationSourceSession.git_branch,
-        started_at: continuationSourceSession.started_at,
-        ended_at: continuationSourceSession.ended_at,
-        last_activity_at:
-          continuationSourceSession.ended_at || continuationSourceSession.started_at,
-        status: continuationSourceSession.ended_at ? "completed" : "working",
-        attention: "auto",
-        duration_minutes: 0,
-        last_user_message: null,
-        last_assistant_message: null,
-        message_count:
-          continuationSourceSession.user_messages +
-          continuationSourceSession.assistant_messages,
-        tool_calls: continuationSourceSession.tool_calls,
-        presence_state: null,
-        presence_tool: null,
-        presence_updated_at: null,
-        user_state: "active",
-        execution_home: continuationSourceSession.execution_home,
-        managed_transport: continuationSourceSession.managed_transport,
-        source_runner_id: continuationSourceSession.source_runner_id,
-        source_runner_name: continuationSourceSession.source_runner_name,
-        loop_mode:
-          continuationSourceSession.id === session.id
-            ? effectiveLoopMode
-            : continuationSourceSession.loop_mode,
       }
     : null;
 
@@ -353,10 +324,10 @@ function SessionDetailWorkspaceRoute({
             onSelectKey={selectKey}
             listRef={registerTimelineList}
             dock={
-              canContinueInCloud && activeSessionForChat ? (
+              canContinueInCloud && sessionChatTarget ? (
                 <SessionChat
-                  key={`${activeSessionForChat.id}:${continuationMode}`}
-                  session={activeSessionForChat}
+                  key={`${sessionChatTarget.id}:${continuationMode}`}
+                  session={sessionChatTarget}
                   layout="dock"
                   dockHeaderStyle={continuationMode === "head" ? "hidden" : "divider"}
                   introEyebrow={

@@ -1,5 +1,4 @@
 import type {
-  AgentActiveSession,
   AgentSession,
   AgentSessionStatus,
   ManagedSessionTransport,
@@ -30,24 +29,6 @@ export type TimelineRuntimeSession = Pick<
 > &
   Partial<TimelineRuntimeOverlay>;
 
-export type TimelineRuntimeActiveSession = Pick<
-  AgentActiveSession,
-  | "status"
-  | "ended_at"
-  | "presence_state"
-  | "presence_tool"
-  | "presence_updated_at"
-  | "last_activity_at"
-  | "timeline_anchor_at"
-  | "runtime_source"
-  | "last_live_at"
-  | "display_phase"
-  | "active_tool"
-  | "confidence"
-  | "execution_home"
-  | "managed_transport"
->;
-
 export interface SessionRuntimeState {
   status: string | null;
   presenceState: KnownPresenceState | null;
@@ -67,20 +48,6 @@ export interface SessionRuntimeState {
   tone: "inactive" | "thinking" | "running" | "needs-user" | "blocked" | "idle" | "inferred";
 }
 
-function overlayFreshnessMillis(overlay: Partial<TimelineRuntimeOverlay> & { last_activity_at?: string | null } | null | undefined): number {
-  const timestamp =
-    overlay?.last_live_at ??
-    overlay?.presence_updated_at ??
-    overlay?.timeline_anchor_at ??
-    overlay?.last_activity_at ??
-    null;
-  if (!timestamp) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const millis = new Date(timestamp).getTime();
-  return Number.isFinite(millis) ? millis : Number.NEGATIVE_INFINITY;
-}
-
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
   if (
     state === "thinking" ||
@@ -97,21 +64,6 @@ export function normalizePresenceState(state: string | null | undefined): KnownP
 function normalizeRuntimeSource(source: string | null | undefined): string | null {
   const trimmed = source?.trim();
   return trimmed ? trimmed : null;
-}
-
-function truthTierScore(tier: RuntimeTruthTier): number {
-  switch (tier) {
-    case "managed-local":
-      return 4;
-    case "fresh":
-      return 3;
-    case "inferred":
-      return 2;
-    case "stale":
-      return 1;
-    default:
-      return 0;
-  }
 }
 
 function getRuntimeTruthTier(
@@ -185,42 +137,21 @@ function getDisplayPhase(
 
 export function resolveSessionRuntimeState(
   session: TimelineRuntimeSession,
-  activeSession?: TimelineRuntimeActiveSession | null,
 ): SessionRuntimeState {
   const sessionTruthTier = getRuntimeTruthTier(session);
-  const activeTruthTier = getRuntimeTruthTier(activeSession);
-  const sessionScore = truthTierScore(sessionTruthTier);
-  const activeScore = truthTierScore(activeTruthTier);
-  const sessionWins =
-    sessionScore > activeScore ||
-    (sessionScore === activeScore && overlayFreshnessMillis(session) >= overlayFreshnessMillis(activeSession));
-  const primaryOverlay = sessionWins ? session : activeSession;
-  const secondaryOverlay = sessionWins ? activeSession : session;
-
-  const status = primaryOverlay?.status ?? secondaryOverlay?.status ?? null;
-  const presenceState = normalizePresenceState(
-    primaryOverlay?.presence_state ?? secondaryOverlay?.presence_state ?? null,
-  );
+  const status = session.status ?? null;
+  const presenceState = normalizePresenceState(session.presence_state ?? null);
   const presenceTool =
-    primaryOverlay?.active_tool ??
-    primaryOverlay?.presence_tool ??
-    secondaryOverlay?.active_tool ??
-    secondaryOverlay?.presence_tool ??
+    session.active_tool ??
+    session.presence_tool ??
     null;
   const lastLiveAt =
-    primaryOverlay?.last_live_at ??
-    primaryOverlay?.presence_updated_at ??
-    secondaryOverlay?.last_live_at ??
-    secondaryOverlay?.presence_updated_at ??
-    (presenceState ? primaryOverlay?.last_activity_at ?? secondaryOverlay?.last_activity_at ?? null : null);
-  const runtimeSource = normalizeRuntimeSource(
-    primaryOverlay?.runtime_source ?? secondaryOverlay?.runtime_source ?? null,
-  );
-  const confidence =
-    primaryOverlay?.confidence ??
-    secondaryOverlay?.confidence ??
-    null;
-  const truthTier = sessionWins ? sessionTruthTier : activeTruthTier;
+    session.last_live_at ??
+    session.presence_updated_at ??
+    (presenceState ? session.last_activity_at ?? null : null);
+  const runtimeSource = normalizeRuntimeSource(session.runtime_source ?? null);
+  const confidence = session.confidence ?? null;
+  const truthTier = sessionTruthTier;
 
   const heuristicActive = presenceState == null && truthTier === "inferred";
   const isExecuting = presenceState === "thinking" || presenceState === "running";
@@ -254,8 +185,8 @@ export function resolveSessionRuntimeState(
     presenceState,
     presenceTool,
     status,
-    activeSession?.ended_at ?? session.ended_at ?? null,
-    primaryOverlay?.display_phase ?? secondaryOverlay?.display_phase ?? null,
+    session.ended_at ?? null,
+    session.display_phase ?? null,
   );
 
   return {

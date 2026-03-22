@@ -140,7 +140,6 @@ export type AgentSessionStatus =
   | "idle"
   | "completed"
   | "active";
-export type AgentAttentionLevel = "hard" | "needs" | "soft" | "auto";
 
 export type PresenceState =
   | "thinking"
@@ -150,47 +149,6 @@ export type PresenceState =
   | "blocked"
   | (string & {});
 
-export interface AgentActiveSession {
-  id: string;
-  project: string | null;
-  provider: string;
-  cwd: string | null;
-  git_repo: string | null;
-  git_branch: string | null;
-  started_at: string;
-  ended_at: string | null;
-  last_activity_at: string;
-  timeline_anchor_at?: string;
-  runtime_phase?: string | null;
-  phase_started_at?: string | null;
-  last_progress_at?: string | null;
-  runtime_source?: string | null;
-  terminal_state?: string | null;
-  runtime_version?: number | null;
-  status: AgentSessionStatus;
-  attention: AgentAttentionLevel;
-  duration_minutes: number;
-  last_user_message: string | null;
-  last_assistant_message: string | null;
-  message_count: number;
-  tool_calls: number;
-  // Real-time presence (null when no hook signal received yet)
-  presence_state: PresenceState | null;
-  presence_tool: string | null;
-  presence_updated_at: string | null;
-  last_live_at?: string | null;
-  display_phase?: string | null;
-  active_tool?: string | null;
-  confidence?: string | null;
-  // User-driven bucket
-  user_state: "active" | "parked" | "snoozed" | "archived";
-  execution_home: SessionExecutionHome;
-  managed_transport: ManagedSessionTransport | null;
-  source_runner_id: number | null;
-  source_runner_name: string | null;
-  loop_mode: SessionLoopMode;
-}
-
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
 export type SessionLoopMode = "manual" | "assist" | "autopilot";
 export type SessionExecutionHome =
@@ -199,12 +157,6 @@ export type SessionExecutionHome =
   | "managed_hosted"
   | "cloud_takeover";
 export type ManagedSessionTransport = "tmux";
-
-export interface AgentActiveSessionsResponse {
-  sessions: AgentActiveSession[];
-  total: number;
-  last_refresh: string;
-}
 
 export interface AgentEvent {
   id: number;
@@ -249,14 +201,6 @@ export interface AgentSessionSummaryFilters {
   days_back?: number;
   limit?: number;
   offset?: number;
-}
-
-export interface AgentActiveSessionFilters {
-  project?: string;
-  attention?: AgentAttentionLevel;
-  status?: AgentSessionStatus;
-  limit?: number;
-  days_back?: number;
 }
 
 export interface AgentFiltersResponse {
@@ -420,26 +364,6 @@ export async function fetchAgentSessionPreview(
 ): Promise<AgentSessionPreview> {
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/preview?last_n=${lastN}`;
   return request<AgentSessionPreview>(path, { method: "GET" });
-}
-
-/**
- * List sessions for the live sessions view.
- */
-export async function fetchAgentActiveSessions(
-  filters: AgentActiveSessionFilters = {},
-): Promise<AgentActiveSessionsResponse> {
-  const params = new URLSearchParams();
-
-  if (filters.project) params.set("project", filters.project);
-  if (filters.attention) params.set("attention", filters.attention);
-  if (filters.status) params.set("status", filters.status);
-  if (filters.limit) params.set("limit", String(filters.limit));
-  if (filters.days_back) params.set("days_back", String(filters.days_back));
-
-  const queryString = params.toString();
-  const path = `${TIMELINE_SESSIONS_PREFIX}/active${queryString ? `?${queryString}` : ""}`;
-
-  return request<AgentActiveSessionsResponse>(path, { method: "GET" });
 }
 
 /**
