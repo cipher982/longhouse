@@ -1576,7 +1576,10 @@ class AgentsStore:
         hide_autonomous: bool = True,
         context_mode: str = "forensic",
         branch_mode: str = "head",
-    ) -> tuple[int, tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]]:
+        include_total: bool = False,
+    ) -> tuple[
+        int | None, tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]
+    ]:
         """Return a lightweight recency window signature for timeline SSE preflight."""
 
         last_activity_subq = self._last_activity_subquery()
@@ -1621,10 +1624,12 @@ class AgentsStore:
             time_anchor=activity_anchor,
         )
         if stmt is None:
-            return 0, ()
+            return (0 if include_total else None), ()
 
-        count_stmt = select(func.count()).select_from(stmt.subquery())
-        total = self.db.execute(count_stmt).scalar() or 0
+        total: int | None = None
+        if include_total:
+            count_stmt = select(func.count()).select_from(stmt.subquery())
+            total = self.db.execute(count_stmt).scalar() or 0
 
         stmt = stmt.order_by(activity_anchor.desc(), AgentSession.started_at.desc()).limit(limit).offset(offset)
         rows = self.db.execute(stmt).all()

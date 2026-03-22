@@ -186,12 +186,46 @@ def test_session_window_signature_prefers_runtime_activity_anchor(tmp_path):
             offset=0,
             hide_autonomous=True,
             context_mode="forensic",
+            include_total=True,
         )
 
     assert total == 2
     assert rows[0][0] == str(old_runtime.id)
     assert rows[0][5] == 7
     assert rows[0][6] is not None
+
+
+def test_session_window_signature_can_skip_total_count(tmp_path):
+    session_local = _make_db(tmp_path, "timeline_stream_signature_no_total.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="signature-no-total",
+        )
+
+        store = AgentsStore(db)
+        total, rows = store.list_session_window_signature(
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            device_id=None,
+            since=now - timedelta(days=14),
+            query=None,
+            limit=1,
+            offset=0,
+            hide_autonomous=True,
+            context_mode="forensic",
+            include_total=False,
+        )
+
+    assert total is None
+    assert len(rows) == 1
+    assert rows[0][0] is not None
 
 
 def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
@@ -207,12 +241,18 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
         )
 
     list_sessions_calls = 0
+    window_signature_kwargs: list[dict] = []
     original_list_sessions = timeline_router.agents_router.list_sessions
+    original_window_signature = timeline_router.AgentsStore.list_session_window_signature
 
     async def _counting_list_sessions(*args, **kwargs):
         nonlocal list_sessions_calls
         list_sessions_calls += 1
         return await original_list_sessions(*args, **kwargs)
+
+    def _capturing_window_signature(self, *args, **kwargs):
+        window_signature_kwargs.append(dict(kwargs))
+        return original_window_signature(self, *args, **kwargs)
 
     async def _collect_events():
         stream = _timeline_sessions_stream(
@@ -238,6 +278,7 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
 
     with (
         patch.object(timeline_router.agents_router, "list_sessions", new=_counting_list_sessions),
+        patch.object(timeline_router.AgentsStore, "list_session_window_signature", new=_capturing_window_signature),
         patch.object(timeline_router, "TIMELINE_STREAM_POLL_SECONDS", 0),
         patch.object(timeline_router, "TIMELINE_STREAM_HEARTBEAT_SECONDS", 0),
     ):
@@ -247,3 +288,5 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
     assert events[1]["event"] == "session_upsert"
     assert events[2]["event"] == "heartbeat"
     assert list_sessions_calls == 1
+    assert len(window_signature_kwargs) >= 1
+    assert all(call.get("include_total") is False for call in window_signature_kwargs)
