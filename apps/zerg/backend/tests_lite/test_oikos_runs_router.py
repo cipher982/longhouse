@@ -887,6 +887,117 @@ def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
+def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    async def _fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+
+    with session_local() as db:
+        owner = User(
+            email="owner@local",
+            role=UserRole.USER.value,
+            context={
+                "preferences": {
+                    "operator_mode": {
+                        "enabled": True,
+                        "allow_continue": False,
+                        "allow_notify": True,
+                    }
+                }
+            },
+        )
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+        runner = _create_runner(db, owner_id=owner.id, name="cinder")
+
+        session = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Mac Reply",
+            project="zerg",
+            device_id=runner.name,
+            execution_home="managed_local",
+            managed_transport="tmux",
+            source_runner_id=runner.id,
+            source_runner_name=runner.name,
+            managed_session_name="lh-mac-reply",
+        )
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="what should we do next?",
+            assistant_text="I handled the last question and now need your direction.",
+        )
+        review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 21, 12, 10, tzinfo=timezone.utc),
+            execution_state="needs_human",
+            decision="wait",
+            summary="Awaiting your direction on the next hiring step.",
+            rationale="The finished turn needs a human reply rather than autonomous continuation.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            card_response = client.get(f"/api/oikos/loop-inbox/cards/{review.id}")
+            assert card_response.status_code == 200, card_response.text
+            card_payload = card_response.json()
+            assert card_payload["home_label"] == "On this Mac"
+            assert card_payload["available_actions"] == [
+                "reply_to_session",
+                "not_now",
+                "open_full_session",
+            ]
+
+            response = client.post(
+                f"/api/oikos/loop-inbox/cards/{review.id}/actions",
+                json={"action": "reply_to_session", "reply_text": "keep going with the shortlist"},
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+
+            assert payload["session_id"] == str(session.id)
+            assert payload["review_id"] == review.id
+            assert payload["action"] == "reply_to_session"
+            assert payload["status"] == "acted"
+            assert payload["reason"] == "reply_to_session"
+            assert payload["queued_job_id"] is None
+
+            queued_jobs = db.query(CommisJob).all()
+            assert queued_jobs == []
+
+            review_row = db.query(SessionTurnReview).filter(SessionTurnReview.id == review.id).one()
+            assert review_row.actual_outcome == "delegated_follow_up"
+            assert review_row.status == "acted"
+
+            assert len(calls) == 1
+            assert calls[0]["owner_id"] == owner.id
+            assert calls[0]["session_id"] == str(session.id)
+            assert calls[0]["text"] == "keep going with the shortlist"
+            assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_loop_inbox_card_marks_older_actionable_review_as_superseded(tmp_path):
     session_local = _make_db(tmp_path)
 

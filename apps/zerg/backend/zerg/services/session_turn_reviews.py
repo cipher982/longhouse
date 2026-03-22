@@ -1143,6 +1143,78 @@ async def approve_pending_turn_review(
     return job
 
 
+async def reply_to_pending_turn_review(
+    *,
+    db: Session,
+    review: SessionTurnReview,
+    reply_text: str,
+) -> None:
+    if review.status not in {"recorded", "enqueued"}:
+        raise ValueError("turn review is no longer actionable")
+    if review.execution_state not in {"awaiting_user_approval", "needs_human"}:
+        raise ValueError("turn review does not accept replies")
+
+    session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
+    if session is None:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="missing_session",
+            actual_outcome="failed",
+        )
+        raise RuntimeError("missing_session")
+
+    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+        raise ValueError("reply is only supported for managed local sessions")
+
+    clean_reply = str(reply_text or "").strip()
+    if not clean_reply:
+        raise ValueError("reply text must not be empty")
+
+    send_result = await send_text_to_managed_local_session(
+        db=db,
+        owner_id=int(review.owner_id or 0),
+        session=session,
+        text=clean_reply,
+        commis_id=f"turn-review-reply-{review.id}",
+        timeout_secs=15,
+    )
+    if not send_result.ok:
+        _mark_review_outcome(
+            db,
+            review=review,
+            status="failed",
+            reason="managed_local_send_failed",
+            actual_outcome="failed",
+        )
+        raise RuntimeError(str(send_result.error or "managed_local_send_failed"))
+
+    if review.run_id is not None:
+        from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ACTED
+        from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
+
+        finalize_wakeups_for_run(
+            db,
+            run_id=review.run_id,
+            status=WAKEUP_STATUS_ACTED,
+            reason="reply_to_session",
+            payload_updates={
+                "outcome": "delegated_follow_up",
+                "reply_sent": True,
+                "resume_session_ids": [str(session.id)],
+            },
+        )
+
+    _mark_review_outcome(
+        db,
+        review=review,
+        status="acted",
+        reason="reply_to_session",
+        actual_outcome="delegated_follow_up",
+    )
+
+
 def dismiss_pending_turn_review(*, db: Session, review: SessionTurnReview, reason: str = "not_now") -> None:
     if review.status not in {"recorded", "enqueued"}:
         raise ValueError("turn review is no longer actionable")

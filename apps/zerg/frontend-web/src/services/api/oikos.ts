@@ -109,6 +109,8 @@ interface LoopInboxItemSummaryRaw {
   project: string | null;
   machine: string | null;
   provider: string | null;
+  execution_home: string | null;
+  home_label: string | null;
   loop_mode: string;
   decision: string;
   execution_state: string | null;
@@ -141,7 +143,7 @@ interface LoopInboxActionResultRaw {
   queued_job_id: number | null;
 }
 
-export type LoopInboxAction = "approve_recommended_action" | "not_now";
+export type LoopInboxAction = "approve_recommended_action" | "reply_to_session" | "not_now";
 
 export interface LoopInboxItem {
   cardId: number;
@@ -150,6 +152,8 @@ export interface LoopInboxItem {
   project: string | null;
   machine: string | null;
   provider: string | null;
+  executionHome: string | null;
+  homeLabel: string | null;
   loopMode: SessionLoopMode;
   decision: SessionTurnDecision;
   executionState: SessionTurnExecutionState;
@@ -248,6 +252,8 @@ function parseLoopInboxItem(row: LoopInboxItemSummaryRaw): LoopInboxItem {
     project: asString(row.project),
     machine: asString(row.machine),
     provider: asString(row.provider),
+    executionHome: asString(row.execution_home),
+    homeLabel: asString(row.home_label),
     loopMode: (asString(row.loop_mode) ?? "manual") as SessionLoopMode,
     decision: (asString(row.decision) ?? "done") as SessionTurnDecision,
     executionState: (asString(row.execution_state) ?? "no_action") as SessionTurnExecutionState,
@@ -305,10 +311,14 @@ export async function fetchLoopActionCardForSession(sessionId: string): Promise<
 export async function applyLoopInboxAction(
   cardId: number,
   action: LoopInboxAction,
+  options?: { replyText?: string | null },
 ): Promise<LoopInboxActionResult> {
   const row = await request<LoopInboxActionResultRaw>(`/oikos/loop-inbox/cards/${cardId}/actions`, {
     method: "POST",
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({
+      action,
+      reply_text: options?.replyText ?? null,
+    }),
   });
   return {
     sessionId: row.session_id,

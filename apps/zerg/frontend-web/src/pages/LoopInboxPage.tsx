@@ -123,6 +123,22 @@ function formatFollowUpCount(count: number): string {
   return `${count} open follow-up${count === 1 ? "" : "s"}`;
 }
 
+function formatVenueLabel(item: Pick<LoopInboxItem, "executionHome" | "homeLabel">): string | null {
+  if (item.homeLabel) {
+    return item.homeLabel;
+  }
+  switch (item.executionHome) {
+    case "managed_local":
+      return "On this Mac";
+    case "managed_hosted":
+      return "Hosted";
+    case "cloud_takeover":
+      return "Moved to cloud";
+    default:
+      return null;
+  }
+}
+
 function useIsPhoneLayout(): boolean {
   const [isPhoneLayout, setIsPhoneLayout] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -154,14 +170,61 @@ function LoopActionButtons({
   pending,
 }: {
   card: LoopActionCard;
-  onAction: (action: LoopInboxAction) => void;
+  onAction: (action: LoopInboxAction, options?: { replyText?: string | null }) => Promise<void>;
   pending: boolean;
 }) {
+  const [replyText, setReplyText] = useState("");
+  const canReply = card.availableActions.includes("reply_to_session");
+  const trimmedReply = replyText.trim();
+  const venueLabel = formatVenueLabel(card);
+
+  useEffect(() => {
+    setReplyText("");
+  }, [card.cardId]);
+
+  const submitReply = async () => {
+    if (!trimmedReply || pending) return;
+    await onAction("reply_to_session", { replyText: trimmedReply });
+    setReplyText("");
+  };
+
   return (
-    <div className="loop-inbox-card-actions">
+    <div className="loop-inbox-card-actions-wrap">
+      {canReply && (
+        <div className="loop-inbox-reply-box" data-testid="loop-reply-box">
+          <label className="loop-inbox-reply-label" htmlFor={`loop-reply-${card.cardId}`}>
+            Reply to source session
+          </label>
+          <div className="loop-inbox-reply-controls">
+            <input
+              id={`loop-reply-${card.cardId}`}
+              className="loop-inbox-reply-input"
+              type="text"
+              value={replyText}
+              onChange={(event) => setReplyText(event.target.value)}
+              placeholder={
+                venueLabel === "On this Mac"
+                  ? "Send a quick reply to the session on this Mac"
+                  : "Send a quick reply to this session"
+              }
+              disabled={pending}
+              data-testid="loop-reply-input"
+            />
+            <Button
+              variant="secondary"
+              onClick={() => void submitReply()}
+              disabled={pending || !trimmedReply}
+              data-testid="loop-reply-action"
+            >
+              Reply
+            </Button>
+          </div>
+        </div>
+      )}
+      <div className="loop-inbox-card-actions">
       {card.availableActions.includes("approve_recommended_action") && (
         <Button
-          onClick={() => onAction("approve_recommended_action")}
+          onClick={() => void onAction("approve_recommended_action")}
           disabled={pending}
           data-testid="loop-approve-action"
         >
@@ -171,7 +234,7 @@ function LoopActionButtons({
       {card.availableActions.includes("not_now") && (
         <Button
           variant="ghost"
-          onClick={() => onAction("not_now")}
+          onClick={() => void onAction("not_now")}
           disabled={pending}
           data-testid="loop-not-now-action"
         >
@@ -181,6 +244,7 @@ function LoopActionButtons({
       <Link className="ui-button ui-button--ghost ui-button--md" to={`/timeline/${card.sessionId}`}>
         Open full session
       </Link>
+      </div>
     </div>
   );
 }
@@ -198,6 +262,8 @@ function LoopInboxRow({
   onSelect?: () => void;
   compact?: boolean;
 }) {
+  const venueLabel = formatVenueLabel(item);
+
   return (
     <Link
       to={to}
@@ -218,6 +284,7 @@ function LoopInboxRow({
         </div>
       </div>
       <div className="loop-inbox-row-meta">
+        {venueLabel && <span className="loop-inbox-home-label">{venueLabel}</span>}
         <span>{item.project || "No project"}</span>
         {item.machine && <span>{item.machine}</span>}
         <span>{formatTimestamp(item.lastTurnAt)}</span>
@@ -258,17 +325,27 @@ export default function LoopInboxPage() {
   });
 
   const actionMutation = useMutation({
-    mutationFn: ({ currentCardId, action }: { currentCardId: number; action: LoopInboxAction }) =>
-      applyLoopInboxAction(currentCardId, action),
+    mutationFn: ({
+      currentCardId,
+      action,
+      replyText,
+    }: {
+      currentCardId: number;
+      action: LoopInboxAction;
+      replyText?: string | null;
+    }) =>
+      replyText == null
+        ? applyLoopInboxAction(currentCardId, action)
+        : applyLoopInboxAction(currentCardId, action, { replyText }),
     onSuccess: async (_result, variables) => {
       await queryClient.invalidateQueries({ queryKey: ["loop-inbox"] });
       await queryClient.invalidateQueries({ queryKey: ["loop-action-card", variables.currentCardId] });
     },
   });
 
-  const handleAction = (action: LoopInboxAction) => {
+  const handleAction = async (action: LoopInboxAction, options?: { replyText?: string | null }) => {
     if (!selectedCardId) return;
-    actionMutation.mutate({ currentCardId: selectedCardId, action });
+    await actionMutation.mutateAsync({ currentCardId: selectedCardId, action, replyText: options?.replyText });
   };
 
   useEffect(() => {
@@ -296,6 +373,7 @@ export default function LoopInboxPage() {
   }, [isPhoneLayout, queueOpen]);
 
   const currentCard = cardQuery.data ?? null;
+  const currentVenueLabel = currentCard ? formatVenueLabel(currentCard) : null;
   const isLoadingCard = cardQuery.isLoading || legacySessionQuery.isLoading;
   const inboxItems = inboxQuery.data ?? [];
   const inboxCount = inboxItems.length;
@@ -381,6 +459,7 @@ export default function LoopInboxPage() {
             <div>
               <h2>{currentCard.title}</h2>
               <div className="loop-inbox-card-meta">
+                {currentVenueLabel && <span className="loop-inbox-home-label">{currentVenueLabel}</span>}
                 <span>{currentCard.project || "No project"}</span>
                 {currentCard.machine && <span>{currentCard.machine}</span>}
                 <span>{formatTimestamp(currentCard.lastTurnAt)}</span>
