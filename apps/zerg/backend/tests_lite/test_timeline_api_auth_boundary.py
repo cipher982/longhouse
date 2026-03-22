@@ -99,7 +99,7 @@ def test_timeline_sessions_accept_browser_session_cookie(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:
         _seed_user(db)
-        _seed_session(db)
+        session_id = _seed_session(db)
 
     client = _make_client(session_local)
 
@@ -111,7 +111,9 @@ def test_timeline_sessions_accept_browser_session_cookie(tmp_path):
         assert response.status_code == 200
         payload = response.json()
         assert payload["total"] == 1
-        assert payload["sessions"][0]["project"] == "timeline-auth"
+        assert payload["sessions"][0]["thread_id"] == session_id
+        assert payload["sessions"][0]["head"]["project"] == "timeline-auth"
+        assert payload["sessions"][0]["detail"]["project"] == "timeline-auth"
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

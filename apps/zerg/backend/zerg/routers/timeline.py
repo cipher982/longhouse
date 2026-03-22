@@ -18,7 +18,6 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
@@ -31,6 +30,7 @@ from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.agents import AgentSession
 from zerg.routers import agents as agents_router
 from zerg.services.agents_store import AgentsStore
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ TIMELINE_STREAM_POLL_SECONDS = 1.0
 TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 
 
-class TimelineSessionCardResponse(BaseModel):
+class TimelineSessionCardResponse(UTCBaseModel):
     thread_id: str = Field(..., description="Logical thread/task root UUID")
     timeline_anchor_at: datetime | None = Field(None, description="Anchor used for timeline ordering and grouping")
     head: agents_router.SessionResponse
@@ -55,7 +55,7 @@ class TimelineSessionCardResponse(BaseModel):
     head_origin_label: str | None = Field(None, description="Origin label for the current writable head")
 
 
-class TimelineSessionsListResponse(BaseModel):
+class TimelineSessionsListResponse(UTCBaseModel):
     sessions: list[TimelineSessionCardResponse]
     total: int
     has_real_sessions: bool = True
