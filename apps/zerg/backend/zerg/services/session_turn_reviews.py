@@ -23,6 +23,8 @@ from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
 from zerg.services.managed_local_control import send_text_to_managed_local_session
+from zerg.services.managed_local_runtime import mark_managed_local_turn_idle
+from zerg.services.managed_local_runtime import mark_managed_local_turn_needs_user
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.session_loop_controller import build_loop_controller_payload
@@ -42,6 +44,7 @@ _EXPECTED_IGNORE_OUTCOME = "ignore"
 _EXPECTED_NOTIFY_OUTCOME = "notify_user"
 _EXPECTED_CONTINUE_OUTCOME = "continue_session"
 _ACTIVE_PRESENCE_STATES = {"thinking", "running"}
+_ATTENTION_EXECUTION_STATES = {"awaiting_user_approval", "needs_human"}
 
 
 @dataclass(frozen=True)
@@ -1248,8 +1251,15 @@ async def maybe_process_session_turn_loop(*, db: Session, session_id: str) -> Se
         return None
     await maybe_execute_recorded_turn_review(db=db, review=review)
     await maybe_enqueue_turn_review_operator_wakeup(db=db, review=review)
+    session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
+    execution_home = str(getattr(session, "execution_home", "") or "").strip() if session is not None else ""
+    is_managed_local_session = execution_home == SessionExecutionHome.MANAGED_LOCAL.value
+    if is_managed_local_session:
+        if review.execution_state in _ATTENTION_EXECUTION_STATES:
+            mark_managed_local_turn_needs_user(db, session=session, dedupe_suffix=f"review-{review.id}")
+        elif review.actual_outcome != _EXPECTED_CONTINUE_OUTCOME:
+            mark_managed_local_turn_idle(db, session=session, dedupe_suffix=f"review-{review.id}")
     if created:
-        session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
         if session is not None:
             try:
                 await _send_turn_review_mobile_notification(db=db, review=review, session=session)

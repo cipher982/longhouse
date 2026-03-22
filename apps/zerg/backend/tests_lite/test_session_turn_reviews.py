@@ -21,6 +21,7 @@ from zerg.models import CommisJob
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurnReview
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
@@ -398,9 +399,58 @@ async def test_turn_review_assist_enqueues_operator_wakeup(monkeypatch, tmp_path
     assert calls[0]["source"] == "operator"
     assert getattr(calls[0]["surface_adapter"], "surface_id", None) == "operator"
     assert (
-        calls[0]["surface_payload"]["turn_review"]["decision"]["follow_up_prompt"]
-        == "Run the pending targeted tests."
+        calls[0]["surface_payload"]["turn_review"]["decision"]["follow_up_prompt"] == "Run the pending targeted tests."
     )
+
+
+@pytest.mark.asyncio
+async def test_turn_review_marks_managed_local_attention_phase(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_managed_local_attention.db")
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="wait",
+            summary="The session needs a direct human reply.",
+            rationale="The completed turn ended in a handoff request with no safe autonomous next step.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"wait"}',
+            loop_thread_id=77,
+        )
+
+    async def _fake_invoke(*_args, **_kwargs):
+        return 654
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+
+    with SessionLocal() as db:
+        user = _create_user(db, allow_continue=False)
+        runner = _create_runner(db, owner_id=user.id, name="cinder")
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="what should we do next?",
+            assistant_text="I finished the last turn and now need your direction on the next hiring step.",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        session.managed_transport = "tmux"
+        session.source_runner_id = runner.id
+        session.source_runner_name = runner.name
+        session.managed_session_name = "lh-managed-local-attention"
+        db.commit()
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.execution_state == "needs_human"
+
+        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        assert runtime_state.phase == "needs_user"
+        assert runtime_state.phase_source == "semantic"
+        assert runtime_state.last_runtime_signal_at is not None
 
 
 def test_classify_turn_review_outcome_keeps_notify_reviews_actionable_without_jobs(tmp_path):

@@ -43,6 +43,7 @@ from zerg.services.managed_local_control import send_text_to_managed_local_sessi
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
+from zerg.services.managed_local_runtime import mark_managed_local_turn_idle
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
@@ -80,6 +81,24 @@ SUPPORTED_SESSION_CHAT_BACKENDS = {
 MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
 MANAGED_LOCAL_STABLE_POLLS = 1
+_MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
+    [
+        "Message was sent to the managed local session, but Longhouse ",
+        "did not observe a completed turn yet.",
+    ]
+)
+_CONTINUATION_PERSISTENCE_ERROR = "".join(
+    [
+        "Response completed, but Longhouse could not save the ",
+        "continuation transcript to the timeline.",
+    ]
+)
+_CONTINUATION_EMPTY_EVENTS_ERROR = "".join(
+    [
+        "Response completed, but Longhouse could not extract any new ",
+        "timeline events from the continuation transcript.",
+    ]
+)
 
 
 def _truthy_env(name: str) -> bool:
@@ -377,7 +396,7 @@ async def _stream_managed_local_output(
         after_event_id=baseline_event_id,
     )
     if not new_events:
-        persistence_error = "Message was sent to the managed local session, " "but Longhouse did not observe a completed turn yet."
+        persistence_error = _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE
         yield SSEEvent(
             event="error",
             data=json.dumps({"error": persistence_error}),
@@ -418,6 +437,13 @@ async def _stream_managed_local_output(
                 event="assistant_delta",
                 data=json.dumps({"text": event.content_text, "accumulated": assistant_text}),
             ).encode()
+
+    latest_event_id = max((int(getattr(event, "id", 0) or 0) for event in new_events), default=0)
+    mark_managed_local_turn_idle(
+        db,
+        session=source_session,
+        dedupe_suffix=str(latest_event_id or request_id),
+    )
 
     yield SSEEvent(
         event="done",
@@ -509,12 +535,10 @@ async def _stream_fake_claude_output(
     except Exception as exc:
         logger.warning("Failed to persist fake continuation turn for %s: %s", target_session_id, exc)
         ship_result = None
-        persistence_error = "Response completed, but Longhouse could not save " "the continuation transcript to the timeline."
+        persistence_error = _CONTINUATION_PERSISTENCE_ERROR
 
     if ship_result is not None and ship_result.events_inserted <= 0 and persistence_error is None:
-        persistence_error = (
-            "Response completed, but Longhouse could not extract any new timeline events " "from the continuation transcript."
-        )
+        persistence_error = _CONTINUATION_EMPTY_EVENTS_ERROR
 
     yield SSEEvent(
         event="done",
@@ -584,6 +608,12 @@ def _persist_fake_continuation_turn(
             "timestamp": assistant_timestamp.isoformat(),
         }
     )
+    if target_session:
+        resolved_git_branch = target_session.git_branch
+        resolved_thread_root_session_id = target_session.thread_root_session_id
+    else:
+        resolved_git_branch = source_session.git_branch if source_session else None
+        resolved_thread_root_session_id = UUID(thread_root_session_id)
 
     payload = SessionIngest(
         id=target_uuid,
@@ -601,11 +631,11 @@ def _persist_fake_continuation_turn(
         ),
         cwd=target_session.cwd if target_session else str(workspace_path.absolute()),
         git_repo=target_session.git_repo if target_session else (source_session.git_repo if source_session else None),
-        git_branch=(target_session.git_branch if target_session else (source_session.git_branch if source_session else None)),
+        git_branch=resolved_git_branch,
         started_at=target_session.started_at if target_session else user_timestamp,
         ended_at=assistant_timestamp,
         provider_session_id=provider_session_id,
-        thread_root_session_id=(target_session.thread_root_session_id if target_session else UUID(thread_root_session_id)),
+        thread_root_session_id=resolved_thread_root_session_id,
         continued_from_session_id=(
             target_session.continued_from_session_id
             if target_session and target_session.continued_from_session_id
@@ -849,9 +879,9 @@ async def stream_claude_output(
                         )
                         logger.warning("[%s] Shipped continuation contained no new events", request_id)
                 else:
-                    persistence_error = "Response completed, but Longhouse could not save " "the continuation transcript to the timeline."
+                    persistence_error = _CONTINUATION_PERSISTENCE_ERROR
             except Exception as e:
-                persistence_error = "Response completed, but Longhouse could not save " "the continuation transcript to the timeline."
+                persistence_error = _CONTINUATION_PERSISTENCE_ERROR
                 logger.warning(f"[{request_id}] Failed to ship session to Longhouse: {e}")
 
         yield SSEEvent(
@@ -1022,13 +1052,14 @@ async def chat_with_session(
 
         async def generate():
             try:
+                continued_from_session_id = (
+                    str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
+                )
                 async for event in stream_claude_output(
                     source_session_id=str(source_session.id),
                     target_session_id=str(target_session.id),
                     thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
-                    continued_from_session_id=(
-                        str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
-                    ),
+                    continued_from_session_id=continued_from_session_id,
                     created_continuation=created_continuation,
                     branched_from_event_id=target_session.branched_from_event_id,
                     provider_session_id=provider_session_id,

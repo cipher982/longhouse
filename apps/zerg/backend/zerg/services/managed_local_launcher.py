@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.models.agents import AgentSession
+from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
@@ -298,6 +299,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             status_code=502,
         )
 
+    mark_managed_local_session_launched(db, session=session)
     db.commit()
     db.refresh(session)
     return ManagedLocalLaunchResult(session=session, attach_command=f"tmux attach -t {managed_session_name}")
