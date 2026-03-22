@@ -194,6 +194,49 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("refreshes relative time labels while the timeline stays open", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-21T12:00:45Z"));
+
+      mockUseAgentSessions.mockImplementation((filters: AgentSessionFilters, options?: { refetchInterval?: unknown }) => {
+        latestFilters = filters;
+        latestSessionOptions = options;
+        return {
+          data: {
+            sessions: [
+              makeSession({
+                started_at: "2026-03-21T12:00:00Z",
+                last_activity_at: "2026-03-21T12:00:00Z",
+                timeline_anchor_at: "2026-03-21T12:00:00Z",
+                ended_at: null,
+                status: "idle",
+                display_phase: "Idle",
+              }),
+            ],
+            total: 1,
+            has_real_sessions: true,
+          },
+          isLoading: false,
+          error: null,
+          refetch: vi.fn(),
+        };
+      });
+
+      renderSessionsPage("/timeline");
+
+      expect(screen.getByText("Just now")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+
+      expect(screen.getByText("1m ago")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a slow reconciliation poll when the timeline SSE stream is active", async () => {
     renderSessionsPage("/timeline");
 

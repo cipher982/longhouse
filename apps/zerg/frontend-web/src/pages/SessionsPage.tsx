@@ -71,10 +71,9 @@ interface SessionsUrlState {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatRelativeTime(dateStr: string): string {
+function formatRelativeTime(dateStr: string, nowMs: number = Date.now()): string {
   const date = parseUTC(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
+  const diffMs = nowMs - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
   const diffDays = Math.floor(diffMs / 86400000);
@@ -86,9 +85,9 @@ function formatRelativeTime(dateStr: string): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function getDateKey(dateStr: string): string {
+function getDateKey(dateStr: string, nowMs: number = Date.now()): string {
   const date = parseUTC(dateStr);
-  const now = new Date();
+  const now = new Date(nowMs);
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
@@ -132,6 +131,37 @@ function useDocumentVisible(): boolean {
   }, []);
 
   return isVisible;
+}
+
+function useRelativeTimeClock(enabled: boolean): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
+    let intervalId: number | null = null;
+    const scheduleRepeatingUpdates = () => {
+      setNowMs(Date.now());
+      intervalId = window.setInterval(() => {
+        setNowMs(Date.now());
+      }, 60_000);
+    };
+
+    setNowMs(Date.now());
+    const delayUntilNextMinute = Math.max(1, 60_000 - (Date.now() % 60_000));
+    const timeoutId = window.setTimeout(scheduleRepeatingUpdates, delayUntilNextMinute);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [enabled]);
+
+  return nowMs;
 }
 
 interface SessionThreadCard {
@@ -209,11 +239,12 @@ function buildThreadCards(
 
 function groupThreadCardsByDay(
   cards: SessionThreadCard[],
+  nowMs: number,
 ): Map<string, SessionThreadCard[]> {
   const groups = new Map<string, SessionThreadCard[]>();
 
   for (const card of cards) {
-    const key = getDateKey(getResolvedTimelineAnchor(card.head));
+    const key = getDateKey(getResolvedTimelineAnchor(card.head), nowMs);
     const existing = groups.get(key) || [];
     existing.push(card);
     groups.set(key, existing);
@@ -555,9 +586,10 @@ interface SessionCardProps {
   onClick: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
+  relativeNowMs: number;
 }
 
-function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: SessionCardProps) {
+function SessionCard({ thread, onClick, highlightQuery, isSemanticResult, relativeNowMs }: SessionCardProps) {
   const session = thread.head;
   const detailSession = thread.detail;
   const turnCount = session.user_messages;
@@ -599,7 +631,7 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: Sess
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
-        <span className="session-card-time">{formatRelativeTime(getResolvedTimelineAnchor(session))}</span>
+        <span className="session-card-time">{formatRelativeTime(getResolvedTimelineAnchor(session), relativeNowMs)}</span>
       </div>
 
       <div className="session-card-meta">
@@ -685,7 +717,7 @@ function SessionCard({ thread, onClick, highlightQuery, isSemanticResult }: Sess
           <span className="session-stat-separator">&middot;</span>
           <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
           <span className="session-stat-separator">&middot;</span>
-          <span className="session-stat session-stat--secondary">Started {formatRelativeTime(thread.root.started_at)}</span>
+          <span className="session-stat session-stat--secondary">Started {formatRelativeTime(thread.root.started_at, relativeNowMs)}</span>
         </div>
         <div className="session-card-actions">
           <span className="session-card-action-label">{primaryActionLabel}</span>
@@ -706,6 +738,7 @@ interface SessionGroupProps {
   onSessionClick: (thread: SessionThreadCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
+  relativeNowMs: number;
 }
 
 function SessionGroup({
@@ -714,6 +747,7 @@ function SessionGroup({
   onSessionClick,
   highlightQuery,
   isSemanticResult,
+  relativeNowMs,
 }: SessionGroupProps) {
   return (
     <div className="session-group">
@@ -729,6 +763,7 @@ function SessionGroup({
             onClick={() => onSessionClick(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
+            relativeNowMs={relativeNowMs}
           />
         ))}
       </div>
@@ -840,6 +875,7 @@ export default function SessionsPage() {
   );
 
   const documentVisible = useDocumentVisible();
+  const relativeNowMs = useRelativeTimeClock(documentVisible);
   const debouncedQuery = useDebouncedValue(searchQuery, aiSearch ? 700 : 300);
   const aiSearchPending = aiSearch && searchQuery !== debouncedQuery;
 
@@ -885,7 +921,7 @@ export default function SessionsPage() {
   useTimelineSessionStream(filters, { enabled: timelineStreamEnabled });
 
   const threadCards = useMemo(() => buildThreadCards(sessions), [sessions]);
-  const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards), [threadCards]);
+  const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards, relativeNowMs), [threadCards, relativeNowMs]);
 
   const headerActions = (
     <div className="sessions-header-actions">
@@ -1265,6 +1301,7 @@ export default function SessionsPage() {
                 onSessionClick={handleSessionClick}
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
+                relativeNowMs={relativeNowMs}
               />
             ))}
           </div>
