@@ -364,6 +364,122 @@ test.describe("Sessions Page", () => {
     await expect(matchedEvent).toBeVisible({ timeout: 15000 });
   });
 
+  test("Query grouping keeps one honest thread card when multiple raw matches exist", async ({
+    page,
+    request,
+  }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const project = `thread-query-group-${suffix}`;
+    const token = `grouped-hit-${suffix}`;
+    const rootTimestamp = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const matchedTimestamp = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const headTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const runtimeTimestamp = new Date().toISOString();
+
+    const rootId = await ingestSession(request, {
+      project,
+      started_at: rootTimestamp,
+      ended_at: rootTimestamp,
+      events: [
+        {
+          role: "user",
+          content_text: `Older thread root also mentions ${token} once`,
+          timestamp: rootTimestamp,
+          source_path: "/tmp/thread-query-group-root.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    const matchedId = await ingestSession(request, {
+      project,
+      started_at: matchedTimestamp,
+      ended_at: matchedTimestamp,
+      thread_root_session_id: rootId,
+      continued_from_session_id: rootId,
+      events: [
+        {
+          role: "user",
+          content_text: `Matched continuation repeats ${token} and should own the query card`,
+          timestamp: matchedTimestamp,
+          source_path: "/tmp/thread-query-group-match.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await ingestRuntimeEvents(request, [
+      {
+        session_id: matchedId,
+        source: "managed_local_transport",
+        kind: "phase_signal",
+        phase: "running",
+        tool_name: "pytest",
+        occurred_at: runtimeTimestamp,
+        freshness_ms: 60_000,
+        dedupe_key: `running-${matchedId}`,
+      },
+    ]);
+
+    await ingestSession(request, {
+      project,
+      started_at: headTimestamp,
+      ended_at: headTimestamp,
+      thread_root_session_id: rootId,
+      continued_from_session_id: matchedId,
+      events: [
+        {
+          role: "user",
+          content_text: "Newest writable head is just housekeeping without the search token",
+          timestamp: headTimestamp,
+          source_path: "/tmp/thread-query-group-head.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    await page.goto(`/timeline?project=${project}&sort=recency`);
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+
+    const searchInput = page.locator('input[type="search"]');
+    const queryResponsePromise = page.waitForResponse((response) => {
+      const url = response.url();
+      return (
+        response.request().method() === "GET" &&
+        url.includes("/api/timeline/sessions?") &&
+        url.includes(`project=${project}`) &&
+        url.includes(`query=${token}`)
+      );
+    });
+
+    await searchInput.fill(token);
+    await expect(page).toHaveURL(new RegExp(`query=${token}`));
+
+    const queryResponse = await queryResponsePromise;
+    expect(queryResponse.ok()).toBe(true);
+    const queryPayload = await queryResponse.json();
+    expect(queryPayload.total).toBe(2);
+    expect(queryPayload.sessions).toHaveLength(2);
+
+    const cards = page.getByTestId("session-card");
+    await expect(cards).toHaveCount(1);
+
+    const card = cards.first();
+    await expect(card).toHaveAttribute("data-thread-id", rootId);
+    await expect(card).toHaveAttribute("data-session-id", matchedId);
+    await expect(card.locator(".session-card-snippet")).toContainText(token);
+    await expect(card).toContainText("Running pytest");
+    await expect(card).not.toContainText(
+      "Newest writable head is just housekeeping without the search token",
+    );
+
+    await card.click();
+    await expect(page).toHaveURL(new RegExp(`/timeline/${matchedId}.*event_id=`));
+    await expect(
+      page.getByTestId("session-timeline-row").filter({ hasText: token }).first(),
+    ).toBeVisible({ timeout: 15000 });
+  });
+
   test("Clear filters button removes all filters", async ({ page }) => {
     // Navigate with pre-set filters — filtersOpen auto-opens from URL params
     await page.goto("/timeline?provider=claude&project=zerg");
