@@ -172,6 +172,9 @@ function getDisplayPhase(
     return "Idle";
   }
 
+  // Compatibility shim: older callers may still emit `working` without a
+  // semantic presence state. Treat that as fallback progress until all
+  // producers are tightened to the newer execution-only contract.
   if (status === "working") return "Recent progress";
   if (status === "thinking") return "Thinking";
   if (status === "active") return "Recent progress";

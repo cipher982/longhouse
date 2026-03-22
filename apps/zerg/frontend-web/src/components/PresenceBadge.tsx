@@ -105,9 +105,10 @@ function normalizePresenceState(state: PresenceStateInput | null | undefined): P
 interface DotProps {
   state: PresenceState;
   size: number;
+  compact?: boolean;
 }
 
-function Dot({ state, size }: DotProps) {
+function Dot({ state, size, compact = false }: DotProps) {
   const base: React.CSSProperties = {
     display: "inline-block",
     width: size,
@@ -148,8 +149,9 @@ function Dot({ state, size }: DotProps) {
       <span
         style={{
           ...base,
-          background: "radial-gradient(circle, #fbbf24 30%, #f59e0b 100%)",
-          animation: "presence-pulse 2s ease-in-out infinite",
+          background: compact ? "#d97706" : "radial-gradient(circle, #fbbf24 30%, #f59e0b 100%)",
+          animation: compact ? undefined : "presence-pulse 2s ease-in-out infinite",
+          opacity: compact ? 0.78 : 1,
           ["--presence-glow" as string]: "rgba(251, 191, 36, 0.5)",
         }}
       />
@@ -161,8 +163,9 @@ function Dot({ state, size }: DotProps) {
       <span
         style={{
           ...base,
-          background: "radial-gradient(circle, #f87171 30%, #ef4444 100%)",
-          animation: "presence-pulse 2.5s ease-in-out infinite",
+          background: compact ? "#dc2626" : "radial-gradient(circle, #f87171 30%, #ef4444 100%)",
+          animation: compact ? undefined : "presence-pulse 2.5s ease-in-out infinite",
+          opacity: compact ? 0.78 : 1,
           ["--presence-glow" as string]: "rgba(248, 113, 113, 0.5)",
         }}
       />
@@ -316,7 +319,7 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
         title={compactTitle}
         style={{ display: "inline-flex", alignItems: "center" }}
       >
-        <Dot state={normalizedState} size={dotSize} />
+        <Dot state={normalizedState} size={dotSize} compact />
       </span>
     );
   }

@@ -15,4 +15,20 @@ describe("PresenceBadge styles", () => {
     expect(screen.getByText("bash")).toBeInTheDocument();
     expect(document.querySelectorAll("#presence-badge-keyframes")).toHaveLength(1);
   });
+
+  it("keeps compact needs-user badges steady instead of pulsing like execution", () => {
+    render(<PresenceBadge state="needs_user" compact />);
+
+    const indicator = screen.getByTitle("Waiting for input").firstElementChild as HTMLElement;
+    expect(indicator).toBeTruthy();
+    expect(indicator.style.animation).toBe("");
+  });
+
+  it("keeps compact blocked badges steady instead of pulsing like execution", () => {
+    render(<PresenceBadge state="blocked" tool="bash" compact />);
+
+    const indicator = screen.getByTitle("Blocked: bash").firstElementChild as HTMLElement;
+    expect(indicator).toBeTruthy();
+    expect(indicator.style.animation).toBe("");
+  });
 });
