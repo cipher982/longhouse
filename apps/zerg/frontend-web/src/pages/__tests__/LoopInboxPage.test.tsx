@@ -216,8 +216,6 @@ describe("LoopInboxPage", () => {
 
   it("shows the managed-local venue label and sends a quick reply", async () => {
     const user = userEvent.setup();
-    fetchLoopInboxMock.mockResolvedValue([makeInboxItem({ homeLabel: null })]);
-    fetchLoopActionCardMock.mockResolvedValue(makeActionCard({ homeLabel: null }));
     renderPage();
 
     await waitFor(() => {
