@@ -432,7 +432,7 @@ test.describe("Sessions Page", () => {
     await expect(inferredCard).toHaveClass(/session-card--inferred/);
   });
 
-  test("Timeline live stream updates a visible card runtime phase without a reload", async ({
+  test("Timeline live stream updates a visible card in place without duplication", async ({
     page,
     request,
   }) => {
@@ -458,7 +458,7 @@ test.describe("Sessions Page", () => {
       ],
     });
 
-    await ingestSession(request, {
+    const recentId = await ingestSession(request, {
       project,
       started_at: recentTimestamp,
       ended_at: recentTimestamp,
@@ -481,12 +481,18 @@ test.describe("Sessions Page", () => {
     await streamConnected;
 
     const cards = page.locator('[data-testid="session-card"]');
-    await expect(cards.first()).toContainText(`recent-stream-session-${suffix}`);
+    const olderCard = page.locator(
+      `[data-testid="session-card"][data-session-id="${olderId}"]`,
+    );
+    const recentCard = page.locator(
+      `[data-testid="session-card"][data-session-id="${recentId}"]`,
+    );
 
-    const olderCard = page
-      .locator('[data-testid="session-card"]', { hasText: `older-stream-session-${suffix}` })
-      .first();
+    await expect(cards.first()).toHaveAttribute("data-session-id", recentId);
     await expect(olderCard).toBeVisible();
+    await expect(olderCard).toContainText(`older-stream-session-${suffix}`);
+    await expect(recentCard).toBeVisible();
+    await expect(recentCard).toContainText(`recent-stream-session-${suffix}`);
 
     await ingestRuntimeEvents(request, [
       {
@@ -504,6 +510,10 @@ test.describe("Sessions Page", () => {
     await expect(olderCard).toContainText("Running bash", { timeout: 15000 });
     await expect(olderCard).toHaveAttribute("data-runtime-tone", "running");
     await expect(olderCard).toHaveClass(/session-card--live/);
+    await expect(cards.first()).toHaveAttribute("data-session-id", recentId);
+    await expect(olderCard).toHaveCount(1);
+    await expect(recentCard).toHaveCount(1);
+    await expect(cards.nth(1)).toHaveAttribute("data-session-id", olderId);
   });
 });
 
