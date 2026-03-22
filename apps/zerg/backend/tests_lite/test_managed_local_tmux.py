@@ -2,12 +2,15 @@
 
 import shlex
 
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
+from zerg.services.managed_local_tmux import build_tmux_attach_command
 from zerg.services.managed_local_tmux import build_tmux_capture_command
 from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
 from zerg.services.managed_local_tmux import build_tmux_launch_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
+from zerg.services.managed_local_tmux import build_tmux_set_remain_on_exit_command
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
 from zerg.services.managed_local_tmux import validate_managed_transport
 
@@ -33,33 +36,56 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
     )
 
     parts = shlex.split(command)
-    assert parts[:5] == ["tmux", "new-session", "-d", "-s", "lh-demo"]
-    assert parts[5] == "cd '/tmp/path with spaces' && exec claude-code --dangerously-skip-permissions"
+    assert parts[:7] == ["tmux", "-L", MANAGED_LOCAL_TMUX_SERVER_LABEL, "new-session", "-d", "-s", "lh-demo"]
+    assert parts[7] == "cd '/tmp/path with spaces' && exec claude-code --dangerously-skip-permissions"
 
 
 def test_build_tmux_has_session_command_targets_session():
-    assert build_tmux_has_session_command(session_name="lh-demo") == "tmux has-session -t lh-demo"
+    assert (
+        build_tmux_has_session_command(session_name="lh-demo")
+        == f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} has-session -t lh-demo"
+    )
 
 
 def test_build_tmux_current_command_command_targets_session():
     assert (
         build_tmux_current_command_command(session_name="lh-demo")
-        == "tmux display-message -p -t lh-demo '#{pane_current_command}'"
+        == f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} display-message -p -t lh-demo '#{{pane_current_command}}'"
     )
 
 
 def test_build_tmux_capture_command_respects_line_window():
-    assert build_tmux_capture_command(session_name="lh-demo", lines=120) == "tmux capture-pane -pt lh-demo -S -120"
+    assert (
+        build_tmux_capture_command(session_name="lh-demo", lines=120)
+        == f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} capture-pane -pt lh-demo -S -120"
+    )
 
 
 def test_build_tmux_kill_session_command_targets_session():
-    assert build_tmux_kill_session_command(session_name="lh-demo") == "tmux kill-session -t lh-demo"
+    assert (
+        build_tmux_kill_session_command(session_name="lh-demo")
+        == f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} kill-session -t lh-demo"
+    )
+
+
+def test_build_tmux_set_remain_on_exit_command_targets_session():
+    assert (
+        build_tmux_set_remain_on_exit_command(session_name="lh-demo", mode="failed")
+        == f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} set-option -t lh-demo remain-on-exit failed"
+    )
+
+
+def test_build_tmux_attach_command_targets_session():
+    assert (
+        build_tmux_attach_command(session_name="lh-demo")
+        == f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} attach -t lh-demo"
+    )
 
 
 def test_build_tmux_send_text_command_handles_multiline_reply():
     command = build_tmux_send_text_command(session_name="lh-demo", text="continue\nand run tests")
     assert command == (
-        "tmux send-keys -t lh-demo -- continue Enter"
+        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo -- continue Enter"
         " && "
-        "tmux send-keys -t lh-demo -- 'and run tests' Enter"
+        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo -- 'and run tests' Enter"
     )

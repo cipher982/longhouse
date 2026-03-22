@@ -9,6 +9,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 
 TMUX_SESSION_NAME_MAX = 64
 _TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
+MANAGED_LOCAL_TMUX_SERVER_LABEL = "longhouse-managed"
 
 
 def normalize_tmux_session_name(seed: str, *, prefix: str = "lh") -> str:
@@ -42,31 +43,35 @@ def _require_non_empty(name: str, value: str | None) -> str:
     return raw
 
 
+def _tmux_prefix() -> str:
+    return f"tmux -L {_quote(MANAGED_LOCAL_TMUX_SERVER_LABEL)}"
+
+
 def build_tmux_launch_command(*, session_name: str, cwd: str, launch_command: str) -> str:
     """Build a detached tmux launch command for a managed local session."""
     name = normalize_tmux_session_name(session_name, prefix="")
     working_dir = _require_non_empty("cwd", cwd)
     entry = _require_non_empty("launch_command", launch_command)
     inner = f"cd {_quote(working_dir)} && exec {entry}"
-    return f"tmux new-session -d -s {_quote(name)} {_quote(inner)}"
+    return f"{_tmux_prefix()} new-session -d -s {_quote(name)} {_quote(inner)}"
 
 
 def build_tmux_has_session_command(*, session_name: str) -> str:
     """Build a probe command that exits 0 when the tmux session exists."""
     name = normalize_tmux_session_name(session_name, prefix="")
-    return f"tmux has-session -t {_quote(name)}"
+    return f"{_tmux_prefix()} has-session -t {_quote(name)}"
 
 
 def build_tmux_current_command_command(*, session_name: str) -> str:
     """Build a command that prints the active pane command for a tmux session."""
     name = normalize_tmux_session_name(session_name, prefix="")
-    return f"tmux display-message -p -t {_quote(name)} '#{{pane_current_command}}'"
+    return f"{_tmux_prefix()} display-message -p -t {_quote(name)} '#{{pane_current_command}}'"
 
 
 def build_tmux_kill_session_command(*, session_name: str) -> str:
     """Build a best-effort session kill command for cleanup."""
     name = normalize_tmux_session_name(session_name, prefix="")
-    return f"tmux kill-session -t {_quote(name)}"
+    return f"{_tmux_prefix()} kill-session -t {_quote(name)}"
 
 
 def build_tmux_capture_command(*, session_name: str, lines: int = 200) -> str:
@@ -74,7 +79,20 @@ def build_tmux_capture_command(*, session_name: str, lines: int = 200) -> str:
     name = normalize_tmux_session_name(session_name, prefix="")
     if lines <= 0:
         raise ValueError("lines must be positive")
-    return f"tmux capture-pane -pt {_quote(name)} -S -{int(lines)}"
+    return f"{_tmux_prefix()} capture-pane -pt {_quote(name)} -S -{int(lines)}"
+
+
+def build_tmux_set_remain_on_exit_command(*, session_name: str, mode: str = "failed") -> str:
+    """Build a command that preserves failed panes for inspection."""
+    name = normalize_tmux_session_name(session_name, prefix="")
+    normalized_mode = _require_non_empty("mode", mode)
+    return f"{_tmux_prefix()} set-option -t {_quote(name)} remain-on-exit {_quote(normalized_mode)}"
+
+
+def build_tmux_attach_command(*, session_name: str) -> str:
+    """Build the user-facing attach command for a managed local session."""
+    name = normalize_tmux_session_name(session_name, prefix="")
+    return f"{_tmux_prefix()} attach -t {_quote(name)}"
 
 
 def build_tmux_send_text_command(*, session_name: str, text: str) -> str:
@@ -90,7 +108,7 @@ def build_tmux_send_text_command(*, session_name: str, text: str) -> str:
     commands: list[str] = []
     for line in lines:
         if line:
-            commands.append(f"tmux send-keys -t {_quote(name)} -- {_quote(line)} Enter")
+            commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} -- {_quote(line)} Enter")
         else:
-            commands.append(f"tmux send-keys -t {_quote(name)} Enter")
+            commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} Enter")
     return " && ".join(commands)
