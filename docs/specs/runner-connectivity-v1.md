@@ -186,7 +186,7 @@ Instead, the product should express intent in user language:
 - 2026-03-07: Linux `server` mode now installs a systemd system service with `EnvironmentFile=/etc/longhouse/runner.env`, while `desktop` keeps the existing `systemd --user` path.
 - 2026-03-07: Added backend tests for the served install script contract and validated the generated shell with `bash -n`.
 - 2026-03-07: Updated the current UX (`AddRunnerModal`, `RunnerSetupCard`) so users can choose **Desktop / Laptop** vs **Always-on Linux Server** without needing to know `loginctl`.
-- 2026-03-07: Removed the stale `apps/runner/scripts/install-linux.sh` helper because it was unreferenced and still encoded the old linger-dependent Linux install path.
+- 2026-03-07: Removed the stale `runner/scripts/install-linux.sh` helper because it was unreferenced and still encoded the old linger-dependent Linux install path.
 - 2026-03-07: Researched a solo-dev validation strategy and added a layered plan: Playwright browser projects, hosted CI OS matrix, self-hosted canary hardware, and tiny real-device spot checks.
 - 2026-03-07: Implemented the browser ring locally: onboarding config now covers Chromium, Firefox, WebKit, and mobile emulation, and a new runner setup smoke asserts desktop/server command generation on `/runners`.
 - 2026-03-07: Added `make test-e2e-onboarding`, a dedicated GitHub Actions workflow for hosted + self-hosted onboarding validation, and a release-candidate checklist for real-device spot checks.
@@ -201,11 +201,11 @@ Instead, the product should express intent in user language:
 
 ## Discoveries / Quirks
 
-- The live install script is served from `apps/zerg/backend/zerg/routers/templates/install.sh`, not from `apps/runner/scripts/install.sh`.
+- The live install script is served from `server/zerg/routers/templates/install.sh`, not from `runner/scripts/install.sh`.
 - The Linux installer currently uses a `systemd --user` service and explicitly warns that it only runs while the user is logged in.
 - The runner binary can read environment variables directly; `server` mode can rely on a systemd `EnvironmentFile=` instead of forcing `--envfile`.
 - The UI can synthesize a `server` install command client-side from `enroll_token` + `longhouse_url`, so we do not need an API schema change just to expose the new mode.
-- `apps/runner/scripts/install-linux.sh` was unreferenced dead weight, so removing it is safer than pretending it is a maintained install path.
+- `runner/scripts/install-linux.sh` was unreferenced dead weight, so removing it is safer than pretending it is a maintained install path.
 - The onboarding Playwright config already existed, but it only covered Chromium; expanding the ring was a config/problem-shaping task, not a greenfield test harness.
 - Cross-browser onboarding validation still depends on Playwright browser binaries being installed on the host; CI/workflows need to provision them explicitly.
 - The current GitHub API token available in this shell did not expose repo-level self-hosted runner metadata, so optional Linux x64/macOS hardware jobs are wired with explicit labels rather than auto-discovery.
@@ -213,8 +213,8 @@ Instead, the product should express intent in user language:
 - GitHub Actions evaluates `jobs.<job_id>.if` before matrix expansion, so event gating that depends on `matrix.*` has to be expressed as separate jobs instead of a single conditional matrix job.
 - Self-hosted `cube` workflows cannot assume `make` is already present; CI jobs that shell out through `make` need to install build tools explicitly.
 - README test workflows also need `uv` bootstrapped explicitly on self-hosted runners because the harness shells out through `uv venv` and `uv pip`.
-- Fresh-clone README smoke coverage also needs Node/Bun and a frontend build because the backend editable install force-includes `apps/zerg/frontend-web/dist`.
-- Runner README smoke exposed a real packaging dependency gap: `apps/runner` needs `bun-types` in `devDependencies` because its `tsconfig.json` includes that type library.
+- Fresh-clone README smoke coverage also needs Node/Bun and a frontend build because the backend editable install force-includes `web/dist`.
+- Runner README smoke exposed a real packaging dependency gap: `runner` needs `bun-types` in `devDependencies` because its `tsconfig.json` includes that type library.
 - Once the README smoke became a true fresh-clone flow, its timeout needed to account for frontend asset build time on slower self-hosted machines like `cube`.
 - The Add Runner modal is only as healthy as `POST /api/runners/enroll-token`; backend URL-resolution bugs there can masquerade as multi-browser UI failures even when selectors and rendering are fine.
 - Existing self-hosted runners may already have higher capabilities than the backend default. The installer must persist server-provided capabilities on re-enroll or it will silently downgrade a working runner during migration.

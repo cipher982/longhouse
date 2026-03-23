@@ -155,7 +155,7 @@ This remains valuable for hosted-mode work later, but is not the v1 target in th
 
 The best existing insertion point is the session chat path:
 
-- `apps/zerg/backend/zerg/routers/session_chat.py`
+- `server/zerg/routers/session_chat.py`
 
 It already provides:
 
@@ -170,9 +170,9 @@ The current bias is just wrong:
 
 The runner transport stack is already present:
 
-- `apps/zerg/backend/zerg/tools/builtin/runner_tools.py`
-- `apps/zerg/backend/zerg/services/runner_job_dispatcher.py`
-- `apps/zerg/backend/zerg/routers/runners.py`
+- `server/zerg/tools/builtin/runner_tools.py`
+- `server/zerg/services/runner_job_dispatcher.py`
+- `server/zerg/routers/runners.py`
 
 For v1, that stack is sufficient to transport `tmux` commands to the source machine.
 

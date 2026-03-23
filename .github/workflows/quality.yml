@@ -3,13 +3,13 @@ name: Web Quality
 on:
   push:
     paths:
-      - 'apps/zerg/frontend-web/**'
+      - 'web/**'
       - 'bun.lock'
       - 'package.json'
       - '.github/workflows/quality.yml'
   pull_request:
     paths:
-      - 'apps/zerg/frontend-web/**'
+      - 'web/**'
       - 'bun.lock'
       - 'package.json'
       - '.github/workflows/quality.yml'
@@ -42,14 +42,14 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build frontend
-        run: cd apps/zerg/frontend-web && bun run build
+        run: cd web && bun run build
 
       - name: Install Lighthouse CI
         run: npm install -g @lhci/cli
 
       - name: Run Lighthouse CI
         run: lhci autorun
-        working-directory: apps/zerg/frontend-web
+        working-directory: web
 
   bundle-size:
     runs-on: ubuntu-latest
@@ -72,10 +72,10 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build frontend
-        run: cd apps/zerg/frontend-web && bun run build
+        run: cd web && bun run build
 
       - name: Check bundle size
-        run: cd apps/zerg/frontend-web && bun run validate:bundle-size
+        run: cd web && bun run validate:bundle-size
 
   image-size:
     runs-on: ubuntu-latest
@@ -89,7 +89,7 @@ jobs:
           MAX_BYTES=2097152  # 2MB in bytes
           FOUND_OVERSIZED=0
 
-          echo "Checking images in apps/zerg/frontend-web/public..."
+          echo "Checking images in web/public..."
 
           while IFS= read -r -d '' file; do
             size_bytes=$(stat -c%s "$file")
@@ -100,7 +100,7 @@ jobs:
               echo "❌ $file: ${size_mb}MB (max: 2MB)"
               FOUND_OVERSIZED=1
             fi
-          done < <(find apps/zerg/frontend-web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \) -print0)
+          done < <(find web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \) -print0)
 
           if [ "$FOUND_OVERSIZED" -eq 1 ]; then
             echo ""

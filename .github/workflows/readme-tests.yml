@@ -6,7 +6,7 @@ on:
     paths:
       - "README.md"
       - "packages/*/README.md"
-      - "apps/*/README.md"
+      - "*/README.md"
       - "scripts/run-readme-tests.py"
   schedule:
     # Nightly at 6am UTC — catches silent drift even without README changes

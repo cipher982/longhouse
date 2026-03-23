@@ -7,7 +7,7 @@ This is the CORRECT approach per the investigation.
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "apps", "zerg", "backend"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
 from dotenv import load_dotenv
 load_dotenv()

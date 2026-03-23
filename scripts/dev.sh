@@ -43,9 +43,9 @@ if ! command -v bun &> /dev/null; then
 fi
 
 # Install backend deps if needed
-if [ ! -d "apps/zerg/backend/.venv" ]; then
+if [ ! -d "server/.venv" ]; then
     echo "📦 Installing backend dependencies..."
-    (cd apps/zerg/backend && uv sync)
+    (cd server && uv sync)
 fi
 
 # Install frontend deps if needed
@@ -66,7 +66,7 @@ trap cleanup SIGINT SIGTERM
 
 # Start backend
 echo "🚀 Starting backend (port 47300)..."
-(cd apps/zerg/backend && uv run uvicorn zerg.main:app --host 0.0.0.0 --port 47300 --reload) &
+(cd server && uv run uvicorn zerg.main:app --host 0.0.0.0 --port 47300 --reload) &
 BACKEND_PID=$!
 
 # Wait for backend to be ready
@@ -81,7 +81,7 @@ done
 
 # Start frontend
 echo "🚀 Starting frontend (port 47200)..."
-(cd apps/zerg/frontend-web && bun run dev --port 47200) &
+(cd web && bun run dev --port 47200) &
 FRONTEND_PID=$!
 
 echo ""

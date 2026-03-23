@@ -1,0 +1,124 @@
+[project]
+name = "longhouse"
+version = "0.1.5"
+description = "Never lose an AI coding conversation. Search and browse every AI coding session."
+authors = [
+    {name = "David Rose", email = "david.github@drose.io"}
+]
+requires-python = ">=3.12"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+
+# Core dependencies — what every Longhouse user needs
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.24.0",
+    "websockets>=12.0",
+    "openai>=2.14.0",
+    "sqlalchemy>=2.0.38",
+    "requests>=2.32.3",
+    "apscheduler>=3.11.0",
+    "python-multipart>=0.0.20",
+    "prometheus-client>=0.19.0",
+    "cryptography>=44.0.3",
+    "httpx[http2]>=0.27.0",
+    "jsonschema>=4.23.0",
+    "sse-starlette>=1.6.5",
+    "simpleeval>=1.0.3",
+    "google-auth>=2.40.3",
+    "PyJWT[crypto]>=2.8.0",
+    "alembic>=1.13.0",
+    "pathspec>=0.12.0",
+    "tavily-python>=0.7.0",
+    "trafilatura>=2.0.0",
+    "boto3>=1.35.0",
+    "numpy>=2.4.1",
+    "anthropic>=0.40.0",
+    "edge-tts>=7.0.0",
+    "python-telegram-bot>=21.0",
+    "typer>=0.9.0",
+    "watchdog>=6.0.0",
+    "tiktoken>=0.7.0",
+    "mcp>=1.0",
+    "pyyaml>=6.0",
+    "zstandard>=0.23.0",
+    "pywebpush>=2.3.0",
+]
+
+[project.optional-dependencies]
+# Dev/test tools — not shipped in production images
+dev = [
+    "black",
+    "ruff",
+    "pytest",
+    "pytest-xdist>=3.6.1",
+    "pytest-timeout>=2.3.1",
+    "pytest-asyncio>=0.25.3",
+    "pexpect>=4.9",
+    "vulture>=2.11",
+    "langchain-openai>=1.1.6",
+    "langchain-core>=1.2.5",
+]
+
+[project.scripts]
+longhouse = "zerg.cli.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build]
+packages = ["zerg"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# Bundle the frontend dist into the package for pip install deployment
+# This allows `longhouse serve` to serve the UI without needing the repo
+"../web/dist" = "zerg/_frontend_dist"
+# Bundle shared auth redirect helpers used by hosted runtime and control plane.
+"../control-plane/longhouse_shared" = "longhouse_shared"
+# Bundle the shared model routing config so source/wheel installs can start
+# without requiring a sibling monorepo checkout.
+"../config/models.json" = "zerg/_config/models.json"
+# Bundle the tiktoken cache so fresh installs do not need first-use network fetches.
+"zerg/_tiktoken_cache" = "zerg/_tiktoken_cache"
+
+[tool.hatch.build.targets.sdist.force-include]
+# Also include frontend in sdist so building from source works
+"../web/dist" = "zerg/_frontend_dist"
+"../control-plane/longhouse_shared" = "longhouse_shared"
+"../config/models.json" = "zerg/_config/models.json"
+"zerg/_tiktoken_cache" = "zerg/_tiktoken_cache"
+
+[tool.uv]
+# Keep cache inside repo for hermetic test runs
+cache-dir = "./.uv_cache"
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+select = ["I", "E", "F", "Q000"]
+ignore = ["E501"]  # Line length - not a safety issue, and prompt templates are intentionally long
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.flake8-quotes]
+docstring-quotes = "double"
+inline-quotes = "double"
+multiline-quotes = "double"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[dependency-groups]
+dev = []

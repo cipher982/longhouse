@@ -60,7 +60,7 @@ Data survives reprovision — SQLite at `/var/app-data/longhouse/<subdomain>/lon
 gh run watch $(gh run list --workflow runtime-image.yml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status
 ```
 
-Path filters: build only triggers if `apps/zerg/backend/`, `apps/zerg/frontend-web/`, or `docker/` changed. Docs-only pushes skip it.
+Path filters: build only triggers if `server/`, `web/`, or `docker/` changed. Docs-only pushes skip it.
 
 ## Logs When Things Break
 

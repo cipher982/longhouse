@@ -30,11 +30,11 @@ Timeline owns desktop runtime observability. It does not define continuation tra
 These pieces already exist in code and are not future work:
 
 - Materialized runtime state and runtime event storage back Timeline runtime truth.
-- The backend reducer in `apps/zerg/backend/zerg/services/session_runtime.py` builds the runtime view used by Timeline rows.
+- The backend reducer in `server/zerg/services/session_runtime.py` builds the runtime view used by Timeline rows.
 - Session ordering uses `timeline_anchor_at` instead of raw `started_at`.
 - Main Timeline cards render runtime state directly on the existing list.
-- Timeline has a row-level SSE stream in `apps/zerg/backend/zerg/routers/timeline.py` using `session_upsert` and `session_remove`.
-- The browser uses that stream with a slow reconciliation poll in `apps/zerg/frontend-web/src/pages/SessionsPage.tsx`.
+- Timeline has a row-level SSE stream in `server/zerg/routers/timeline.py` using `session_upsert` and `session_remove`.
+- The browser uses that stream with a slow reconciliation poll in `web/src/pages/SessionsPage.tsx`.
 - Background tabs now pause the Timeline SSE stream, and non-SSE clients stay on polling instead of silently going stale.
 
 ## Core Model
@@ -158,7 +158,7 @@ Do not expand scope into these yet:
 ## Clean Target From Here
 
 - one authoritative row shape from `GET /api/timeline/sessions`
-- one reducer in `apps/zerg/backend/zerg/services/session_runtime.py`
+- one reducer in `server/zerg/services/session_runtime.py`
 - one materialized runtime state source for Timeline reads
 - one SSE stream publishing row-level upserts/removes for the same filtered window
 - one browser store keyed by `session_id`

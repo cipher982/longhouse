@@ -15,10 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 # Set work directory for dependency caching
-WORKDIR /repo/apps/zerg/backend
+WORKDIR /repo/server
 
 # Cache dependencies separately from app code for better cache hits
-COPY apps/zerg/backend/uv.lock apps/zerg/backend/pyproject.toml ./
+COPY server/uv.lock server/pyproject.toml ./
 RUN uv sync --frozen --no-install-project --no-dev
 
 # Builder stage - application with dependencies
@@ -33,21 +33,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 # Mirror repo structure for relative path deps
-WORKDIR /repo/apps/zerg/backend
+WORKDIR /repo/server
 
 # Copy virtual environment from dependencies stage
-COPY --from=dependencies /repo/apps/zerg/backend/.venv ./.venv
+COPY --from=dependencies /repo/server/.venv ./.venv
 
 # Copy application source (from repo root context)
-COPY apps/zerg/backend/ ./
+COPY server/ ./
 
 # Copy shared config (models.json) - required for model configuration
 COPY config/models.json /config/models.json
 
 # Create placeholder for frontend dist (pyproject.toml force-include expects it)
 # In Docker, frontend is served separately, but hatch build still needs the path
-RUN mkdir -p /repo/apps/zerg/frontend-web/dist && \
-    echo '<!DOCTYPE html><html><body>Frontend served separately</body></html>' > /repo/apps/zerg/frontend-web/dist/index.html
+RUN mkdir -p /repo/web/dist && \
+    echo '<!DOCTYPE html><html><body>Frontend served separately</body></html>' > /repo/web/dist/index.html
 
 # Install the project itself using cached dependencies
 RUN uv sync --frozen --no-dev
@@ -78,7 +78,7 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 zerg
 WORKDIR /app
 
 # Copy application and virtual environment from builder
-COPY --from=builder --chown=zerg:zerg /repo/apps/zerg/backend /app
+COPY --from=builder --chown=zerg:zerg /repo/server /app
 
 # Copy config from builder stage
 COPY --from=builder --chown=zerg:zerg /config /config
@@ -129,8 +129,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment to /opt/venv to avoid volume mount conflicts
-RUN cp -r /repo/apps/zerg/backend/.venv /opt/venv && \
-    find /opt/venv/bin -type f -exec sed -i 's|#!/repo/apps/zerg/backend/.venv/bin/python|#!/opt/venv/bin/python|g' {} \;
+RUN cp -r /repo/server/.venv /opt/venv && \
+    find /opt/venv/bin -type f -exec sed -i 's|#!/repo/server/.venv/bin/python|#!/opt/venv/bin/python|g' {} \;
 
 # Install dev dependencies using uv (available in builder stage)
 RUN uv sync --frozen
@@ -139,19 +139,19 @@ RUN uv sync --frozen
 RUN useradd --create-home --shell /bin/bash --uid 1000 zerg || true
 
 # Set up /app symlink for compatibility
-RUN ln -s /repo/apps/zerg/backend /app
+RUN ln -s /repo/server /app
 
 # Create required directories with proper permissions
-RUN mkdir -p /repo/apps/zerg/backend/static/avatars \
-    && chown zerg:zerg /repo/apps/zerg/backend/static \
-    && chown zerg:zerg /repo/apps/zerg/backend/static/avatars
+RUN mkdir -p /repo/server/static/avatars \
+    && chown zerg:zerg /repo/server/static \
+    && chown zerg:zerg /repo/server/static/avatars
 
 # Switch back to non-root user
 USER zerg
 
 # Add virtual environment to PATH for development (using /opt/venv)
 ENV PATH="/opt/venv/bin:$PATH" \
-    PYTHONPATH="/repo/apps/zerg/backend" \
+    PYTHONPATH="/repo/server" \
     PYTHONUNBUFFERED=1
 
 # Development command - run migrations then uvicorn with hot reload

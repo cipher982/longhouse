@@ -157,16 +157,16 @@ At minimum, save:
 ## Notes
 
 - Existing repo surfaces to reuse:
-  - backend eval harness under `apps/zerg/backend/evals/`
-  - targeted backend tests under `apps/zerg/backend/tests_lite/`
-  - local/browser E2E and smoke flows under `apps/zerg/e2e/`
+  - backend eval harness under `server/evals/`
+  - targeted backend tests under `server/tests_lite/`
+  - local/browser E2E and smoke flows under `e2e/`
   - hosted smoke via `scripts/qa-live.sh`
 - Keep the harness independent enough that it can start before the full proactive runtime exists.
 - The first slice is about learning whether Oikos makes sensible decisions, not shipping a full autonomy control plane.
 - 2026-03-10: Foundation slice landed as a deterministic shadow harness:
-  - `apps/zerg/backend/zerg/services/oikos_autonomy_journeys.py`
-  - `apps/zerg/backend/tests_lite/fixtures/oikos_autonomy_journeys.yml`
-  - `apps/zerg/backend/tests_lite/test_oikos_autonomy_journeys.py`
+  - `server/zerg/services/oikos_autonomy_journeys.py`
+  - `server/tests_lite/fixtures/oikos_autonomy_journeys.yml`
+  - `server/tests_lite/test_oikos_autonomy_journeys.py`
   - `make test-autonomy-journeys`
 - 2026-03-10: Journey fixtures now cover the first live operator-mode trigger observations too:
   - `needs_user` low-priority pauses stay parked

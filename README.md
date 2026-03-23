@@ -80,10 +80,10 @@ cd longhouse && make dev
   },
   "steps": [
     "bun install --frozen-lockfile --silent",
-    "(cd apps/zerg/frontend-web && bun run build)",
+    "(cd web && bun run build)",
     "uv venv .tmp-readme-serve-venv --python 3.12 -q",
     ". .tmp-readme-serve-venv/bin/activate",
-    "uv pip install -e apps/zerg/backend -q",
+    "uv pip install -e server -q",
     "DATABASE_URL=sqlite:///$(mktemp -d)/test.db longhouse serve --port 47398 &",
     "SERVER_PID=$!",
     "for _ in $(seq 1 20); do curl -sf http://127.0.0.1:47398/api/health && break; sleep 1; done",
@@ -271,15 +271,15 @@ Onboarding contract (CI). Do not edit unless the README steps change.
 {
   "workdir": "/tmp/longhouse-onboarding",
   "steps": [
-    "cd {{WORKDIR}}/apps/zerg/frontend-web && bun install --silent && bun run build",
-    "cd {{WORKDIR}}/apps/zerg/backend && uv sync",
-    "cd {{WORKDIR}}/apps/zerg/backend && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --demo-fresh --host 127.0.0.1 --port 8080 --daemon",
+    "cd {{WORKDIR}}/web && bun install --silent && bun run build",
+    "cd {{WORKDIR}}/server && uv sync",
+    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --demo-fresh --host 127.0.0.1 --port 8080 --daemon",
     "sleep 5",
     "curl -fsS http://127.0.0.1:8080/api/health",
-    "cd {{WORKDIR}}/apps/zerg/e2e && bun install --silent && PLAYWRIGHT_BASE_URL=http://127.0.0.1:8080 bunx playwright test --config playwright.onboarding.config.js --project onboarding-chromium"
+    "cd {{WORKDIR}}/e2e && bun install --silent && PLAYWRIGHT_BASE_URL=http://127.0.0.1:8080 bunx playwright test --config playwright.onboarding.config.js --project onboarding-chromium"
   ],
   "cleanup": [
-    "cd {{WORKDIR}}/apps/zerg/backend && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --stop || true",
+    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --stop || true",
     "rm -rf {{WORKDIR}}/.qa-home"
   ],
   "primary_route": "/timeline",

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BACKEND_URL="${SHIPPER_E2E_URL:-http://localhost:47300}"
-BACKEND_DIR="$(cd "$(dirname "$0")/../apps/zerg/backend" && pwd)"
+BACKEND_DIR="$(cd "$(dirname "$0")/../server" && pwd)"
 TEMP_CLAUDE_DIR=$(mktemp -d)
 SHIPPER_TOKEN="${SHIPPER_E2E_TOKEN:-}"
 

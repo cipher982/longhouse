@@ -104,7 +104,7 @@ jobs:
 
     - name: Run Frontend Tests
       run: |
-        cd apps/zerg/frontend-web
+        cd web
         bun run validate:types
         bun run test -- --run
 
@@ -152,13 +152,13 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y make
 
     - name: Install Playwright browsers + deps
-      run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
+      run: cd e2e && bunx playwright install --with-deps chromium
 
     - name: Build frontend (required by hatch)
-      run: cd apps/zerg/frontend-web && bun install && bun run build
+      run: cd web && bun install && bun run build
 
     - name: Pre-install backend deps
-      run: cd apps/zerg/backend && uv sync
+      run: cd server && uv sync
 
     - name: Run E2E Tests (core + a11y)
       run: make test-e2e
@@ -169,8 +169,8 @@ jobs:
       with:
         name: e2e-artifacts
         path: |
-          apps/zerg/e2e/test-results
-          apps/zerg/e2e/playwright-report
+          e2e/test-results
+          e2e/playwright-report
 
   control-plane-e2e:
     runs-on: ubuntu-latest
@@ -192,10 +192,10 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y make
 
     - name: Install control plane deps
-      run: cd apps/control-plane && uv sync --extra dev --frozen
+      run: cd control-plane && uv sync --extra dev --frozen
 
     - name: Install Playwright browsers
-      run: cd apps/control-plane && uv run --extra dev playwright install chromium --with-deps
+      run: cd control-plane && uv run --extra dev playwright install chromium --with-deps
 
     - name: Run control plane E2E tests
       run: make test-e2e-cp
@@ -247,7 +247,7 @@ jobs:
         bun-version: '1.2.20'
 
     - name: Install Playwright
-      run: cd apps/zerg/e2e && bun install && bunx playwright install chromium
+      run: cd e2e && bun install && bunx playwright install chromium
 
     - name: Run OSS QA (no unit/e2e, UI check only)
       env:

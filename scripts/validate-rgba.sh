@@ -4,7 +4,7 @@
 # fully opaque. This hook prevents that class of bug.
 set -euo pipefail
 
-BAD=$(grep -rn 'rgba([^)]*,\s*[2-9][0-9]*)' --include='*.css' apps/zerg/frontend-web/src/ 2>/dev/null || true)
+BAD=$(grep -rn 'rgba([^)]*,\s*[2-9][0-9]*)' --include='*.css' web/src/ 2>/dev/null || true)
 
 if [ -n "$BAD" ]; then
   echo "ERROR: Found rgba() with alpha > 1 (should be 0.0-1.0):"

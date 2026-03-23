@@ -112,7 +112,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "🏗️  Building frontend dist..."
-(cd "$WORKDIR/apps/zerg/frontend-web" && bun install --silent && bun run build)
+(cd "$WORKDIR/web" && bun install --silent && bun run build)
 
 if [[ "$RUN_UNIT" -eq 1 ]]; then
   echo "🧪 Running unit + onboarding-sqlite tests..."
@@ -138,7 +138,7 @@ mkdir -p "$(dirname "$DEMO_DB_PATH")"
 
 echo "🚀 Starting Longhouse (demo) at ${BASE_URL}"
 (
-  cd "$WORKDIR/apps/zerg/backend"
+  cd "$WORKDIR/server"
   HOME="$QA_HOME" AUTH_DISABLED=1 ENVIRONMENT="test:e2e" DATABASE_URL="sqlite:///${DEMO_DB_PATH}" \
     uv run longhouse serve --demo-fresh --host 127.0.0.1 --port "$PORT"
 ) >"$SERVER_LOG" 2>&1 &
@@ -163,7 +163,7 @@ fi
 if [[ "$RUN_UI" -eq 1 ]]; then
   echo "🎭 Running onboarding UI check..."
   (
-    cd "$WORKDIR/apps/zerg/e2e"
+    cd "$WORKDIR/e2e"
     bun install --silent
     if [[ -n "$ONBOARDING_PLAYWRIGHT_PROJECT" ]]; then
       PLAYWRIGHT_BASE_URL="$BASE_URL" bunx playwright test --config playwright.onboarding.config.js --project "$ONBOARDING_PLAYWRIGHT_PROJECT"

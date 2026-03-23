@@ -3,8 +3,8 @@ name: Installer Validation Ring
 on:
   push:
     paths:
-      - 'apps/zerg/backend/**'
-      - 'apps/zerg/frontend-web/**'
+      - 'server/**'
+      - 'web/**'
       - 'config/**'
       - 'bun.lock'
       - 'scripts/install.sh'
@@ -12,8 +12,8 @@ on:
       - '.github/workflows/test-install.yml'
   pull_request:
     paths:
-      - 'apps/zerg/backend/**'
-      - 'apps/zerg/frontend-web/**'
+      - 'server/**'
+      - 'web/**'
       - 'config/**'
       - 'bun.lock'
       - 'scripts/install.sh'
