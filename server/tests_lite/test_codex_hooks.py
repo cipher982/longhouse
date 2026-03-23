@@ -24,6 +24,7 @@ def test_codex_hook_script_template_has_required_markers():
     # "longhouse-engine" appears in comments but the actual command line must
     # use the placeholder so install_codex_hooks can bake in the real path.
     assert 'ENGINE="__ENGINE_PATH__"' in CODEX_HOOK_SCRIPT, "must use placeholder in the command variable"
+    assert 'provider: $provider' in CODEX_HOOK_SCRIPT, "must include provider in presence payload"
 
 
 def test_codex_hook_script_has_managed_session_id_support():
@@ -34,6 +35,7 @@ def test_codex_hook_script_has_managed_session_id_support():
     assert "--session-id" in CODEX_HOOK_SCRIPT, "must pass --session-id override to engine for managed sessions"
     # No fallback pattern — two explicit paths
     assert "SID=" in CODEX_HOOK_SCRIPT, "must assign SID explicitly in each path"
+    assert '--arg provider "codex"' in CODEX_HOOK_SCRIPT, "must stamp Codex presence events with provider=codex"
 
 
 def test_codex_hook_script_maps_all_events():

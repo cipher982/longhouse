@@ -210,8 +210,8 @@ OUTBOX="$HOME/.claude/outbox"
 [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
 TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
 jq -n --arg sid "$SID" --arg st "$STATE" \\
-      --arg tool "" --arg cwd "$CWD" \\
-  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}' > "$TMPFILE"
+      --arg tool "" --arg cwd "$CWD" --arg provider "codex" \\
+  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider}' > "$TMPFILE"
 mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 
 # Stop: ship the session transcript via engine binary.
