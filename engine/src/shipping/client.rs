@@ -28,6 +28,7 @@ pub enum ShipResult {
 }
 
 /// HTTP client with connection pooling and retry logic.
+#[derive(Clone)]
 pub struct ShipperClient {
     client: reqwest::Client,
     ingest_url: String,

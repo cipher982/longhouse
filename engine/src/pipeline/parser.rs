@@ -205,7 +205,7 @@ struct GeminiSession {
 struct GeminiMessage {
     id: Option<String>,
     timestamp: Option<String>,
-    /// "user" or "gemini"
+    /// Common observed values: "user", "gemini", "info", "error"
     r#type: Option<String>,
     /// Content is normally a string but may be an object/array in newer Gemini
     /// CLI versions. Accept any JSON value and extract text defensively.

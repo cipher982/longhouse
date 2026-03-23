@@ -30,6 +30,25 @@ pub struct SpoolEntry {
     pub end_offset: u64,
 }
 
+/// A file path with pending retry work, ordered by oldest pending entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPath {
+    pub provider: String,
+    pub file_path: String,
+}
+
+/// A retained dead-lettered range for local inspection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadLetterEntry {
+    pub provider: String,
+    pub file_path: String,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub session_id: Option<String>,
+    pub last_error: Option<String>,
+    pub created_at: String,
+}
+
 /// Spool operations on a shared SQLite connection.
 pub struct Spool<'a> {
     conn: &'a Connection,
@@ -153,6 +172,60 @@ impl<'a> Spool<'a> {
         Ok(result)
     }
 
+    /// Get unique file paths with pending retry work, oldest-first.
+    pub fn pending_paths(&self, limit: usize) -> Result<Vec<PendingPath>> {
+        let now = Utc::now().to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT provider, file_path
+             FROM spool_queue
+             WHERE status = 'pending' AND next_retry_at <= ?1
+             GROUP BY provider, file_path
+             ORDER BY MIN(created_at) ASC, MIN(id) ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![now, limit as i64], |row| {
+            Ok(PendingPath {
+                provider: row.get(0)?,
+                file_path: row.get(1)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Get pending retry entries for a single file path, oldest-first.
+    pub fn pending_entries_for_path(
+        &self,
+        file_path: &str,
+        limit: usize,
+    ) -> Result<Vec<SpoolEntry>> {
+        let now = Utc::now().to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, file_path, start_offset, end_offset
+             FROM spool_queue
+             WHERE status = 'pending' AND next_retry_at <= ?1 AND file_path = ?2
+             ORDER BY created_at ASC, id ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![now, file_path, limit as i64], |row| {
+            Ok(SpoolEntry {
+                id: row.get(0)?,
+                provider: row.get(1)?,
+                file_path: row.get(2)?,
+                start_offset: row.get::<_, i64>(3)? as u64,
+                end_offset: row.get::<_, i64>(4)? as u64,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
     /// Remove a successfully shipped entry.
     pub fn mark_shipped(&self, entry_id: i64) -> Result<()> {
         self.conn
@@ -231,6 +304,33 @@ impl<'a> Spool<'a> {
         Ok(count as usize)
     }
 
+    /// Return recent dead-lettered ranges, newest first.
+    pub fn recent_dead(&self, limit: usize) -> Result<Vec<DeadLetterEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT provider, file_path, start_offset, end_offset, session_id, last_error, created_at
+             FROM spool_queue
+             WHERE status = 'dead'
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
+            Ok(DeadLetterEntry {
+                provider: row.get(0)?,
+                file_path: row.get(1)?,
+                start_offset: row.get::<_, i64>(2)? as u64,
+                end_offset: row.get::<_, i64>(3)? as u64,
+                session_id: row.get(4)?,
+                last_error: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
     /// Total entries (for backpressure check).
     pub fn total_size(&self) -> Result<usize> {
         let count: i64 = self
@@ -266,8 +366,8 @@ impl<'a> Spool<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::DateTime;
     use crate::state::db::open_db;
+    use chrono::DateTime;
 
     fn setup() -> (tempfile::NamedTempFile, Connection) {
         let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -303,6 +403,80 @@ mod tests {
         spool.mark_shipped(batch[0].id).unwrap();
         assert_eq!(spool.pending_count().unwrap(), 0);
         assert_eq!(spool.total_size().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_pending_paths_returns_unique_oldest_first() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/b.jsonl', 0, 10, '2026-03-10T00:00:00+00:00', '2026-03-10T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/a.jsonl', 0, 10, '2026-03-11T00:00:00+00:00', '2026-03-11T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/a.jsonl', 10, 20, '2026-03-12T00:00:00+00:00', '2026-03-12T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('claude', '/dead.jsonl', 0, 10, '2026-03-09T00:00:00+00:00', '2026-03-09T00:00:00+00:00', 'dead')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let pending = spool.pending_paths(10).unwrap();
+        assert_eq!(
+            pending,
+            vec![
+                PendingPath {
+                    provider: "claude".to_string(),
+                    file_path: "/b.jsonl".to_string(),
+                },
+                PendingPath {
+                    provider: "claude".to_string(),
+                    file_path: "/a.jsonl".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pending_entries_for_path_filters_and_orders() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/target.jsonl', 10, 20, '2026-03-11T00:00:00+00:00', '2026-03-11T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/other.jsonl', 0, 10, '2026-03-10T00:00:00+00:00', '2026-03-10T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/target.jsonl', 0, 10, '2026-03-09T00:00:00+00:00', '2026-03-09T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let pending = spool.pending_entries_for_path("/target.jsonl", 10).unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].start_offset, 0);
+        assert_eq!(pending[1].start_offset, 10);
     }
 
     #[test]
@@ -385,6 +559,42 @@ mod tests {
         assert_eq!(row.4, "dead");
         assert!(row.5.contains("oversize"));
         assert_eq!(spool.dead_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_recent_dead_returns_newest_first() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        spool
+            .record_dead(
+                "claude",
+                "/older.jsonl",
+                0,
+                10,
+                Some("older"),
+                "older error",
+            )
+            .unwrap();
+        spool
+            .record_dead(
+                "codex",
+                "/newer.jsonl",
+                10,
+                30,
+                Some("newer"),
+                "newer error",
+            )
+            .unwrap();
+
+        let entries = spool.recent_dead(10).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].file_path, "/newer.jsonl");
+        assert_eq!(entries[0].provider, "codex");
+        assert_eq!(entries[0].start_offset, 10);
+        assert_eq!(entries[0].end_offset, 30);
+        assert_eq!(entries[0].last_error.as_deref(), Some("newer error"));
+        assert_eq!(entries[1].file_path, "/older.jsonl");
     }
 
     #[test]

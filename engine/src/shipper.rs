@@ -5,12 +5,13 @@
 //! startup recovery, spool replay.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 use rusqlite::Connection;
 
 use crate::discovery::{self, ProviderConfig};
-use crate::error_tracker::ConsecutiveErrorTracker;
+use crate::error_tracker::{ConsecutiveErrorTracker, RecentIssueTracker};
 use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser::{self, ParseResult};
@@ -60,6 +61,8 @@ pub struct PreparedFile {
     pub actions: Vec<PreparedAction>,
 }
 
+pub const SLOW_FILE_PROCESSING_MS: u128 = 5_000;
+
 impl PreparedAction {
     fn event_count(&self) -> usize {
         match self {
@@ -94,6 +97,31 @@ impl PreparedFile {
     }
 }
 
+pub fn log_slow_file_processing(
+    context: &str,
+    path: &Path,
+    provider: &str,
+    event_count: usize,
+    byte_count: u64,
+    dead_lettered: usize,
+    elapsed: Duration,
+) {
+    if elapsed.as_millis() < SLOW_FILE_PROCESSING_MS {
+        return;
+    }
+
+    tracing::warn!(
+        context,
+        path = %path.display(),
+        provider,
+        event_count,
+        byte_count,
+        dead_lettered,
+        elapsed_ms = elapsed.as_millis() as u64,
+        "Slow file processing"
+    );
+}
+
 pub struct ShipPreparedOutcome {
     pub events_shipped: usize,
     pub bytes_shipped: u64,
@@ -109,6 +137,22 @@ impl Default for ShipPreparedOutcome {
             bytes_shipped: 0,
             dead_lettered: 0,
             fully_processed: true,
+            had_connect_error: false,
+        }
+    }
+}
+
+pub(crate) struct ReplaySpoolOutcome {
+    pub resolved: usize,
+    pub failed: usize,
+    pub had_connect_error: bool,
+}
+
+impl Default for ReplaySpoolOutcome {
+    fn default() -> Self {
+        Self {
+            resolved: 0,
+            failed: 0,
             had_connect_error: false,
         }
     }
@@ -385,6 +429,24 @@ fn log_suspicious_empty_parse(path_str: &str, file_size: u64, candidate_records:
     }
 }
 
+fn record_parse_issue(parse_tracker: Option<&RecentIssueTracker>) {
+    if let Some(tracker) = parse_tracker {
+        tracker.record();
+    }
+}
+
+fn log_suspicious_empty_parse_with_tracker(
+    path_str: &str,
+    file_size: u64,
+    candidate_records: usize,
+    parse_tracker: Option<&RecentIssueTracker>,
+) {
+    if candidate_records > 0 && file_size >= 128 {
+        record_parse_issue(parse_tracker);
+        log_suspicious_empty_parse(path_str, file_size, candidate_records);
+    }
+}
+
 fn should_ack_empty_gemini_document(
     provider: &str,
     parse_result: &ParseResult,
@@ -429,6 +491,22 @@ fn dead_letter_from_raw_range(
             "source range {}..{} is {} bytes which exceeds max_batch_bytes {}",
             range.start_offset, range.end_offset, range.byte_len, max_batch_bytes
         ),
+    }
+}
+
+fn ack_only_from_raw_range(
+    path_str: &str,
+    provider: &str,
+    session_id: &str,
+    start_offset: u64,
+    end_offset: u64,
+) -> AckOnlyItem {
+    AckOnlyItem {
+        path_str: path_str.to_string(),
+        provider: provider.to_string(),
+        offset: start_offset,
+        new_offset: end_offset,
+        session_id: session_id.to_string(),
     }
 }
 
@@ -635,13 +713,23 @@ fn build_prepared_actions(
                 session_id_override,
             )?),
             PlannedRangeAction::DeadLetter(range) => {
-                actions.push(PreparedAction::DeadLetter(dead_letter_from_raw_range(
-                    path_str,
-                    provider,
-                    &parse_result.metadata.session_id,
-                    range,
-                    max_batch_bytes,
-                )))
+                if range.event_range.is_empty() {
+                    actions.push(PreparedAction::AckOnly(ack_only_from_raw_range(
+                        path_str,
+                        provider,
+                        &parse_result.metadata.session_id,
+                        range.start_offset,
+                        range.end_offset,
+                    )));
+                } else {
+                    actions.push(PreparedAction::DeadLetter(dead_letter_from_raw_range(
+                        path_str,
+                        provider,
+                        &parse_result.metadata.session_id,
+                        range,
+                        max_batch_bytes,
+                    )))
+                }
             }
         }
     }
@@ -657,6 +745,28 @@ pub fn prepare_path_range(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
 ) -> Result<Option<PreparedFile>> {
+    prepare_path_range_with_parse_tracker(
+        path,
+        provider,
+        offset,
+        end_offset_cap,
+        algo,
+        max_batch_bytes,
+        session_id_override,
+        None,
+    )
+}
+
+pub(crate) fn prepare_path_range_with_parse_tracker(
+    path: &Path,
+    provider: &str,
+    offset: u64,
+    end_offset_cap: Option<u64>,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    session_id_override: Option<&str>,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_size = match std::fs::metadata(path) {
         Ok(m) => m.len(),
@@ -669,6 +779,7 @@ pub fn prepare_path_range(
     let parse_result = match parser::parse_session_file(path, offset) {
         Ok(result) => result,
         Err(e) => {
+            record_parse_issue(parse_tracker);
             tracing::warn!("Skip {}: {}", path_str, e);
             return Ok(None);
         }
@@ -694,7 +805,12 @@ pub fn prepare_path_range(
     }
 
     if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
-        log_suspicious_empty_parse(&path_str, file_size, parse_result.candidate_records);
+        log_suspicious_empty_parse_with_tracker(
+            &path_str,
+            file_size,
+            parse_result.candidate_records,
+            parse_tracker,
+        );
         return Ok(None);
     }
 
@@ -743,6 +859,26 @@ pub fn prepare_file_batches(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
 ) -> Result<Option<PreparedFile>> {
+    prepare_file_batches_with_parse_tracker(
+        path,
+        provider,
+        algo,
+        conn,
+        max_batch_bytes,
+        session_id_override,
+        None,
+    )
+}
+
+pub(crate) fn prepare_file_batches_with_parse_tracker(
+    path: &Path,
+    provider: &str,
+    algo: CompressionAlgo,
+    conn: &Connection,
+    max_batch_bytes: u64,
+    session_id_override: Option<&str>,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_state = FileState::new(conn);
 
@@ -779,7 +915,7 @@ pub fn prepare_file_batches(
         current_offset
     };
 
-    prepare_path_range(
+    prepare_path_range_with_parse_tracker(
         path,
         provider,
         offset,
@@ -787,6 +923,7 @@ pub fn prepare_file_batches(
         algo,
         max_batch_bytes,
         session_id_override,
+        parse_tracker,
     )
 }
 
@@ -1048,23 +1185,75 @@ pub async fn replay_spool_batch_with_batch_bytes(
     limit: usize,
     max_batch_bytes: u64,
 ) -> Result<(usize, usize)> {
+    replay_spool_batch_with_batch_bytes_and_parse_tracker(
+        conn,
+        client,
+        algo,
+        limit,
+        max_batch_bytes,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    limit: usize,
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<(usize, usize)> {
+    let spool = Spool::new(conn);
+    let pending = spool.dequeue_batch(limit)?;
+    let outcome =
+        replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await?;
+
+    // Cleanup old dead entries
+    let cleaned = spool.cleanup()?;
+    if cleaned > 0 {
+        tracing::info!("Cleaned {} old spool entries", cleaned);
+    }
+
+    Ok((outcome.resolved, outcome.failed))
+}
+
+pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    file_path: &Path,
+    limit: usize,
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<ReplaySpoolOutcome> {
+    let spool = Spool::new(conn);
+    let pending = spool.pending_entries_for_path(&file_path.to_string_lossy(), limit)?;
+    replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await
+}
+
+async fn replay_spool_entries(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    pending: &[crate::state::spool::SpoolEntry],
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let file_state = FileState::new(conn);
-    let pending = spool.dequeue_batch(limit)?;
+    let mut outcome = ReplaySpoolOutcome::default();
 
-    let mut shipped = 0usize;
-    let mut failed = 0usize;
-
-    'entry_loop: for entry in &pending {
+    'entry_loop: for entry in pending {
         let path = PathBuf::from(&entry.file_path);
         if !path.exists() {
             tracing::warn!("Spool file missing: {}", entry.file_path);
             spool.mark_failed_with_max(entry.id, "file missing", 0)?;
-            failed += 1;
+            outcome.failed += 1;
             continue;
         }
 
-        let prepared = match prepare_path_range(
+        let prepared = match prepare_path_range_with_parse_tracker(
             &path,
             &entry.provider,
             entry.start_offset,
@@ -1072,21 +1261,22 @@ pub async fn replay_spool_batch_with_batch_bytes(
             algo,
             max_batch_bytes,
             None,
+            parse_tracker,
         ) {
             Ok(Some(prepared)) => prepared,
             Ok(None) => {
                 if entry.start_offset >= entry.end_offset {
                     spool.mark_shipped(entry.id)?;
-                    shipped += 1;
+                    outcome.resolved += 1;
                 } else {
                     spool.mark_failed(entry.id, "no complete lines ready for replay")?;
-                    failed += 1;
+                    outcome.failed += 1;
                 }
                 continue;
             }
             Err(e) => {
                 spool.mark_failed(entry.id, &e.to_string())?;
-                failed += 1;
+                outcome.failed += 1;
                 continue;
             }
         };
@@ -1143,10 +1333,11 @@ pub async fn replay_spool_batch_with_batch_bytes(
                         is_connect_error,
                     } => {
                         if is_connect_error {
+                            outcome.had_connect_error = true;
                             break 'entry_loop;
                         }
                         spool.mark_failed(entry.id, &error)?;
-                        failed += 1;
+                        outcome.failed += 1;
                         continue 'entry_loop;
                     }
                     AttemptedShip::ClientError {
@@ -1160,7 +1351,7 @@ pub async fn replay_spool_batch_with_batch_bytes(
                                 "413 payload too large during replay",
                                 u32::MAX,
                             )?;
-                            failed += 1;
+                            outcome.failed += 1;
                             continue 'entry_loop;
                         }
 
@@ -1194,17 +1385,11 @@ pub async fn replay_spool_batch_with_batch_bytes(
         }
 
         if entry_done {
-            shipped += 1;
+            outcome.resolved += 1;
         }
     }
 
-    // Cleanup old dead entries
-    let cleaned = spool.cleanup()?;
-    if cleaned > 0 {
-        tracing::info!("Cleaned {} old spool entries", cleaned);
-    }
-
-    Ok((shipped, failed))
+    Ok(outcome)
 }
 
 /// Run a full scan: discover all provider files, prepare and ship any with new content.
@@ -1221,6 +1406,7 @@ pub async fn full_scan(
     full_scan_with_batch_bytes(providers, conn, client, algo, u64::MAX, tracker).await
 }
 
+#[allow(dead_code)]
 pub async fn full_scan_with_batch_bytes(
     providers: &[ProviderConfig],
     conn: &Connection,
@@ -1229,14 +1415,55 @@ pub async fn full_scan_with_batch_bytes(
     max_batch_bytes: u64,
     tracker: Option<&ConsecutiveErrorTracker>,
 ) -> Result<(usize, usize)> {
+    full_scan_with_batch_bytes_and_parse_tracker(
+        providers,
+        conn,
+        client,
+        algo,
+        max_batch_bytes,
+        tracker,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
+    providers: &[ProviderConfig],
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    tracker: Option<&ConsecutiveErrorTracker>,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<(usize, usize)> {
     let all_files = discovery::discover_all_files(providers);
     let mut files_shipped = 0usize;
     let mut events_shipped = 0usize;
 
     for (path, provider_name) in &all_files {
-        match prepare_file_batches(path, provider_name, algo, conn, max_batch_bytes, None) {
+        let file_start = std::time::Instant::now();
+        match prepare_file_batches_with_parse_tracker(
+            path,
+            provider_name,
+            algo,
+            conn,
+            max_batch_bytes,
+            None,
+            parse_tracker,
+        ) {
             Ok(Some(prepared)) => {
+                let event_count = prepared.total_event_count();
+                let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
                 let outcome = ship_prepared_file(prepared, client, conn, tracker).await?;
+                log_slow_file_processing(
+                    "fallback_scan",
+                    path,
+                    provider_name,
+                    event_count,
+                    byte_count,
+                    outcome.dead_lettered,
+                    file_start.elapsed(),
+                );
                 if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
                     files_shipped += 1;
                     events_shipped += outcome.events_shipped;
@@ -1875,6 +2102,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_prepare_codex_oversize_compacted_line_acknowledges_without_dead_letter() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-03-10T02-45-21-019cd67e-36d7-7271-af29-9dcc8aba405e.jsonl");
+        let compacted = serde_json::json!({
+            "timestamp": "2026-03-11T23:11:59.551Z",
+            "type": "compacted",
+            "payload": {
+                "message": "",
+                "replacement_history": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "x".repeat(512)
+                    }]
+                }]
+            }
+        });
+        std::fs::write(&path, format!("{}\n", compacted)).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "codex", CompressionAlgo::Gzip, &conn, 200, None).unwrap();
+        let prepared = prepared.expect("oversize compacted line should be acknowledged");
+
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::AckOnly(item) => {
+                assert_eq!(item.offset, 0);
+                assert_eq!(item.new_offset, std::fs::metadata(&path).unwrap().len());
+                assert_eq!(item.provider, "codex");
+            }
+            PreparedAction::Ship(_) | PreparedAction::DeadLetter(_) => {
+                panic!("oversize zero-event compacted line should not be dead-lettered")
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_ship_prepared_file_ack_only_updates_offsets() {
         let (_tmp, conn) = make_db();
@@ -1901,6 +2169,157 @@ mod tests {
         assert!(outcome.fully_processed);
         assert_eq!(fs.get_offset("/tmp/gemini-info.json").unwrap(), 413);
         assert_eq!(fs.get_queued_offset("/tmp/gemini-info.json").unwrap(), 413);
+    }
+
+    #[tokio::test]
+    async fn test_replay_oversize_zero_event_range_clears_pending_entry() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-03-10T02-45-21-019cd67e-36d7-7271-af29-9dcc8aba405e.jsonl");
+        let compacted = serde_json::json!({
+            "timestamp": "2026-03-11T23:11:59.551Z",
+            "type": "compacted",
+            "payload": {
+                "message": "",
+                "replacement_history": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "x".repeat(512)
+                    }]
+                }]
+            }
+        });
+        std::fs::write(&path, format!("{}\n", compacted)).unwrap();
+
+        let spool = Spool::new(&conn);
+        let file_state = FileState::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        file_state
+            .set_queued_offset(
+                &path_str,
+                file_len,
+                "codex",
+                "019cd67e-36d7-7271-af29-9dcc8aba405e",
+                "019cd67e-36d7-7271-af29-9dcc8aba405e",
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "codex",
+                &path_str,
+                0,
+                file_len,
+                Some("019cd67e-36d7-7271-af29-9dcc8aba405e"),
+            )
+            .unwrap();
+
+        let client = make_test_client("http://127.0.0.1:9");
+        let (ok, failed) =
+            replay_spool_batch_with_batch_bytes(&conn, &client, CompressionAlgo::Gzip, 10, 200)
+                .await
+                .unwrap();
+
+        assert_eq!(ok, 1);
+        assert_eq!(failed, 0);
+        assert_eq!(spool.pending_count().unwrap(), 0);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), file_len);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), file_len);
+    }
+
+    #[tokio::test]
+    async fn test_replay_spool_for_path_processes_only_target_file() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir
+            .path()
+            .join("aaaaaaaa-1111-2222-3333-444455556666.jsonl");
+        let path_b = dir
+            .path()
+            .join("bbbbbbbb-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path_a, claude_session_lines()).unwrap();
+        std::fs::write(&path_b, claude_session_lines()).unwrap();
+
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let path_a_str = path_a.to_string_lossy().to_string();
+        let path_b_str = path_b.to_string_lossy().to_string();
+        let path_a_len = std::fs::metadata(&path_a).unwrap().len();
+        let path_b_len = std::fs::metadata(&path_b).unwrap().len();
+
+        file_state
+            .set_queued_offset(
+                &path_a_str,
+                path_a_len,
+                "claude",
+                "aaaaaaaa-1111-2222-3333-444455556666",
+                "aaaaaaaa-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+        file_state
+            .set_queued_offset(
+                &path_b_str,
+                path_b_len,
+                "claude",
+                "bbbbbbbb-1111-2222-3333-444455556666",
+                "bbbbbbbb-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+
+        spool
+            .enqueue(
+                "claude",
+                &path_a_str,
+                0,
+                path_a_len,
+                Some("aaaaaaaa-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_b_str,
+                0,
+                path_b_len,
+                Some("bbbbbbbb-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let client = make_test_client(&url);
+        let outcome = replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            &path_a,
+            10,
+            10_000,
+            None,
+        )
+        .await
+        .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(outcome.resolved, 1);
+        assert_eq!(outcome.failed, 0);
+        assert!(!outcome.had_connect_error);
+        assert!(spool
+            .pending_entries_for_path(&path_a_str, 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            spool
+                .pending_entries_for_path(&path_b_str, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(file_state.get_offset(&path_a_str).unwrap(), path_a_len);
+        assert_eq!(file_state.get_offset(&path_b_str).unwrap(), 0);
     }
 
     #[test]
