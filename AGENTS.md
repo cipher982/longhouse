@@ -84,7 +84,7 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 | Reflection / briefings | `POST /api/agents/reflect`, `GET /api/agents/reflections`, `GET /api/timeline/briefing` | BriefingsPage | — | Briefings are the user-facing continuity surface; reflection remains optional admin tooling and the cron job is paused by default |
 | Jobs/Scheduler | `GET /api/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
 | Runner daemon | WebSocket from runner binary | — | — | Remote command execution on user infra |
-| **Session presence** | `POST /api/agents/presence` + `GET /api/agents/sessions/active` | ForumPage | — | Real-time state (thinking/running/idle) via Claude Code hooks; `session_presence` table, stale after 10min |
+| **Session presence** | `POST /api/agents/presence` + `GET /api/agents/sessions/active` | ForumPage | — | Real-time state (thinking/running/idle) via Claude/Codex hooks; managed-local Codex launch also seeds an initial idle row because bare Codex TUI emits no hook until the first submitted prompt; `session_presence` table, stale after 10min |
 | **Forum / live view** | `GET /api/agents/sessions/active` | ForumPage | — | Active session map; active rows glow green, canvas entities pulse; polls at 2s |
 
 ## Conventions
