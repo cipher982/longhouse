@@ -211,7 +211,7 @@ def _build_codex_entry_command(*, managed_session_id: str, managed_session_name:
         'LONGHOUSE_CODEX_APP_SERVER_READYZ="$READYZ_URL"',
         'LONGHOUSE_CODEX_APP_SERVER_HEALTHZ="$HEALTHZ_URL"',
         "EOF",
-        '    exec codex --remote "$REMOTE_URL"',
+        '    exec codex --enable tui_app_server --remote "$REMOTE_URL"',
         "  fi",
         "  sleep 0.1",
         "done",

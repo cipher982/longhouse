@@ -185,7 +185,7 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
     )
     inner = _inner_command(cmd)
     assert "codex app-server --listen ws://127.0.0.1:0 --session-source cli" in inner
-    assert 'exec codex --remote "$REMOTE_URL"' in inner
+    assert 'exec codex --enable tui_app_server --remote "$REMOTE_URL"' in inner
     assert "claude-code" not in inner
     assert "--session-id" not in inner
     assert "export LONGHOUSE_SESSION_ID=" in inner
@@ -509,7 +509,7 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
 
             launch_inner = _inner_command(dispatcher.calls[1]["command"])
             assert "codex app-server --listen ws://127.0.0.1:0 --session-source cli" in launch_inner
-            assert 'exec codex --remote "$REMOTE_URL"' in launch_inner
+            assert 'exec codex --enable tui_app_server --remote "$REMOTE_URL"' in launch_inner
             assert "claude-code" not in launch_inner
 
             # Must inject LONGHOUSE_SESSION_ID so hook routes presence to Longhouse's UUID
