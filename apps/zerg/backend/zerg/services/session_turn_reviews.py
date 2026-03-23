@@ -652,6 +652,46 @@ def _review_requires_mobile_attention(review: SessionTurnReview) -> bool:
     return True
 
 
+def turn_loop_retry_needed(
+    *,
+    db: Session,
+    session_id: str,
+    freshness_reference_at: datetime | None = None,
+) -> bool:
+    if not _has_turn_review_table(db):
+        return False
+    turn = load_latest_completed_assistant_turn(db, session_id)
+    if turn is None:
+        return False
+    now = datetime.now(timezone.utc)
+    fresh_window_seconds = _TURN_REVIEW_FRESH_WINDOW_MINUTES * 60
+    if (now - turn.assistant_timestamp).total_seconds() > fresh_window_seconds:
+        reference_time = _normalize_utc(freshness_reference_at)
+        if reference_time is None or (reference_time - turn.assistant_timestamp).total_seconds() > fresh_window_seconds:
+            return False
+
+    existing = (
+        db.query(SessionTurnReview)
+        .filter(
+            SessionTurnReview.session_id == session_id,
+            SessionTurnReview.assistant_event_id == turn.assistant_event_id,
+        )
+        .first()
+    )
+    if existing is not None:
+        return False
+
+    presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
+    if presence is None:
+        return False
+    updated_at = _normalize_utc(presence.updated_at)
+    if updated_at is None:
+        return False
+    if (now - updated_at).total_seconds() > (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60):
+        return False
+    return presence.state in _ACTIVE_PRESENCE_STATES
+
+
 async def _record_session_turn_review(
     *,
     db: Session,

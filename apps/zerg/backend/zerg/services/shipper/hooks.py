@@ -107,10 +107,16 @@ mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 
 # Stop: also ship the session transcript via engine binary.
 # Done AFTER the outbox write so idle state is always recorded.
+# Use a fast immediate background ship plus a short delayed replay because
+# Claude can fire Stop before the final transcript tail is fully flushed.
 # Engine path is quoted to handle paths with spaces.
 ENGINE="__ENGINE_PATH__"
 if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]; then
-  "$ENGINE" ship --file "$TRANSCRIPT" --quiet 2>/dev/null
+  (
+    "$ENGINE" ship --file "$TRANSCRIPT" --quiet &>/dev/null || true
+    sleep 1
+    "$ENGINE" ship --file "$TRANSCRIPT" --quiet &>/dev/null || true
+  ) &
 fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
@@ -242,10 +248,11 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict, dict]:
     hook_path = str(hooks_dir / "longhouse-hook.sh")
     session_start_path = str(hooks_dir / "longhouse-session-start.sh")
 
-    # Stop: sync with longer timeout to allow transcript ship to finish.
+    # Stop: async — the hook itself only writes presence and kicks off
+    # background transcript shipping, so Claude should not wait on it.
     stop_entry = {
         "hooks": [
-            {"type": "command", "command": hook_path, "async": False, "timeout": 30},
+            {"type": "command", "command": hook_path, "async": True, "timeout": 30},
         ],
     }
     # Lifecycle events: outbox write is <2ms, sync is safe and silent.
