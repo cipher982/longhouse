@@ -23,6 +23,7 @@ from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.managed_local_launcher import _build_entry_command
+from zerg.services.managed_local_launcher import _build_hooks_ensure_command
 from zerg.services.managed_local_launcher import _build_preflight_command
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 
@@ -106,12 +107,18 @@ class _FakeDispatcher:
         preflight_tmux_tmpdir: str | None = None,
         pane_command: str = "claude",
         capture_stdout: str = "Claude ready",
+        hook_install_exit_code: int = 0,
+        hook_install_stdout: str = "",
+        hook_install_stderr: str = "",
     ):
         self.calls: list[dict] = []
         self.verify_exit_code = verify_exit_code
         self.preflight_tmux_tmpdir = preflight_tmux_tmpdir
         self.pane_command = pane_command
         self.capture_stdout = capture_stdout
+        self.hook_install_exit_code = hook_install_exit_code
+        self.hook_install_stdout = hook_install_stdout
+        self.hook_install_stderr = hook_install_stderr
 
     async def dispatch_job(self, *, db, owner_id, runner_id, command, timeout_secs, commis_id, run_id):
         self.calls.append(
@@ -130,6 +137,15 @@ class _FakeDispatcher:
                     "exit_code": 0,
                     "stdout": f"__LONGHOUSE_TMUX_TMPDIR__={self.preflight_tmux_tmpdir or ''}\n",
                     "stderr": "",
+                },
+            }
+        if "longhouse connect --hooks-only" in inner:
+            return {
+                "ok": True,
+                "data": {
+                    "exit_code": self.hook_install_exit_code,
+                    "stdout": self.hook_install_stdout,
+                    "stderr": self.hook_install_stderr,
                 },
             }
         if f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} has-session" in inner:
@@ -184,7 +200,7 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
         managed_session_name="lh-zerg-codex",
     )
     inner = _inner_command(cmd)
-    assert inner.endswith("exec codex")
+    assert inner.endswith("exec codex --enable codex_hooks")
     assert "claude-code" not in inner
     assert "--session-id" not in inner
     assert "export LONGHOUSE_SESSION_ID=" in inner
@@ -218,6 +234,16 @@ def test_build_preflight_command_codex_checks_codex():
     inner = _inner_command(cmd)
     assert "command -v codex" in inner
     assert "command -v claude-code" not in inner
+
+
+def test_build_hooks_ensure_command_installs_longhouse_hooks_for_codex():
+    cmd = _build_hooks_ensure_command(provider="codex")
+    inner = _inner_command(cmd)
+    assert "command -v longhouse" in inner
+    assert "longhouse connect --hooks-only" in inner
+    assert "$HOME/.codex/hooks/longhouse-codex-hook.sh" in inner
+    assert "$HOME/.codex/hooks.json" in inner
+    assert "longhouse-codex-hook.sh" in inner
 
 
 def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkeypatch, tmp_path):
@@ -278,15 +304,19 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert runtime_state.freshness_expires_at is not None
 
             preflight_inner = _inner_command(dispatcher.calls[0]["command"])
-            launch_inner = _inner_command(dispatcher.calls[1]["command"])
-            has_session_inner = _inner_command(dispatcher.calls[2]["command"])
-            display_inner = _inner_command(dispatcher.calls[3]["command"])
+            hooks_inner = _inner_command(dispatcher.calls[1]["command"])
+            launch_inner = _inner_command(dispatcher.calls[2]["command"])
+            has_session_inner = _inner_command(dispatcher.calls[3]["command"])
+            display_inner = _inner_command(dispatcher.calls[4]["command"])
 
-            assert len(dispatcher.calls) == 4
+            assert len(dispatcher.calls) == 5
             assert dispatcher.calls[0]["runner_id"] == runner.id
             assert "command -v tmux" in preflight_inner
             assert "command -v claude-code" in preflight_inner
             assert "printf '__LONGHOUSE_TMUX_TMPDIR__=%s\\n' \"${TMUX_TMPDIR:-}\"" in preflight_inner
+            assert "longhouse connect --hooks-only" in hooks_inner
+            assert "$HOME/.claude/hooks/longhouse-hook.sh" in hooks_inner
+            assert "$HOME/.claude/settings.json" in hooks_inner
             assert "cat > /tmp/longhouse-managed-" in launch_inner
             assert "__LONGHOUSE_MANAGED_LOCAL__" in launch_inner
             assert (
@@ -335,8 +365,8 @@ def test_launch_managed_local_session_accepts_shell_wrapper_when_capture_has_out
                 },
             )
             assert response.status_code == 200, response.text
-            assert len(dispatcher.calls) == 5
-            assert "capture-pane" in _inner_command(dispatcher.calls[4]["command"])
+            assert len(dispatcher.calls) == 6
+            assert "capture-pane" in _inner_command(dispatcher.calls[5]["command"])
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -400,7 +430,7 @@ def test_launch_managed_local_session_rolls_back_when_tmux_verify_fails(monkeypa
             assert response.status_code == 424, response.text
             assert "failed to find session" in response.json()["detail"]
             assert db.query(AgentSession).count() == 0
-            assert len(dispatcher.calls) == 4
+            assert len(dispatcher.calls) == 5
             assert dispatcher.calls[-1]["command"].startswith(
                 "zsh -lc "
             )
@@ -500,8 +530,13 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             assert "command -v codex" in preflight_inner
             assert "command -v claude-code" not in preflight_inner
 
-            launch_inner = _inner_command(dispatcher.calls[1]["command"])
-            assert "exec codex" in launch_inner
+            hooks_inner = _inner_command(dispatcher.calls[1]["command"])
+            assert "longhouse connect --hooks-only" in hooks_inner
+            assert "$HOME/.codex/hooks/longhouse-codex-hook.sh" in hooks_inner
+            assert "$HOME/.codex/hooks.json" in hooks_inner
+
+            launch_inner = _inner_command(dispatcher.calls[2]["command"])
+            assert "exec codex --enable codex_hooks" in launch_inner
             assert "claude-code" not in launch_inner
 
             # Must inject LONGHOUSE_SESSION_ID so hook routes presence to Longhouse's UUID
@@ -509,6 +544,44 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             assert payload["provider_session_id"] in launch_inner
             assert "codex app-server" not in launch_inner
             assert "--remote" not in launch_inner
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_codex_fails_when_hook_install_does_not_produce_hooks(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+        dispatcher = _FakeDispatcher(
+            hook_install_exit_code=18,
+            hook_install_stderr="Longhouse hook config is missing the expected hook entry",
+        )
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "provider": "codex",
+                },
+            )
+            assert response.status_code == 424, response.text
+            assert response.json()["detail"] == "Longhouse hook config is missing the expected hook entry"
+            assert db.query(AgentSession).count() == 0
+            assert len(dispatcher.calls) == 2
+            assert "longhouse connect --hooks-only" in _inner_command(dispatcher.calls[1]["command"])
         finally:
             api_app_ref.dependency_overrides = {}
 

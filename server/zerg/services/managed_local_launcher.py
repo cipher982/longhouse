@@ -92,6 +92,18 @@ _PROVIDER_PANE_COMMANDS = {
     "claude": {"claude", "node"},
     "codex": {"codex", "node"},
 }
+_PROVIDER_HOOK_FILES = {
+    "claude": {
+        "script": "$HOME/.claude/hooks/longhouse-hook.sh",
+        "config": "$HOME/.claude/settings.json",
+        "marker": "longhouse-hook.sh",
+    },
+    "codex": {
+        "script": "$HOME/.codex/hooks/longhouse-codex-hook.sh",
+        "config": "$HOME/.codex/hooks.json",
+        "marker": "longhouse-codex-hook.sh",
+    },
+}
 
 
 def _resolve_runner(db: Session, owner_id: int, target: str):
@@ -167,7 +179,11 @@ def _build_codex_entry_command(*, managed_session_id: str, managed_session_name:
     a first-class provider control plane.
     """
     del managed_session_name
-    inner = f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}; source ~/.zshrc >/dev/null 2>&1 || true; exec codex"
+    inner = (
+        f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}; "
+        "source ~/.zshrc >/dev/null 2>&1 || true; "
+        "exec codex --enable codex_hooks"
+    )
     return f"zsh -lc {shlex.quote(inner)}"
 
 
@@ -179,6 +195,22 @@ def _build_preflight_command(*, provider: str, cwd: str) -> str:
         f"command -v {cli_name} >/dev/null 2>&1 || {{ echo '{cli_name} is not available' >&2; exit 12; }}",
         f"test -d {quoted_cwd} || {{ echo 'working directory does not exist' >&2; exit 13; }}",
         f"printf {shlex.quote(_MANAGED_LOCAL_TMUX_TMPDIR_MARKER + '%s\\n')} \"${{TMUX_TMPDIR:-}}\"",
+    ]
+    return f"zsh -lc {shlex.quote('; '.join(checks))}"
+
+
+def _build_hooks_ensure_command(*, provider: str) -> str:
+    hook_files = _PROVIDER_HOOK_FILES.get(provider, _PROVIDER_HOOK_FILES["claude"])
+    quoted_script = shlex.quote(hook_files["script"])
+    quoted_config = shlex.quote(hook_files["config"])
+    quoted_marker = shlex.quote(hook_files["marker"])
+    checks = [
+        build_managed_local_shell_prelude(require_tmux=False),
+        "command -v longhouse >/dev/null 2>&1 || { echo 'longhouse is not available' >&2; exit 14; }",
+        "longhouse connect --hooks-only >/dev/null 2>&1 || { echo 'failed to install Longhouse hooks' >&2; exit 15; }",
+        f"test -x {quoted_script} || {{ echo 'Longhouse hook script missing after install' >&2; exit 16; }}",
+        f"test -f {quoted_config} || {{ echo 'Longhouse hook config missing after install' >&2; exit 17; }}",
+        f"grep -q {quoted_marker} {quoted_config} || {{ echo 'Longhouse hook config is missing the expected hook entry' >&2; exit 18; }}",
     ]
     return f"zsh -lc {shlex.quote('; '.join(checks))}"
 
@@ -252,6 +284,26 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         detail = stderr or stdout or "Managed local preflight failed"
         raise ManagedLocalLaunchError(detail, status_code=400)
     managed_tmux_tmpdir = _extract_tmux_tmpdir(preflight_data.get("stdout"))
+
+    hooks_ensure_result = await dispatcher.dispatch_job(
+        db=db,
+        owner_id=params.owner_id,
+        runner_id=runner.id,
+        command=_build_hooks_ensure_command(provider=provider),
+        timeout_secs=30,
+        commis_id=None,
+        run_id=None,
+    )
+    if not hooks_ensure_result.get("ok"):
+        detail = hooks_ensure_result.get("error", {}).get("message", "Managed local hook installation failed")
+        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
+
+    hooks_ensure_data = hooks_ensure_result.get("data", {})
+    if int(hooks_ensure_data.get("exit_code", 1)) != 0:
+        stderr = (hooks_ensure_data.get("stderr") or "").strip()
+        stdout = (hooks_ensure_data.get("stdout") or "").strip()
+        detail = stderr or stdout or "Managed local hook installation failed"
+        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
     session_uuid = uuid4()
     provider_session_id = str(session_uuid)
