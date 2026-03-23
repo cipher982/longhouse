@@ -57,6 +57,7 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.demo_seed import delete_demo_sessions
 from zerg.services.demo_seed import seed_missing_demo_sessions
+from zerg.services.managed_local_tmux import build_tmux_attach_command
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
@@ -118,6 +119,18 @@ def _resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
         return SessionExecutionHome.MANAGED_HOSTED
 
     return stored or SessionExecutionHome.LEGACY
+
+
+def _build_attach_command(session: AgentSession) -> str | None:
+    if _coerce_managed_transport(getattr(session, "managed_transport", None)) != ManagedSessionTransport.TMUX:
+        return None
+    session_name = str(getattr(session, "managed_session_name", "") or "").strip()
+    if not session_name:
+        return None
+    return build_tmux_attach_command(
+        session_name=session_name,
+        tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +196,7 @@ class SessionResponse(UTCBaseModel):
     )
     source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
     source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
+    attach_command: Optional[str] = Field(None, description="Local reattach command for managed local tmux sessions")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
 
 
@@ -346,6 +360,7 @@ def _build_session_response(
         managed_transport=_coerce_managed_transport(getattr(session, "managed_transport", None)),
         source_runner_id=getattr(session, "source_runner_id", None),
         source_runner_name=getattr(session, "source_runner_name", None),
+        attach_command=_build_attach_command(session),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 

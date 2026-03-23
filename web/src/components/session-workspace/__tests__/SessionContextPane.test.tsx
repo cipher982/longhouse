@@ -128,6 +128,23 @@ describe("SessionContextPane", () => {
     expect(screen.queryByText("Completed")).not.toBeInTheDocument();
   });
 
+  it("shows the local reattach command for managed-local sessions", () => {
+    renderPane({
+      session: makeSession({
+        execution_home: "managed_local",
+        managed_transport: "tmux",
+        source_runner_name: "cinder",
+        attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+      }),
+    });
+
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach locally");
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("running on cinder");
+    expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
+      "tmux -L longhouse-managed attach -t lh-codex",
+    );
+  });
+
   it("calls back with the selected loop mode", async () => {
     const user = userEvent.setup();
     const onLoopModeChange = vi.fn();

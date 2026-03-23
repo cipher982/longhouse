@@ -63,6 +63,7 @@ export interface AgentSession {
   managed_transport: ManagedSessionTransport | null;
   source_runner_id: number | null;
   source_runner_name: string | null;
+  attach_command?: string | null;
   loop_mode: SessionLoopMode;
 }
 
