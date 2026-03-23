@@ -93,6 +93,7 @@ export function SessionContextPane({
   turnReviewLoading = false,
   turnReviewUnavailable = false,
 }: SessionContextPaneProps) {
+  const isManagedLocalCodex = session.provider === "codex" && session.execution_home === "managed_local";
   const turnCount = session.user_messages + session.assistant_messages;
   const decisionMeta = latestTurnReview
     ? TURN_DECISION_META[latestTurnReview.decision] ?? {
@@ -120,6 +121,9 @@ export function SessionContextPane({
   const attachCommand =
     session.execution_home === "managed_local" ? session.attach_command?.trim() || null : null;
   const attachRunnerLabel = session.source_runner_name?.trim() || "this machine";
+  const loopModeCaption = isManagedLocalCodex
+    ? "For managed-local Codex, Loop Mode changes review posture only. Keep driving the live session from the attached terminal."
+    : "Stored session preference for what Oikos may do after each completed assistant turn.";
 
   return (
     <div className="session-context-pane">
@@ -178,10 +182,13 @@ export function SessionContextPane({
         <div className="session-pane-section">
           <div className="session-pane-section-title">Reattach</div>
           <div className="session-pane-callout session-pane-callout--muted" data-testid="session-attach-callout">
-            <div className="session-pane-callout-title">Reattach locally</div>
+            <div className="session-pane-callout-title">
+              {isManagedLocalCodex ? "Reattach the live Codex terminal" : "Reattach locally"}
+            </div>
             <div className="session-pane-callout-copy">
-              This managed-local session is running on {attachRunnerLabel}. Use the local terminal command below to
-              reopen the live tmux session.
+              {isManagedLocalCodex
+                ? `This managed-local Codex session is running on ${attachRunnerLabel}. Use the local terminal command below to reopen the live Codex TUI.`
+                : `This managed-local session is running on ${attachRunnerLabel}. Use the local terminal command below to reopen the live tmux session.`}
             </div>
             <pre className="inspector-code-block" data-testid="session-attach-command">
               <code>{attachCommand}</code>
@@ -216,9 +223,7 @@ export function SessionContextPane({
             );
           })}
         </div>
-        <div className="session-loop-mode__caption">
-          Stored session preference for what Oikos may do after each completed assistant turn.
-        </div>
+        <div className="session-loop-mode__caption">{loopModeCaption}</div>
       </div>
 
       <div className="session-pane-section">
