@@ -117,6 +117,9 @@ export function SessionContextPane({
     : runtime.needsAttention
       ? "warning"
       : "neutral";
+  const attachCommand =
+    session.execution_home === "managed_local" ? session.attach_command?.trim() || null : null;
+  const attachRunnerLabel = session.source_runner_name?.trim() || "this machine";
 
   return (
     <div className="session-context-pane">
@@ -170,6 +173,22 @@ export function SessionContextPane({
           {session.project ? <MetaRow label="Project" value={session.project} /> : null}
         </div>
       </div>
+
+      {attachCommand ? (
+        <div className="session-pane-section">
+          <div className="session-pane-section-title">Reattach</div>
+          <div className="session-pane-callout session-pane-callout--muted" data-testid="session-attach-callout">
+            <div className="session-pane-callout-title">Reattach locally</div>
+            <div className="session-pane-callout-copy">
+              This managed-local session is running on {attachRunnerLabel}. Use the local terminal command below to
+              reopen the live tmux session.
+            </div>
+            <pre className="inspector-code-block" data-testid="session-attach-command">
+              <code>{attachCommand}</code>
+            </pre>
+          </div>
+        </div>
+      ) : null}
 
       <div className="session-pane-section">
         <div className="session-pane-section-title">Loop Mode</div>

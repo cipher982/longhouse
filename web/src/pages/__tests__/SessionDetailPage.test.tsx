@@ -81,6 +81,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     managed_transport: "tmux",
     source_runner_id: 7,
     source_runner_name: "cinder",
+    attach_command: "zsh -lc 'source ~/.zshrc >/dev/null 2>&1; exec tmux -L longhouse-managed attach -t lh-codex'",
     loop_mode: "manual",
     ...overrides,
   };
@@ -191,6 +192,9 @@ describe("SessionDetailPage", () => {
 
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
       "Managed-local Codex stays terminal-driven",
+    );
+    expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
+      "tmux -L longhouse-managed attach -t lh-codex",
     );
     expect(screen.queryByTestId("session-chat")).not.toBeInTheDocument();
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();

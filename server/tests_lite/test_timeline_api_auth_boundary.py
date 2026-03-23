@@ -22,6 +22,7 @@ from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
+from zerg.services.managed_local_tmux import build_tmux_attach_command
 
 
 def _make_db(tmp_path):
@@ -114,6 +115,51 @@ def test_timeline_sessions_accept_browser_session_cookie(tmp_path):
         assert payload["sessions"][0]["thread_id"] == session_id
         assert payload["sessions"][0]["head"]["project"] == "timeline-auth"
         assert payload["sessions"][0]["detail"]["project"] == "timeline-auth"
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        session = AgentSession(
+            id=uuid4(),
+            provider="codex",
+            environment="development",
+            project="timeline-auth",
+            device_id="cinder",
+            cwd="/tmp/timeline-auth",
+            git_repo=None,
+            git_branch="main",
+            started_at=datetime.now(timezone.utc),
+            ended_at=None,
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+            execution_home="managed_local",
+            managed_transport="tmux",
+            source_runner_id=9,
+            source_runner_name="cinder",
+            managed_session_name="lh-codex-managed-local",
+        )
+        db.add(session)
+        db.commit()
+        session_id = str(session.id)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["execution_home"] == "managed_local"
+        assert payload["source_runner_name"] == "cinder"
+        assert payload["attach_command"] == build_tmux_attach_command(session_name="lh-codex-managed-local")
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
