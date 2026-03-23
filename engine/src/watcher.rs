@@ -159,7 +159,9 @@ impl SessionWatcher {
             }
         }
 
-        Some(batch.into_iter().collect())
+        let mut paths: Vec<_> = batch.into_iter().collect();
+        paths.sort();
+        Some(paths)
     }
 }
 

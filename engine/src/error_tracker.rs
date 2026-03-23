@@ -3,9 +3,10 @@
 //! Logs warn on the first failure and every 100th after that.
 //! Emits info on first success after a run of failures.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Shared error tracker — cheap to clone, backed by atomics.
 #[derive(Clone)]
@@ -76,6 +77,68 @@ impl Default for ConsecutiveErrorTracker {
     }
 }
 
+const RECENT_ISSUE_WINDOW: Duration = Duration::from_secs(60 * 60);
+
+/// Rolling counter for local process issues such as parse anomalies.
+#[derive(Clone)]
+pub struct RecentIssueTracker {
+    inner: Arc<Mutex<VecDeque<Instant>>>,
+}
+
+impl RecentIssueTracker {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+
+    pub fn record(&self) {
+        self.record_at(Instant::now());
+    }
+
+    pub fn count_last_hour(&self) -> u32 {
+        let now = Instant::now();
+        if let Ok(mut guard) = self.inner.lock() {
+            prune_recent_issues(&mut guard, now);
+            guard.len() as u32
+        } else {
+            0
+        }
+    }
+
+    #[cfg(test)]
+    fn record_at(&self, instant: Instant) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.push_back(instant);
+            prune_recent_issues(&mut guard, instant);
+        }
+    }
+
+    #[cfg(not(test))]
+    fn record_at(&self, instant: Instant) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.push_back(instant);
+            prune_recent_issues(&mut guard, instant);
+        }
+    }
+}
+
+impl Default for RecentIssueTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn prune_recent_issues(entries: &mut VecDeque<Instant>, now: Instant) {
+    while let Some(front) = entries.front() {
+        if now.saturating_duration_since(*front) > RECENT_ISSUE_WINDOW {
+            entries.pop_front();
+        } else {
+            break;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +192,25 @@ mod tests {
 
         // Success with no prior errors → None
         assert_eq!(tracker.record_success(), None);
+    }
+
+    #[test]
+    fn test_recent_issue_tracker_counts_recent_records() {
+        let tracker = RecentIssueTracker::new();
+        tracker.record();
+        tracker.record();
+
+        assert_eq!(tracker.count_last_hour(), 2);
+    }
+
+    #[test]
+    fn test_recent_issue_tracker_prunes_old_records() {
+        let tracker = RecentIssueTracker::new();
+        let now = Instant::now();
+
+        tracker.record_at(now - Duration::from_secs(RECENT_ISSUE_WINDOW.as_secs() + 60));
+        tracker.record_at(now - Duration::from_secs(RECENT_ISSUE_WINDOW.as_secs() - 60));
+
+        assert_eq!(tracker.count_last_hour(), 1);
     }
 }

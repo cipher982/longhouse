@@ -417,7 +417,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     if (event.role === "tool") {
       const interaction: ToolInteraction = {
         key: `orphan:${event.id}`,
-        toolName: "tool",
+        toolName: event.tool_name ?? "tool",
         callEvent: null,
         resultEvent: event,
         pairing: "orphan",

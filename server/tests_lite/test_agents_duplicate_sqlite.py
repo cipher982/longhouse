@@ -6,6 +6,7 @@ in a failed state (PendingRollbackError).
 
 from datetime import datetime
 from datetime import timezone
+from uuid import uuid4
 
 from sqlalchemy.orm import sessionmaker
 
@@ -259,6 +260,98 @@ def test_duplicate_ingest_upgrades_generic_environment_to_machine_label(tmp_path
         assert stored.git_repo == "git@github.com:example/sample-project.git"
         assert stored.git_branch == "main"
         assert stored.ended_at == later_time.replace(tzinfo=None)
+
+
+def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_session_id(tmp_path):
+    db_path = tmp_path / "duplicate_codex_placeholder_upgrade.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    AgentsBase.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+
+        base_time = datetime(2026, 3, 22, 12, 0, 0, tzinfo=timezone.utc)
+        session_id = uuid4()
+        native_provider_session_id = "019c638d-0000-0000-0000-000000000999"
+
+        launched = AgentSession(
+            id=session_id,
+            provider="codex",
+            environment="development",
+            project="managed-local-codex",
+            device_id="cinder",
+            cwd="/tmp/zerg",
+            started_at=base_time,
+            ended_at=base_time,
+            provider_session_id=str(session_id),
+            thread_root_session_id=session_id,
+            continuation_kind="local",
+            origin_label="cinder",
+            execution_home="managed_local",
+            managed_transport="tmux",
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            is_writable_head=1,
+            is_sidechain=0,
+        )
+        db.add(launched)
+        db.commit()
+
+        first = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="development",
+                project="managed-local-codex",
+                device_id="cinder",
+                cwd="/tmp/zerg",
+                started_at=base_time,
+                provider_session_id=str(session_id),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="continue",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        assert first.events_inserted == 1
+        assert first.events_skipped == 0
+
+        second = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="development",
+                project="managed-local-codex",
+                device_id="cinder",
+                cwd="/tmp/zerg",
+                started_at=base_time,
+                provider_session_id=native_provider_session_id,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="continue",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert second.events_inserted == 0
+        assert second.events_skipped == 1
+        assert db.query(AgentSession).count() == 1
+
+        stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert stored.provider_session_id == native_provider_session_id
 
 
 def test_duplicate_ingest_keeps_machine_label_when_generic_environment_arrives_later(tmp_path):

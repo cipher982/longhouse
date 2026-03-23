@@ -37,6 +37,7 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
+from zerg.session_execution_home import SessionExecutionHome
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,19 @@ def _normalize_label(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _should_replace_managed_local_codex_provider_session_id(session: AgentSession, incoming_provider_session_id: str) -> bool:
+    current_provider_session_id = str(session.provider_session_id or "").strip()
+    if not current_provider_session_id:
+        return False
+    if current_provider_session_id != str(session.id):
+        return False
+    if incoming_provider_session_id == current_provider_session_id:
+        return False
+    if str(session.provider or "").strip().lower() != "codex":
+        return False
+    return str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value
 
 
 def _infer_continuation_kind_from_ingest(data: "SessionIngest") -> str:
@@ -567,7 +581,11 @@ class AgentsStore:
             session.git_repo = data.git_repo
         if data.git_branch and not session.git_branch:
             session.git_branch = data.git_branch
-        if data.provider_session_id and not session.provider_session_id:
+        incoming_provider_session_id = str(data.provider_session_id or "").strip()
+        if incoming_provider_session_id and (
+            not session.provider_session_id
+            or _should_replace_managed_local_codex_provider_session_id(session, incoming_provider_session_id)
+        ):
             session.provider_session_id = data.provider_session_id
         if data.thread_root_session_id and not session.thread_root_session_id:
             session.thread_root_session_id = data.thread_root_session_id

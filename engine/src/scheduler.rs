@@ -1,0 +1,246 @@
+//! Path-keyed scheduler for daemon shipping work.
+//!
+//! Ensures at most one in-flight task per session file path while allowing
+//! bounded concurrency across unrelated files. Ready work is prioritized so
+//! live watcher events can preempt retry/scan work without losing deduping.
+
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+
+/// Ready-work priority, ordered from highest urgency to lowest.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum WorkPriority {
+    Watch,
+    Retry,
+    Scan,
+}
+
+/// One unit of daemon work keyed to a single file path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PathJob {
+    pub path: PathBuf,
+    pub provider: &'static str,
+    pub priority: WorkPriority,
+}
+
+#[derive(Clone, Debug)]
+struct ReadyJob {
+    provider: &'static str,
+    priority: WorkPriority,
+}
+
+#[derive(Clone, Debug)]
+struct InFlightJob {
+    provider: &'static str,
+    rerun_priority: Option<WorkPriority>,
+}
+
+/// Bounded scheduler that dedupes work by file path.
+pub struct PathScheduler {
+    max_in_flight: usize,
+    ready_watch: VecDeque<PathBuf>,
+    ready_retry: VecDeque<PathBuf>,
+    ready_scan: VecDeque<PathBuf>,
+    ready_jobs: HashMap<PathBuf, ReadyJob>,
+    in_flight: HashMap<PathBuf, InFlightJob>,
+}
+
+impl PathScheduler {
+    pub fn new(max_in_flight: usize) -> Self {
+        Self {
+            max_in_flight: max_in_flight.max(1),
+            ready_watch: VecDeque::new(),
+            ready_retry: VecDeque::new(),
+            ready_scan: VecDeque::new(),
+            ready_jobs: HashMap::new(),
+            in_flight: HashMap::new(),
+        }
+    }
+
+    /// Enqueue work for a path.
+    ///
+    /// If the path is already queued, the highest-priority source wins.
+    /// If the path is already in flight, a rerun is recorded for completion.
+    pub fn enqueue(&mut self, path: PathBuf, provider: &'static str, priority: WorkPriority) {
+        if let Some(ready) = self.ready_jobs.get_mut(&path) {
+            if priority < ready.priority {
+                ready.priority = priority;
+                self.push_ready_path(path, priority);
+            }
+            return;
+        }
+
+        if let Some(in_flight) = self.in_flight.get_mut(&path) {
+            in_flight.rerun_priority = merge_priority(in_flight.rerun_priority, Some(priority));
+            return;
+        }
+
+        self.ready_jobs
+            .insert(path.clone(), ReadyJob { provider, priority });
+        self.push_ready_path(path, priority);
+    }
+
+    /// Return the next job that can start, respecting both priority and the
+    /// configured in-flight concurrency cap.
+    pub fn pop_launchable(&mut self) -> Option<PathJob> {
+        if self.in_flight.len() >= self.max_in_flight {
+            return None;
+        }
+
+        self.pop_ready_queue(WorkPriority::Watch)
+            .or_else(|| self.pop_ready_queue(WorkPriority::Retry))
+            .or_else(|| self.pop_ready_queue(WorkPriority::Scan))
+    }
+
+    /// Mark a path as completed. If the path was re-enqueued while running, or
+    /// the task requests a follow-up pass, the path is queued again.
+    pub fn complete(&mut self, path: &Path, task_rerun: Option<WorkPriority>) {
+        let Some(in_flight) = self.in_flight.remove(path) else {
+            return;
+        };
+
+        if let Some(priority) = merge_priority(in_flight.rerun_priority, task_rerun) {
+            self.enqueue(path.to_path_buf(), in_flight.provider, priority);
+        }
+    }
+
+    pub fn has_in_flight(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    #[cfg(test)]
+    fn ready_len(&self) -> usize {
+        self.ready_jobs.len()
+    }
+
+    #[cfg(test)]
+    fn in_flight_len(&self) -> usize {
+        self.in_flight.len()
+    }
+
+    fn pop_ready_queue(&mut self, expected_priority: WorkPriority) -> Option<PathJob> {
+        let queue = match expected_priority {
+            WorkPriority::Watch => &mut self.ready_watch,
+            WorkPriority::Retry => &mut self.ready_retry,
+            WorkPriority::Scan => &mut self.ready_scan,
+        };
+
+        while let Some(path) = queue.pop_front() {
+            let Some(ready) = self.ready_jobs.get(&path).cloned() else {
+                continue;
+            };
+
+            if ready.priority != expected_priority {
+                continue;
+            }
+
+            self.ready_jobs.remove(&path);
+            self.in_flight.insert(
+                path.clone(),
+                InFlightJob {
+                    provider: ready.provider,
+                    rerun_priority: None,
+                },
+            );
+
+            return Some(PathJob {
+                path,
+                provider: ready.provider,
+                priority: ready.priority,
+            });
+        }
+
+        None
+    }
+
+    fn push_ready_path(&mut self, path: PathBuf, priority: WorkPriority) {
+        match priority {
+            WorkPriority::Watch => self.ready_watch.push_back(path),
+            WorkPriority::Retry => self.ready_retry.push_back(path),
+            WorkPriority::Scan => self.ready_scan.push_back(path),
+        }
+    }
+}
+
+fn merge_priority(a: Option<WorkPriority>, b: Option<WorkPriority>) -> Option<WorkPriority> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ready_path_promotes_to_higher_priority_without_dup_launch() {
+        let mut scheduler = PathScheduler::new(2);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue(path.clone(), "claude", WorkPriority::Scan);
+        scheduler.enqueue(path.clone(), "claude", WorkPriority::Watch);
+
+        assert_eq!(scheduler.ready_len(), 1);
+        let job = scheduler.pop_launchable().unwrap();
+        assert_eq!(job.path, path);
+        assert_eq!(job.priority, WorkPriority::Watch);
+        assert!(scheduler.pop_launchable().is_none());
+    }
+
+    #[test]
+    fn test_inflight_path_is_rerun_after_completion() {
+        let mut scheduler = PathScheduler::new(1);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue(path.clone(), "codex", WorkPriority::Scan);
+        let job = scheduler.pop_launchable().unwrap();
+        assert_eq!(job.priority, WorkPriority::Scan);
+        assert_eq!(scheduler.in_flight_len(), 1);
+
+        scheduler.enqueue(path.clone(), "codex", WorkPriority::Watch);
+        assert_eq!(scheduler.ready_len(), 0);
+
+        scheduler.complete(&path, None);
+        assert_eq!(scheduler.in_flight_len(), 0);
+        assert_eq!(scheduler.ready_len(), 1);
+
+        let rerun = scheduler.pop_launchable().unwrap();
+        assert_eq!(rerun.priority, WorkPriority::Watch);
+    }
+
+    #[test]
+    fn test_complete_merges_task_and_external_rerun_priority() {
+        let mut scheduler = PathScheduler::new(1);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue(path.clone(), "gemini", WorkPriority::Retry);
+        let _ = scheduler.pop_launchable().unwrap();
+
+        scheduler.enqueue(path.clone(), "gemini", WorkPriority::Scan);
+        scheduler.complete(&path, Some(WorkPriority::Watch));
+
+        let rerun = scheduler.pop_launchable().unwrap();
+        assert_eq!(rerun.priority, WorkPriority::Watch);
+    }
+
+    #[test]
+    fn test_scheduler_respects_in_flight_cap() {
+        let mut scheduler = PathScheduler::new(1);
+        let path_a = PathBuf::from("/tmp/a.jsonl");
+        let path_b = PathBuf::from("/tmp/b.jsonl");
+
+        scheduler.enqueue(path_a.clone(), "claude", WorkPriority::Watch);
+        scheduler.enqueue(path_b.clone(), "claude", WorkPriority::Watch);
+
+        let first = scheduler.pop_launchable().unwrap();
+        assert_eq!(first.path, path_a);
+        assert!(scheduler.pop_launchable().is_none());
+
+        scheduler.complete(&path_a, None);
+        let second = scheduler.pop_launchable().unwrap();
+        assert_eq!(second.path, path_b);
+    }
+}
