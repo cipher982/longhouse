@@ -60,6 +60,11 @@ class Instance(Base):
     deploy_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deploy_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Ongoing health tracking (populated by background reconciler)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    unhealthy_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_health_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     user: Mapped[User] = relationship("User", back_populates="instance")
 
 

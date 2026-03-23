@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import logging
 from datetime import datetime
@@ -27,6 +28,7 @@ from control_plane.routers import health
 from control_plane.routers import instances
 from control_plane.routers import ui
 from control_plane.routers import webhooks
+from control_plane.services.instance_health_reconciler import run_instance_health_reconciler
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     _startup()
+    asyncio.create_task(run_instance_health_reconciler(settings.root_domain))
     yield
 
 
@@ -70,6 +73,21 @@ def _startup():
             conn.rollback()
             if "duplicate" not in str(exc).lower():
                 logger.warning(f"custom_env_json migration skipped: {exc}")
+
+    # Migrate: add per-instance health tracking columns if missing
+    for col_ddl in (
+        "ALTER TABLE cp_instances ADD COLUMN consecutive_failures INTEGER DEFAULT 0",
+        "ALTER TABLE cp_instances ADD COLUMN unhealthy_since DATETIME",
+        "ALTER TABLE cp_instances ADD COLUMN last_health_error TEXT",
+    ):
+        with engine.connect() as conn:
+            try:
+                conn.execute(text(col_ddl))
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                if "duplicate" not in str(exc).lower():
+                    logger.warning("Instance health column migration skipped: %s", exc)
 
     # Crash recovery: clean up stale deploy states from interrupted deploys
     _recover_stale_deploys()
