@@ -4,10 +4,12 @@
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use walkdir::WalkDir;
 
 /// Configuration for a session provider.
+#[derive(Clone)]
 pub struct ProviderConfig {
     pub name: &'static str,
     pub root: PathBuf,
@@ -46,7 +48,7 @@ pub fn get_providers() -> Vec<ProviderConfig> {
 ///
 /// Returns `(path, provider_name)` tuples sorted by modification time (newest first).
 pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'static str)> {
-    let mut files = Vec::new();
+    let mut files: Vec<(PathBuf, &'static str, SystemTime)> = Vec::new();
 
     for provider in providers {
         for entry in WalkDir::new(&provider.root)
@@ -61,25 +63,19 @@ pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'stati
             {
                 if let Ok(meta) = path.metadata() {
                     if meta.len() > 0 {
-                        files.push((path.to_path_buf(), provider.name));
+                        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                        files.push((path.to_path_buf(), provider.name, modified));
                     }
                 }
             }
         }
     }
 
-    // Sort by modification time descending (newest first)
-    files.sort_by(|a, b| {
-        let ma = std::fs::metadata(&a.0)
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let mb = std::fs::metadata(&b.0)
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        mb.cmp(&ma)
-    });
-
+    files.sort_by(|a, b| b.2.cmp(&a.2));
     files
+        .into_iter()
+        .map(|(path, provider, _)| (path, provider))
+        .collect()
 }
 
 /// Determine the provider name for a file path based on registered providers.

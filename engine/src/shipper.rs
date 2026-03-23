@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use rusqlite::Connection;
+use tokio::task;
 
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::{ConsecutiveErrorTracker, RecentIssueTracker};
@@ -1232,6 +1233,29 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
     replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await
 }
 
+async fn prepare_spool_entry_for_replay(
+    entry: crate::state::spool::SpoolEntry,
+    path: PathBuf,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<Option<PreparedFile>> {
+    let parse_tracker = parse_tracker.cloned();
+    task::spawn_blocking(move || {
+        prepare_path_range_with_parse_tracker(
+            &path,
+            &entry.provider,
+            entry.start_offset,
+            Some(entry.end_offset),
+            algo,
+            max_batch_bytes,
+            None,
+            parse_tracker.as_ref(),
+        )
+    })
+    .await?
+}
+
 async fn replay_spool_entries(
     conn: &Connection,
     client: &ShipperClient,
@@ -1253,16 +1277,15 @@ async fn replay_spool_entries(
             continue;
         }
 
-        let prepared = match prepare_path_range_with_parse_tracker(
-            &path,
-            &entry.provider,
-            entry.start_offset,
-            Some(entry.end_offset),
+        let prepared = match prepare_spool_entry_for_replay(
+            entry.clone(),
+            path,
             algo,
             max_batch_bytes,
-            None,
             parse_tracker,
-        ) {
+        )
+        .await
+        {
             Ok(Some(prepared)) => prepared,
             Ok(None) => {
                 if entry.start_offset >= entry.end_offset {
