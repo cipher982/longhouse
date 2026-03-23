@@ -22,7 +22,6 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
-from zerg.services.managed_local_launcher import _build_codex_entry_command
 from zerg.services.managed_local_launcher import _build_entry_command
 from zerg.services.managed_local_launcher import _build_preflight_command
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
@@ -178,13 +177,22 @@ def test_build_entry_command_claude_includes_session_id():
 
 
 def test_build_entry_command_codex_injects_longhouse_session_id():
-    cmd = _build_entry_command(provider="codex", provider_session_id="abc-123", display_name=None)
+    cmd = _build_entry_command(
+        provider="codex",
+        provider_session_id="abc-123",
+        display_name=None,
+        managed_session_name="lh-zerg-codex",
+    )
     inner = _inner_command(cmd)
-    assert "exec codex" in inner
+    assert "codex app-server --listen ws://127.0.0.1:0 --session-source cli" in inner
+    assert 'exec codex --remote "$REMOTE_URL"' in inner
     assert "claude-code" not in inner
     assert "--session-id" not in inner
     assert "export LONGHOUSE_SESSION_ID=" in inner
     assert "abc-123" in inner
+    assert "APP_SERVER_LOG=" in inner
+    assert "APP_SERVER_META=" in inner
+    assert 'curl -fsS "$READYZ_URL"' in inner
 
 
 def test_build_preflight_command_claude_checks_claude_code():
@@ -198,6 +206,7 @@ def test_build_preflight_command_codex_checks_codex():
     cmd = _build_preflight_command(provider="codex", cwd="/tmp/test")
     inner = _inner_command(cmd)
     assert "command -v codex" in inner
+    assert "command -v curl" in inner
     assert "command -v claude-code" not in inner
 
 
@@ -479,15 +488,20 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
 
             preflight_inner = _inner_command(dispatcher.calls[0]["command"])
             assert "command -v codex" in preflight_inner
+            assert "command -v curl" in preflight_inner
             assert "command -v claude-code" not in preflight_inner
 
             launch_inner = _inner_command(dispatcher.calls[1]["command"])
-            assert "exec codex" in launch_inner
+            assert "codex app-server --listen ws://127.0.0.1:0 --session-source cli" in launch_inner
+            assert 'exec codex --remote "$REMOTE_URL"' in launch_inner
             assert "claude-code" not in launch_inner
 
             # Must inject LONGHOUSE_SESSION_ID so hook routes presence to Longhouse's UUID
             assert "LONGHOUSE_SESSION_ID" in launch_inner
             assert payload["provider_session_id"] in launch_inner
+            assert "APP_SERVER_LOG=" in launch_inner
+            assert "APP_SERVER_META=" in launch_inner
+            assert 'curl -fsS "$READYZ_URL"' in launch_inner
         finally:
             api_app_ref.dependency_overrides = {}
 

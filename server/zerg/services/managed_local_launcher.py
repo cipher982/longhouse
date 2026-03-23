@@ -3,7 +3,7 @@
 Phase 2 keeps this intentionally small:
 - resolve a reachable runner owned by the current user
 - create a managed-local AgentSession row
-- launch stock Claude Code inside a detached tmux session on that runner
+- launch the provider CLI inside a detached tmux session on that runner
 - verify the tmux session exists
 
 No chat routing or Loop behavior changes live here yet.
@@ -11,6 +11,7 @@ No chat routing or Loop behavior changes live here yet.
 
 from __future__ import annotations
 
+import asyncio
 import shlex
 from dataclasses import dataclass
 from datetime import datetime
@@ -73,16 +74,26 @@ _MANAGED_LOCAL_CAPTURE_ERROR_SNIPPETS = (
     "command not found: claude-code",
     "command not found: claude",
     "command not found: codex",
+    "curl is not available",
+    "codex app-server exited before ready",
+    "codex app-server failed to become ready",
     "aws auth refresh timed out",
     "not logged in",
     "permission denied",
 )
+_MANAGED_LOCAL_CAPTURE_READY_SNIPPETS = {
+    "claude": ("claude",),
+    "codex": ("codex",),
+}
+_MANAGED_LOCAL_VERIFY_ATTEMPTS = 40
+_MANAGED_LOCAL_VERIFY_INTERVAL_SECS = 0.25
 _VALID_PROVIDERS = {"claude", "codex"}
 _PROVIDER_DISPLAY_NAMES = {"claude": "Claude", "codex": "Codex"}
 _PROVIDER_PANE_COMMANDS = {
     "claude": {"claude", "node"},
     "codex": {"codex", "node"},
 }
+_MANAGED_CODEX_SESSION_DIR = "$HOME/.claude/longhouse-managed-sessions"
 
 
 def _resolve_runner(db: Session, owner_id: int, target: str):
@@ -130,9 +141,18 @@ def _derive_project(cwd: str, project: str | None) -> str:
     return Path(cwd).name or "managed-local"
 
 
-def _build_entry_command(*, provider: str, provider_session_id: str, display_name: str | None) -> str:
+def _build_entry_command(
+    *,
+    provider: str,
+    provider_session_id: str,
+    display_name: str | None,
+    managed_session_name: str | None = None,
+) -> str:
     if provider == "codex":
-        return _build_codex_entry_command(managed_session_id=provider_session_id)
+        return _build_codex_entry_command(
+            managed_session_id=provider_session_id,
+            managed_session_name=managed_session_name or provider_session_id,
+        )
     parts = ["claude-code", "--session-id", provider_session_id]
     if display_name and display_name.strip():
         parts.extend(["-n", display_name.strip()])
@@ -140,15 +160,63 @@ def _build_entry_command(*, provider: str, provider_session_id: str, display_nam
     return f"zsh -lc {shlex.quote(inner)}"
 
 
-def _build_codex_entry_command(*, managed_session_id: str) -> str:
+def _build_codex_entry_command(*, managed_session_id: str, managed_session_name: str) -> str:
     """Build the tmux entry command for a managed-local Codex session.
 
-    Injects LONGHOUSE_SESSION_ID into the environment so the Codex hook
-    script routes presence and transcript shipping under Longhouse's UUID
-    instead of Codex's auto-generated session ID.
+    Managed-local Codex is terminal-first: tmux hosts a remote Codex TUI while
+    a sibling Codex app-server owns the underlying session/thread. This keeps
+    the terminal UX intact without letting Longhouse pretend keystroke
+    injection is the control plane.
     """
-    inner = f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}; " "source ~/.zshrc >/dev/null 2>&1; exec codex"
-    return f"zsh -lc {shlex.quote(inner)}"
+
+    safe_name = managed_session_name.strip() or managed_session_id
+    inner_lines = [
+        "set -euo pipefail",
+        f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}",
+        "source ~/.zshrc >/dev/null 2>&1 || true",
+        "command -v codex >/dev/null 2>&1 || { echo 'codex is not available' >&2; exit 12; }",
+        "command -v curl >/dev/null 2>&1 || { echo 'curl is not available' >&2; exit 13; }",
+        f'MANAGED_DIR="{_MANAGED_CODEX_SESSION_DIR}"',
+        'mkdir -p "$MANAGED_DIR"',
+        f'APP_SERVER_LOG="$MANAGED_DIR/{safe_name}.app-server.log"',
+        'APP_SERVER_META="$MANAGED_DIR/$LONGHOUSE_SESSION_ID.app-server.env"',
+        'rm -f "$APP_SERVER_LOG" "$APP_SERVER_META"',
+        'touch "$APP_SERVER_LOG"',
+        'codex app-server --listen ws://127.0.0.1:0 --session-source cli >/dev/null 2>>"$APP_SERVER_LOG" &',
+        "APP_SERVER_PID=$!",
+        "cleanup() {",
+        '  kill "$APP_SERVER_PID" >/dev/null 2>&1 || true',
+        '  wait "$APP_SERVER_PID" 2>/dev/null || true',
+        "}",
+        "trap cleanup EXIT INT TERM",
+        'REMOTE_URL=""',
+        'READYZ_URL=""',
+        'HEALTHZ_URL=""',
+        "for _ in {1..200}; do",
+        '  if ! kill -0 "$APP_SERVER_PID" 2>/dev/null; then',
+        '    echo "codex app-server exited before ready" >&2',
+        '    tail -n 40 "$APP_SERVER_LOG" >&2 || true',
+        "    break",
+        "  fi",
+        "  REMOTE_URL=$(sed -n 's/^  listening on: //p' \"$APP_SERVER_LOG\" | tail -n 1)",
+        "  READYZ_URL=$(sed -n 's/^  readyz: //p' \"$APP_SERVER_LOG\" | tail -n 1)",
+        "  HEALTHZ_URL=$(sed -n 's/^  healthz: //p' \"$APP_SERVER_LOG\" | tail -n 1)",
+        '  if [ -n "$REMOTE_URL" ] && [ -n "$READYZ_URL" ] && curl -fsS "$READYZ_URL" >/dev/null 2>&1; then',
+        '    cat > "$APP_SERVER_META" <<EOF',
+        'LONGHOUSE_CODEX_APP_SERVER_PID="$APP_SERVER_PID"',
+        'LONGHOUSE_CODEX_APP_SERVER_URL="$REMOTE_URL"',
+        'LONGHOUSE_CODEX_APP_SERVER_READYZ="$READYZ_URL"',
+        'LONGHOUSE_CODEX_APP_SERVER_HEALTHZ="$HEALTHZ_URL"',
+        "EOF",
+        '    exec codex --remote "$REMOTE_URL"',
+        "  fi",
+        "  sleep 0.1",
+        "done",
+        'echo "codex app-server failed to become ready" >&2',
+        'tail -n 40 "$APP_SERVER_LOG" >&2 || true',
+        "exit 14",
+    ]
+    return f"zsh -lc {shlex.quote('; '.join(inner_lines))}"
 
 
 def _build_preflight_command(*, provider: str, cwd: str) -> str:
@@ -160,6 +228,8 @@ def _build_preflight_command(*, provider: str, cwd: str) -> str:
         f"test -d {quoted_cwd} || {{ echo 'working directory does not exist' >&2; exit 13; }}",
         f"printf {shlex.quote(_MANAGED_LOCAL_TMUX_TMPDIR_MARKER + '%s\\n')} \"${{TMUX_TMPDIR:-}}\"",
     ]
+    if provider == "codex":
+        checks.insert(2, "command -v curl >/dev/null 2>&1 || { echo 'curl is not available' >&2; exit 14; }")
     return f"zsh -lc {shlex.quote('; '.join(checks))}"
 
 
@@ -170,6 +240,13 @@ def _extract_tmux_tmpdir(preflight_stdout: str | None) -> str | None:
         raw = line[len(_MANAGED_LOCAL_TMUX_TMPDIR_MARKER) :].strip()
         return raw or None
     return None
+
+
+def _capture_text_indicates_provider_ready(*, provider: str, capture_text: str) -> bool:
+    capture_lower = str(capture_text or "").strip().lower()
+    if not capture_lower:
+        return False
+    return any(marker in capture_lower for marker in _MANAGED_LOCAL_CAPTURE_READY_SNIPPETS.get(provider, ()))
 
 
 async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
@@ -249,7 +326,12 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     db.add(session)
     db.flush()
 
-    entry_command = _build_entry_command(provider=provider, provider_session_id=provider_session_id, display_name=params.display_name)
+    entry_command = _build_entry_command(
+        provider=provider,
+        provider_session_id=provider_session_id,
+        display_name=params.display_name,
+        managed_session_name=managed_session_name,
+    )
     launch_command = build_tmux_launch_command(
         session_name=managed_session_name,
         cwd=cwd,
@@ -329,31 +411,42 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         await _cleanup_tmux_session()
         raise ManagedLocalLaunchError(detail, status_code=502)
 
-    verify_result = await dispatcher.dispatch_job(
-        db=db,
-        owner_id=params.owner_id,
-        runner_id=runner.id,
-        command=verify_command,
-        timeout_secs=10,
-        commis_id=None,
-        run_id=None,
-    )
-    if not verify_result.get("ok"):
-        detail = verify_result.get("error", {}).get("message", "Managed local session verification failed")
-        await _cleanup_tmux_session()
-        raise ManagedLocalLaunchError(detail, status_code=502)
-
-    verify_data = verify_result.get("data", {})
-    if int(verify_data.get("exit_code", 1)) != 0:
-        stderr = (verify_data.get("stderr") or "").strip()
-        stdout = (verify_data.get("stdout") or "").strip()
-        detail = stderr or stdout or "tmux session did not start successfully"
-        await _cleanup_tmux_session()
-        raise ManagedLocalLaunchError(detail, status_code=502)
-
-    pane_command = (verify_data.get("stdout") or "").strip().lower()
     expected_pane_commands = _PROVIDER_PANE_COMMANDS.get(provider, _PROVIDER_PANE_COMMANDS["claude"])
-    if pane_command in _MANAGED_LOCAL_SHELL_COMMANDS:
+
+    for attempt in range(_MANAGED_LOCAL_VERIFY_ATTEMPTS):
+        verify_result = await dispatcher.dispatch_job(
+            db=db,
+            owner_id=params.owner_id,
+            runner_id=runner.id,
+            command=verify_command,
+            timeout_secs=10,
+            commis_id=None,
+            run_id=None,
+        )
+        if not verify_result.get("ok"):
+            detail = verify_result.get("error", {}).get("message", "Managed local session verification failed")
+            await _cleanup_tmux_session()
+            raise ManagedLocalLaunchError(detail, status_code=502)
+
+        verify_data = verify_result.get("data", {})
+        if int(verify_data.get("exit_code", 1)) != 0:
+            stderr = (verify_data.get("stderr") or "").strip()
+            stdout = (verify_data.get("stdout") or "").strip()
+            detail = stderr or stdout or "tmux session did not start successfully"
+            await _cleanup_tmux_session()
+            raise ManagedLocalLaunchError(detail, status_code=502)
+
+        pane_command = (verify_data.get("stdout") or "").strip().lower()
+        if any(cmd in pane_command for cmd in expected_pane_commands):
+            break
+
+        if pane_command not in _MANAGED_LOCAL_SHELL_COMMANDS:
+            await _cleanup_tmux_session()
+            raise ManagedLocalLaunchError(
+                f"Managed local session started an unexpected pane command ({pane_command})",
+                status_code=502,
+            )
+
         capture_result = await dispatcher.dispatch_job(
             db=db,
             owner_id=params.owner_id,
@@ -375,19 +468,16 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
                     status_code=502,
                 )
 
-        if not capture_text:
+        if _capture_text_indicates_provider_ready(provider=provider, capture_text=capture_text):
+            break
+
+        if attempt == _MANAGED_LOCAL_VERIFY_ATTEMPTS - 1:
             await _cleanup_tmux_session()
             raise ManagedLocalLaunchError(
                 f"Managed local session started an idle shell instead of {provider_name} ({pane_command or 'empty pane'})",
                 status_code=502,
             )
-
-    elif not any(cmd in pane_command for cmd in expected_pane_commands):
-        await _cleanup_tmux_session()
-        raise ManagedLocalLaunchError(
-            f"Managed local session started an unexpected pane command ({pane_command})",
-            status_code=502,
-        )
+        await asyncio.sleep(_MANAGED_LOCAL_VERIFY_INTERVAL_SECS)
 
     mark_managed_local_session_launched(db, session=session)
     db.commit()
