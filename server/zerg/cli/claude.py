@@ -84,10 +84,12 @@ def _launch_managed_local_from_api(
     loop_mode: SessionLoopMode,
     name: str | None,
     machine_name: str,
+    provider: str = "claude",
 ) -> ManagedLocalLaunchResponse:
     git_repo, git_branch = _infer_git_context(cwd)
     payload = {
         "cwd": str(cwd),
+        "provider": provider,
         "project": project,
         "git_repo": git_repo,
         "git_branch": git_branch,
@@ -168,16 +170,17 @@ def claude(
         "-t",
         help="Device token (uses stored token if not specified)",
     ),
-    claude_dir: str | None = typer.Option(
+    config_dir: str | None = typer.Option(
         None,
+        "--config-dir",
         "--claude-dir",
-        help="Claude config directory (default: ~/.claude)",
+        help="Longhouse config directory (default: ~/.claude).",
     ),
 ) -> None:
     """Launch a managed-local Claude Code session on this device via the Longhouse API."""
 
-    config_dir = Path(claude_dir) if claude_dir else None
-    resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    resolved_config_dir = Path(config_dir) if config_dir else None
+    resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=resolved_config_dir)
     machine_name = get_machine_name_label()
     result = _launch_managed_local_from_api(
         url=resolved_url,
@@ -187,6 +190,7 @@ def claude(
         loop_mode=loop_mode,
         name=name,
         machine_name=machine_name,
+        provider="claude",
     )
 
     typer.secho("Managed local Claude session launched on this device.", fg=typer.colors.GREEN)
