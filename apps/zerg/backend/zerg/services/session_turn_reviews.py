@@ -107,6 +107,13 @@ def _supports_resume(session: AgentSession) -> bool:
     return (session.provider or "").strip().lower() == "claude"
 
 
+def _supports_same_session_continue(session: AgentSession) -> bool:
+    provider = (session.provider or "").strip().lower()
+    if provider == "claude":
+        return True
+    return provider == "codex" and (str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value)
+
+
 def _resume_backend_for_session(session: AgentSession) -> str | None:
     if not _supports_resume(session):
         return None
@@ -268,7 +275,7 @@ def _loop_mode_profile(session: AgentSession, policy: OikosOperatorPolicy) -> tu
             "observe_only",
             "Assist mode is set, but proactive notifications are disabled right now.",
         )
-    if policy.allow_continue and _supports_resume(session):
+    if policy.allow_continue and _supports_same_session_continue(session):
         return (
             "bounded_autonomy",
             "Continue one bounded next step automatically when the finished turn clearly leaves one.",

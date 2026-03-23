@@ -6,6 +6,7 @@ from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -29,7 +30,7 @@ def _make_db(tmp_path):
     return make_sessionmaker(engine)
 
 
-def _seed_user_runner_and_session(db):
+def _seed_user_runner_and_session(db, *, provider: str = "claude"):
     user = User(email="managed-local-control@test.local", role=UserRole.USER.value)
     db.add(user)
     db.commit()
@@ -50,7 +51,7 @@ def _seed_user_runner_and_session(db):
 
     session = AgentSession(
         id=uuid4(),
-        provider="claude",
+        provider=provider,
         environment="development",
         project="zerg",
         device_id=runner.name,
@@ -101,13 +102,14 @@ class _FakeDispatcher:
         }
 
 
-def test_send_text_to_managed_local_session_emits_thinking_runtime_signal(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_send_text_to_managed_local_session_emits_thinking_runtime_signal(monkeypatch, tmp_path, provider):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db)
+        user, runner, session = _seed_user_runner_and_session(db, provider=provider)
 
         result = asyncio.run(
             send_text_to_managed_local_session(
