@@ -28,6 +28,7 @@ from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.models.work import OikosWakeup
+from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.services.session_turn_reviews import classify_turn_review_outcome_for_run
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
@@ -211,6 +212,14 @@ async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
     monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr(
+        "zerg.services.session_turn_reviews._load_policy",
+        lambda _db, _owner_id: OikosOperatorPolicy(
+            enabled=True,
+            allow_continue=True,
+            allow_notify=True,
+        ),
+    )
 
     with SessionLocal() as db:
         user = _create_user(db, allow_continue=True)
