@@ -21,7 +21,7 @@ Codex hooks (via hooks.json):
 
 - **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, Stop):
   Writes presence events to the same ~/.claude/outbox/ directory using
-  Codex's camelCase hook input fields. On Stop, ships the transcript.
+  Codex's snake_case hook command input fields. On Stop, ships the transcript.
   Codex has fewer hook events than Claude (no PreToolUse/PostToolUse),
   so tool-level granularity is not available.
 
@@ -175,13 +175,13 @@ CODEX_HOOK_SCRIPT = """\
 # Stop also runs longhouse-engine ship (local binary, ships transcript).
 INPUT=$(cat)
 
-# Codex uses camelCase field names in hook input (unlike Claude's snake_case).
+# Codex command hooks use snake_case field names.
 IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT <<< "$(
   printf '%s' "$INPUT" | jq -r '[
-    (.hookEventName // ""),
-    (.sessionId // ""),
+    (.hook_event_name // ""),
+    (.session_id // ""),
     (.cwd // ""),
-    (.transcriptPath // "")
+    (.transcript_path // "")
   ] | join("\\u001f")'
 )"
 
