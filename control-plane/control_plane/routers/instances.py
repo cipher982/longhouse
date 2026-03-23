@@ -458,7 +458,12 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{instance_id}/reprovision", response_model=InstanceOut, dependencies=[Depends(require_admin)])
 def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
-    """Reprovision a stopped/deprovisioned instance."""
+    """Reprovision a stopped/deprovisioned instance.
+
+    Blocks until the runtime passes /api/readyz (up to 120s). On success,
+    stamps last_healthy_image and promotes to active. On timeout, attempts
+    rollback to last_healthy_image before returning an error.
+    """
     row = db.query(Instance, User).join(User, Instance.user_id == User.id).filter(Instance.id == instance_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="instance not found")
@@ -479,10 +484,54 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    prior_image = inst.last_healthy_image
     result = _recreate_instance(inst, user, provisioner)
     db.commit()
-    db.refresh(inst)
 
+    # Wait for the runtime to become ready, then stamp last_healthy_image.
+    try:
+        provisioner.wait_for_health(inst.subdomain, timeout=120)
+        inst.last_healthy_image = inst.current_image
+        inst.status = "active"
+        inst.last_health_at = datetime.now(timezone.utc)
+        db.commit()
+    except RuntimeError as exc:
+        # Health check timed out — try rolling back to prior good image.
+        if prior_image and prior_image != inst.current_image:
+            try:
+                provisioner.deprovision_instance(inst.container_name)
+                custom_env = parse_custom_env_json(inst.custom_env_json)
+                rb = provisioner.provision_instance(
+                    inst.subdomain,
+                    owner_email=user.email,
+                    custom_env=custom_env,
+                    data_path=resolve_instance_data_path(inst.subdomain, data_path=inst.data_path),
+                    image=prior_image,
+                )
+                inst.container_name = rb.container_name
+                inst.current_image = prior_image
+                inst.status = "active"
+                inst.last_health_at = datetime.now(timezone.utc)
+                db.commit()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Reprovision failed (rolled back to previous image): {exc}",
+                ) from exc
+            except HTTPException:
+                raise
+            except Exception as rb_exc:
+                inst.status = "failed"
+                inst.deploy_error = f"Reprovision failed: {str(exc)[:200]}; rollback also failed: {str(rb_exc)[:200]}"
+                db.commit()
+                raise HTTPException(status_code=500, detail=inst.deploy_error) from rb_exc
+        else:
+            inst.status = "failed"
+            inst.deploy_error = str(exc)[:500]
+            db.commit()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    db.refresh(inst)
     return _instance_out(inst, user.email, password=result.password)
 
 
