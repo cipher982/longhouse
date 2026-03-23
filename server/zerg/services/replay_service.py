@@ -62,9 +62,9 @@ class ReplayService:
         Looks for scenarios in video/scenarios/ relative to repo root.
         """
         # Navigate from server/zerg/services/ to repo root
-        # parents: [0]=services, [1]=zerg, [2]=backend, [3]=zerg, [4]=apps, [5]=repo_root
-        repo_root = Path(__file__).parents[5]
-        path = repo_root / "apps" / "video" / "scenarios" / f"{name}.yaml"
+        # parents: [0]=services, [1]=zerg, [2]=server, [3]=repo_root
+        repo_root = Path(__file__).parents[3]
+        path = repo_root / "video" / "scenarios" / f"{name}.yaml"
 
         if not path.exists():
             raise FileNotFoundError(f"Scenario not found: {path}")

@@ -21,8 +21,8 @@ from zerg.models.agents import AgentsBase
 
 
 def _fixture_path(provider: str) -> Path:
-    repo_root = Path(__file__).resolve().parents[4]
-    return repo_root / "apps" / "engine" / "tests" / "fixtures" / "golden" / provider / "basic.jsonl"
+    repo_root = Path(__file__).resolve().parents[2]
+    return repo_root / "engine" / "tests" / "fixtures" / "golden" / provider / "basic.jsonl"
 
 
 def _read_lines_with_offsets(path: Path) -> list[tuple[int, str]]:

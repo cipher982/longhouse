@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 # Add scripts dir so we can import the smoke runner
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"))
 
 from smoke_models import load_config, get_api_key, run_all  # noqa: E402
 

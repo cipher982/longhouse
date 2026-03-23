@@ -52,7 +52,7 @@ def ensure_owner(db, email: str) -> User:
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parents[4]
+    repo_root = Path(__file__).resolve().parents[2]
     default_output = repo_root / "data" / "demo" / "longhouse-demo.db"
 
     parser = argparse.ArgumentParser(description="Build a demo SQLite database")

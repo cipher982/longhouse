@@ -194,7 +194,7 @@ def test_cli_runs_without_app_env(tmp_path):
     instance_dir.mkdir()
     db_path, _SessionLocal = _make_db(instance_dir, "longhouse.db")
 
-    script_path = Path(__file__).resolve().parents[4] / "scripts" / "repair-tenant-db-guids.py"
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "repair-tenant-db-guids.py"
     result = subprocess.run(
         [sys.executable, str(script_path), "--db-path", str(db_path)],
         capture_output=True,

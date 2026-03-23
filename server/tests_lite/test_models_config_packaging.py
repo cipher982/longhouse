@@ -20,7 +20,7 @@ def test_get_config_path_prefers_packaged_copy_when_present(tmp_path, monkeypatc
 
 
 def test_get_config_path_falls_back_to_repo_layout(tmp_path, monkeypatch):
-    fake_module = tmp_path / "repo" / "apps" / "zerg" / "backend" / "zerg" / "models_config.py"
+    fake_module = tmp_path / "repo" / "server" / "zerg" / "models_config.py"
     fake_module.parent.mkdir(parents=True)
     fake_module.write_text("# fake module path\n", encoding="utf-8")
 
