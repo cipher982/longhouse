@@ -96,26 +96,24 @@ class _FakeDispatcher:
             "ok": True,
             "data": {
                 "exit_code": 0,
-                "stdout": "__LONGHOUSE_CODEX_EXEC_STARTED__\n",
+                "stdout": '{"event":"thread.started"}\n',
                 "stderr": "",
             },
         }
 
 
-def test_build_codex_exec_resume_command_uses_mapping_file_and_launches_detached_exec():
+def test_build_codex_exec_resume_command_binds_longhouse_session_and_native_codex_session():
     command = build_codex_exec_resume_command(
         session_id="11111111-2222-3333-4444-555555555555",
+        provider_session_id="019c638d-0000-0000-0000-000000000999",
         cwd="/Users/davidrose/git/zerg",
         prompt="continue with targeted verification",
     )
 
     assert "codex exec resume --json --skip-git-repo-check --full-auto" in command
     assert "export LONGHOUSE_SESSION_ID=11111111-2222-3333-4444-555555555555" in command
-    assert 'MAPPING_FILE="$MANAGED_DIR/$LONGHOUSE_SESSION_ID.codex-session-id"' in command
-    assert 'NATIVE_SESSION_ID=$(tr -d' in command
-    assert "nohup env LONGHOUSE_SESSION_ID=" in command
-    assert "longhouse-engine ship --file" in command
-    assert "--provider codex --session-id \"$LONGHOUSE_SESSION_ID\"" in command
+    assert "019c638d-0000-0000-0000-000000000999" in command
+    assert "working directory does not exist" in command
     assert "continue with targeted verification" in command
 
 
@@ -149,8 +147,8 @@ def test_run_codex_exec_resume_for_managed_local_session_marks_thinking_runtime_
         assert dispatcher.calls[0]["commis_id"] == "managed-local-codex-exec-test"
         assert dispatcher.calls[0]["timeout_secs"] == 300
         assert "codex exec resume --json --skip-git-repo-check --full-auto" in str(dispatcher.calls[0]["command"])
-        assert ".codex-session-id" in str(dispatcher.calls[0]["command"])
-        assert "nohup env LONGHOUSE_SESSION_ID=" in str(dispatcher.calls[0]["command"])
+        assert str(session.provider_session_id) in str(dispatcher.calls[0]["command"])
+        assert f"export LONGHOUSE_SESSION_ID={session.id}" in str(dispatcher.calls[0]["command"])
 
 
 def test_run_codex_exec_resume_requires_codex_provider(tmp_path):
@@ -174,14 +172,11 @@ def test_run_codex_exec_resume_requires_codex_provider(tmp_path):
         assert result.error == "Session is not a managed-local Codex session"
 
 
-def test_run_codex_exec_resume_does_not_require_provider_session_id(monkeypatch, tmp_path):
+def test_run_codex_exec_resume_rejects_launch_time_placeholder_provider_session_id(tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_local_codex_exec.get_runner_job_dispatcher", lambda: dispatcher)
-
     with SessionLocal() as db:
         user, _runner, session = _seed_user_runner_and_session(db)
-        session.provider_session_id = None
+        session.provider_session_id = str(session.id)
         db.commit()
         db.refresh(session)
 
@@ -194,5 +189,5 @@ def test_run_codex_exec_resume_does_not_require_provider_session_id(monkeypatch,
             )
         )
 
-        assert result.ok is True
-        assert len(dispatcher.calls) == 1
+        assert result.ok is False
+        assert result.error == "Managed local Codex session is missing native provider session id"
