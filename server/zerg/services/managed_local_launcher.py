@@ -70,15 +70,18 @@ class ManagedLocalLaunchResult:
 
 _MANAGED_LOCAL_TMUX_TMPDIR_MARKER = "__LONGHOUSE_TMUX_TMPDIR__="
 _MANAGED_LOCAL_SHELL_COMMANDS = {"", "bash", "sh", "zsh", "fish"}
+_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS = 424
 _MANAGED_LOCAL_CAPTURE_ERROR_SNIPPETS = (
     "command not found: claude-code",
     "command not found: claude",
     "command not found: codex",
+    "command not found: eof",
     "curl is not available",
     "codex app-server exited before ready",
     "codex app-server failed to become ready",
     "aws auth refresh timed out",
     "not logged in",
+    "pane is dead",
     "permission denied",
 )
 _MANAGED_LOCAL_CAPTURE_READY_SNIPPETS = {
@@ -216,7 +219,7 @@ def _build_codex_entry_command(*, managed_session_id: str, managed_session_name:
         'tail -n 40 "$APP_SERVER_LOG" >&2 || true',
         "exit 14",
     ]
-    return f"zsh -lc {shlex.quote('; '.join(inner_lines))}"
+    return f"zsh -lc {shlex.quote(chr(10).join(inner_lines))}"
 
 
 def _build_preflight_command(*, provider: str, cwd: str) -> str:
@@ -249,6 +252,21 @@ def _capture_text_indicates_provider_ready(*, provider: str, capture_text: str) 
     return any(marker in capture_lower for marker in _MANAGED_LOCAL_CAPTURE_READY_SNIPPETS.get(provider, ()))
 
 
+def _pane_command_matches_provider(*, pane_command: str, expected_pane_commands: set[str]) -> bool:
+    normalized = str(pane_command or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized in expected_pane_commands
+
+
+def _pane_command_is_bootstrap_script(*, pane_command: str, managed_session_name: str) -> bool:
+    normalized = str(pane_command or "").strip().lower()
+    if not normalized:
+        return False
+    bootstrap_name = f"longhouse-managed-{managed_session_name}.zsh".lower()
+    return normalized == bootstrap_name
+
+
 async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
     transport = validate_managed_transport(params.managed_transport)
     if transport != ManagedSessionTransport.TMUX.value:
@@ -278,7 +296,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     )
     if not preflight_result.get("ok"):
         detail = preflight_result.get("error", {}).get("message", "Managed local preflight failed")
-        raise ManagedLocalLaunchError(detail, status_code=502)
+        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
     preflight_data = preflight_result.get("data", {})
     if int(preflight_data.get("exit_code", 1)) != 0:
@@ -380,14 +398,14 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     )
     if not launch_result.get("ok"):
         detail = launch_result.get("error", {}).get("message", "Managed local launch failed")
-        raise ManagedLocalLaunchError(detail, status_code=502)
+        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
     launch_data = launch_result.get("data", {})
     if int(launch_data.get("exit_code", 1)) != 0:
         stderr = (launch_data.get("stderr") or "").strip()
         stdout = (launch_data.get("stdout") or "").strip()
         detail = stderr or stdout or "Managed local launcher exited non-zero"
-        raise ManagedLocalLaunchError(detail, status_code=502)
+        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
     verify_session_result = await dispatcher.dispatch_job(
         db=db,
@@ -401,7 +419,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     if not verify_session_result.get("ok"):
         detail = verify_session_result.get("error", {}).get("message", "Managed local session verification failed")
         await _cleanup_tmux_session()
-        raise ManagedLocalLaunchError(detail, status_code=502)
+        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
     verify_session_data = verify_session_result.get("data", {})
     if int(verify_session_data.get("exit_code", 1)) != 0:
@@ -409,7 +427,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         stdout = (verify_session_data.get("stdout") or "").strip()
         detail = stderr or stdout or "tmux session did not start successfully"
         await _cleanup_tmux_session()
-        raise ManagedLocalLaunchError(detail, status_code=502)
+        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
     expected_pane_commands = _PROVIDER_PANE_COMMANDS.get(provider, _PROVIDER_PANE_COMMANDS["claude"])
 
@@ -426,7 +444,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         if not verify_result.get("ok"):
             detail = verify_result.get("error", {}).get("message", "Managed local session verification failed")
             await _cleanup_tmux_session()
-            raise ManagedLocalLaunchError(detail, status_code=502)
+            raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
         verify_data = verify_result.get("data", {})
         if int(verify_data.get("exit_code", 1)) != 0:
@@ -434,17 +452,20 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             stdout = (verify_data.get("stdout") or "").strip()
             detail = stderr or stdout or "tmux session did not start successfully"
             await _cleanup_tmux_session()
-            raise ManagedLocalLaunchError(detail, status_code=502)
+            raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
         pane_command = (verify_data.get("stdout") or "").strip().lower()
-        if any(cmd in pane_command for cmd in expected_pane_commands):
+        if _pane_command_matches_provider(pane_command=pane_command, expected_pane_commands=expected_pane_commands):
             break
 
-        if pane_command not in _MANAGED_LOCAL_SHELL_COMMANDS:
+        if pane_command not in _MANAGED_LOCAL_SHELL_COMMANDS and not _pane_command_is_bootstrap_script(
+            pane_command=pane_command,
+            managed_session_name=managed_session_name,
+        ):
             await _cleanup_tmux_session()
             raise ManagedLocalLaunchError(
                 f"Managed local session started an unexpected pane command ({pane_command})",
-                status_code=502,
+                status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS,
             )
 
         capture_result = await dispatcher.dispatch_job(
@@ -465,7 +486,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
                 await _cleanup_tmux_session()
                 raise ManagedLocalLaunchError(
                     f"Managed local session failed to start {provider_name}: {capture_text or marker}",
-                    status_code=502,
+                    status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS,
                 )
 
         if _capture_text_indicates_provider_ready(provider=provider, capture_text=capture_text):
@@ -475,7 +496,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             await _cleanup_tmux_session()
             raise ManagedLocalLaunchError(
                 f"Managed local session started an idle shell instead of {provider_name} ({pane_command or 'empty pane'})",
-                status_code=502,
+                status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS,
             )
         await asyncio.sleep(_MANAGED_LOCAL_VERIFY_INTERVAL_SECS)
 
