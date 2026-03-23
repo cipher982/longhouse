@@ -197,8 +197,8 @@ else
 fi
 
 # Managed-local Codex sessions need a local Longhouse UUID -> native Codex UUID
-# mapping so later headless continuations can call `codex exec resume` against
-# the original native session without creating duplicates.
+# mapping so later managed-local control can target the original native Codex
+# thread without creating duplicates.
 MANAGED_SESSIONS_DIR="$HOME/.claude/longhouse-managed-sessions"
 if [[ "$EVENT" == "SessionStart" ]] && [[ -n "$LONGHOUSE_SESSION_ID" ]] && [[ -n "$CODEX_SESSION_ID" ]]; then
   [ -d "$MANAGED_SESSIONS_DIR" ] || mkdir -p "$MANAGED_SESSIONS_DIR"
