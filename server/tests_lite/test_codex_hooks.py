@@ -14,9 +14,9 @@ from zerg.services.shipper.hooks import (
 
 def test_codex_hook_script_template_has_required_markers():
     """Hook script must contain the key patterns the engine + outbox expect."""
-    assert "hookEventName" in CODEX_HOOK_SCRIPT, "must read Codex camelCase input"
-    assert "sessionId" in CODEX_HOOK_SCRIPT, "must read Codex session ID"
-    assert "transcriptPath" in CODEX_HOOK_SCRIPT, "must read transcript path"
+    assert "hook_event_name" in CODEX_HOOK_SCRIPT, "must read Codex snake_case hook event input"
+    assert "session_id" in CODEX_HOOK_SCRIPT, "must read Codex session ID"
+    assert "transcript_path" in CODEX_HOOK_SCRIPT, "must read transcript path"
     assert "prs." in CODEX_HOOK_SCRIPT, "must use prs.*.json outbox naming"
     assert ".tmp." in CODEX_HOOK_SCRIPT, "must use atomic tmp write pattern"
     assert "__ENGINE_PATH__" in CODEX_HOOK_SCRIPT, "must have engine path placeholder"
@@ -101,7 +101,7 @@ def test_install_codex_hooks_creates_hook_script(tmp_path, monkeypatch):
 
     content = hook_script.read_text()
     assert "/usr/bin/longhouse-engine" in content
-    assert "hookEventName" in content
+    assert "hook_event_name" in content
 
 
 def test_install_codex_hooks_creates_valid_hooks_json(tmp_path, monkeypatch):
