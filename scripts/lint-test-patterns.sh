@@ -13,8 +13,8 @@
 
 set -euo pipefail
 
-FRONTEND_SRC="apps/zerg/frontend-web/src"
-E2E_TESTS="apps/zerg/e2e/tests"
+FRONTEND_SRC="web/src"
+E2E_TESTS="e2e/tests"
 
 failed=0
 
@@ -105,7 +105,7 @@ fi
 # =============================================================================
 # Core E2E tests must NEVER use waitForTimeout or networkidle.
 # No allowlist, no skip escape. These patterns are banned outright in core/.
-CORE_E2E="apps/zerg/e2e/tests/core"
+CORE_E2E="e2e/tests/core"
 
 echo "3️⃣  Checking for waitForTimeout() in core E2E tests (strict)..."
 

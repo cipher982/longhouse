@@ -36,7 +36,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 - Apply themed verbs to APIs/CLI commands
 
 **Transition notes:**
-- Repo paths still live under `apps/zerg/` until the code rename lands
+- Deployable units are top-level directories: `server/`, `engine/`, `web/`, etc.
 - Some env vars / schema names may still use `ZERG_` during transition
 
 ---
@@ -463,7 +463,7 @@ docker run -d \
 
 **Control plane stack:**
 ```
-apps/control-plane/           # NEW - tiny FastAPI app
+control-plane/           # NEW - tiny FastAPI app
 ├── main.py                   # App startup + router wiring
 ├── config.py                 # Settings (Stripe keys, Docker host, JWT)
 ├── models.py                 # User, Instance, Subscription
@@ -646,7 +646,7 @@ The shipper daemon for providers without hook support (Codex, Gemini, Cursor):
 - Spools locally when offline, syncs on reconnect
 
 **Current State (as of 2026-02-20):**
-- **Rust engine daemon** (`apps/engine/`) is the only shipping path. Python watcher/shipper deleted (2026-02-20). Resource profile: 27 MB RSS idle (vs 835 MB Python), 0% CPU idle, 3 threads, <1s wake-to-ship latency. Uses FSEvents (macOS) / inotify (Linux) via `notify` crate, tokio single-threaded runtime, zstd compression (12x faster than gzip).
+- **Rust engine daemon** (`engine/`) is the only shipping path. Python watcher/shipper deleted (2026-02-20). Resource profile: 27 MB RSS idle (vs 835 MB Python), 0% CPU idle, 3 threads, <1s wake-to-ship latency. Uses FSEvents (macOS) / inotify (Linux) via `notify` crate, tokio single-threaded runtime, zstd compression (12x faster than gzip).
 - `longhouse-engine connect --flush-ms 500 --fallback-scan-secs 300 --compression zstd --log-dir ~/.claude/logs` is the daemon command. Managed by `longhouse connect --install` (launchd/systemd). Watches Claude, Codex, and Gemini directories.
 - **Python `longhouse connect`** manages service lifecycle only (`--install`, `--uninstall`, `--status`) plus shipping hooks. No Python shipping code remains.
 - **Stop hook calls `longhouse-engine ship --file "$TRANSCRIPT"` directly** (not via Python wrapper). Absolute path baked at install time via `get_engine_executable()`. `exec` replaces the shell — zero Python overhead. Hook registration is currently `async: false` (sync).
@@ -1229,7 +1229,7 @@ _This section consolidates the former standalone SQLite pivot doc so VISION is t
 **Status:** Active
 **Goal:** `pip install longhouse && longhouse serve` — cloud agent ops center in under 5 minutes (SQLite only)
 **Reality check:** Postgres remains for legacy/dev paths and control plane; OSS/runtime is SQLite-only.
-**Naming note:** Public brand is Longhouse; repo paths still use `apps/zerg/` until the code rename lands.
+**Naming note:** Public brand is Longhouse; Python package is still `zerg` internally.
 
 ---
 
@@ -1265,7 +1265,7 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 2. **SQLite schema strategy**: recommended = **flat tables, no schemas** (there are no name collisions with agents tables). Postgres keeps schemas.
 3. **Durable job queue**: **SQLite-backed `zerg.jobs.queue`** for OSS/Sauron. `ops.job_queue` (Postgres) is not required in lite.
 4. **Durable checkpoints**: recommended = **use `langgraph-checkpoint-sqlite`** for SQLite so resumes survive restarts.
-5. **Static frontend packaging**: recommended = **bundle `apps/zerg/frontend-web/dist` in the python package** and mount via FastAPI.
+5. **Static frontend packaging**: recommended = **bundle `web/dist` in the python package** and mount via FastAPI.
 
 ---
 
@@ -1358,7 +1358,7 @@ These are the concrete mismatches between today’s codebase and the SQLite-only
 - Bundle frontend `dist` into the python package (hatch config).
 - Update FastAPI static mount to use packaged assets when available.
 
-**Files:** `cli/main.py`, `pyproject.toml`, `main.py`, `apps/zerg/frontend-web/dist`
+**Files:** `cli/main.py`, `pyproject.toml`, `main.py`, `web/dist`
 
 **Test:** fresh venv → `pip install longhouse` → `longhouse serve` → open `/dashboard` and `/chat`.
 

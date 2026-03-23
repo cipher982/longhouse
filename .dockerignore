@@ -49,7 +49,7 @@ e2e/playwright-report/
 **/logs/
 
 # Local data directories (LLM audit logs, debug dumps - can be gigabytes)
-apps/zerg/backend/data/
+server/data/
 
 # Temporary files
 **/tmp/
@@ -68,7 +68,7 @@ apps/zerg/backend/data/
 Thumbs.db
 
 # Test stubs (shadow real packages in production)
-apps/zerg/backend/apscheduler/
+server/apscheduler/
 
 # Docker files (prevent recursive copying)
 **/Dockerfile*

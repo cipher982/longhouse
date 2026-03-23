@@ -1,5 +1,5 @@
 # Marketing Screenshot Manifest
-# All paths relative to apps/zerg/frontend-web/
+# All paths relative to web/
 #
 # NOTE: scenario-*.png files are AI-generated illustrations, not screenshots.
 # They live in public/images/landing/ but are NOT captured by this script.

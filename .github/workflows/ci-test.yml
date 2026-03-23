@@ -76,15 +76,15 @@ jobs:
 
       - name: Build frontend (required by hatch)
         if: contains('e2e-core e2e-a11y e2e-single full', inputs.suite)
-        run: cd apps/zerg/frontend-web && bun install && bun run build
+        run: cd web && bun install && bun run build
 
       - name: Pre-install backend deps
         if: contains('validate unit e2e-core e2e-a11y e2e-single full', inputs.suite)
-        run: cd apps/zerg/backend && uv sync
+        run: cd server && uv sync
 
       - name: Install Playwright browsers + deps
         if: startsWith(inputs.suite, 'e2e-') || inputs.suite == 'full'
-        run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
+        run: cd e2e && bunx playwright install --with-deps chromium
 
       - name: Run selected suite
         run: |
@@ -98,7 +98,7 @@ jobs:
               make test
               ;;
             frontend)
-              cd apps/zerg/frontend-web
+              cd web
               bun run validate:types
               bun run test -- --run
               ;;
@@ -137,5 +137,5 @@ jobs:
         with:
           name: ci-test-e2e-artifacts
           path: |
-            apps/zerg/e2e/test-results
-            apps/zerg/e2e/playwright-report
+            e2e/test-results
+            e2e/playwright-report

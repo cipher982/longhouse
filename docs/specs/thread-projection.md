@@ -179,9 +179,9 @@ Non-goals for v1:
 
 Primary ownership:
 
-- `apps/zerg/backend/zerg/services/agents_store.py`
-- `apps/zerg/backend/zerg/routers/agents.py`
-- `apps/zerg/backend/zerg/routers/timeline.py`
+- `server/zerg/services/agents_store.py`
+- `server/zerg/routers/agents.py`
+- `server/zerg/routers/timeline.py`
 
 Required additions:
 
@@ -199,12 +199,12 @@ Important constraint:
 
 Primary ownership:
 
-- `apps/zerg/frontend-web/src/services/api/agents.ts`
-- `apps/zerg/frontend-web/src/hooks/useAgentSessions.ts`
-- `apps/zerg/frontend-web/src/hooks/useSessionWorkspace.ts`
-- `apps/zerg/frontend-web/src/lib/sessionWorkspace.ts`
-- `apps/zerg/frontend-web/src/components/session-workspace/TimelinePane.tsx`
-- `apps/zerg/frontend-web/src/pages/SessionDetailPage.tsx`
+- `web/src/services/api/agents.ts`
+- `web/src/hooks/useAgentSessions.ts`
+- `web/src/hooks/useSessionWorkspace.ts`
+- `web/src/lib/sessionWorkspace.ts`
+- `web/src/components/session-workspace/TimelinePane.tsx`
+- `web/src/pages/SessionDetailPage.tsx`
 
 Required changes:
 

@@ -51,11 +51,11 @@ fi
 echo "Building demo database..."
 rm -f "$DEMO_DB_PATH"
 mkdir -p "$(dirname "$DEMO_DB_PATH")"
-(cd apps/zerg/backend && uv run python scripts/build_demo_db.py --output "$DEMO_DB_PATH")
+(cd server && uv run python scripts/build_demo_db.py --output "$DEMO_DB_PATH")
 
 # --- Start backend ---
 echo "Starting backend on :$BACKEND_PORT..."
-(cd apps/zerg/backend && uv run uvicorn zerg.main:app --host 0.0.0.0 --port "$BACKEND_PORT") &
+(cd server && uv run uvicorn zerg.main:app --host 0.0.0.0 --port "$BACKEND_PORT") &
 BACKEND_PID=$!
 
 for i in {1..30}; do
@@ -69,7 +69,7 @@ done
 
 # --- Start frontend (Vite dev) ---
 echo "Starting frontend on :$FRONTEND_PORT..."
-(cd apps/zerg/frontend-web && bun run dev --port "$FRONTEND_PORT" --logLevel warn) &
+(cd web && bun run dev --port "$FRONTEND_PORT" --logLevel warn) &
 FRONTEND_PID=$!
 
 for i in {1..30}; do

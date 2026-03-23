@@ -61,13 +61,13 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y make build-essential pkg-config
 
     - name: Install Playwright browsers + deps
-      run: cd apps/zerg/e2e && bunx playwright install --with-deps chromium
+      run: cd e2e && bunx playwright install --with-deps chromium
 
     - name: Build frontend (required by hatch)
-      run: cd apps/zerg/frontend-web && bun install && bun run build
+      run: cd web && bun install && bun run build
 
     - name: Pre-install backend deps
-      run: cd apps/zerg/backend && uv sync
+      run: cd server && uv sync
 
     - name: Run Extended Suite
       run: make test-full
@@ -78,5 +78,5 @@ jobs:
       with:
         name: extended-ci-e2e-artifacts
         path: |
-          apps/zerg/e2e/test-results
-          apps/zerg/e2e/playwright-report
+          e2e/test-results
+          e2e/playwright-report

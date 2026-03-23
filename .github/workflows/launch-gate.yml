@@ -6,12 +6,12 @@ on:
       - '.github/workflows/launch-gate.yml'
       - '.github/workflows/test-install.yml'
       - '.github/workflows/runner-onboarding-validation.yml'
-      - 'apps/zerg/backend/pyproject.toml'
-      - 'apps/zerg/backend/zerg/cli/connect.py'
-      - 'apps/zerg/backend/zerg/cli/doctor.py'
-      - 'apps/zerg/backend/zerg/cli/onboard.py'
-      - 'apps/zerg/backend/zerg/cli/serve.py'
-      - 'apps/zerg/e2e/**'
+      - 'server/pyproject.toml'
+      - 'server/zerg/cli/connect.py'
+      - 'server/zerg/cli/doctor.py'
+      - 'server/zerg/cli/onboard.py'
+      - 'server/zerg/cli/serve.py'
+      - 'e2e/**'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
       - 'scripts/qa-oss.sh'
@@ -23,12 +23,12 @@ on:
       - '.github/workflows/launch-gate.yml'
       - '.github/workflows/test-install.yml'
       - '.github/workflows/runner-onboarding-validation.yml'
-      - 'apps/zerg/backend/pyproject.toml'
-      - 'apps/zerg/backend/zerg/cli/connect.py'
-      - 'apps/zerg/backend/zerg/cli/doctor.py'
-      - 'apps/zerg/backend/zerg/cli/onboard.py'
-      - 'apps/zerg/backend/zerg/cli/serve.py'
-      - 'apps/zerg/e2e/**'
+      - 'server/pyproject.toml'
+      - 'server/zerg/cli/connect.py'
+      - 'server/zerg/cli/doctor.py'
+      - 'server/zerg/cli/onboard.py'
+      - 'server/zerg/cli/serve.py'
+      - 'e2e/**'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
       - 'scripts/qa-oss.sh'
@@ -110,7 +110,7 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          cd apps/zerg/e2e
+          cd e2e
           bun install --silent
           bunx playwright install --with-deps chromium
 
@@ -124,5 +124,5 @@ jobs:
           name: launch-gate-onboarding-artifacts
           if-no-files-found: ignore
           path: |
-            /tmp/longhouse-onboarding/apps/zerg/e2e/test-results
-            /tmp/longhouse-onboarding/apps/zerg/e2e/playwright-report
+            /tmp/longhouse-onboarding/e2e/test-results
+            /tmp/longhouse-onboarding/e2e/playwright-report

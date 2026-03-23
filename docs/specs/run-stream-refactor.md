@@ -4,7 +4,7 @@ Date: 2026-03-14
 
 ## Goal
 
-Refactor `apps/zerg/backend/zerg/routers/stream.py` so the router becomes thin HTTP glue and the replay/live stream lifecycle logic lives in one service module with focused tests.
+Refactor `server/zerg/routers/stream.py` so the router becomes thin HTTP glue and the replay/live stream lifecycle logic lives in one service module with focused tests.
 
 This is a cleanup refactor, not a behavior change.
 
@@ -32,7 +32,7 @@ That logic is service-grade code living in a router module, and it has almost no
 
 Create one module:
 
-- `apps/zerg/backend/zerg/services/run_stream.py`
+- `server/zerg/services/run_stream.py`
 
 Move these concerns into it:
 
@@ -46,7 +46,7 @@ Move these concerns into it:
 - `encode_*_sse(...)`
 - `stream_run_events(...)`
 
-Keep `apps/zerg/backend/zerg/routers/stream.py` responsible for:
+Keep `server/zerg/routers/stream.py` responsible for:
 
 - ownership lookup
 - `Last-Event-ID` parsing
@@ -57,7 +57,7 @@ Keep `apps/zerg/backend/zerg/routers/stream.py` responsible for:
 
 ### Slice 1: Characterization Tests
 
-Add `apps/zerg/backend/tests_lite/test_run_stream_service.py` to pin the current behavior through the existing public wrappers.
+Add `server/tests_lite/test_run_stream_service.py` to pin the current behavior through the existing public wrappers.
 
 Initial tests:
 

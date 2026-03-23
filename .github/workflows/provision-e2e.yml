@@ -7,9 +7,9 @@ on:
     paths:
       - '.dockerignore'
       - 'bun.lock'
-      - 'apps/control-plane/**'
-      - 'apps/zerg/backend/**'
-      - 'apps/zerg/frontend-web/**'
+      - 'control-plane/**'
+      - 'server/**'
+      - 'web/**'
       - 'config/**'
       - 'docker/entrypoint.sh'
       - 'docker/runtime.dockerfile'
@@ -65,8 +65,8 @@ jobs:
           runtime_paths=(
             .dockerignore
             bun.lock
-            apps/zerg/backend
-            apps/zerg/frontend-web
+            server
+            web
             config
             docker/entrypoint.sh
             docker/runtime.dockerfile

@@ -231,7 +231,7 @@ download_runner_code() {
 
   tar -xzf "$temp_dir/runner.tar.gz" -C "$temp_dir"
 
-  local runner_dir="$temp_dir/$root_dir/apps/runner"
+  local runner_dir="$temp_dir/$root_dir/runner"
   if [[ ! -d "$runner_dir" ]]; then
     log_error "Runner directory not found in release archive"
     exit 1

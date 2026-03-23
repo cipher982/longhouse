@@ -6,7 +6,7 @@ on:
     tags:
       - "runner-v*"
     paths:
-      - "apps/runner/**"
+      - "runner/**"
       - ".github/workflows/runner-image.yml"
   workflow_dispatch: {}
 
@@ -51,8 +51,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
-          context: apps/runner
-          file: apps/runner/Dockerfile
+          context: runner
+          file: runner/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}

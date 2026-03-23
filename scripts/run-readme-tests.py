@@ -7,7 +7,7 @@ then executes each block's steps in order. Fails fast on first error.
 Usage:
     python scripts/run-readme-tests.py [--mode smoke|full] [files...]
 
-If no files specified, scans README.md and packages/*/README.md and apps/*/README.md.
+If no files specified, scans README.md and */README.md.
 """
 
 from __future__ import annotations
@@ -139,8 +139,7 @@ def default_paths() -> list[Path]:
     """Default set of README files to scan."""
     candidates = [
         REPO_ROOT / "README.md",
-        *sorted((REPO_ROOT / "packages").glob("*/README.md")),
-        *sorted((REPO_ROOT / "apps").glob("*/README.md")),
+        *sorted(REPO_ROOT.glob("*/README.md")),
     ]
     return [p for p in candidates if p.exists()]
 

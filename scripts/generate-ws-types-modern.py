@@ -33,10 +33,10 @@ class ModernProtocolGenerator:
         # Canonical output locations (independent of schema file location).
         self.schemas_dir = self.repo_root / "schemas"
         self.backend_generated_path = (
-            self.repo_root / "apps" / "zerg" / "backend" / "zerg" / "generated" / "ws_messages.py"
+            self.repo_root / "server" / "zerg" / "generated" / "ws_messages.py"
         )
         self.frontend_generated_path = (
-            self.repo_root / "apps" / "zerg" / "frontend-web" / "src" / "generated" / "ws-messages.ts"
+            self.repo_root / "web" / "src" / "generated" / "ws-messages.ts"
         )
         self.json_schema_path = self.schemas_dir / "ws-protocol.schema.json"
         self.contract_json_path = self.schemas_dir / "ws-protocol-v1.json"

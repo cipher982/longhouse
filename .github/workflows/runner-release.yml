@@ -45,11 +45,11 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        working-directory: apps/runner
+        working-directory: runner
         run: bun install
 
       - name: Build binary
-        working-directory: apps/runner
+        working-directory: runner
         run: |
           bun build --compile --target=${{ matrix.target }} --minify src/index.ts --outfile=dist/${{ matrix.artifact }}
 
@@ -57,7 +57,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: apps/runner/dist/${{ matrix.artifact }}
+          path: runner/dist/${{ matrix.artifact }}
           retention-days: 1
 
   release:
@@ -99,7 +99,7 @@ jobs:
 
       - name: Build update manifest + checksums
         run: |
-          bun apps/runner/scripts/build-update-manifest.ts \
+          bun runner/scripts/build-update-manifest.ts \
             --binaries-dir binaries \
             --output-dir release-metadata \
             --tag "${{ steps.version.outputs.tag }}" \

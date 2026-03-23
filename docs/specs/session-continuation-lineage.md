@@ -104,8 +104,8 @@ Own:
 - child continuation creation rules
 
 Likely files:
-- `apps/zerg/backend/zerg/models/agents.py`
-- `apps/zerg/backend/zerg/services/agents_store.py`
+- `server/zerg/models/agents.py`
+- `server/zerg/services/agents_store.py`
 
 ### Continuation service / session chat
 
@@ -115,8 +115,8 @@ Own:
 - lock web-vs-web access for the same writable head
 
 Likely files:
-- `apps/zerg/backend/zerg/services/session_continuity.py`
-- `apps/zerg/backend/zerg/routers/session_chat.py`
+- `server/zerg/services/session_continuity.py`
+- `server/zerg/routers/session_chat.py`
 
 ### Shipper / ingest path
 
@@ -126,8 +126,8 @@ Own:
 - creating local child continuation rows after branch
 
 Likely files:
-- `apps/engine/src/pipeline/compressor.rs`
-- `apps/zerg/backend/zerg/services/agents_store.py`
+- `engine/src/pipeline/compressor.rs`
+- `server/zerg/services/agents_store.py`
 
 ## Frontend Ownership
 
@@ -151,8 +151,8 @@ Requirements:
 - `Start new continuation from here` on stale continuations
 
 Likely files:
-- `apps/zerg/frontend-web/src/pages/SessionsPage.tsx`
-- `apps/zerg/frontend-web/src/pages/SessionDetailPage.tsx`
+- `web/src/pages/SessionsPage.tsx`
+- `web/src/pages/SessionDetailPage.tsx`
 
 ## API / Query Shape
 

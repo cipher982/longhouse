@@ -30,10 +30,10 @@ class SSETypeGenerator:
 
         # Canonical output locations
         self.backend_generated_path = (
-            self.repo_root / "apps" / "zerg" / "backend" / "zerg" / "generated" / "sse_events.py"
+            self.repo_root / "server" / "zerg" / "generated" / "sse_events.py"
         )
         self.frontend_generated_path = (
-            self.repo_root / "apps" / "zerg" / "frontend-web" / "src" / "generated" / "sse-events.ts"
+            self.repo_root / "web" / "src" / "generated" / "sse-events.ts"
         )
 
     def _load_schema(self) -> Dict[str, Any]:

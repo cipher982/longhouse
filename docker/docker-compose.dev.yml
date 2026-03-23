@@ -71,14 +71,14 @@ services:
     ports:
       - "${BACKEND_PORT:-47300}:8000"
     volumes:
-      - ../apps/zerg/backend:/app:cached
+      - ../server:/app:cached
       - ../config:/app/config:ro
       - backend_static:/app/static
       - ../data:/app/data
       - ${HOME}/.ssh:/home/zerg/.ssh:ro
       - ../logs/backend:/app/logs
       # E2E test fixtures (for tool stubbing)
-      - ../apps/zerg/e2e/fixtures:/app/e2e-fixtures:ro
+      - ../e2e/fixtures:/app/e2e-fixtures:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       <<: *healthcheck-defaults
@@ -94,7 +94,7 @@ services:
     profiles: [dev]
     build:
       context: ..
-      dockerfile: apps/zerg/frontend-web/Dockerfile
+      dockerfile: web/Dockerfile
       target: development
     restart: "no"
     depends_on:
@@ -107,7 +107,7 @@ services:
     ports:
       - "${FRONTEND_PORT:-47200}:5173"
     volumes:
-      - ../apps/zerg/frontend-web:/app:cached
+      - ../web:/app:cached
       - /app/node_modules
       - ../logs/frontend:/app/logs
     healthcheck:
@@ -153,7 +153,7 @@ services:
   dev-runner:
     profiles: [dev]
     build:
-      context: ../apps/runner
+      context: ../runner
       dockerfile: Dockerfile
     restart: "no"
     depends_on:

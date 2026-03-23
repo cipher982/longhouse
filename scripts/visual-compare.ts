@@ -6,8 +6,8 @@
  *   bun run scripts/visual-compare.ts before.png after.png [--json] [--skip-llm]
  *   bun run scripts/visual-compare.ts --baseline-dir <dir> --current-dir <dir> [--json] [--skip-llm]
  *
- * Deps: pixelmatch, pngjs from apps/zerg/e2e/node_modules; @google/genai for LLM triage.
- * Run `bun install` in apps/zerg/e2e/ first.
+ * Deps: pixelmatch, pngjs from e2e/node_modules; @google/genai for LLM triage.
+ * Run `bun install` in e2e/ first.
  *
  * Exit codes: 0 = pass, 1 = failures detected, 2 = error
  */

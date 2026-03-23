@@ -1,7 +1,7 @@
 # Oikos Dispatch Contract
 
 Status: Deferred
-Research: `apps/zerg/backend/docs/specs/3a-deferred-research.md`
+Research: `server/docs/specs/3a-deferred-research.md`
 Last updated: 2026-03-17
 
 ## Goal

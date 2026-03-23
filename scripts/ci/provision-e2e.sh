@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOSTED_INSTANCE_HELPER="$ROOT_DIR/scripts/lib/hosted-instance.sh"
-CONTROL_PLANE_DIR="$ROOT_DIR/apps/control-plane"
+CONTROL_PLANE_DIR="$ROOT_DIR/control-plane"
 API_URL="http://127.0.0.1:48080"
 INSTANCE_PORT=8000
 INSTANCE_URL="http://127.0.0.1:${INSTANCE_PORT}"

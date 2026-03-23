@@ -5,16 +5,16 @@
   "private": true,
   "packageManager": "bun@1.2.20",
   "workspaces": [
-    "apps/zerg/frontend-web",
-    "apps/zerg/e2e",
-    "apps/runner",
-    "apps/video"
+    "web",
+    "e2e",
+    "runner",
+    "video"
   ],
   "scripts": {
     "dev": "make dev",
     "test": "make test",
     "generate-sdk": "make generate-sdk",
-    "validate:all": "make validate && cd apps/zerg/frontend-web && bun run validate:contracts"
+    "validate:all": "make validate && cd web && bun run validate:contracts"
   },
   "devDependencies": {
     "@asyncapi/cli": "^3.1.0",

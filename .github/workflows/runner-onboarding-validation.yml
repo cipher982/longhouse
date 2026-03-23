@@ -6,18 +6,18 @@ on:
       - '.github/workflows/runner-onboarding-validation.yml'
       - '.github/workflows/launch-gate.yml'
       - '.github/workflows/test-install.yml'
-      - 'apps/zerg/e2e/**'
-      - 'apps/zerg/backend/pyproject.toml'
-      - 'apps/zerg/backend/zerg/cli/connect.py'
-      - 'apps/zerg/backend/zerg/cli/doctor.py'
-      - 'apps/zerg/backend/zerg/cli/onboard.py'
-      - 'apps/zerg/backend/zerg/cli/serve.py'
-      - 'apps/zerg/frontend-web/src/components/AddRunnerModal.tsx'
-      - 'apps/zerg/frontend-web/src/components/chat/RunnerSetupCard.tsx'
-      - 'apps/zerg/frontend-web/src/lib/runnerInstallCommands.ts'
-      - 'apps/zerg/frontend-web/src/pages/RunnersPage.tsx'
-      - 'apps/zerg/backend/zerg/routers/runners.py'
-      - 'apps/zerg/backend/zerg/routers/templates/install.sh'
+      - 'e2e/**'
+      - 'server/pyproject.toml'
+      - 'server/zerg/cli/connect.py'
+      - 'server/zerg/cli/doctor.py'
+      - 'server/zerg/cli/onboard.py'
+      - 'server/zerg/cli/serve.py'
+      - 'web/src/components/AddRunnerModal.tsx'
+      - 'web/src/components/chat/RunnerSetupCard.tsx'
+      - 'web/src/lib/runnerInstallCommands.ts'
+      - 'web/src/pages/RunnersPage.tsx'
+      - 'server/zerg/routers/runners.py'
+      - 'server/zerg/routers/templates/install.sh'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
       - 'scripts/qa-oss.sh'
@@ -29,18 +29,18 @@ on:
       - '.github/workflows/runner-onboarding-validation.yml'
       - '.github/workflows/launch-gate.yml'
       - '.github/workflows/test-install.yml'
-      - 'apps/zerg/e2e/**'
-      - 'apps/zerg/backend/pyproject.toml'
-      - 'apps/zerg/backend/zerg/cli/connect.py'
-      - 'apps/zerg/backend/zerg/cli/doctor.py'
-      - 'apps/zerg/backend/zerg/cli/onboard.py'
-      - 'apps/zerg/backend/zerg/cli/serve.py'
-      - 'apps/zerg/frontend-web/src/components/AddRunnerModal.tsx'
-      - 'apps/zerg/frontend-web/src/components/chat/RunnerSetupCard.tsx'
-      - 'apps/zerg/frontend-web/src/lib/runnerInstallCommands.ts'
-      - 'apps/zerg/frontend-web/src/pages/RunnersPage.tsx'
-      - 'apps/zerg/backend/zerg/routers/runners.py'
-      - 'apps/zerg/backend/zerg/routers/templates/install.sh'
+      - 'e2e/**'
+      - 'server/pyproject.toml'
+      - 'server/zerg/cli/connect.py'
+      - 'server/zerg/cli/doctor.py'
+      - 'server/zerg/cli/onboard.py'
+      - 'server/zerg/cli/serve.py'
+      - 'web/src/components/AddRunnerModal.tsx'
+      - 'web/src/components/chat/RunnerSetupCard.tsx'
+      - 'web/src/lib/runnerInstallCommands.ts'
+      - 'web/src/pages/RunnersPage.tsx'
+      - 'server/zerg/routers/runners.py'
+      - 'server/zerg/routers/templates/install.sh'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
       - 'scripts/qa-oss.sh'
@@ -126,7 +126,7 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          cd apps/zerg/e2e
+          cd e2e
           bun install --silent
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             bunx playwright install --with-deps ${{ matrix.browsers }}
@@ -152,8 +152,8 @@ jobs:
           name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
           if-no-files-found: ignore
           path: |
-            apps/zerg/e2e/test-results
-            apps/zerg/e2e/playwright-report
+            e2e/test-results
+            e2e/playwright-report
             qa-oss-server.log
 
   hosted-onboarding-extended:
@@ -199,7 +199,7 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          cd apps/zerg/e2e
+          cd e2e
           bun install --silent
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             bunx playwright install --with-deps ${{ matrix.browsers }}
@@ -220,8 +220,8 @@ jobs:
           name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
           if-no-files-found: ignore
           path: |
-            apps/zerg/e2e/test-results
-            apps/zerg/e2e/playwright-report
+            e2e/test-results
+            e2e/playwright-report
             qa-oss-server.log
 
   synthetic-first-user:
@@ -254,11 +254,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y make
 
       - name: Install frontend test deps
-        run: cd apps/zerg/e2e && bun install --silent
+        run: cd e2e && bun install --silent
 
       - name: Install Playwright Chromium shell
         run: |
-          cd apps/zerg/e2e
+          cd e2e
           # The README onboarding contract runs the onboarding-chromium project only.
           bunx playwright install-deps chromium
           bunx playwright install --only-shell chromium
@@ -273,8 +273,8 @@ jobs:
           name: onboarding-funnel-artifacts
           if-no-files-found: ignore
           path: |
-            /tmp/longhouse-onboarding/apps/zerg/e2e/test-results
-            /tmp/longhouse-onboarding/apps/zerg/e2e/playwright-report
+            /tmp/longhouse-onboarding/e2e/test-results
+            /tmp/longhouse-onboarding/e2e/playwright-report
 
   self-hosted-cube-linux-x64:
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted) }}
@@ -308,7 +308,7 @@ jobs:
 
       - name: Install Playwright Chromium shell
         run: |
-          cd apps/zerg/e2e
+          cd e2e
           bun install --silent
           # This lane runs the onboarding-chromium project only.
           bunx playwright install-deps chromium
@@ -327,8 +327,8 @@ jobs:
           name: onboarding-self-hosted-cube-linux-x64
           if-no-files-found: ignore
           path: |
-            apps/zerg/e2e/test-results
-            apps/zerg/e2e/playwright-report
+            e2e/test-results
+            e2e/playwright-report
             qa-oss-server.log
 
   self-hosted-linux-x64:
@@ -363,7 +363,7 @@ jobs:
 
       - name: Install Playwright Chromium shell
         run: |
-          cd apps/zerg/e2e
+          cd e2e
           bun install --silent
           # This lane runs the onboarding-chromium project only.
           bunx playwright install-deps chromium
@@ -382,8 +382,8 @@ jobs:
           name: onboarding-self-hosted-linux-x64
           if-no-files-found: ignore
           path: |
-            apps/zerg/e2e/test-results
-            apps/zerg/e2e/playwright-report
+            e2e/test-results
+            e2e/playwright-report
             qa-oss-server.log
 
   self-hosted-macos-arm64:
@@ -415,7 +415,7 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          cd apps/zerg/e2e
+          cd e2e
           bun install --silent
           bunx playwright install chromium firefox webkit
 
@@ -432,6 +432,6 @@ jobs:
           name: onboarding-self-hosted-macos-arm64
           if-no-files-found: ignore
           path: |
-            apps/zerg/e2e/test-results
-            apps/zerg/e2e/playwright-report
+            e2e/test-results
+            e2e/playwright-report
             qa-oss-server.log

@@ -31,14 +31,14 @@ jobs:
 
     - name: Pre-install backend deps
       run: |
-        cd apps/zerg/backend
+        cd server
         echo "=== Installing backend dependencies ==="
         time uv sync
         echo "=== Done ==="
 
     - name: Test uvicorn startup time
       run: |
-        cd apps/zerg/backend
+        cd server
         echo "=== Starting uvicorn and timing to health ==="
         TESTING=1 AUTH_DISABLED=1 DATABASE_URL="${DATABASE_URL}" \
           .venv/bin/python -m uvicorn zerg.main:app --host 127.0.0.1 --port 8001 --workers 1 --log-level info &

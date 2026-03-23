@@ -106,7 +106,7 @@ try {
 log("\n3b. Verifying workspace resolution:");
 try {
   const workspaces = [
-    { name: "zerg-frontend", path: "apps/zerg/frontend-web/package.json" },
+    { name: "zerg-frontend", path: "web/package.json" },
   ];
 
   for (const ws of workspaces) {
