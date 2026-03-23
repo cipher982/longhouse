@@ -193,9 +193,11 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
       "Managed-local Codex stays terminal-driven",
     );
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach the live Codex terminal");
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
       "tmux -L longhouse-managed attach -t lh-codex",
     );
+    expect(screen.getByText(/Loop Mode changes review posture only/i)).toBeInTheDocument();
     expect(screen.queryByTestId("session-chat")).not.toBeInTheDocument();
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();
 

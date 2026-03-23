@@ -145,6 +145,22 @@ describe("SessionContextPane", () => {
     );
   });
 
+  it("clarifies the terminal-first contract for managed-local Codex", () => {
+    renderPane({
+      session: makeSession({
+        provider: "codex",
+        execution_home: "managed_local",
+        managed_transport: "tmux",
+        source_runner_name: "cinder",
+        attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+      }),
+    });
+
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach the live Codex terminal");
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("reopen the live Codex TUI");
+    expect(screen.getByText(/Loop Mode changes review posture only/i)).toBeInTheDocument();
+  });
+
   it("calls back with the selected loop mode", async () => {
     const user = userEvent.setup();
     const onLoopModeChange = vi.fn();
