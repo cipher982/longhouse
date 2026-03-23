@@ -345,8 +345,8 @@ log "🧪 Starting local server from onboarded config..."
 longhouse serve --stop >/dev/null 2>&1 || true
 longhouse serve --host 127.0.0.1 --port "$PORT" --daemon
 
-if ! wait_for_health "http://127.0.0.1:${PORT}/api/health" "Onboarded local server"; then
-  fail "Onboarding server did not become healthy"
+if ! wait_for_health "http://127.0.0.1:${PORT}/api/readyz" "Onboarded local server"; then
+  fail "Onboarding server did not become ready"
 fi
 
 log "🛑 Stopping onboarded server..."
@@ -355,8 +355,8 @@ longhouse serve --stop
 log "🎭 Starting demo server..."
 longhouse serve --demo-fresh --host 127.0.0.1 --port "$DEMO_PORT" --daemon
 
-if ! wait_for_health "http://127.0.0.1:${DEMO_PORT}/api/health" "Demo server"; then
-  fail "Demo server did not become healthy"
+if ! wait_for_health "http://127.0.0.1:${DEMO_PORT}/api/readyz" "Demo server"; then
+  fail "Demo server did not become ready"
 fi
 
 log "🔐 Creating local device token for demo server..."
