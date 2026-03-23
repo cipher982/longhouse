@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::shipping::client::ShipperClient;
+use crate::state::spool::DeadLetterEntry;
 use crate::state::spool::Spool;
 
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -35,6 +36,20 @@ pub struct HeartbeatStats<'a> {
     pub tracker: &'a ConsecutiveErrorTracker,
     pub is_offline: bool,
     pub last_ship_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusDeadLetter {
+    provider: String,
+    file_path: String,
+    start_offset: u64,
+    end_offset: u64,
+    range_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+    created_at: String,
 }
 
 impl HeartbeatPayload {
@@ -65,23 +80,49 @@ pub async fn send_heartbeat(client: &ShipperClient, payload: &HeartbeatPayload) 
 }
 
 /// Write status to `~/.claude/engine-status.json`.
-pub fn write_status_file(payload: &HeartbeatPayload, claude_dir: &std::path::Path) {
+pub fn write_status_file(
+    payload: &HeartbeatPayload,
+    stats: &HeartbeatStats<'_>,
+    claude_dir: &std::path::Path,
+) {
     #[derive(Serialize)]
     struct StatusFile<'a> {
         #[serde(flatten)]
         payload: &'a HeartbeatPayload,
+        recent_dead_letters: Vec<StatusDeadLetter>,
         last_updated: String,
     }
 
+    let recent_dead_letters = stats
+        .spool
+        .recent_dead(5)
+        .unwrap_or_default()
+        .into_iter()
+        .map(status_dead_letter_from_entry)
+        .collect();
     let now = chrono::Utc::now().to_rfc3339();
     let status = StatusFile {
         payload,
+        recent_dead_letters,
         last_updated: now,
     };
 
     let path = claude_dir.join("engine-status.json");
     if let Ok(json) = serde_json::to_string_pretty(&status) {
         let _ = std::fs::write(&path, json);
+    }
+}
+
+fn status_dead_letter_from_entry(entry: DeadLetterEntry) -> StatusDeadLetter {
+    StatusDeadLetter {
+        provider: entry.provider,
+        file_path: entry.file_path,
+        start_offset: entry.start_offset,
+        end_offset: entry.end_offset,
+        range_bytes: entry.end_offset.saturating_sub(entry.start_offset),
+        session_id: entry.session_id,
+        last_error: entry.last_error,
+        created_at: entry.created_at,
     }
 }
 
@@ -121,6 +162,7 @@ fn disk_free_bytes(_path: &std::path::Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::db::open_db;
 
     #[test]
     fn test_heartbeat_payload_fields() {
@@ -173,6 +215,10 @@ mod tests {
     #[test]
     fn test_write_status_file_includes_dead_count() {
         let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let spool = Spool::new(&conn);
+        let tracker = ConsecutiveErrorTracker::new();
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 42,
@@ -185,10 +231,33 @@ mod tests {
             is_offline: false,
         };
 
-        write_status_file(&payload, dir.path());
+        spool
+            .record_dead(
+                "codex",
+                "/tmp/dead-range.jsonl",
+                100,
+                220,
+                Some("dead-session"),
+                "oversize source range",
+            )
+            .unwrap();
+        let stats = HeartbeatStats {
+            spool: &spool,
+            tracker: &tracker,
+            is_offline: false,
+            last_ship_at: payload.last_ship_at.clone(),
+        };
+
+        write_status_file(&payload, &stats, dir.path());
 
         let json = std::fs::read_to_string(dir.path().join("engine-status.json")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["spool_dead_count"], 3);
+        assert_eq!(parsed["recent_dead_letters"][0]["provider"], "codex");
+        assert_eq!(
+            parsed["recent_dead_letters"][0]["file_path"],
+            "/tmp/dead-range.jsonl"
+        );
+        assert_eq!(parsed["recent_dead_letters"][0]["range_bytes"], 120);
     }
 }
