@@ -478,6 +478,22 @@ fn dead_letter_from_raw_range(
     }
 }
 
+fn ack_only_from_raw_range(
+    path_str: &str,
+    provider: &str,
+    session_id: &str,
+    start_offset: u64,
+    end_offset: u64,
+) -> AckOnlyItem {
+    AckOnlyItem {
+        path_str: path_str.to_string(),
+        provider: provider.to_string(),
+        offset: start_offset,
+        new_offset: end_offset,
+        session_id: session_id.to_string(),
+    }
+}
+
 fn dead_letter_from_compressed_range(
     path_str: &str,
     provider: &str,
@@ -681,13 +697,23 @@ fn build_prepared_actions(
                 session_id_override,
             )?),
             PlannedRangeAction::DeadLetter(range) => {
-                actions.push(PreparedAction::DeadLetter(dead_letter_from_raw_range(
-                    path_str,
-                    provider,
-                    &parse_result.metadata.session_id,
-                    range,
-                    max_batch_bytes,
-                )))
+                if range.event_range.is_empty() {
+                    actions.push(PreparedAction::AckOnly(ack_only_from_raw_range(
+                        path_str,
+                        provider,
+                        &parse_result.metadata.session_id,
+                        range.start_offset,
+                        range.end_offset,
+                    )));
+                } else {
+                    actions.push(PreparedAction::DeadLetter(dead_letter_from_raw_range(
+                        path_str,
+                        provider,
+                        &parse_result.metadata.session_id,
+                        range,
+                        max_batch_bytes,
+                    )))
+                }
             }
         }
     }
@@ -2032,6 +2058,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_prepare_codex_oversize_compacted_line_acknowledges_without_dead_letter() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-03-10T02-45-21-019cd67e-36d7-7271-af29-9dcc8aba405e.jsonl");
+        let compacted = serde_json::json!({
+            "timestamp": "2026-03-11T23:11:59.551Z",
+            "type": "compacted",
+            "payload": {
+                "message": "",
+                "replacement_history": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "x".repeat(512)
+                    }]
+                }]
+            }
+        });
+        std::fs::write(&path, format!("{}\n", compacted)).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "codex", CompressionAlgo::Gzip, &conn, 200, None).unwrap();
+        let prepared = prepared.expect("oversize compacted line should be acknowledged");
+
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::AckOnly(item) => {
+                assert_eq!(item.offset, 0);
+                assert_eq!(item.new_offset, std::fs::metadata(&path).unwrap().len());
+                assert_eq!(item.provider, "codex");
+            }
+            PreparedAction::Ship(_) | PreparedAction::DeadLetter(_) => {
+                panic!("oversize zero-event compacted line should not be dead-lettered")
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_ship_prepared_file_ack_only_updates_offsets() {
         let (_tmp, conn) = make_db();
@@ -2058,6 +2125,66 @@ mod tests {
         assert!(outcome.fully_processed);
         assert_eq!(fs.get_offset("/tmp/gemini-info.json").unwrap(), 413);
         assert_eq!(fs.get_queued_offset("/tmp/gemini-info.json").unwrap(), 413);
+    }
+
+    #[tokio::test]
+    async fn test_replay_oversize_zero_event_range_clears_pending_entry() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-03-10T02-45-21-019cd67e-36d7-7271-af29-9dcc8aba405e.jsonl");
+        let compacted = serde_json::json!({
+            "timestamp": "2026-03-11T23:11:59.551Z",
+            "type": "compacted",
+            "payload": {
+                "message": "",
+                "replacement_history": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "x".repeat(512)
+                    }]
+                }]
+            }
+        });
+        std::fs::write(&path, format!("{}\n", compacted)).unwrap();
+
+        let spool = Spool::new(&conn);
+        let file_state = FileState::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        file_state
+            .set_queued_offset(
+                &path_str,
+                file_len,
+                "codex",
+                "019cd67e-36d7-7271-af29-9dcc8aba405e",
+                "019cd67e-36d7-7271-af29-9dcc8aba405e",
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "codex",
+                &path_str,
+                0,
+                file_len,
+                Some("019cd67e-36d7-7271-af29-9dcc8aba405e"),
+            )
+            .unwrap();
+
+        let client = make_test_client("http://127.0.0.1:9");
+        let (ok, failed) =
+            replay_spool_batch_with_batch_bytes(&conn, &client, CompressionAlgo::Gzip, 10, 200)
+                .await
+                .unwrap();
+
+        assert_eq!(ok, 1);
+        assert_eq!(failed, 0);
+        assert_eq!(spool.pending_count().unwrap(), 0);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), file_len);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), file_len);
     }
 
     #[test]
