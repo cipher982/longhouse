@@ -209,7 +209,7 @@ CONTAINER_NAME="${LH_INSTANCE_CONTAINER_NAME:-$CI_CONTAINER_NAME}"
 
 printf "\n==> Waiting for instance health (%s)\n" "$CONTAINER_NAME"
 for _ in {1..40}; do
-  if curl -sf "${INSTANCE_URL}/api/health" >/dev/null; then
+  if curl -sf "${INSTANCE_URL}/api/readyz" >/dev/null; then
     break
   fi
   sleep 2
@@ -221,15 +221,15 @@ for _ in {1..40}; do
   fi
 done
 
-if ! curl -sf "${INSTANCE_URL}/api/health" >/dev/null; then
-  echo "Instance health check failed." >&2
+if ! curl -sf "${INSTANCE_URL}/api/readyz" >/dev/null; then
+  echo "Instance readiness check failed." >&2
   docker ps -a
   docker logs "$CONTAINER_NAME" || true
   exit 1
 fi
 
 printf "\n==> Running smoke checks\n"
-curl -sf "${INSTANCE_URL}/api/health" >/dev/null
+curl -sf "${INSTANCE_URL}/api/readyz" >/dev/null
 curl -sf "${INSTANCE_URL}/api/health" >/dev/null
 curl -sf "${INSTANCE_URL}/timeline" >/dev/null
 
@@ -397,8 +397,8 @@ if [[ "${deploy_succeeded:-0}" -ne 1 || "${deploy_failed:-0}" -ne 0 ]]; then
 fi
 
 printf "\n==> Verifying instance health after deploy\n"
-if ! curl -sf "${INSTANCE_URL}/api/health" >/dev/null; then
-  echo "Instance health check failed after deploy." >&2
+if ! curl -sf "${INSTANCE_URL}/api/readyz" >/dev/null; then
+  echo "Instance readiness check failed after deploy." >&2
   docker logs "$CONTAINER_NAME" || true
   exit 1
 fi

@@ -296,7 +296,7 @@ def my_instance_health(request: Request, db: Session = Depends(get_db)):
     """Server-side health check for the current user's instance.
 
     Makes a real HTTPS request to the instance, verifying both SSL cert
-    and a 200 response from /api/health. Updates instance status to "active"
+    and a 200 response from /api/readyz. Updates instance status to "active"
     on first successful check.
     """
     from control_plane.routers.auth import get_current_user

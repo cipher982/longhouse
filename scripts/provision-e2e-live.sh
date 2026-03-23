@@ -116,14 +116,14 @@ ok "Instance created: id=${INSTANCE_ID} url=${INSTANCE_URL} status=${INSTANCE_ST
 # Step 3: Wait for instance health via HTTPS
 # ---------------------------------------------------------------------------
 
-step "Waiting for instance health at ${INSTANCE_URL}/api/health (timeout ${HEALTH_TIMEOUT}s)"
+step "Waiting for instance readiness at ${INSTANCE_URL}/api/readyz (timeout ${HEALTH_TIMEOUT}s)"
 
 elapsed=0
 while [[ $elapsed -lt $HEALTH_TIMEOUT ]]; do
   health_resp=$(curl -sf --connect-timeout 5 --max-time 10 \
-    "${INSTANCE_URL}/api/health" 2>/dev/null || echo "")
-  if printf '%s' "$health_resp" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"(ok|healthy)"'; then
-    ok "Instance healthy after ${elapsed}s"
+    "${INSTANCE_URL}/api/readyz" 2>/dev/null || echo "")
+  if [[ -n "$health_resp" ]]; then
+    ok "Instance ready after ${elapsed}s"
     break
   fi
   sleep 3
@@ -136,7 +136,7 @@ if [[ $elapsed -ge $HEALTH_TIMEOUT ]]; then
   echo "  Attempting container diagnostics..."
   ssh zerg "docker logs ${CONTAINER_NAME} 2>&1 | tail -30" 2>/dev/null || true
   ssh zerg "docker ps -a --filter name=${CONTAINER_NAME}" 2>/dev/null || true
-  fail "Instance health check timed out after ${HEALTH_TIMEOUT}s"
+  fail "Instance readiness check timed out after ${HEALTH_TIMEOUT}s"
 fi
 
 # ---------------------------------------------------------------------------

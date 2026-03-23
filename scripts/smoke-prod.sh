@@ -92,10 +92,10 @@ section() {
     echo "--- $1 ---"
 }
 
-# Wait for API health to return "healthy" status
-# Polls /api/health until status is "healthy" three times consecutively (or timeout)
+# Wait for API readiness to return a healthy/ready status
+# Polls /api/readyz until status is healthy/ok/ready three times consecutively (or timeout)
 wait_for_health() {
-    local url="${1:-$API_URL/api/health}"
+    local url="${1:-$API_URL/api/readyz}"
     local max_attempts="${2:-45}"   # 45 * 2s = 90s max
     local interval="${3:-2}"
     local required_consecutive=3
@@ -114,10 +114,10 @@ wait_for_health() {
         local status
         status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null)
 
-        if [[ "$status" == "healthy" || "$status" == "ok" ]]; then
+        if [[ "$status" == "healthy" || "$status" == "ok" || "$status" == "ready" ]]; then
             consecutive_ok=$((consecutive_ok + 1))
             if [[ $consecutive_ok -ge $required_consecutive ]]; then
-                echo -e "${GREEN}✓${NC} API healthy after $attempt attempts"
+                echo -e "${GREEN}✓${NC} API ready after $attempt attempts"
                 return 0
             fi
         else
@@ -680,7 +680,7 @@ echo ""
 
 # Wait if requested - polls health instead of static sleep
 if [[ $WAIT -eq 1 ]]; then
-    wait_for_health "$API_URL/api/health"
+    wait_for_health "$API_URL/api/readyz"
     echo ""
 fi
 
