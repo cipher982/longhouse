@@ -30,9 +30,17 @@ from fastapi.exceptions import HTTPException
 MAX_RAW_BYTES: Final[int] = 2 * 1024 * 1024  # 2 MiB raw upload limit
 ALLOWED_MIME: Final[set[str]] = {"image/png", "image/jpeg", "image/webp"}
 
-# Directory where avatars are persisted.  Computed relative to repo root so
-# the function also works in tests where CWD can vary.
-AVATARS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "static" / "avatars"
+
+# Directory where avatars are persisted. Resolve against the repo root in local
+# development and `/app` in the runtime image.
+def _static_base_dir(module_path: Path) -> Path:
+    resolved = module_path.resolve()
+    if resolved.parents[2] == Path("/app"):
+        return Path("/app")
+    return resolved.parents[3]
+
+
+AVATARS_DIR = _static_base_dir(Path(__file__)) / "static" / "avatars"
 AVATARS_DIR.mkdir(parents=True, exist_ok=True)
 
 
