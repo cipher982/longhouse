@@ -55,6 +55,7 @@ class RunnerJobDispatcher:
         # Track active job per runner for concurrency control
         # Key: runner_id (int), Value: job_id (UUID string)
         self._runner_active_jobs: Dict[int, str] = {}
+        self._runner_active_jobs_lock = threading.Lock()
 
     def can_accept_job(self, runner_id: int) -> bool:
         """Check if a runner can accept a new job.
@@ -65,7 +66,8 @@ class RunnerJobDispatcher:
         Returns:
             True if runner has no active jobs, False if busy
         """
-        return runner_id not in self._runner_active_jobs
+        with self._runner_active_jobs_lock:
+            return runner_id not in self._runner_active_jobs
 
     def mark_job_active(self, runner_id: int, job_id: str) -> None:
         """Mark a job as active on a runner.
@@ -74,7 +76,8 @@ class RunnerJobDispatcher:
             runner_id: ID of the runner
             job_id: UUID of the job
         """
-        self._runner_active_jobs[runner_id] = job_id
+        with self._runner_active_jobs_lock:
+            self._runner_active_jobs[runner_id] = job_id
         logger.debug(f"Marked job {job_id} as active on runner {runner_id}")
 
     def clear_active_job(self, runner_id: int) -> None:
@@ -83,7 +86,8 @@ class RunnerJobDispatcher:
         Args:
             runner_id: ID of the runner
         """
-        job_id = self._runner_active_jobs.pop(runner_id, None)
+        with self._runner_active_jobs_lock:
+            job_id = self._runner_active_jobs.pop(runner_id, None)
         if job_id:
             logger.debug(f"Cleared active job {job_id} from runner {runner_id}")
 
@@ -248,16 +252,16 @@ class RunnerJobDispatcher:
         with self._pending_lock:
             pending = self._pending_jobs.get(job_id)
 
-        if pending:
-            pending.result = result
-            pending.event.set()  # Signal completion
-            logger.debug(f"Completed job {job_id}")
-        else:
-            logger.warning(f"complete_job called for unknown job {job_id}")
-
         # Clear active job tracking
         if runner_id is not None:
             self.clear_active_job(runner_id)
+
+        if pending:
+            pending.result = result
+            pending.event.set()  # Signal completion after freeing the runner
+            logger.debug(f"Completed job {job_id}")
+        else:
+            logger.warning(f"complete_job called for unknown job {job_id}")
 
 
 # Global singleton instance
