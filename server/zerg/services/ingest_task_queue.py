@@ -135,7 +135,11 @@ async def _process_batch() -> None:
             return
 
         task_id, session_id, task_type = tasks[0]
-        await _execute_task(task_id, session_id, task_type)
+        retried = await _execute_task(task_id, session_id, task_type)
+        if retried:
+            # Task was re-queued; break so the outer worker sleep provides a
+            # yield before we re-claim — prevents event-loop starvation.
+            break
 
 
 def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
@@ -161,7 +165,8 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
     return claimed
 
 
-async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
+async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
+    """Execute a single task. Returns True if the task was re-queued (RetryTaskLater)."""
     timeout_seconds = TASK_TIMEOUT_SECONDS.get(task_type)
     try:
         if timeout_seconds is None:
@@ -171,9 +176,13 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
 
         _mark_status(task_id, "done", error=None, retry=False)
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
+        return False
     except RetryTaskLater as e:
         logger.info("Ingest task %s (%s/%s) re-queued: %s", task_id, task_type, session_id, e)
-        _mark_status(task_id, "pending", error=str(e), retry=True)
+        # Pass "failed" as final_status so exhausted tasks actually die rather
+        # than looping as "pending" forever.
+        _mark_status(task_id, "failed", error=str(e), retry=True)
+        return True
     except asyncio.TimeoutError:
         timeout_label = f"{timeout_seconds:g}s" if timeout_seconds is not None else "unknown"
         logger.warning("Ingest task %s (%s/%s) timed out after %s", task_id, task_type, session_id, timeout_label)
@@ -183,9 +192,11 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
             error=f"{task_type} task timed out after {timeout_label}",
             retry=True,
         )
+        return False
     except Exception as e:
         logger.exception("Ingest task %s (%s/%s) failed", task_id, task_type, session_id)
         _mark_status(task_id, "failed", error=str(e), retry=True)
+        return False
 
 
 async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
