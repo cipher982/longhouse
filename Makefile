@@ -228,7 +228,9 @@ test-e2e-cp: ## Control plane E2E (Playwright, local server, no Docker)
 install-engine: ## Build + sign the Rust engine binary (run after any engine source change)
 	cd engine && cargo build --release
 	codesign -s - engine/target/release/longhouse-engine
-	@echo "longhouse-engine installed (symlink at ~/.local/bin/longhouse-engine)"
+	@mkdir -p $$HOME/.local/bin
+	@ln -sf "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
+	@echo "longhouse-engine installed (~/.local/bin/longhouse-engine -> $(CURDIR)/engine/target/release/longhouse-engine)"
 
 test-engine-fast: ## Rust engine unit + golden + adversarial tests (uses repo-local binary, included in make test)
 	@echo "🦀 Running engine unit + golden + adversarial tests..."
