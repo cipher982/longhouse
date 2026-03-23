@@ -142,6 +142,22 @@ impl Default for ShipPreparedOutcome {
     }
 }
 
+pub(crate) struct ReplaySpoolOutcome {
+    pub resolved: usize,
+    pub failed: usize,
+    pub had_connect_error: bool,
+}
+
+impl Default for ReplaySpoolOutcome {
+    fn default() -> Self {
+        Self {
+            resolved: 0,
+            failed: 0,
+            had_connect_error: false,
+        }
+    }
+}
+
 enum AttemptedShip {
     Shipped(ShipItem),
     Transient {
@@ -1189,18 +1205,51 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
     parse_tracker: Option<&RecentIssueTracker>,
 ) -> Result<(usize, usize)> {
     let spool = Spool::new(conn);
-    let file_state = FileState::new(conn);
     let pending = spool.dequeue_batch(limit)?;
+    let outcome =
+        replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await?;
 
-    let mut shipped = 0usize;
-    let mut failed = 0usize;
+    // Cleanup old dead entries
+    let cleaned = spool.cleanup()?;
+    if cleaned > 0 {
+        tracing::info!("Cleaned {} old spool entries", cleaned);
+    }
 
-    'entry_loop: for entry in &pending {
+    Ok((outcome.resolved, outcome.failed))
+}
+
+pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    file_path: &Path,
+    limit: usize,
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<ReplaySpoolOutcome> {
+    let spool = Spool::new(conn);
+    let pending = spool.pending_entries_for_path(&file_path.to_string_lossy(), limit)?;
+    replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await
+}
+
+async fn replay_spool_entries(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    pending: &[crate::state::spool::SpoolEntry],
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<ReplaySpoolOutcome> {
+    let spool = Spool::new(conn);
+    let file_state = FileState::new(conn);
+    let mut outcome = ReplaySpoolOutcome::default();
+
+    'entry_loop: for entry in pending {
         let path = PathBuf::from(&entry.file_path);
         if !path.exists() {
             tracing::warn!("Spool file missing: {}", entry.file_path);
             spool.mark_failed_with_max(entry.id, "file missing", 0)?;
-            failed += 1;
+            outcome.failed += 1;
             continue;
         }
 
@@ -1218,16 +1267,16 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
             Ok(None) => {
                 if entry.start_offset >= entry.end_offset {
                     spool.mark_shipped(entry.id)?;
-                    shipped += 1;
+                    outcome.resolved += 1;
                 } else {
                     spool.mark_failed(entry.id, "no complete lines ready for replay")?;
-                    failed += 1;
+                    outcome.failed += 1;
                 }
                 continue;
             }
             Err(e) => {
                 spool.mark_failed(entry.id, &e.to_string())?;
-                failed += 1;
+                outcome.failed += 1;
                 continue;
             }
         };
@@ -1284,10 +1333,11 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
                         is_connect_error,
                     } => {
                         if is_connect_error {
+                            outcome.had_connect_error = true;
                             break 'entry_loop;
                         }
                         spool.mark_failed(entry.id, &error)?;
-                        failed += 1;
+                        outcome.failed += 1;
                         continue 'entry_loop;
                     }
                     AttemptedShip::ClientError {
@@ -1301,7 +1351,7 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
                                 "413 payload too large during replay",
                                 u32::MAX,
                             )?;
-                            failed += 1;
+                            outcome.failed += 1;
                             continue 'entry_loop;
                         }
 
@@ -1335,17 +1385,11 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
         }
 
         if entry_done {
-            shipped += 1;
+            outcome.resolved += 1;
         }
     }
 
-    // Cleanup old dead entries
-    let cleaned = spool.cleanup()?;
-    if cleaned > 0 {
-        tracing::info!("Cleaned {} old spool entries", cleaned);
-    }
-
-    Ok((shipped, failed))
+    Ok(outcome)
 }
 
 /// Run a full scan: discover all provider files, prepare and ship any with new content.
@@ -2185,6 +2229,97 @@ mod tests {
         assert_eq!(spool.pending_count().unwrap(), 0);
         assert_eq!(file_state.get_offset(&path_str).unwrap(), file_len);
         assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), file_len);
+    }
+
+    #[tokio::test]
+    async fn test_replay_spool_for_path_processes_only_target_file() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir
+            .path()
+            .join("aaaaaaaa-1111-2222-3333-444455556666.jsonl");
+        let path_b = dir
+            .path()
+            .join("bbbbbbbb-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path_a, claude_session_lines()).unwrap();
+        std::fs::write(&path_b, claude_session_lines()).unwrap();
+
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let path_a_str = path_a.to_string_lossy().to_string();
+        let path_b_str = path_b.to_string_lossy().to_string();
+        let path_a_len = std::fs::metadata(&path_a).unwrap().len();
+        let path_b_len = std::fs::metadata(&path_b).unwrap().len();
+
+        file_state
+            .set_queued_offset(
+                &path_a_str,
+                path_a_len,
+                "claude",
+                "aaaaaaaa-1111-2222-3333-444455556666",
+                "aaaaaaaa-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+        file_state
+            .set_queued_offset(
+                &path_b_str,
+                path_b_len,
+                "claude",
+                "bbbbbbbb-1111-2222-3333-444455556666",
+                "bbbbbbbb-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+
+        spool
+            .enqueue(
+                "claude",
+                &path_a_str,
+                0,
+                path_a_len,
+                Some("aaaaaaaa-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_b_str,
+                0,
+                path_b_len,
+                Some("bbbbbbbb-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let client = make_test_client(&url);
+        let outcome = replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            &path_a,
+            10,
+            10_000,
+            None,
+        )
+        .await
+        .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(outcome.resolved, 1);
+        assert_eq!(outcome.failed, 0);
+        assert!(!outcome.had_connect_error);
+        assert!(spool
+            .pending_entries_for_path(&path_a_str, 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            spool
+                .pending_entries_for_path(&path_b_str, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(file_state.get_offset(&path_a_str).unwrap(), path_a_len);
+        assert_eq!(file_state.get_offset(&path_b_str).unwrap(), 0);
     }
 
     #[test]

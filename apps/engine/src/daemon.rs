@@ -7,9 +7,11 @@
 //! - 0% CPU when idle (blocked on kernel filesystem events)
 //! - Single-threaded tokio runtime (current_thread)
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use tokio::task::JoinSet;
 
 use crate::config::ShipperConfig;
 use crate::discovery::{self, ProviderConfig};
@@ -18,6 +20,7 @@ use crate::error_tracker::RecentIssueTracker;
 use crate::heartbeat;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
+use crate::scheduler::{PathJob, PathScheduler, WorkPriority};
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
 use crate::state::db::open_db;
@@ -33,6 +36,11 @@ pub struct ConnectConfig {
     pub fallback_scan_secs: u64,
     pub spool_replay_secs: u64,
 }
+
+const DAEMON_MAX_IN_FLIGHT_CAP: usize = 4;
+const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
+const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
+const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 
 /// Offline / connectivity state.
 struct OfflineState {
@@ -71,10 +79,26 @@ impl OfflineState {
     }
 }
 
+#[derive(Clone)]
+struct PathTaskContext {
+    shipper_config: ShipperConfig,
+    client: ShipperClient,
+    algo: CompressionAlgo,
+    tracker: ConsecutiveErrorTracker,
+    parse_tracker: RecentIssueTracker,
+}
+
+struct PathTaskResult {
+    job: PathJob,
+    events_shipped: usize,
+    resolved_spool: usize,
+    failed_spool: usize,
+    had_connect_error: bool,
+    rerun_priority: Option<WorkPriority>,
+}
+
 /// Run the connect daemon. This function blocks until shutdown signal.
 pub async fn run(config: ConnectConfig) -> Result<()> {
-    let start = Instant::now();
-
     // 1. Open state DB
     let conn = open_db(config.shipper_config.db_path.as_deref())?;
 
@@ -111,48 +135,38 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 5. Create error tracker (shared across all ship operations)
     let tracker = ConsecutiveErrorTracker::new();
     let parse_tracker = RecentIssueTracker::new();
+    let task_context = PathTaskContext {
+        shipper_config: config.shipper_config.clone(),
+        client: client.clone(),
+        algo: config.algo,
+        tracker: tracker.clone(),
+        parse_tracker: parse_tracker.clone(),
+    };
 
-    // 6. Initial full scan (catch up on anything missed while stopped)
-    tracing::info!("Running initial full scan...");
-    let (files, events) = shipper::full_scan_with_batch_bytes_and_parse_tracker(
-        &providers,
-        &conn,
-        &client,
-        config.algo,
-        config.shipper_config.max_batch_bytes,
-        Some(&tracker),
-        Some(&parse_tracker),
-    )
-    .await?;
-    tracing::info!(
-        "Initial scan: shipped {} files, {} events in {:.1}s",
-        files,
-        events,
-        start.elapsed().as_secs_f64()
-    );
-
-    // 7. Replay any pending spool entries
-    let (spool_ok, spool_fail) = shipper::replay_spool_batch_with_batch_bytes_and_parse_tracker(
-        &conn,
-        &client,
-        config.algo,
-        100,
-        config.shipper_config.max_batch_bytes,
-        Some(&parse_tracker),
-    )
-    .await?;
-    if spool_ok > 0 || spool_fail > 0 {
-        tracing::info!("Spool replay: {} shipped, {} failed", spool_ok, spool_fail);
-    }
-
-    // 8. Start file watcher
+    // 6. Start file watcher before catch-up work so live changes queue immediately.
     let mut watcher = SessionWatcher::new(&providers)?;
     tracing::info!(
         "Daemon ready — watching for file changes (flush interval: {:?})",
         config.flush_interval
     );
 
-    // 9. Main event loop
+    // 7. Build bounded per-path scheduler and queue startup work.
+    let max_in_flight = daemon_max_in_flight(&config.shipper_config);
+    let mut scheduler = PathScheduler::new(max_in_flight);
+    let mut in_flight = JoinSet::new();
+
+    let initial_scan_paths =
+        queue_all_discovered_files(&mut scheduler, &providers, WorkPriority::Scan);
+    let initial_retry_paths =
+        queue_pending_spool_paths(&mut scheduler, &conn, INITIAL_SPOOL_PATH_LIMIT)?;
+    tracing::info!(
+        "Queued startup catch-up: {} scan paths, {} retry paths (max {} concurrent)",
+        initial_scan_paths,
+        initial_retry_paths,
+        max_in_flight
+    );
+
+    // 8. Main event loop
     let fallback_interval = Duration::from_secs(config.fallback_scan_secs.max(10));
     let spool_interval = Duration::from_secs(config.spool_replay_secs.max(5));
     let health_check_interval = Duration::from_secs(60);
@@ -191,6 +205,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let outbox_dir = claude_dir.join("outbox");
 
     loop {
+        if !offline.is_offline {
+            start_ready_jobs(&mut scheduler, &mut in_flight, &task_context);
+        }
+
         tokio::select! {
             biased;
 
@@ -198,6 +216,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             _ = shutdown_signal() => {
                 tracing::info!("Shutdown signal received, exiting gracefully...");
                 break;
+            }
+
+            task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
+                match task_result {
+                    Some(Ok(result)) => {
+                        scheduler.complete(&result.job.path, result.rerun_priority);
+                        if result.resolved_spool > 0 || result.failed_spool > 0 {
+                            tracing::info!(
+                                "Path retry {}: {} resolved, {} failed",
+                                result.job.path.display(),
+                                result.resolved_spool,
+                                result.failed_spool
+                            );
+                        }
+                        if result.had_connect_error {
+                            offline.mark_offline();
+                            tracing::warn!(
+                                "Connection error while processing {} — entering offline mode",
+                                result.job.path.display()
+                            );
+                        } else if result.events_shipped > 0 {
+                            last_ship_at = Some(chrono::Utc::now().to_rfc3339());
+                        }
+                    }
+                    Some(Err(e)) => {
+                        return Err(anyhow::anyhow!("path task failed: {}", e));
+                    }
+                    None => {}
+                }
             }
 
             // Health check when offline (every 60s)
@@ -221,23 +268,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             batch = watcher.next_batch(config.flush_interval), if !offline.is_offline => {
                 match batch {
                     Some(paths) if !paths.is_empty() => {
-                        let (had_connect_error, shipped_events) = ship_batch(
-                            &paths,
-                            &providers,
-                            &conn,
-                            &client,
-                            config.algo,
-                            config.shipper_config.max_batch_bytes,
-                            &tracker,
-                            &parse_tracker,
-                        ).await;
-                        if had_connect_error {
-                            offline.mark_offline();
-                            tracing::warn!(
-                                "Connection error — entering offline mode, will retry every 60s"
-                            );
-                        } else if shipped_events > 0 {
-                            last_ship_at = Some(chrono::Utc::now().to_rfc3339());
+                        for path in paths {
+                            let provider = match discovery::provider_for_path(&path, &providers) {
+                                Some(provider) => provider,
+                                None => {
+                                    tracing::debug!(
+                                        "Skipping file outside known providers: {}",
+                                        path.display()
+                                    );
+                                    continue;
+                                }
+                            };
+                            scheduler.enqueue(path, provider, WorkPriority::Watch);
                         }
                     }
                     Some(_) => {} // empty batch, timer elapsed with no events
@@ -251,46 +293,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Periodic full scan (catch missed events) — skip when offline
             _ = fallback_timer.tick(), if !offline.is_offline => {
                 tracing::debug!("Running fallback full scan...");
-                match shipper::full_scan_with_batch_bytes_and_parse_tracker(
-                    &providers,
-                    &conn,
-                    &client,
-                    config.algo,
-                    config.shipper_config.max_batch_bytes,
-                    Some(&tracker),
-                    Some(&parse_tracker),
-                ).await {
-                    Ok((f, e)) => {
-                        if f > 0 {
-                            tracing::info!("Fallback scan: shipped {} files, {} events", f, e);
-                        }
-                    }
-                    Err(e) => {
-                        // Check if it's a connection error → go offline
-                        let msg = e.to_string();
-                        if msg.contains("connect") || msg.contains("ConnectError") {
-                            offline.mark_offline();
-                            tracing::warn!("Fallback scan connect error — entering offline mode");
-                        } else {
-                            tracing::warn!("Fallback scan error: {}", e);
-                        }
-                    }
+                let queued = queue_all_discovered_files(&mut scheduler, &providers, WorkPriority::Scan);
+                if queued > 0 {
+                    tracing::debug!("Queued {} paths for fallback scan", queued);
                 }
             }
 
             // Spool replay (retry failed shipments) — skip when offline
             _ = spool_timer.tick(), if !offline.is_offline => {
-                match shipper::replay_spool_batch_with_batch_bytes_and_parse_tracker(
-                    &conn,
-                    &client,
-                    config.algo,
-                    50,
-                    config.shipper_config.max_batch_bytes,
-                    Some(&parse_tracker),
-                ).await {
-                    Ok((ok, fail)) => {
-                        if ok > 0 || fail > 0 {
-                            tracing::info!("Spool replay: {} shipped, {} failed", ok, fail);
+                match queue_pending_spool_paths(&mut scheduler, &conn, PERIODIC_SPOOL_PATH_LIMIT) {
+                    Ok(queued) => {
+                        if queued > 0 {
+                            tracing::debug!("Queued {} retry paths from spool", queued);
                         }
                     }
                     Err(e) => tracing::warn!("Spool replay error: {}", e),
@@ -340,90 +354,198 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     Ok(())
 }
 
-/// Ship a batch of changed file paths.
-/// Returns (had_connect_error, total_events_shipped).
-async fn ship_batch(
-    paths: &[std::path::PathBuf],
+fn daemon_max_in_flight(config: &ShipperConfig) -> usize {
+    config.workers.max(1).min(DAEMON_MAX_IN_FLIGHT_CAP)
+}
+
+fn queue_all_discovered_files(
+    scheduler: &mut PathScheduler,
     providers: &[ProviderConfig],
+    priority: WorkPriority,
+) -> usize {
+    let all_files = discovery::discover_all_files(providers);
+    let count = all_files.len();
+    for (path, provider) in all_files {
+        scheduler.enqueue(path, provider, priority);
+    }
+    count
+}
+
+fn queue_pending_spool_paths(
+    scheduler: &mut PathScheduler,
     conn: &rusqlite::Connection,
-    client: &ShipperClient,
-    algo: CompressionAlgo,
-    max_batch_bytes: u64,
-    tracker: &ConsecutiveErrorTracker,
-    parse_tracker: &RecentIssueTracker,
-) -> (bool, usize) {
-    let batch_start = Instant::now();
-    let mut shipped = 0usize;
-    let mut events = 0usize;
-    let mut had_connect_error = false;
+    limit: usize,
+) -> Result<usize> {
+    let spool = Spool::new(conn);
+    let cleaned = spool.cleanup()?;
+    if cleaned > 0 {
+        tracing::info!("Cleaned {} old spool entries", cleaned);
+    }
 
-    for path in paths {
-        let file_start = Instant::now();
-        let provider = match discovery::provider_for_path(path, providers) {
-            Some(p) => p,
-            None => {
-                tracing::debug!("Skipping file outside known providers: {}", path.display());
-                continue;
-            }
+    let mut queued = 0usize;
+    for pending in spool.pending_paths(limit)? {
+        let Some(provider) = provider_name_to_static(&pending.provider) else {
+            tracing::warn!(
+                "Skipping pending spool path with unknown provider {}: {}",
+                pending.provider,
+                pending.file_path
+            );
+            continue;
         };
-
-        match shipper::prepare_file_batches_with_parse_tracker(
-            path,
+        scheduler.enqueue(
+            PathBuf::from(pending.file_path),
             provider,
-            algo,
-            conn,
-            max_batch_bytes,
-            None,
-            Some(parse_tracker),
-        ) {
-            Ok(Some(prepared)) => {
-                let event_count = prepared.total_event_count();
-                let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
-                match shipper::ship_prepared_file(prepared, client, conn, Some(tracker)).await {
-                    Ok(outcome) => {
-                        shipper::log_slow_file_processing(
-                            "watch",
-                            path,
-                            provider,
-                            event_count,
-                            byte_count,
-                            outcome.dead_lettered,
-                            file_start.elapsed(),
-                        );
-                        if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
-                            shipped += 1;
-                            events += outcome.events_shipped;
-                        }
-                        if outcome.had_connect_error {
-                            had_connect_error = true;
-                        }
+            WorkPriority::Retry,
+        );
+        queued += 1;
+    }
+    Ok(queued)
+}
+
+fn provider_name_to_static(provider: &str) -> Option<&'static str> {
+    match provider {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "gemini" => Some("gemini"),
+        _ => None,
+    }
+}
+
+fn work_context(priority: WorkPriority) -> &'static str {
+    match priority {
+        WorkPriority::Watch => "watch",
+        WorkPriority::Retry => "spool_replay",
+        WorkPriority::Scan => "fallback_scan",
+    }
+}
+
+fn start_ready_jobs(
+    scheduler: &mut PathScheduler,
+    in_flight: &mut JoinSet<PathTaskResult>,
+    task_context: &PathTaskContext,
+) {
+    while let Some(job) = scheduler.pop_launchable() {
+        let task_context = task_context.clone();
+        in_flight.spawn_local(run_path_job(job, task_context));
+    }
+}
+
+async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskResult {
+    let mut result = PathTaskResult {
+        job,
+        events_shipped: 0,
+        resolved_spool: 0,
+        failed_spool: 0,
+        had_connect_error: false,
+        rerun_priority: None,
+    };
+
+    let conn = match open_db(task_context.shipper_config.db_path.as_deref()) {
+        Ok(conn) => conn,
+        Err(e) => {
+            if task_context.tracker.record_error() {
+                tracing::warn!(
+                    "Error opening shipper DB for {}: {}",
+                    result.job.path.display(),
+                    e
+                );
+            }
+            return result;
+        }
+    };
+
+    match shipper::replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+        &conn,
+        &task_context.client,
+        task_context.algo,
+        &result.job.path,
+        PATH_SPOOL_REPLAY_LIMIT,
+        task_context.shipper_config.max_batch_bytes,
+        Some(&task_context.parse_tracker),
+    )
+    .await
+    {
+        Ok(replay_outcome) => {
+            result.resolved_spool = replay_outcome.resolved;
+            result.failed_spool = replay_outcome.failed;
+            result.had_connect_error = replay_outcome.had_connect_error;
+        }
+        Err(e) => {
+            if task_context.tracker.record_error() {
+                tracing::warn!(
+                    "Error replaying spool for {}: {}",
+                    result.job.path.display(),
+                    e
+                );
+            }
+            return result;
+        }
+    }
+
+    if result.had_connect_error {
+        return result;
+    }
+
+    let ready_spool_remaining = Spool::new(&conn)
+        .pending_entries_for_path(&result.job.path.to_string_lossy(), 1)
+        .map(|entries| !entries.is_empty())
+        .unwrap_or(false);
+    if ready_spool_remaining {
+        result.rerun_priority = Some(WorkPriority::Retry);
+    }
+
+    let file_start = Instant::now();
+    match shipper::prepare_file_batches_with_parse_tracker(
+        &result.job.path,
+        result.job.provider,
+        task_context.algo,
+        &conn,
+        task_context.shipper_config.max_batch_bytes,
+        None,
+        Some(&task_context.parse_tracker),
+    ) {
+        Ok(Some(prepared)) => {
+            let event_count = prepared.total_event_count();
+            let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
+            match shipper::ship_prepared_file(
+                prepared,
+                &task_context.client,
+                &conn,
+                Some(&task_context.tracker),
+            )
+            .await
+            {
+                Ok(outcome) => {
+                    shipper::log_slow_file_processing(
+                        work_context(result.job.priority),
+                        Path::new(&result.job.path),
+                        result.job.provider,
+                        event_count,
+                        byte_count,
+                        outcome.dead_lettered,
+                        file_start.elapsed(),
+                    );
+                    result.events_shipped = outcome.events_shipped;
+                    if outcome.had_connect_error {
+                        result.had_connect_error = true;
                     }
-                    Err(e) => {
-                        if tracker.record_error() {
-                            tracing::warn!("Error shipping {}: {}", path.display(), e);
-                        }
+                }
+                Err(e) => {
+                    if task_context.tracker.record_error() {
+                        tracing::warn!("Error shipping {}: {}", result.job.path.display(), e);
                     }
                 }
             }
-            Ok(None) => {} // no new content
-            Err(e) => {
-                if tracker.record_error() {
-                    tracing::warn!("Error preparing {}: {}", path.display(), e);
-                }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            if task_context.tracker.record_error() {
+                tracing::warn!("Error preparing {}: {}", result.job.path.display(), e);
             }
         }
     }
 
-    if shipped > 0 {
-        tracing::info!(
-            "Shipped {} files ({} events) in {:.0}ms",
-            shipped,
-            events,
-            batch_start.elapsed().as_millis()
-        );
-    }
-
-    (had_connect_error, events)
+    result
 }
 
 /// Wait for SIGINT (Ctrl-C) or SIGTERM.
