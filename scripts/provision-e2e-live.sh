@@ -187,11 +187,11 @@ COOKIE_JAR=$(mktemp)
 LH_INSTANCE_ID="$INSTANCE_ID"
 LH_INSTANCE_URL="$INSTANCE_URL"
 export LH_INSTANCE_ID LH_INSTANCE_URL
-sso_token="$(lh_hosted_issue_login_token "$INSTANCE_ID" 2>/dev/null || true)"
+if ! sso_token="$(lh_hosted_issue_login_token "$INSTANCE_ID" 2>/dev/null)" || [[ -z "$sso_token" ]]; then
+  fail "SSO token issuance failed — check control-plane JWT config and /api/instances/{id}/login-token"
+fi
 
-if [[ -z "$sso_token" ]]; then
-  echo "  Warning: Could not get SSO token (may not be configured). Skipping SSO test."
-else
+if true; then
   if lh_hosted_accept_login_token "$sso_token" "$COOKIE_JAR" "$INSTANCE_URL" >/dev/null 2>&1; then
     ok "SSO token accepted"
 
