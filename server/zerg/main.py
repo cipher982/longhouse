@@ -1201,6 +1201,59 @@ async def livez_check():
     return {"status": "ok"}
 
 
+@api_app.get("/readyz", operation_id="readyz_check_get")
+@api_app.head("/readyz", operation_id="readyz_check_head", include_in_schema=False)
+async def readyz_check():
+    """Readiness probe: returns 503 when core dependencies are unavailable.
+
+    Unlike /health (which always returns 200 for observability), this endpoint
+    returns a non-2xx status code so load balancers and provisioners can gate
+    on it. Used by the Docker HEALTHCHECK and the control-plane wait_for_health.
+    """
+    from sqlalchemy import text
+
+    from zerg.database import default_engine
+
+    single_tenant_violation = getattr(app.state, "single_tenant_violation", None)
+    if single_tenant_violation:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "reason": single_tenant_violation},
+        )
+
+    try:
+        with default_engine.connect() as conn:
+            row = conn.execute(text("SELECT 1")).fetchone()
+            if not row:
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "unhealthy", "reason": "database query returned no rows"},
+                )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "reason": f"database: {exc}"},
+        )
+
+    try:
+        if default_engine is not None and default_engine.dialect.name == "sqlite":
+            with default_engine.connect() as conn:
+                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+                if not fts_row:
+                    return JSONResponse(
+                        status_code=503,
+                        content={"status": "unhealthy", "reason": "events_fts table missing (FTS5 required)"},
+                    )
+                conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "reason": f"fts5: {exc}"},
+        )
+
+    return {"status": "ok"}
+
+
 @api_app.get("/health", operation_id="health_check_get")
 @api_app.head("/health", operation_id="health_check_head", include_in_schema=False)
 async def health_check():
