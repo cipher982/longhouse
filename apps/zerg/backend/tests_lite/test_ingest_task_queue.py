@@ -638,7 +638,7 @@ async def test_turn_loop_task_processes_stale_completed_turn_from_durable_queue(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("presence_state", ["thinking", "running"])
 async def test_turn_loop_task_skips_operator_when_session_is_still_active(tmp_path, monkeypatch, presence_state):
-    """Fresh active presence suppresses completed-turn evaluation."""
+    """Fresh active presence should re-queue turn_loop instead of silently finishing."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
@@ -657,10 +657,11 @@ async def test_turn_loop_task_skips_operator_when_session_is_still_active(tmp_pa
 
     invoke_oikos.assert_not_awaited()
 
-    tasks = _get_tasks(factory, status="done")
+    tasks = _get_tasks(factory, status="pending")
     reviews = _get_turn_reviews(factory)
     assert len(tasks) == 1
     assert len(reviews) == 0
+    assert "waiting for active session presence to settle" in (tasks[0].error or "")
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,7 @@ from sqlalchemy import case
 from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
+from zerg.services.session_turn_reviews import turn_loop_retry_needed
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,10 @@ TASK_TIMEOUT_SECONDS: dict[str, float] = {
     "summary": 180.0,
     "embedding": 30.0,
 }
+
+
+class RetryTaskLater(Exception):
+    """Signal that a task should be re-queued without treating it as a hard failure."""
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +171,9 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> None:
 
         _mark_status(task_id, "done", error=None, retry=False)
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
+    except RetryTaskLater as e:
+        logger.info("Ingest task %s (%s/%s) re-queued: %s", task_id, task_type, session_id, e)
+        _mark_status(task_id, "pending", error=str(e), retry=True)
     except asyncio.TimeoutError:
         timeout_label = f"{timeout_seconds:g}s" if timeout_seconds is not None else "unknown"
         logger.warning("Ingest task %s (%s/%s) timed out after %s", task_id, task_type, session_id, timeout_label)
@@ -196,11 +204,17 @@ async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
         db = factory()
         try:
             task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
-            await maybe_process_session_turn_loop(
+            review = await maybe_process_session_turn_loop(
                 db=db,
                 session_id=session_id,
                 freshness_reference_at=getattr(task, "created_at", None),
             )
+            if review is None and turn_loop_retry_needed(
+                db=db,
+                session_id=session_id,
+                freshness_reference_at=getattr(task, "created_at", None),
+            ):
+                raise RetryTaskLater("waiting for active session presence to settle before creating turn review")
         finally:
             db.close()
         return
